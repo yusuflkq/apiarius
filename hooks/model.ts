@@ -11,18 +11,27 @@ import type {
   DeckAgent,
   DeckAgentPane,
   DeckData,
+  DeckDuring,
   DeckEdit,
+  DeckFile,
+  DeckGoal,
   DeckKind,
   DeckMapView,
   DeckMessage,
   DeckMessageKind,
   DeckNeeds,
+  DeckOrigin,
   DeckShownStatus,
   DeckStatus,
+  DeckStepHow,
+  DeckStepStatus,
   DeckTab,
+  DeckTask,
+  DeckTodoItem,
   DeckView,
+  DeckWorkflow,
 } from '../types'
-import { baseName, dur, firstLine, oneLine, plural, trunc, truncStart } from './format'
+import { baseName, dur, firstLine, hash, oneLine, plural, trunc, truncStart } from './format'
 import type { GitState } from './git'
 
 export const MAIN = 'main'
@@ -75,15 +84,34 @@ export const LIMITS = {
   answerChars: 1400,
   messageChars: 700,
   agents: 80,
+  /** The goals a snapshot keeps, and each one's follow-ups. */
+  goals: 20,
+  followUps: 10,
+  goalChars: 2000,
+  headlineChars: 80,
+  /** The task board's tasks. */
+  board: 200,
+  /** The items of one agent's checklist. */
+  todos: 50,
+  /** The files edited. */
+  files: 500,
+  workflows: 10,
+  /** The steps a plan is cut to. */
+  steps: 30,
+  /** An agent's label, in characters. */
+  label: 18,
 } as const
 
 export const EDIT_TOOLS: readonly string[] = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit']
 export const SHELL_TOOLS: readonly string[] = ['Bash', 'PowerShell']
 /** Calls that keep the agent's own lists: never "what it's doing", which their items say instead. */
 export const LIST_TOOLS: readonly string[] = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']
+/** The task board's own calls. */
+export const TASK_TOOLS: readonly string[] = ['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList']
 
+/** Live: at work or about to be (a placeholder `starting`), or held on something. */
 export function isLive(status: DeckStatus): boolean {
-  return status === 'running' || status === 'waiting' || status === 'pending'
+  return status === 'running' || status === 'waiting' || status === 'pending' || status === 'starting'
 }
 
 export function isEnded(status: DeckStatus): boolean {
@@ -136,6 +164,10 @@ export function emptyData(now: number): DeckData {
     tasks: {},
     turns: 0,
     turnMs: 0,
+    goals: [],
+    board: {},
+    files: {},
+    workflows: [],
   }
 }
 
@@ -151,8 +183,13 @@ export function defaultView(): DeckView {
     isBandHidden: false,
     map: 'tree',
     message: '',
+    folded: [],
+    zoom: '',
   }
 }
+
+/** The outline folds `view.folded` keeps at most, the oldest dropped first. */
+const FOLDS_KEPT = 200
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
@@ -162,7 +199,9 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback
  * A view restored from a snapshot, field by field: one missing, of another
  * type, or naming a tab or map view this build lacks takes its default; an
  * earlier build's tab name becomes the tab that took its place (`tabNamed`).
- * With `data`, an agent or a message it no longer holds is let go too.
+ * With `data`, an agent or a message it no longer holds is let go too; a
+ * selected file (`file:…`) or plan step (its key, or `step:` and its key)
+ * stays while it is a step of the plan, or names itself one.
  */
 export function healView(value: unknown, data?: DeckData): DeckView {
   const base = defaultView()
@@ -181,9 +220,13 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     isBandHidden: flag(v.isBandHidden, base.isBandHidden),
     map: oneOf(v.map, MAP_VIEWS, base.map),
     message: text(v.message, base.message),
+    // the outline's folds: strings only, each once, the newest kept
+    folded: Array.isArray(v.folded) ? [...new Set(v.folded.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-FOLDS_KEPT) : base.folded,
+    zoom: text(v.zoom, base.zoom),
   }
   if (data) {
-    if (view.agent !== '' && !agentOf(data, view.agent)) view.agent = base.agent
+    const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)
+    if (view.agent !== '' && !agentOf(data, view.agent) && !isRow(view.agent)) view.agent = base.agent
     if (view.message !== '' && !data.messages.some(message => message.id === view.message)) view.message = ''
   }
   return view
@@ -193,8 +236,11 @@ export function agentOf(data: DeckData, id: string): DeckAgent | undefined {
   return data.agents.find(agent => agent.id === id)
 }
 
-/** The agent under `id`, made on first sight (a subagent seen before its spawn was). */
-export function ensureAgent(data: DeckData, id: string, now: number): DeckAgent {
+/**
+ * The agent under `id`, made on first sight (a subagent seen before its spawn
+ * was); `origin` classifies a row made here (see `seeLoop`).
+ */
+export function ensureAgent(data: DeckData, id: string, now: number, origin?: DeckOrigin): DeckAgent {
   const found = agentOf(data, id)
   if (found) return found
 
@@ -202,25 +248,129 @@ export function ensureAgent(data: DeckData, id: string, now: number): DeckAgent 
     type: 'subagent',
     parentId: MAIN,
     status: 'running',
+    ...(origin !== undefined ? { origin } : {}),
   })
   data.agents.push(made)
   pruneAgents(data)
   return made
 }
 
+/** Over the cap: the oldest ended agents go first, then the oldest background loops, whatever their state. */
 function pruneAgents(data: DeckData) {
   if (data.agents.length <= LIMITS.agents) return
-  const removable = data.agents.filter(agent => agent.kind !== 'you' && agent.kind !== 'main' && isEnded(agent.status))
-  const drop = new Set(removable.slice(0, data.agents.length - LIMITS.agents).map(agent => agent.id))
+  const isKept = (agent: DeckAgent) => agent.kind === 'you' || agent.kind === 'main'
+  const ended = data.agents.filter(agent => !isKept(agent) && isEnded(agent.status))
+  const background = data.agents.filter(agent => !isKept(agent) && !isEnded(agent.status) && isFolded(agent))
+  const drop = new Set([...ended, ...background].slice(0, data.agents.length - LIMITS.agents).map(agent => agent.id))
   data.agents = data.agents.filter(agent => !drop.has(agent.id))
 }
 
-/** A short label for the agent: its name, else its description, else its type; the main loop is the Orchestrator. */
+// Labels: one short name per agent, fixed when it spawns.
+
+/** The name `ensureAgent` makes up for a loop it knows nothing of. */
+function isMadeUpName(agent: DeckAgent): boolean {
+  return agent.name === `agent-${agent.id.slice(0, 6)}`
+}
+
+/**
+ * `text` on one line, cut to `max` characters after a whole word (trailing
+ * punctuation dropped); a first word longer than that is cut with an ellipsis.
+ */
+export function cutAtWord(text: string, max: number): string {
+  const line = oneLine(text)
+  if (Array.from(line).length <= max) return line
+  let out = ''
+  for (const word of line.split(' ')) {
+    const next = out === '' ? word : `${out} ${word}`
+    if (Array.from(next).length > max) break
+    out = next
+  }
+  out = out.replace(/[\s,;:.(\-–—]+$/, '')
+  return out !== '' ? out : trunc(line, max)
+}
+
+/**
+ * A description's leading marker and the rest: "Phase A: data, banner" is
+ * `{ marker: 'Phase A', scope: 'data, banner' }`. The marker is at most 18
+ * characters and three words, before a colon and a space, or a spaced dash.
+ */
+export function splitMarker(description: string): { marker: string; scope: string } | undefined {
+  const found = /^([^:]{1,18}?)\s*(?::\s+|\s[-–—]\s+)(\S.*)$/.exec(oneLine(description))
+  if (!found) return undefined
+  const marker = (found[1] ?? '').trim()
+  const scope = (found[2] ?? '').trim()
+  if (marker === '' || scope === '' || marker.split(' ').length > 3) return undefined
+  return { marker, scope }
+}
+
+/** The label an agent's own words give it, and the scope beside it; undefined while it has none. */
+function labelParts(agent: DeckAgent): { label: string; scope: string } | undefined {
+  const name = agent.name.trim()
+  const named = name !== '' && !isMadeUpName(agent) ? name : ''
+  const description = oneLine(agent.description)
+  const marked = splitMarker(description)
+  if (named !== '') {
+    const scope = marked ? marked.scope : description
+    return { label: cutAtWord(named, LIMITS.label), scope: scope === named ? '' : scope }
+  }
+  if (marked) return { label: cutAtWord(marked.marker, LIMITS.label), scope: marked.scope }
+  if (description !== '') {
+    const label = cutAtWord(description, LIMITS.label)
+    return { label, scope: label === description ? '' : description }
+  }
+  return undefined
+}
+
+/** A label for a loop with no words of its own: never its id. */
+function fallbackLabel(agent: DeckAgent): string {
+  if (agent.origin === 'workflow') return 'Workflow agent'
+  if (agent.origin === 'engine') return 'Housekeeping'
+  const type = agent.type.trim()
+  if (type !== '' && type !== 'subagent' && type !== agent.id) return cutAtWord(type, LIMITS.label)
+  return agent.kind === 'teammate' ? 'Teammate' : 'Agent'
+}
+
+/**
+ * Fixes the agent's label once it has words to make one from (its name, else
+ * its description's leading marker, else its description cut at a word):
+ * at most 18 characters, never changed after. A sibling (same parent)
+ * already labelled the same makes it "Phase A 2", then "Phase A 3".
+ */
+export function fixLabel(data: DeckData, agent: DeckAgent): void {
+  if (agent.label !== undefined || (agent.kind !== 'agent' && agent.kind !== 'teammate')) return
+  const parts = labelParts(agent)
+  if (!parts) return
+  const parent = parentIdOf(data, agent)
+  const taken = new Set<string>()
+  for (const other of data.agents) {
+    if (other !== agent && other.label !== undefined && parentIdOf(data, other) === parent) taken.add(other.label.toLowerCase())
+  }
+  let label = parts.label
+  for (let n = 2; taken.has(label.toLowerCase()) && n < 1000; n++) {
+    const suffix = ` ${n}`
+    label = `${Array.from(parts.label).slice(0, LIMITS.label - suffix.length).join('').trimEnd()}${suffix}`
+  }
+  agent.label = label
+  if (parts.scope !== '') agent.scope = trunc(parts.scope, 200)
+}
+
+/**
+ * The agent's label, at most 18 characters and never an id: the one fixed
+ * at its spawn (`fixLabel`), else what its words give, else its type; the
+ * main loop is the Orchestrator.
+ */
 export function labelOf(agent: DeckAgent): string {
   if (agent.kind === 'main') return ORCHESTRATOR
   if (agent.kind === 'you') return agent.name
-  const named = agent.name && !agent.name.startsWith('agent-') ? agent.name : ''
-  return trunc(named || agent.description || agent.type || agent.name, 28)
+  if (agent.kind === 'peer') return cutAtWord(agent.name, LIMITS.label)
+  return agent.label ?? labelParts(agent)?.label ?? fallbackLabel(agent)
+}
+
+/** What the agent was given beside its label ("data, banner" of "Phase A: data, banner"); '' for none. */
+export function scopeOf(agent: DeckAgent): string {
+  if (agent.kind !== 'agent' && agent.kind !== 'teammate') return ''
+  if (agent.label !== undefined) return agent.scope ?? ''
+  return labelParts(agent)?.scope ?? ''
 }
 
 /**
@@ -323,11 +473,14 @@ export function targetOf(tool: string, input: Record<string, unknown>, root: str
   }
 }
 
-/** One tool call as the deck keeps it: what it is aimed at, and a shell call's own description of itself. */
+/** One tool call as the deck keeps it: what it is aimed at, and a shell call's own description of itself and its command. */
 export function activityOf(id: string, tool: string, input: Record<string, unknown>, root: string | null, at: number): DeckActivity {
-  const described = SHELL_TOOLS.includes(tool) ? str(input.description) : undefined
+  const isShell = SHELL_TOOLS.includes(tool)
+  const described = isShell ? str(input.description) : undefined
   const description = described ? trunc(oneLine(described), 80) : ''
-  return { id, tool, target: targetOf(tool, input, root), at, ...(description ? { description } : {}) }
+  const said = isShell ? str(input.command) : undefined
+  const command = said ? trunc(oneLine(said), 120) : ''
+  return { id, tool, target: targetOf(tool, input, root), at, ...(description ? { description } : {}), ...(command ? { command } : {}) }
 }
 
 export function beginTool(data: DeckData, agent: DeckAgent, activity: DeckActivity) {
@@ -337,7 +490,11 @@ export function beginTool(data: DeckData, agent: DeckAgent, activity: DeckActivi
   agent.lastAt = activity.at
   agent.recent.push(activity)
   if (agent.recent.length > LIMITS.recent) agent.recent.splice(0, agent.recent.length - LIMITS.recent)
-  if (agent.kind !== 'you' && !isEnded(agent.status)) agent.status = 'running'
+  if (agent.kind !== 'you' && !isEnded(agent.status)) {
+    // an idle teammate at work again starts a new run, with a result of its own to come
+    if (agent.status === 'idle' && agent.kind !== 'main') delete agent.resultVia
+    agent.status = 'running'
+  }
   bump(data, activity.at, 'tools')
 }
 
@@ -352,6 +509,7 @@ export function endTool(agent: DeckAgent, id: string, ok: boolean, now: number) 
   agent.lastAt = now
 }
 
+/** Records one edit: in the capped log with its patch, in its agent's counts, and in the file's record (`filesOf`). */
 export function addEdit(data: DeckData, agent: DeckAgent, edit: DeckEdit) {
   data.edits.push(edit)
   if (data.edits.length > LIMITS.edits) data.edits.splice(0, data.edits.length - LIMITS.edits)
@@ -360,6 +518,42 @@ export function addEdit(data: DeckData, agent: DeckAgent, edit: DeckEdit) {
   if (!agent.files.includes(edit.path)) agent.files.push(edit.path)
   if (agent.files.length > 200) agent.files.splice(0, agent.files.length - 200)
   bump(data, edit.at, 'edits')
+  noteFile(data, edit)
+}
+
+/** The key a file's record goes under: its normalised path, lower-cased under a drive letter. */
+export function fileKeyOf(abs: string): string {
+  const path = normPath(abs)
+  return isCaseless(path) ? path.toLowerCase() : path
+}
+
+/** Adds one edit to its file's record: who, how much, when; the 500 files edited last are kept. */
+export function noteFile(data: DeckData, edit: Pick<DeckEdit, 'agent' | 'path' | 'abs' | 'at' | 'added' | 'removed' | 'isNew' | 'userModified'>): DeckFile {
+  const key = fileKeyOf(edit.abs || edit.path)
+  const file: DeckFile = data.files[key] ?? { path: edit.path, abs: normPath(edit.abs || edit.path), editors: [], added: 0, removed: 0, lastAt: edit.at }
+  file.path = edit.path
+  file.added += edit.added
+  file.removed += edit.removed
+  file.lastAt = Math.max(file.lastAt, edit.at)
+  if (edit.isNew) file.isNew = true
+  if (edit.userModified) file.userModified = true
+  let editor = file.editors.find(one => one.agent === edit.agent)
+  if (!editor) {
+    editor = { agent: edit.agent, count: 0, added: 0, removed: 0, firstAt: edit.at, lastAt: edit.at }
+    file.editors.push(editor)
+  }
+  editor.count += 1
+  editor.added += edit.added
+  editor.removed += edit.removed
+  editor.firstAt = Math.min(editor.firstAt, edit.at)
+  editor.lastAt = Math.max(editor.lastAt, edit.at)
+  data.files[key] = file
+  const keys = Object.keys(data.files)
+  if (keys.length > LIMITS.files) {
+    const oldest = keys.sort((a, b) => (data.files[a]?.lastAt ?? 0) - (data.files[b]?.lastAt ?? 0)).slice(0, keys.length - LIMITS.files)
+    for (const old of oldest) delete data.files[old]
+  }
+  return file
 }
 
 export function addMessage(
@@ -376,18 +570,22 @@ export function addMessage(
   return made
 }
 
-/** Finds an agent a SendMessage `to` names: an id, a name, a teammate address, or "main". */
+/**
+ * Finds an agent a SendMessage `to` names: an id, a name, a teammate address
+ * (`name@team`), or "main". A name two agents carried (a reviewer finished,
+ * another spawned) is the newest live one's, else the newest's.
+ */
 export function resolveRecipient(data: DeckData, to: string): DeckAgent | undefined {
   const wanted = to.trim()
-  if (wanted === '' ) return undefined
+  if (wanted === '') return undefined
   if (wanted === MAIN || wanted === 'team-lead' || wanted === 'lead') return agentOf(data, MAIN)
+  const byId = agentOf(data, wanted)
+  if (byId) return byId
   const lower = wanted.toLowerCase()
-  return (
-    data.agents.find(agent => agent.id === wanted) ??
-    data.agents.find(agent => agent.name.toLowerCase() === lower) ??
-    data.agents.find(agent => agent.name.toLowerCase() === lower.split('@')[0]) ??
-    data.agents.find(agent => agent.id.startsWith(wanted) && wanted.length >= 6)
-  )
+  const bare = lower.split('@')[0] ?? lower
+  const named = data.agents.filter(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && agent.name !== '' && (agent.name.toLowerCase() === lower || agent.name.toLowerCase() === bare))
+  const live = named.filter(agent => isLive(agent.status))
+  return live[live.length - 1] ?? named[named.length - 1] ?? (wanted.length >= 6 ? data.agents.find(agent => agent.id.startsWith(wanted)) : undefined)
 }
 
 /** The id of an outside peer's node, made on first sight. */
@@ -476,11 +674,15 @@ export function copyOf<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-/** Fills fields a snapshot from an older shape may lack. */
+/**
+ * Fills, field by field, what a snapshot from an older shape lacks, drops
+ * what it holds of the wrong shape, and cuts each list to its cap (goals 20,
+ * board 200, 50 todos per agent, files 500). Agents without a label get one.
+ */
 export function healData(value: DeckData, now: number): DeckData {
   const base = emptyData(now)
   const data = { ...base, ...value }
-  data.agents = Array.isArray(value.agents) ? value.agents.map(agent => ({ ...newAgent(agent.id, agent.kind, agent.name, now), ...agent })) : base.agents
+  data.agents = Array.isArray(value.agents) ? value.agents.filter(isRecord).map(agent => healAgent({ ...newAgent(agent.id, agent.kind, agent.name, now), ...agent })) : base.agents
   if (!agentOf(data, YOU)) data.agents.unshift(base.agents[0] as DeckAgent)
   if (!agentOf(data, MAIN)) data.agents.splice(1, 0, base.agents[1] as DeckAgent)
   data.messages = Array.isArray(value.messages) ? value.messages : []
@@ -488,7 +690,135 @@ export function healData(value: DeckData, now: number): DeckData {
   data.minutes = Array.isArray(value.minutes) ? value.minutes : []
   data.commitsBy = value.commitsBy && typeof value.commitsBy === 'object' ? value.commitsBy : {}
   data.tasks = isRecord(value.tasks) ? (value.tasks as Record<string, string>) : {}
+  data.goals = healGoals(value.goals)
+  data.board = healBoard(value.board)
+  data.files = healFiles(value.files)
+  data.workflows = healWorkflows(value.workflows)
+  if (value.isNewGoalNext !== true) delete data.isNewGoalNext
+  for (const agent of data.agents) fixLabel(data, agent)
   return data
+}
+
+const ORIGINS: readonly DeckOrigin[] = ['agent', 'teammate', 'workflow', 'engine']
+const ITEM_STATES: readonly DeckTodoItem['status'][] = ['done', 'active', 'pending']
+
+function num(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/** One restored agent's newer fields, each kept only in its own shape. */
+function healAgent(agent: DeckAgent): DeckAgent {
+  const loose = agent as unknown as Record<string, unknown>
+  if (typeof loose.label !== 'string' || loose.label === '') delete agent.label
+  else agent.label = cutAtWord(loose.label, LIMITS.label)
+  if (typeof loose.scope !== 'string') delete agent.scope
+  if (!ORIGINS.includes(loose.origin as DeckOrigin)) delete agent.origin
+  for (const field of ['toolUseId', 'goal', 'workflow'] as const) if (typeof loose[field] !== 'string') delete agent[field]
+  if (num(loose.todosAt) === undefined) delete agent.todosAt
+  if (!['handback', 'answer', 'call', 'stop'].includes(String(loose.resultVia))) delete agent.resultVia
+  const during = loose.during
+  if (!isRecord(during) || (during.kind !== 'todo' && during.kind !== 'task') || typeof during.key !== 'string' || typeof during.text !== 'string') delete agent.during
+  if (Array.isArray(loose.todos)) {
+    agent.todos = loose.todos
+      .filter(isRecord)
+      .filter(item => typeof item.key === 'string' && typeof item.text === 'string' && ITEM_STATES.includes(item.status as DeckTodoItem['status']))
+      .slice(0, LIMITS.todos) as DeckTodoItem[]
+  } else {
+    delete agent.todos
+  }
+  return agent
+}
+
+function healGoals(value: unknown): DeckGoal[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(isRecord)
+    .filter(goal => typeof goal.id === 'string' && typeof goal.text === 'string' && num(goal.at) !== undefined)
+    .map(goal => {
+      const healed: DeckGoal = {
+        id: goal.id as string,
+        headline: typeof goal.headline === 'string' ? goal.headline : headlineOf(goal.text as string),
+        text: goal.text as string,
+        at: goal.at as number,
+        followUps: Array.isArray(goal.followUps)
+          ? goal.followUps
+              .filter(isRecord)
+              .filter(one => typeof one.text === 'string' && num(one.at) !== undefined)
+              .map(one => ({ text: one.text as string, at: one.at as number }))
+              .slice(-LIMITS.followUps)
+          : [],
+        origin: typeof goal.origin === 'string' ? goal.origin : 'composer',
+      }
+      const plan = goal.plan
+      if (isRecord(plan) && Array.isArray(plan.steps) && num(plan.at) !== undefined) {
+        healed.plan = { steps: plan.steps.filter((step): step is string => typeof step === 'string').slice(0, LIMITS.steps), at: plan.at as number }
+      }
+      return healed
+    })
+    .slice(-LIMITS.goals)
+}
+
+function healBoard(value: unknown): Record<string, DeckTask> {
+  const board: Record<string, DeckTask> = {}
+  if (!isRecord(value)) return board
+  for (const task of Object.values(value)) {
+    if (!isRecord(task) || typeof task.id !== 'string' || typeof task.subject !== 'string' || !ITEM_STATES.includes(task.status as DeckTask['status'])) continue
+    const healed: DeckTask = { id: task.id, subject: task.subject, status: task.status as DeckTask['status'], at: num(task.at) ?? 0 }
+    for (const field of ['description', 'doing', 'owner', 'createdBy', 'claimedBy', 'goal'] as const) if (typeof task[field] === 'string') healed[field] = task[field] as string
+    for (const field of ['startedAt', 'doneAt'] as const) if (num(task[field]) !== undefined) healed[field] = task[field] as number
+    board[healed.id] = healed
+  }
+  pruneBoard(board)
+  return board
+}
+
+function healFiles(value: unknown): Record<string, DeckFile> {
+  const files: Record<string, DeckFile> = {}
+  if (!isRecord(value)) return files
+  for (const [key, file] of Object.entries(value)) {
+    if (!isRecord(file) || typeof file.path !== 'string' || typeof file.abs !== 'string' || !Array.isArray(file.editors)) continue
+    const editors = file.editors
+      .filter(isRecord)
+      .filter(one => typeof one.agent === 'string')
+      .map(one => ({
+        agent: one.agent as string,
+        count: num(one.count) ?? 0,
+        added: num(one.added) ?? 0,
+        removed: num(one.removed) ?? 0,
+        firstAt: num(one.firstAt) ?? 0,
+        lastAt: num(one.lastAt) ?? 0,
+      }))
+    const healed: DeckFile = { path: file.path, abs: file.abs, editors, added: num(file.added) ?? 0, removed: num(file.removed) ?? 0, lastAt: num(file.lastAt) ?? 0 }
+    if (file.isNew === true) healed.isNew = true
+    if (file.userModified === true) healed.userModified = true
+    files[key] = healed
+  }
+  const keys = Object.keys(files)
+  if (keys.length > LIMITS.files) {
+    for (const old of keys.sort((a, b) => (files[a]?.lastAt ?? 0) - (files[b]?.lastAt ?? 0)).slice(0, keys.length - LIMITS.files)) delete files[old]
+  }
+  return files
+}
+
+function healWorkflows(value: unknown): DeckWorkflow[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(isRecord)
+    .filter(run => typeof run.id === 'string' && typeof run.caller === 'string' && num(run.startedAt) !== undefined)
+    .map(run => {
+      const healed: DeckWorkflow = {
+        id: run.id as string,
+        caller: run.caller as string,
+        name: typeof run.name === 'string' ? run.name : '',
+        phases: Array.isArray(run.phases) ? run.phases.filter((one): one is string => typeof one === 'string').slice(0, LIMITS.steps) : [],
+        startedAt: run.startedAt as number,
+        lastAt: num(run.lastAt) ?? (run.startedAt as number),
+      }
+      for (const field of ['runId', 'taskId', 'goal'] as const) if (typeof run[field] === 'string') healed[field] = run[field] as string
+      if (num(run.endedAt) !== undefined) healed.endedAt = run.endedAt as number
+      return healed
+    })
+    .slice(-LIMITS.workflows)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -531,14 +861,24 @@ export function nowOf(agent: DeckAgent): string {
 
 /**
  * The status the deck draws: `waiting` while the engine waits on the person
- * for it (a needs-you note) or its loop is held; `running` for a pending or
- * running loop; `done` once it completed; `failed` once it failed or was
- * stopped; `idle` between turns, and always for you and outside peers.
+ * for it (a needs-you note) or its loop is held; `running` for a starting,
+ * pending or running loop; `done` once it completed; `failed` once it failed
+ * or was stopped; `idle` between turns, and always for you and outside peers.
+ *
+ * Without `data` the note counts where it is kept, on the Orchestrator. With
+ * it, it counts on the agent whose call waits: a subagent's permission prompt
+ * makes that subagent `waiting`, not the Orchestrator.
  */
-export function statusOf(agent: DeckAgent): DeckShownStatus {
+export function statusOf(agent: DeckAgent, data?: DeckData): DeckShownStatus {
   if (agent.kind === 'you' || agent.kind === 'peer') return 'idle'
-  if (agent.needs) return 'waiting'
+  if (data) {
+    const needs = agentOf(data, MAIN)?.needs
+    if (needs && (needs.agent ?? MAIN) === agent.id) return 'waiting'
+  } else if (agent.needs) {
+    return 'waiting'
+  }
   switch (agent.status) {
+    case 'starting':
     case 'running':
     case 'pending':
       return 'running'
@@ -577,14 +917,18 @@ function bookTask(data: DeckData, id: string, text: string) {
 
 /**
  * Folds a list call that went through into what the agent says it is doing:
- * TodoWrite's in-progress item (its activeForm, else its content; none
- * clears it); a TaskUpdate that starts a task (its activeForm, else the
- * words its TaskCreate booked, else its subject) or ends the task in hand.
- * TaskCreate books the task's words for that later start. Others: nothing.
+ * TodoWrite's whole list (the result's `newTodos`, else the input's `todos`)
+ * becomes its checklist (`noteTodos`), its in-progress item (activeForm, else
+ * content; none clears it) what it is doing; a TaskUpdate that starts a task
+ * (its activeForm, else the words its TaskCreate booked, else its subject)
+ * or ends the task in hand. TaskCreate books the task's words for that
+ * later start. Others: nothing. `at` stamps the checklist's starts and ends.
  */
-export function noteTodo(data: DeckData, agent: DeckAgent, tool: string, input: Record<string, unknown>, result: unknown): void {
+export function noteTodo(data: DeckData, agent: DeckAgent, tool: string, input: Record<string, unknown>, result: unknown, at = agent.lastAt): void {
   if (tool === 'TodoWrite') {
-    const todos = Array.isArray(input.todos) ? input.todos.filter(isRecord) : []
+    const listed = isRecord(result) && Array.isArray(result.newTodos) ? result.newTodos : Array.isArray(input.todos) ? input.todos : []
+    const todos = listed.filter(isRecord)
+    noteTodos(agent, todos, at)
     const doing = todos.find(todo => todo.status === 'in_progress')
     const text = doing ? (str(doing.activeForm) ?? str(doing.content)) : undefined
     if (text) agent.todo = { text: trunc(oneLine(text), NOTE_CHARS) }
@@ -819,4 +1163,1611 @@ export function agentsKeyOf(data: DeckData, git: Pick<GitState, 'isRepo' | 'file
   const shown = bannerOf(data, git, now)
   rows.push(`banner\t${shown.tone}\t${shown.text}\t${shown.agentId ?? ''}`)
   return rows.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// v3: where loops come from, spawns and their placeholders, results, goals,
+// checklists, the task board, plans, files, and the queries the Agents tab
+// reads (goalOf, planOf, checklistOf, stepOf, lastActionOf, filesOf,
+// needsOf, summaryOf, foldOf). All pure, like the rest of this module.
+
+// Loops: where each came from, and the rows that fold away.
+
+/** Where the agent's loop came from (DeckOrigin), or what it is: the main loop, you, an outside peer. */
+export function originOf(agent: DeckAgent): DeckOrigin | 'main' | 'you' | 'peer' {
+  if (agent.kind === 'main' || agent.kind === 'you' || agent.kind === 'peer') return agent.kind
+  return agent.origin ?? (agent.kind === 'teammate' ? 'teammate' : 'agent')
+}
+
+/** A workflow's agent or the engine's own loop: folded into one dim row, never one of the Orchestrator's children. */
+export function isFolded(agent: DeckAgent): boolean {
+  return agent.origin === 'workflow' || agent.origin === 'engine'
+}
+
+/** A subagent or teammate the outline shows (not folded away). */
+export function isShownAgent(agent: DeckAgent): boolean {
+  return (agent.kind === 'agent' || agent.kind === 'teammate') && !isFolded(agent)
+}
+
+/** Whether an agent has no name of its own: none given, or the one `ensureAgent` made up. */
+export function isNameless(agent: DeckAgent): boolean {
+  return agent.name.trim() === '' || isMadeUpName(agent)
+}
+
+/** Whether any agent the outline shows is at work (a placeholder counts). */
+export function hasLiveAgents(data: DeckData): boolean {
+  return data.agents.some(agent => isShownAgent(agent) && isLive(agent.status))
+}
+
+/** The ids of the agents `id` spawned that the outline shows, in spawn order. */
+export function childrenOf(data: DeckData, id: string): string[] {
+  return data.agents.filter(agent => isShownAgent(agent) && parentIdOf(data, agent) === id).map(agent => agent.id)
+}
+
+/** The folded loops, as their one dim row draws them. */
+export type DeckFold = {
+  ids: string[]
+  /** How many of them run. */
+  live: number
+  workflow: number
+  engine: number
+  /** "3 workflow agents · 1 housekeeping loop · 2 running". */
+  text: string
+}
+
+/** The workflow agents and housekeeping loops, folded into one dim row; undefined while there are none. */
+export function foldOf(data: DeckData): DeckFold | undefined {
+  const folded = data.agents.filter(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && isFolded(agent))
+  if (folded.length === 0) return undefined
+  const workflow = folded.filter(agent => agent.origin === 'workflow').length
+  const engine = folded.length - workflow
+  const live = folded.filter(agent => isLive(agent.status)).length
+  const parts = [workflow > 0 ? plural(workflow, 'workflow agent') : '', engine > 0 ? plural(engine, 'housekeeping loop') : '', live > 0 ? `${live} running` : '']
+  return { ids: folded.map(agent => agent.id), live, workflow, engine, text: parts.filter(part => part !== '').join(' · ') }
+}
+
+/**
+ * The row for a loop id a tool call or a message names: a known one as it
+ * is; an unknown one is a workflow's agent while a Workflow run is live
+ * (under the loop that called it), else the engine's own housekeeping (a
+ * compaction or memory fork, anything with no spawn).
+ */
+export function seeLoop(data: DeckData, id: string, now: number): DeckAgent {
+  const found = agentOf(data, id)
+  if (found) return found
+  const run = liveWorkflowOf(data, now)
+  const made = ensureAgent(data, id, now, run ? 'workflow' : 'engine')
+  if (run) {
+    made.workflow = run.id
+    made.parentId = run.caller
+    if (run.goal !== undefined) made.goal = run.goal
+    run.lastAt = now
+  }
+  return made
+}
+
+/** Sets an ended or idle agent going again (a message woke it, a step of its loop ran): its run's result is open again. */
+export function reopen(agent: DeckAgent): boolean {
+  if (agent.kind === 'main' || agent.kind === 'you' || agent.kind === 'peer') return false
+  if (!isEnded(agent.status) && agent.status !== 'idle') return false
+  agent.status = 'running'
+  delete agent.endedAt
+  delete agent.resultVia
+  return true
+}
+
+// Results: what each agent handed back.
+
+const RESULT_RANK: Readonly<Record<NonNullable<DeckAgent['resultVia']>, number>> = { stop: 0, call: 1, answer: 2, handback: 3 }
+
+/** Whether two texts are one report: the same words, one cut or led by a warning, a backslash or two inserted. */
+function isSameReport(a: string, b: string): boolean {
+  const x = oneLine(a.replace(/\\/g, ''))
+  const y = oneLine(b.replace(/\\/g, ''))
+  if (x === '' || y === '') return false
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x]
+  return long.includes(short.slice(0, 120))
+}
+
+function lastResultOf(data: DeckData, id: string): DeckMessage | undefined {
+  for (let i = data.messages.length - 1; i >= 0; i--) {
+    const message = data.messages[i]
+    if (message && message.from === id && message.kind === 'result') return message
+  }
+  return undefined
+}
+
+/**
+ * Records `text` as the agent's result for this run, from `via`: its
+ * SubagentHandback `message` (strongest), its turn's answer, its foreground
+ * Agent call's text, or SubagentStop's last message. One result message per
+ * run: the same report again adds nothing, a weaker source never replaces a
+ * stronger one, and a stronger one rewrites the result in place.
+ */
+export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: number, via: NonNullable<DeckAgent['resultVia']> = 'answer'): boolean {
+  const body = text.trim()
+  if (body === '') return false
+  const held = agent.resultVia
+  if (held !== undefined) {
+    if (agent.answer !== undefined && isSameReport(agent.answer, body)) {
+      if (RESULT_RANK[via] > RESULT_RANK[held]) agent.resultVia = via
+      return false
+    }
+    if (RESULT_RANK[via] < RESULT_RANK[held]) return false
+    agent.answer = trunc(body, LIMITS.answerChars)
+    agent.resultVia = via
+    const shown = lastResultOf(data, agent.id)
+    if (shown) {
+      shown.text = trunc(body, LIMITS.messageChars)
+      return true
+    }
+  }
+  agent.answer = trunc(body, LIMITS.answerChars)
+  agent.resultVia = via
+  addMessage(data, { from: agent.id, to: agent.parentId ?? MAIN, kind: 'result', text: body, at })
+  return true
+}
+
+/** Ends a live agent's row now: a teammate goes idle, any other completes. */
+function endRow(agent: DeckAgent, at: number): boolean {
+  if (!isLive(agent.status)) return false
+  agent.status = agent.kind === 'teammate' ? 'idle' : 'completed'
+  agent.endedAt = at
+  delete agent.current
+  delete agent.todo
+  return true
+}
+
+/** A subagent's loop stopped (classic SubagentStop): its row ends now, and with no result yet, its last message is one. */
+export function noteStop(data: DeckData, id: string, lastMessage: string, at: number): boolean {
+  const agent = agentOf(data, id)
+  if (!agent || (agent.kind !== 'agent' && agent.kind !== 'teammate')) return false
+  const isEndedNow = endRow(agent, at)
+  const isNoted = agent.resultVia === undefined && lastMessage.trim() !== '' && noteResult(data, agent, lastMessage, at, 'stop')
+  return isEndedNow || isNoted
+}
+
+/** A teammate went idle (classic TeammateIdle), by its id when the event carried one, else by its name. */
+export function noteIdle(data: DeckData, who: { id?: string; name: string }, at: number): boolean {
+  const byId = who.id ? agentOf(data, who.id) : undefined
+  const agent = byId ?? resolveRecipient(data, who.name)
+  if (!agent || (agent.kind !== 'agent' && agent.kind !== 'teammate') || agent.status === 'idle') return false
+  agent.status = 'idle'
+  agent.endedAt = at
+  delete agent.current
+  delete agent.todo
+  return true
+}
+
+// Spawns: a placeholder row the moment the Agent call starts, bound to the agent at its spawn.
+
+/** What an Agent call says of the agent it starts. */
+export type AgentCall = { toolUseId: string; parentId: string; name?: string; description: string; prompt: string; type?: string; at: number }
+
+/** A row its Agent call made that no spawn has bound yet. */
+export function isPlaceholder(agent: DeckAgent): boolean {
+  return agent.toolUseId !== undefined && agent.id === agent.toolUseId
+}
+
+/**
+ * The row an Agent call makes before the engine spawns anything: keyed by
+ * the call's tool_use_id, `starting`, under the loop that called, labelled
+ * from the call's `name` or `description`, stamped with the goal and with
+ * what its caller had in progress.
+ */
+export function addPlaceholder(data: DeckData, call: AgentCall): DeckAgent {
+  const known = data.agents.find(agent => agent.toolUseId === call.toolUseId)
+  if (known) return known
+  const goal = goalOf(data)
+  const during = duringOf(data, call.parentId)
+  const agent = newAgent(call.toolUseId, 'agent', (call.name ?? '').trim(), call.at, {
+    type: call.type?.trim() || 'general-purpose',
+    description: oneLine(call.description),
+    prompt: trunc(call.prompt, LIMITS.promptChars),
+    parentId: call.parentId,
+    status: 'starting',
+    origin: 'agent',
+    toolUseId: call.toolUseId,
+    ...(goal ? { goal: goal.id } : {}),
+    ...(during ? { during } : {}),
+  })
+  data.agents.push(agent)
+  pruneAgents(data)
+  fixLabel(data, agent)
+  return agent
+}
+
+/** What the caller had in progress when it made an Agent call: its one in-progress todo or board task; undefined for none or several. */
+export function duringOf(data: DeckData, callerId: string): DeckDuring | undefined {
+  const caller = agentOf(data, callerId)
+  if (!caller) return undefined
+  const doing: DeckDuring[] = []
+  for (const item of caller.todos ?? []) if (item.status === 'active') doing.push({ kind: 'todo', key: item.key, text: item.text })
+  const name = caller.kind === 'main' || isNameless(caller) ? '' : caller.name.toLowerCase()
+  for (const task of Object.values(data.board)) {
+    if (task.status !== 'active') continue
+    const isCallers =
+      task.claimedBy === callerId || (name !== '' && task.owner?.toLowerCase() === name) || (callerId === MAIN && task.claimedBy === undefined && task.owner === undefined)
+    if (isCallers) doing.push({ kind: 'task', key: task.id, text: task.subject })
+  }
+  return doing.length === 1 ? doing[0] : undefined
+}
+
+/** Folds a twin row (the agent's own events, seen before its spawn was told) into the row that stays. */
+function mergeInto(row: DeckAgent, twin: DeckAgent): void {
+  row.tools += twin.tools
+  row.errors += twin.errors
+  for (const [tool, count] of Object.entries(twin.toolCounts)) row.toolCounts[tool] = (row.toolCounts[tool] ?? 0) + count
+  for (const file of twin.files) if (!row.files.includes(file)) row.files.push(file)
+  row.added += twin.added
+  row.removed += twin.removed
+  row.tokensIn += twin.tokensIn
+  row.tokensOut += twin.tokensOut
+  row.cacheRead += twin.cacheRead
+  row.requests += twin.requests
+  row.recent = [...row.recent, ...twin.recent].sort((a, b) => a.at - b.at).slice(-LIMITS.recent)
+  row.lastAt = Math.max(row.lastAt, twin.lastAt)
+  if (twin.current) row.current = twin.current
+  if (twin.todos) row.todos = twin.todos
+  if (twin.todosAt !== undefined) row.todosAt = twin.todosAt
+  if (twin.todo) row.todo = twin.todo
+  if (twin.model && !row.model) row.model = twin.model
+  if (twin.answer !== undefined && row.answer === undefined) {
+    row.answer = twin.answer
+    if (twin.resultVia) row.resultVia = twin.resultVia
+  }
+}
+
+/** Every reference to agent `from` (messages, edits, files, parents, the board, commits, the needs note) made to `to`. */
+function renameAgent(data: DeckData, from: string, to: string): void {
+  for (const message of data.messages) {
+    if (message.from === from) message.from = to
+    if (message.to === from) message.to = to
+  }
+  for (const edit of data.edits) if (edit.agent === from) edit.agent = to
+  for (const file of Object.values(data.files)) {
+    let kept: DeckFile['editors'][number] | undefined
+    const editors: DeckFile['editors'] = []
+    for (const one of file.editors) {
+      if (one.agent !== from && one.agent !== to) {
+        editors.push(one)
+      } else if (!kept) {
+        kept = { ...one, agent: to }
+        editors.push(kept)
+      } else {
+        kept.count += one.count
+        kept.added += one.added
+        kept.removed += one.removed
+        kept.firstAt = Math.min(kept.firstAt, one.firstAt)
+        kept.lastAt = Math.max(kept.lastAt, one.lastAt)
+      }
+    }
+    file.editors = editors
+  }
+  for (const agent of data.agents) if (agent.parentId === from) agent.parentId = to
+  for (const task of Object.values(data.board)) {
+    if (task.createdBy === from) task.createdBy = to
+    if (task.claimedBy === from) task.claimedBy = to
+  }
+  for (const [commit, by] of Object.entries(data.commitsBy)) if (by === from) data.commitsBy[commit] = to
+  const needs = agentOf(data, MAIN)?.needs
+  if (needs?.agent === from) needs.agent = to
+}
+
+/**
+ * Binds a placeholder row to the agent the engine started: the same row (its
+ * place, label and goal kept) takes the agent's id, and a twin row the
+ * agent's own events made first is folded into it. Never a second row.
+ */
+export function bindAgent(data: DeckData, row: DeckAgent, agentId: string): DeckAgent {
+  const from = row.id
+  if (from === agentId) return row
+  const twin = data.agents.find(agent => agent.id === agentId && agent !== row)
+  row.id = agentId
+  if (twin) {
+    mergeInto(row, twin)
+    data.agents = data.agents.filter(agent => agent !== twin)
+  }
+  renameAgent(data, from, agentId)
+  return row
+}
+
+/** What `agent.spawn` says of the agent it started. */
+export type Spawn = {
+  toolUseId: string
+  agentId: string
+  /** The loop it was spawned in (`parentAgentId`), `main` for the main loop. */
+  parentId: string
+  name?: string
+  description: string
+  prompt: string
+  type: string
+  isTeammate: boolean
+  /** A workflow agent's run id (`workflow.runId`, '' outside a real run); undefined for any other agent. */
+  workflow?: string
+  model?: string
+  at: number
+}
+
+/**
+ * Folds a spawn in: the placeholder its Agent call made is bound to the new
+ * id (`from` says which row it was), else the agent's row is made or found;
+ * then its fields, its origin (a workflow's agent folds under its run), its
+ * goal, what its caller had in progress, and its label (fixed once).
+ */
+export function noteSpawn(data: DeckData, spawn: Spawn): { agent: DeckAgent; isNew: boolean; from?: string } {
+  const isWorkflow = spawn.workflow !== undefined
+  let from: string | undefined
+  let agent: DeckAgent | undefined
+  if (!isWorkflow) {
+    const placeholder = data.agents.find(one => isPlaceholder(one) && one.toolUseId === spawn.toolUseId)
+    if (placeholder) {
+      from = placeholder.id
+      agent = bindAgent(data, placeholder, spawn.agentId)
+    }
+  }
+  const isNew = agent === undefined && agentOf(data, spawn.agentId) === undefined
+  agent ??= ensureAgent(data, spawn.agentId, spawn.at)
+  const run = isWorkflow ? workflowForSpawn(data, spawn) : undefined
+  agent.kind = spawn.isTeammate ? 'teammate' : 'agent'
+  agent.origin = run ? 'workflow' : spawn.isTeammate ? 'teammate' : 'agent'
+  if (spawn.name) agent.name = spawn.name
+  if (spawn.type) agent.type = spawn.type
+  agent.description = spawn.description
+  agent.prompt = trunc(spawn.prompt, LIMITS.promptChars)
+  agent.parentId = run ? run.caller : spawn.parentId
+  if (spawn.model) agent.model = spawn.model
+  agent.status = 'running'
+  delete agent.endedAt
+  if (isNew) agent.startedAt = spawn.at
+  if (run) {
+    agent.workflow = run.id
+    run.lastAt = Math.max(run.lastAt, spawn.at)
+    if (spawn.workflow) run.runId ??= spawn.workflow
+  } else {
+    agent.toolUseId ??= spawn.toolUseId
+    if (agent.during === undefined) {
+      const during = duringOf(data, spawn.parentId)
+      if (during) agent.during = during
+    }
+  }
+  if (agent.goal === undefined) {
+    const goal = goalOf(data)
+    if (goal) agent.goal = goal.id
+  }
+  fixLabel(data, agent)
+  return { agent, isNew, ...(from !== undefined ? { from } : {}) }
+}
+
+/** How an Agent call ended: the agent it started, or why none started, and what a foreground agent handed back. */
+export type AgentCallEnd = {
+  toolUseId: string
+  agentId?: string
+  /** False when the call was refused or failed before an agent started. */
+  isStarted: boolean
+  why?: string
+  /** A foreground agent's report, which its call returns. */
+  report?: string
+  /** The call returned with its agent done (a foreground run); an async launch leaves it running. */
+  isDone?: boolean
+  /** It runs in a cloud session: no local loop will report on it. */
+  isRemote?: boolean
+  at: number
+}
+
+/**
+ * Settles the row an Agent call made once the call returns: bound to the
+ * agent its result names when no spawn bound it; ended "Not started: why"
+ * when no agent started; a foreground agent's report recorded and its row ended.
+ */
+export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: DeckAgent; from?: string } | undefined {
+  const row = data.agents.find(agent => agent.toolUseId === end.toolUseId)
+  if (!row) return undefined
+  let from: string | undefined
+  if (isPlaceholder(row)) {
+    if (end.agentId) {
+      from = row.id
+      bindAgent(data, row, end.agentId)
+      if (row.status === 'starting') row.status = 'running'
+    } else if (!end.isStarted) {
+      row.status = 'killed'
+      row.endedAt = end.at
+      row.answer = trunc(`Not started: ${oneLine(end.why ?? '') || 'the call was refused'}`, LIMITS.answerChars)
+      return { agent: row }
+    } else if (end.isRemote) {
+      row.status = 'idle'
+      row.endedAt = end.at
+      row.answer = 'Runs in a cloud session, outside this view'
+      return { agent: row }
+    }
+  }
+  if (end.report) noteResult(data, row, end.report, end.at, 'call')
+  if (end.isDone) endRow(row, end.at)
+  return { agent: row, ...(from !== undefined ? { from } : {}) }
+}
+
+// Goals: what the person asked for.
+
+/** Whether a prompt is the person's own words: typed (composer), from a Remote Control client (bridge), the SDK host's, or a plugin's sent as theirs. */
+export function isUsersWords(origin: { kind: string; asUser?: unknown }): boolean {
+  return origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk' || (origin.kind === 'plugin' && origin.asUser === true)
+}
+
+export type PromptKind = 'goal' | 'followUp' | 'event'
+
+/**
+ * What a submitted prompt starts. Anything not in the person's own words is
+ * an event. Their words start a new goal while the session is idle (no
+ * `turnId`: not typed over a running turn; the Orchestrator not running)
+ * with nothing live from the last goal; otherwise they follow it up.
+ */
+export function promptKindOf(data: DeckData, prompt: { origin: { kind: string; asUser?: unknown }; turnId?: string }): PromptKind {
+  if (!isUsersWords(prompt.origin)) return 'event'
+  const last = goalOf(data)
+  if (!last || data.isNewGoalNext === true) return 'goal'
+  if (prompt.turnId !== undefined) return 'followUp'
+  if (agentOf(data, MAIN)?.status === 'running') return 'followUp'
+  // the goal's own agents still at work, a workflow's included; the engine's housekeeping is no one's
+  const isLeft = data.agents.some(agent => agent.goal === last.id && (agent.kind === 'agent' || agent.kind === 'teammate') && agent.origin !== 'engine' && isLive(agent.status))
+  return isLeft ? 'followUp' : 'goal'
+}
+
+/** A goal's headline: its first line that says something, at most 80 characters. */
+export function headlineOf(text: string): string {
+  return trunc(firstLine(text) || oneLine(text), LIMITS.headlineChars)
+}
+
+/** Records a prompt in the person's words: a new goal (the newest 20 kept), or a follow-up of the goal in hand. */
+export function noteGoal(data: DeckData, kind: 'goal' | 'followUp', prompt: { text: string; origin: string; at: number; headline?: string }): DeckGoal | undefined {
+  const text = prompt.text.trim()
+  if (text === '') return undefined
+  const last = goalOf(data)
+  if (kind === 'followUp' && last) {
+    last.followUps.push({ text: trunc(oneLine(text), 300), at: prompt.at })
+    if (last.followUps.length > LIMITS.followUps) last.followUps.splice(0, last.followUps.length - LIMITS.followUps)
+    return last
+  }
+  let id = `g${prompt.at}`
+  for (let n = 2; data.goals.some(goal => goal.id === id); n++) id = `g${prompt.at}-${n}`
+  const headline = prompt.headline ? trunc(oneLine(prompt.headline), LIMITS.headlineChars) : ''
+  const goal: DeckGoal = { id, headline: headline || headlineOf(text), text: trunc(text, LIMITS.goalChars), at: prompt.at, followUps: [], origin: prompt.origin }
+  data.goals.push(goal)
+  if (data.goals.length > LIMITS.goals) data.goals.splice(0, data.goals.length - LIMITS.goals)
+  delete data.isNewGoalNext
+  return goal
+}
+
+/** The goal in hand: the person's latest; undefined before their first prompt. */
+export function goalOf(data: DeckData): DeckGoal | undefined {
+  return data.goals[data.goals.length - 1]
+}
+
+/** The next prompt in the person's words starts a new goal, whatever is still live (a "new goal" button). */
+export function armNewGoal(data: DeckData): void {
+  data.isNewGoalNext = true
+}
+
+/** Gives the goal in hand a slash command's own words as its headline, when it started at or after `since`. */
+export function retitleGoal(data: DeckData, headline: string, since: number): boolean {
+  const goal = goalOf(data)
+  const next = trunc(oneLine(headline), LIMITS.headlineChars)
+  if (!goal || goal.at < since || next === '' || next === goal.headline) return false
+  goal.headline = next
+  return true
+}
+
+// Checklists: each agent's whole todo list, and what it is on now.
+
+/** Lower case, words only: how items, steps and texts are matched. */
+function normText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+/**
+ * Keeps the agent's whole TodoWrite list as its checklist (at most 50). An
+ * item keeps its key and its start and end times across rewrites, matched by
+ * its normalised content; one seen in progress or done for the first time is
+ * stamped `at`, and a done item put back loses its end.
+ */
+export function noteTodos(agent: DeckAgent, todos: readonly Record<string, unknown>[], at: number): void {
+  const before = new Map<string, DeckTodoItem[]>()
+  for (const item of agent.todos ?? []) {
+    const norm = normText(item.text)
+    before.set(norm, [...(before.get(norm) ?? []), item])
+  }
+  const seen = new Map<string, number>()
+  const items: DeckTodoItem[] = []
+  for (const raw of todos) {
+    if (items.length >= LIMITS.todos) break
+    const text = str(raw.content) ?? str(raw.subject) ?? str(raw.activeForm)
+    if (!text) continue
+    const norm = normText(text)
+    const n = (seen.get(norm) ?? 0) + 1
+    seen.set(norm, n)
+    const prev = before.get(norm)?.shift()
+    const status: DeckTodoItem['status'] = raw.status === 'completed' ? 'done' : raw.status === 'in_progress' ? 'active' : 'pending'
+    const item: DeckTodoItem = { key: prev?.key ?? `t${hash(norm).toString(36)}${n > 1 ? `-${n}` : ''}`, text: trunc(oneLine(text), NOTE_CHARS), status }
+    const doing = str(raw.activeForm)
+    if (doing && oneLine(doing) !== oneLine(text)) item.doing = trunc(oneLine(doing), NOTE_CHARS)
+    const startedAt = prev?.startedAt ?? (status === 'pending' ? undefined : at)
+    if (startedAt !== undefined) item.startedAt = startedAt
+    if (status === 'done') item.doneAt = prev?.doneAt ?? at
+    items.push(item)
+  }
+  agent.todos = items
+  agent.todosAt = at
+}
+
+/** One item of a checklist as the screens read it. */
+export type DeckCheckItem = { key: string; text: string; status: DeckStepStatus; doing?: string; startedAt?: number; doneAt?: number }
+export type DeckChecklist = { items: DeckCheckItem[]; done: number; total: number }
+
+function boardItemOf(task: DeckTask): DeckCheckItem {
+  return {
+    key: `task:${task.id}`,
+    text: task.subject,
+    status: task.status,
+    ...(task.doing ? { doing: task.doing } : {}),
+    ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
+    ...(task.doneAt !== undefined ? { doneAt: task.doneAt } : {}),
+  }
+}
+
+/**
+ * The agent's checklist: its whole TodoWrite list; with none and `data`
+ * given, the board tasks it created, claimed or owns. `done` of `total`.
+ */
+export function checklistOf(agent: DeckAgent, data?: DeckData): DeckChecklist {
+  let items: DeckCheckItem[] = (agent.todos ?? []).map(item => ({ ...item }))
+  if (items.length === 0 && data && agent.kind !== 'main' && agent.kind !== 'you' && agent.kind !== 'peer') {
+    const name = isNameless(agent) ? '' : agent.name.toLowerCase()
+    items = Object.values(data.board)
+      .filter(task => task.claimedBy === agent.id || task.createdBy === agent.id || (name !== '' && task.owner?.toLowerCase() === name))
+      .sort(taskOrder)
+      .map(boardItemOf)
+  }
+  return { items, done: items.filter(item => item.status === 'done').length, total: items.length }
+}
+
+/**
+ * The step the agent is on: its checklist's in-progress item (its activeForm,
+ * else its content), else the board task it started; '' for none, and for an
+ * agent no longer at work. It changes only when the list does, never per call.
+ */
+export function stepOf(agent: DeckAgent): string {
+  if (agent.kind === 'you' || agent.kind === 'peer') return ''
+  if (agent.kind !== 'main' && !isLive(agent.status)) return ''
+  const active = agent.todos?.find(item => item.status === 'active')
+  if (active) return active.doing ?? active.text
+  return agent.todo?.text ?? ''
+}
+
+/** The agent's latest tool call, kept after it ends: `isLive` while it runs, so the screen dims it rather than clearing it. */
+export type DeckAction = { text: string; tool: string; at: number; isLive: boolean; ok?: boolean }
+
+/** The latest tool call of the agent's (its list calls left out); undefined before its first. */
+export function lastActionOf(agent: DeckAgent): DeckAction | undefined {
+  for (let i = agent.recent.length - 1; i >= 0; i--) {
+    const one = agent.recent[i]
+    if (!one || LIST_TOOLS.includes(one.tool)) continue
+    return {
+      text: trunc(oneLine(saidOf(one)), NOW_CHARS),
+      tool: one.tool,
+      at: one.at,
+      isLive: one.ms === undefined && isLive(agent.status),
+      ...(one.ok !== undefined ? { ok: one.ok } : {}),
+    }
+  }
+  return undefined
+}
+
+// The task board: TaskCreate, TaskUpdate, TaskList, TaskGet, and the TaskCreated and TaskCompleted events.
+
+function taskIdOf(value: unknown): string | undefined {
+  if (typeof value === 'string' && value !== '') return value
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined
+}
+
+function taskStateOf(value: unknown): DeckTask['status'] | 'deleted' | undefined {
+  switch (value) {
+    case 'completed':
+      return 'done'
+    case 'in_progress':
+      return 'active'
+    case 'pending':
+      return 'pending'
+    case 'deleted':
+      return 'deleted'
+    default:
+      return undefined
+  }
+}
+
+/** Board order: by numeric id, else as created. */
+function taskOrder(a: DeckTask, b: DeckTask): number {
+  const x = Number(a.id)
+  const y = Number(b.id)
+  if (Number.isFinite(x) && Number.isFinite(y) && x !== y) return x - y
+  return a.at - b.at || a.id.localeCompare(b.id)
+}
+
+/** Over 200 tasks: the oldest done go first, then the oldest. */
+function pruneBoard(board: Record<string, DeckTask>): void {
+  const tasks = Object.values(board)
+  if (tasks.length <= LIMITS.board) return
+  const byAge = (a: DeckTask, b: DeckTask) => a.at - b.at
+  const drop = [...tasks.filter(task => task.status === 'done').sort(byAge), ...tasks.filter(task => task.status !== 'done').sort(byAge)].slice(0, tasks.length - LIMITS.board)
+  for (const task of drop) delete board[task.id]
+}
+
+type TaskPatch = {
+  subject?: string
+  description?: string
+  doing?: string
+  status?: DeckTask['status'] | 'deleted'
+  owner?: string
+  /** The agent whose call or event it is: it created the task, or claimed it by starting or finishing it. */
+  by?: string
+  /** An update: the task moves to the goal in hand. */
+  isTouch?: boolean
+}
+
+function upsertTask(data: DeckData, id: string, patch: TaskPatch, at: number): DeckTask | undefined {
+  if (patch.status === 'deleted') {
+    delete data.board[id]
+    return undefined
+  }
+  const goal = goalOf(data)?.id
+  let task = data.board[id]
+  if (!task) {
+    task = { id, subject: `Task ${id}`, status: 'pending', at, ...(goal ? { goal } : {}), ...(patch.by ? { createdBy: patch.by } : {}) }
+    data.board[id] = task
+  } else if (patch.isTouch && goal) {
+    task.goal = goal
+  }
+  if (patch.subject) task.subject = trunc(oneLine(patch.subject), NOTE_CHARS)
+  if (patch.description) task.description = trunc(oneLine(patch.description), 400)
+  if (patch.doing) task.doing = trunc(oneLine(patch.doing), NOTE_CHARS)
+  if (patch.owner) task.owner = patch.owner
+  if (patch.status !== undefined && patch.status !== task.status) {
+    task.status = patch.status
+    if (patch.status !== 'pending') task.startedAt ??= at
+    if (patch.status === 'done') task.doneAt = at
+    else delete task.doneAt
+    if (patch.by && patch.status !== 'pending') task.claimedBy = patch.by
+  }
+  pruneBoard(data.board)
+  return task
+}
+
+/** Folds a task board call that went through into the board; answers whether it changed anything. */
+export function noteBoard(data: DeckData, agent: DeckAgent, tool: string, input: Record<string, unknown>, result: unknown, at: number): boolean {
+  const record = isRecord(result) ? result : {}
+  if (tool === 'TaskCreate') {
+    const task = isRecord(record.task) ? record.task : undefined
+    const id = taskIdOf(task?.id)
+    if (!id) return false
+    upsertTask(data, id, { subject: str(input.subject) ?? str(task?.subject), description: str(input.description), doing: str(input.activeForm), by: agent.id }, at)
+    return true
+  }
+  if (tool === 'TaskUpdate') {
+    const id = taskIdOf(input.taskId) ?? taskIdOf(record.taskId)
+    if (!id || record.success === false) return false
+    const patch: TaskPatch = {
+      subject: str(input.subject),
+      description: str(input.description),
+      doing: str(input.activeForm),
+      status: taskStateOf(input.status),
+      owner: str(input.owner),
+      by: agent.id,
+      isTouch: true,
+    }
+    upsertTask(data, id, patch, at)
+    return true
+  }
+  if (tool === 'TaskList') {
+    const tasks = Array.isArray(record.tasks) ? record.tasks.filter(isRecord) : []
+    for (const task of tasks) {
+      const id = taskIdOf(task.id)
+      if (id) upsertTask(data, id, { subject: str(task.subject), status: taskStateOf(task.status), owner: str(task.owner) }, at)
+    }
+    return tasks.length > 0
+  }
+  if (tool === 'TaskGet') {
+    const task = isRecord(record.task) ? record.task : undefined
+    const id = taskIdOf(task?.id)
+    if (!task || !id) return false
+    upsertTask(data, id, { subject: str(task.subject), description: str(task.description), status: taskStateOf(task.status) }, at)
+    return true
+  }
+  return false
+}
+
+/** A board event (classic TaskCreated, TaskCompleted): the task, and the agent the event names (a teammate), if any. */
+export function noteTaskEvent(data: DeckData, kind: 'created' | 'completed', event: { id: string; subject: string; description?: string; by?: string }, at: number): boolean {
+  if (event.id === '') return false
+  const patch: TaskPatch = { subject: event.subject }
+  if (event.description) patch.description = event.description
+  if (event.by) patch.by = event.by
+  if (kind === 'completed') patch.status = 'done'
+  upsertTask(data, event.id, patch, at)
+  return true
+}
+
+// Plans: an approved ExitPlanMode plan, and a Workflow's phases.
+
+const STEP_SECTION = /\b(steps?|plan|implementation|phases?|tasks?|orchestration|approach|milestones?|to-?dos?|roadmap|work)\b/i
+const STEP_HEADING = /^(?:step|phase|stage|part|milestone|task)\b|^\d+[.)]?\s/i
+
+/** A step's words: markdown marks and links dropped, a trailing colon cut, at most 120 characters. */
+function cleanStep(text: string): string {
+  const plain = oneLine(text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\*\*|__|`/g, '')).replace(/[\s:]+$/, '')
+  return trunc(plain, 120)
+}
+
+/**
+ * Splits a plan's markdown into its steps: the items (or sub-headings) of a
+ * section whose heading says steps, plan, phases, tasks, orchestration...;
+ * else headings that are steps ("Step 1", "Phase A"); else the first
+ * numbered list; else the headings under the title; else the first bulleted
+ * list. Code blocks are skipped; at most 30 steps.
+ */
+export function planStepsOf(markdown: string): string[] {
+  type Line = { kind: 'head' | 'num' | 'bullet' | 'text'; level: number; indent: number; text: string }
+  const lines: Line[] = []
+  let isFence = false
+  for (const raw of markdown.split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(raw)) {
+      isFence = !isFence
+      continue
+    }
+    if (isFence || raw.trim() === '') continue
+    const head = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(raw)
+    if (head) {
+      lines.push({ kind: 'head', level: (head[1] ?? '#').length, indent: 0, text: head[2] ?? '' })
+      continue
+    }
+    const numbered = /^(\s*)\d+[.)]\s+(.*)$/.exec(raw)
+    if (numbered) {
+      lines.push({ kind: 'num', level: 0, indent: (numbered[1] ?? '').length, text: numbered[2] ?? '' })
+      continue
+    }
+    const bullet = /^(\s*)[-*+]\s+(?:\[[ xX]\]\s+)?(.*)$/.exec(raw)
+    if (bullet) {
+      lines.push({ kind: 'bullet', level: 0, indent: (bullet[1] ?? '').length, text: bullet[2] ?? '' })
+      continue
+    }
+    lines.push({ kind: 'text', level: 0, indent: 0, text: raw.trim() })
+  }
+  const topItems = (body: readonly Line[], kind: 'num' | 'bullet'): string[] => {
+    const items = body.filter(line => line.kind === kind)
+    if (items.length < 2) return []
+    const top = Math.min(...items.map(line => line.indent))
+    return items.filter(line => line.indent === top).map(line => line.text)
+  }
+  const done = (texts: readonly string[]): string[] => texts.map(cleanStep).filter(text => text !== '').slice(0, LIMITS.steps)
+
+  // 1. a section that names its steps
+  for (let i = 0; i < lines.length; i++) {
+    const head = lines[i]
+    if (!head || head.kind !== 'head' || head.level < 2 || !STEP_SECTION.test(head.text)) continue
+    const body: Line[] = []
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j]
+      if (!line || (line.kind === 'head' && line.level <= head.level)) break
+      body.push(line)
+    }
+    const subheads = body.filter(line => line.kind === 'head' && line.level === head.level + 1).map(line => line.text)
+    const numbered = topItems(body, 'num')
+    const found = subheads.length >= 2 ? subheads : numbered.length >= 2 ? numbered : topItems(body, 'bullet')
+    if (found.length >= 2) return done(found)
+  }
+  // 2. headings that are steps
+  const stepHeads = lines.filter(line => line.kind === 'head' && STEP_HEADING.test(cleanStep(line.text))).map(line => line.text)
+  if (stepHeads.length >= 2) return done(stepHeads)
+  // 3. the first numbered list, in the blocks headings split
+  const blocks: Line[][] = [[]]
+  for (const line of lines) {
+    if (line.kind === 'head') blocks.push([])
+    else blocks[blocks.length - 1]?.push(line)
+  }
+  for (const block of blocks) {
+    const items = topItems(block, 'num')
+    if (items.length >= 2) return done(items)
+  }
+  // 4. the headings under the title
+  const heads = lines.filter(line => line.kind === 'head' && line.level >= 2).map(line => line.text)
+  if (heads.length >= 2) return done(heads)
+  // 5. the first bulleted list
+  for (const block of blocks) {
+    const items = topItems(block, 'bullet')
+    if (items.length >= 2) return done(items)
+  }
+  return []
+}
+
+/**
+ * Records a plan approved under the goal in hand (ExitPlanMode), split into
+ * its steps. With no goal yet, the plan's first line starts one.
+ */
+export function notePlan(data: DeckData, markdown: string, at: number): boolean {
+  const steps = planStepsOf(markdown)
+  if (steps.length === 0) return false
+  const goal = goalOf(data) ?? noteGoal(data, 'goal', { text: firstLine(markdown) || 'The approved plan', origin: 'plan', at })
+  if (!goal) return false
+  goal.plan = { steps, at }
+  return true
+}
+
+/**
+ * Reads one JavaScript literal (object, array, string, number, true, false,
+ * null) from `source` at `start`, comments skipped: enough for a Workflow
+ * script's `meta`, which must be a pure literal. Undefined when it is not one.
+ */
+function readLiteral(source: string, start: number): unknown {
+  let i = start
+  const s = source
+  const skip = () => {
+    for (;;) {
+      while (i < s.length && /\s/.test(s[i] ?? '')) i++
+      if (s.startsWith('//', i)) {
+        const end = s.indexOf('\n', i)
+        i = end < 0 ? s.length : end + 1
+      } else if (s.startsWith('/*', i)) {
+        const end = s.indexOf('*/', i + 2)
+        i = end < 0 ? s.length : end + 2
+      } else {
+        return
+      }
+    }
+  }
+  const quoted = (): string => {
+    const quote = s[i]
+    i++
+    let out = ''
+    while (i < s.length && s[i] !== quote) {
+      if (s[i] === '\\' && i + 1 < s.length) {
+        const next = s[i + 1] ?? ''
+        out += next === 'n' ? '\n' : next === 't' ? '\t' : next
+        i += 2
+        continue
+      }
+      out += s[i]
+      i++
+    }
+    if (i >= s.length) throw new Error('unclosed string')
+    i++
+    return out
+  }
+  const word = (): string => {
+    const found = /^[\w$.+-]+/.exec(s.slice(i, i + 256))?.[0]
+    if (!found) throw new Error(`unexpected ${s[i] ?? 'end'}`)
+    i += found.length
+    return found
+  }
+  const value = (depth: number): unknown => {
+    if (depth > 24) throw new Error('too deep')
+    skip()
+    const c = s[i]
+    if (c === '{') {
+      i++
+      const out: Record<string, unknown> = {}
+      for (;;) {
+        skip()
+        if (s[i] === '}') {
+          i++
+          return out
+        }
+        const key = s[i] === '"' || s[i] === "'" || s[i] === '`' ? quoted() : word()
+        skip()
+        if (s[i] !== ':') throw new Error('expected :')
+        i++
+        out[key] = value(depth + 1)
+        skip()
+        if (s[i] === ',') {
+          i++
+          continue
+        }
+        if (s[i] === '}') {
+          i++
+          return out
+        }
+        throw new Error('expected , or }')
+      }
+    }
+    if (c === '[') {
+      i++
+      const out: unknown[] = []
+      for (;;) {
+        skip()
+        if (s[i] === ']') {
+          i++
+          return out
+        }
+        out.push(value(depth + 1))
+        skip()
+        if (s[i] === ',') {
+          i++
+          continue
+        }
+        if (s[i] === ']') {
+          i++
+          return out
+        }
+        throw new Error('expected , or ]')
+      }
+    }
+    if (c === '"' || c === "'" || c === '`') return quoted()
+    const said = word()
+    if (said === 'true') return true
+    if (said === 'false') return false
+    if (said === 'null') return null
+    const n = Number(said)
+    return Number.isFinite(n) ? n : said
+  }
+  try {
+    return value(0)
+  } catch {
+    return undefined
+  }
+}
+
+/** A Workflow script's `export const meta = { name, description, phases }`: its phases' titles in order; undefined without a readable meta. */
+export function workflowMetaOf(script: string): { name: string; description: string; phases: string[] } | undefined {
+  const found = /\bmeta\s*=\s*\{/.exec(script)
+  if (!found) return undefined
+  const meta = readLiteral(script, found.index + found[0].length - 1)
+  if (!isRecord(meta)) return undefined
+  const phases = Array.isArray(meta.phases)
+    ? meta.phases
+        .map(phase => (typeof phase === 'string' ? phase : isRecord(phase) ? (str(phase.title) ?? str(phase.name) ?? '') : ''))
+        .map(title => trunc(oneLine(title), 120))
+        .filter(title => title !== '')
+        .slice(0, LIMITS.steps)
+    : []
+  return { name: str(meta.name) ?? '', description: str(meta.description) ?? '', phases }
+}
+
+/** Records a Workflow run (its call's tool_use_id), under the goal in hand; the newest 10 are kept. */
+export function noteWorkflow(data: DeckData, run: { id: string; caller: string; name: string; phases: readonly string[]; at: number; runId?: string }): DeckWorkflow {
+  const known = data.workflows.find(one => one.id === run.id)
+  if (known) return known
+  const goal = goalOf(data)
+  const made: DeckWorkflow = {
+    id: run.id,
+    caller: run.caller,
+    name: run.name,
+    phases: run.phases.slice(0, LIMITS.steps),
+    startedAt: run.at,
+    lastAt: run.at,
+    ...(run.runId ? { runId: run.runId } : {}),
+    ...(goal ? { goal: goal.id } : {}),
+  }
+  data.workflows.push(made)
+  if (data.workflows.length > LIMITS.workflows) data.workflows.splice(0, data.workflows.length - LIMITS.workflows)
+  return made
+}
+
+/** What a Workflow call returned: the run's ids to know it by, or an end when it never launched. */
+export function launchWorkflow(data: DeckData, id: string, launched: { ok: boolean; runId?: string; taskId?: string; name?: string; at: number }): boolean {
+  const run = data.workflows.find(one => one.id === id)
+  if (!run) return false
+  if (launched.runId) run.runId = launched.runId
+  if (launched.taskId) run.taskId = launched.taskId
+  if (launched.name && run.name === '') run.name = launched.name
+  run.lastAt = launched.at
+  if (!launched.ok) run.endedAt = launched.at
+  return true
+}
+
+function workflowForSpawn(data: DeckData, spawn: Spawn): DeckWorkflow {
+  const runId = spawn.workflow ?? ''
+  const found = data.workflows.find(run => run.id === spawn.toolUseId || (runId !== '' && run.runId === runId))
+  if (found) return found
+  return noteWorkflow(data, { id: spawn.toolUseId || runId || `workflow-${spawn.at}`, caller: spawn.parentId, name: '', phases: [], at: spawn.at, ...(runId ? { runId } : {}) })
+}
+
+/** How long a run with no news counts as live. */
+const WORKFLOW_QUIET_MS = 30 * 60_000
+
+/** The newest Workflow run still going: not ended, and heard from in the last half hour. */
+export function liveWorkflowOf(data: DeckData, now: number): DeckWorkflow | undefined {
+  for (let i = data.workflows.length - 1; i >= 0; i--) {
+    const run = data.workflows[i]
+    if (run && run.endedAt === undefined && now - run.lastAt < WORKFLOW_QUIET_MS) return run
+  }
+  return undefined
+}
+
+/** Ends the runs a task notification (or a TaskStop) names by their task or run id. */
+export function endWorkflows(data: DeckData, text: string, at: number): boolean {
+  let isChanged = false
+  for (const run of data.workflows) {
+    if (run.endedAt !== undefined) continue
+    const ids = [run.taskId, run.runId].filter((id): id is string => id !== undefined && id.length >= 4)
+    if (ids.some(id => text.includes(id))) {
+      run.endedAt = at
+      isChanged = true
+    }
+  }
+  return isChanged
+}
+
+// The plan: the goal's steps, first source that exists, and which agent serves each.
+
+/** Where the plan came from: the task board, the Orchestrator's todos, an approved plan, a Workflow's phases, each Agent call (implicit), or none. */
+export type DeckPlanSource = 'board' | 'todo' | 'plan' | 'workflow' | 'implicit' | 'none'
+
+/** One step: its key (stable), words, state, and the ids of the agents that serve it directly (their sub-agents nest under them). */
+export type DeckPlanStep = { key: string; text: string; status: DeckStepStatus; agents: string[] }
+
+/** How an agent was tied to its step and how sure that is (1 certain, 0.5 and under a guess); a sub-agent's is its parent's (`isInherited`). */
+export type DeckStepLink = { key: string; how: DeckStepHow; sure: number; isInherited: boolean }
+
+export type DeckPlan = {
+  source: DeckPlanSource
+  /** The goal it is the plan of. */
+  goal?: string
+  steps: DeckPlanStep[]
+  /** The Orchestrator's own agents (this goal's) that no step claims: they sit straight under it. */
+  unlinked: string[]
+  /** Every shown agent's link to its step, by agent id. */
+  links: Record<string, DeckStepLink>
+}
+
+/** A step as the links are made against it: its words read once (`norm`, `words`), whatever the agents. */
+type StepSeed = { key: string; text: string; number: number; norm: string; words: Set<string>; status?: DeckTodoItem['status']; task?: DeckTask; todoKey?: string }
+
+function seedOf(seed: Omit<StepSeed, 'norm' | 'words'>): StepSeed {
+  return { ...seed, norm: normText(seed.text), words: wordsOf(seed.text) }
+}
+
+const HOW_SURE: Readonly<Record<DeckStepHow, number>> = { owner: 1, self: 0.95, mention: 0.8, during: 0.7, words: 0.5 }
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'into', 'onto', 'that', 'this', 'these', 'those', 'then', 'than', 'are', 'was', 'were', 'its',
+  'all', 'any', 'each', 'every', 'not', 'but', 'you', 'your', 'our', 'out', 'one', 'two', 'use', 'using', 'used', 'via', 'per',
+  'also', 'when', 'what', 'who', 'how', 'why', 'will', 'can', 'should', 'must', 'have', 'has', 'had', 'been', 'being', 'after',
+  'before', 'over', 'under', 'about', 'agent', 'agents', 'task', 'tasks', 'step', 'steps', 'phase', 'make', 'sure', 'just', 'only',
+])
+
+/** A text's telling words: lower case, three letters or more, common words left out, a plural or -ing/-ed cut. */
+function wordsOf(text: string): Set<string> {
+  const out = new Set<string>()
+  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || STOP_WORDS.has(raw)) continue
+    out.add(raw.length > 4 ? raw.replace(/(?:ing|ed|es|s)$/, '') : raw)
+  }
+  return out
+}
+
+/** The steps a text refers to by number or id: "step 2", "task #3", "#4", "phase 1". */
+function refsOf(text: string): Set<string> {
+  const refs = new Set<string>()
+  for (const found of text.toLowerCase().matchAll(/(?:\b(?:step|task|item|phase|stage|part)\s*#?\s*|#)([a-z0-9][\w-]*)\b/g)) if (found[1]) refs.add(found[1])
+  return refs
+}
+
+/** The Orchestrator's own agents under `goal` (all of them with no goal yet), in spawn order. */
+function topAgentsOf(data: DeckData, goal: DeckGoal | undefined): DeckAgent[] {
+  return data.agents.filter(agent => isShownAgent(agent) && parentIdOf(data, agent) === MAIN && (goal === undefined || agent.goal === goal.id))
+}
+
+/** The agent's ancestor the Orchestrator spawned (itself when it is one); undefined for a loop of parents. */
+function topOf(data: DeckData, agent: DeckAgent): DeckAgent | undefined {
+  let at: DeckAgent | undefined = agent
+  for (let hops = 0; at && hops < 32; hops++) {
+    const parent = parentIdOf(data, at)
+    if (parent === MAIN) return at
+    at = parent === undefined ? undefined : agentOf(data, parent)
+  }
+  return undefined
+}
+
+/** The goal's steps from the first source that has any: the board, the Orchestrator's todos, the approved plan, a Workflow's phases, its Agent calls. */
+function seedsOf(data: DeckData, goal: DeckGoal | undefined): { source: DeckPlanSource; seeds: StepSeed[]; run?: DeckWorkflow } {
+  const tasks = Object.values(data.board)
+    .filter(task => goal === undefined || task.goal === goal.id)
+    .sort(taskOrder)
+  if (tasks.length > 0) return { source: 'board', seeds: tasks.map((task, i) => seedOf({ key: `task:${task.id}`, text: task.subject, number: i + 1, status: task.status, task })) }
+
+  const main = agentOf(data, MAIN)
+  const todos = main?.todos ?? []
+  if (todos.length > 0 && (goal === undefined || (main?.todosAt ?? 0) >= goal.at)) {
+    return { source: 'todo', seeds: todos.map((item, i) => seedOf({ key: `todo:${item.key}`, text: item.text, number: i + 1, status: item.status, todoKey: item.key })) }
+  }
+
+  const planned = goal?.plan?.steps ?? []
+  if (planned.length > 0) return { source: 'plan', seeds: planned.map((text, i) => seedOf({ key: `plan:${i + 1}`, text, number: i + 1 })) }
+
+  const run = [...data.workflows].reverse().find(one => one.phases.length > 0 && (goal === undefined || one.goal === goal.id))
+  if (run) return { source: 'workflow', seeds: run.phases.map((text, i) => seedOf({ key: `phase:${i + 1}`, text, number: i + 1 })), run }
+
+  const agents = topAgentsOf(data, goal)
+  if (agents.length > 0) {
+    return { source: 'implicit', seeds: agents.map((agent, i) => seedOf({ key: `agent:${agent.id}`, text: oneLine(agent.description) || labelOf(agent), number: i + 1 })) }
+  }
+  return { source: 'none', seeds: [] }
+}
+
+/** The step the agent's own words name: its marker heads the step, the step's words stand whole in its task, "step 2" / "task #3", or the step names the agent. */
+function mentionedSeed(agent: DeckAgent, seeds: readonly StepSeed[]): StepSeed | undefined {
+  const words = `${agent.description} ${agent.prompt.slice(0, 600)}`
+  const said = ` ${normText(words)} `
+  const refs = refsOf(words)
+  const marker = normText(splitMarker(agent.description)?.marker ?? '')
+  const name = isNameless(agent) ? '' : normText(agent.name)
+  let best: StepSeed | undefined
+  let bestScore = 0
+  let isTie = false
+  for (const seed of seeds) {
+    const step = seed.norm
+    if (step === '') continue
+    let score = 0
+    if (marker !== '' && (step === marker || step.startsWith(`${marker} `))) score = 4
+    else if (step.includes(' ') && said.includes(` ${step} `)) score = 3
+    else if (refs.has(String(seed.number)) || (seed.task !== undefined && refs.has(seed.task.id.toLowerCase()))) score = 2
+    else if (name.length >= 3 && !STOP_WORDS.has(name) && ` ${step} `.includes(` ${name} `)) score = 1
+    if (score > bestScore) {
+      best = seed
+      bestScore = score
+      isTie = false
+    } else if (score > 0 && score === bestScore) {
+      isTie = true
+    }
+  }
+  return bestScore > 0 && !isTie ? best : undefined
+}
+
+/** The step whose words overlap `words` most (at least two of the step's, or all of a one-word step); a tie is no answer. */
+function bestWords(words: ReadonlySet<string>, seeds: readonly StepSeed[]): { seed: StepSeed; score: number } | undefined {
+  let best: StepSeed | undefined
+  let bestScore = 0
+  let isTie = false
+  for (const seed of seeds) {
+    const step = seed.words
+    if (step.size === 0) continue
+    let overlap = 0
+    for (const word of step) if (words.has(word)) overlap += 1
+    if (overlap < Math.min(2, step.size)) continue
+    const score = overlap / step.size
+    if (score > bestScore) {
+      best = seed
+      bestScore = score
+      isTie = false
+    } else if (score === bestScore) {
+      isTie = true
+    }
+  }
+  return best && !isTie ? { seed: best, score: bestScore } : undefined
+}
+
+/** The step its caller had in progress at the Agent call: by key when the plan is that list, else by the item's words. */
+function duringSeed(agent: DeckAgent, seeds: readonly StepSeed[]): { seed: StepSeed; sure: number } | undefined {
+  const during = agent.during
+  if (!during) return undefined
+  const exact = seeds.find(seed => (during.kind === 'todo' && seed.todoKey === during.key) || (during.kind === 'task' && seed.task?.id === during.key))
+  if (exact) return { seed: exact, sure: HOW_SURE.during }
+  const text = normText(during.text)
+  const same = seeds.find(seed => seed.norm === text)
+  if (same) return { seed: same, sure: HOW_SURE.during }
+  const close = bestWords(wordsOf(during.text), seeds)
+  return close && close.score >= 0.6 ? { seed: close.seed, sure: 0.5 } : undefined
+}
+
+/** One of the Orchestrator's agents tied to a step, the surest way first: owner, self, mention, during, words. */
+function linkTop(agent: DeckAgent, source: DeckPlanSource, seeds: readonly StepSeed[]): DeckStepLink | undefined {
+  if (source === 'implicit') return { key: `agent:${agent.id}`, how: 'self', sure: 1, isInherited: false }
+  const link = (seed: StepSeed, how: DeckStepHow, sure = HOW_SURE[how]): DeckStepLink => ({ key: seed.key, how, sure, isInherited: false })
+  if (source === 'board') {
+    const names = new Set([isNameless(agent) ? '' : agent.name, agent.label ?? '', agent.id].map(one => one.toLowerCase()).filter(one => one !== ''))
+    const owned = seeds.filter(seed => seed.task?.owner !== undefined && names.has((seed.task.owner.toLowerCase().split('@')[0] ?? '').trim()))
+    const ownedOne = owned.find(seed => seed.task?.status === 'active') ?? owned[0]
+    if (ownedOne) return link(ownedOne, 'owner')
+    const claimed = seeds.filter(seed => seed.task?.claimedBy === agent.id)
+    const claimedOne = claimed.find(seed => seed.task?.status === 'active') ?? claimed[0]
+    if (claimedOne) return link(claimedOne, 'self')
+  }
+  const mentioned = mentionedSeed(agent, seeds)
+  if (mentioned) return link(mentioned, 'mention')
+  const during = duringSeed(agent, seeds)
+  if (during) return link(during.seed, 'during', during.sure)
+  const worded = bestWords(wordsOf(`${agent.description} ${agent.scope ?? ''} ${agent.prompt.slice(0, 300)}`), seeds)
+  if (worded && worded.score >= 0.5) return link(worded.seed, 'words', Math.round(worded.score * 50) / 100)
+  return undefined
+}
+
+/** Whether a workflow agent's words name a phase: its title whole, or most of its words. */
+function isOfPhase(agent: DeckAgent, seed: StepSeed): boolean {
+  const said = ` ${normText(`${agent.description} ${agent.label ?? ''} ${agent.prompt.slice(0, 300)}`)} `
+  const step = seed.norm
+  if (step !== '' && said.includes(` ${step} `)) return true
+  const words = seed.words
+  if (words.size === 0) return false
+  const mine = wordsOf(said)
+  let overlap = 0
+  for (const word of words) if (mine.has(word)) overlap += 1
+  return overlap >= Math.min(2, words.size) && overlap / words.size >= 0.5
+}
+
+function stepStatusOf(seed: StepSeed, agents: readonly DeckAgent[], run: DeckWorkflow | undefined, runAgents: readonly DeckAgent[]): DeckStepStatus {
+  const isFailed = (agent: DeckAgent) => agent.status === 'failed' || agent.status === 'killed'
+  if (seed.status !== undefined) {
+    if (seed.status === 'done') return 'done'
+    if (agents.length > 0 && !agents.some(agent => isLive(agent.status)) && agents.some(isFailed)) return 'failed'
+    return seed.status
+  }
+  const pool = run && agents.length === 0 ? runAgents.filter(agent => isOfPhase(agent, seed)) : agents
+  if (pool.some(agent => isLive(agent.status))) return 'active'
+  if (pool.some(agent => agent.status === 'completed' || agent.status === 'idle')) return 'done'
+  if (pool.some(isFailed)) return 'failed'
+  if (run?.endedAt !== undefined) return 'done'
+  return 'pending'
+}
+
+/**
+ * The goal in hand's plan, from the first source that has steps: the task
+ * board (this goal's tasks), the Orchestrator's TodoWrite, the approved
+ * ExitPlanMode plan, a Workflow's `meta.phases`, else one step per Agent call
+ * (`implicit`). Each of the Orchestrator's agents is tied to one step (see
+ * `links` for how and how sure); sub-agents take their parent's step and nest
+ * under it, so a step's `agents` are the Orchestrator's own.
+ */
+export function planOf(data: DeckData): DeckPlan {
+  const goal = goalOf(data)
+  const { source, seeds, run } = seedsOf(data, goal)
+  const links: Record<string, DeckStepLink> = {}
+  const byStep = new Map<string, DeckAgent[]>()
+  const unlinked: string[] = []
+  for (const agent of topAgentsOf(data, goal)) {
+    const link = linkTop(agent, source, seeds)
+    if (!link) {
+      unlinked.push(agent.id)
+      continue
+    }
+    links[agent.id] = link
+    byStep.set(link.key, [...(byStep.get(link.key) ?? []), agent])
+  }
+  for (const agent of data.agents) {
+    if (!isShownAgent(agent) || links[agent.id]) continue
+    const top = topOf(data, agent)
+    const link = top && top !== agent ? links[top.id] : undefined
+    if (link) links[agent.id] = { ...link, isInherited: true }
+  }
+  const runAgents = run ? data.agents.filter(agent => agent.workflow === run.id) : []
+  const steps = seeds.map(seed => {
+    const agents = byStep.get(seed.key) ?? []
+    return { key: seed.key, text: seed.text, status: stepStatusOf(seed, agents, run, runAgents), agents: agents.map(agent => agent.id) }
+  })
+  return { source, ...(goal ? { goal: goal.id } : {}), steps, unlinked, links }
+}
+
+/** How the agent is tied to the plan's step (a sub-agent through its parent); undefined while no step claims it. */
+export function stepLinkOf(data: DeckData, agentId: string): DeckStepLink | undefined {
+  return planOf(data).links[agentId]
+}
+
+// Files: what changed, who is editing it, and files two agents share.
+
+/** One edited file as the Files section reads it. */
+export type DeckFileView = {
+  path: string
+  abs: string
+  /** Who edited it, first editor first. */
+  editors: string[]
+  /** One of its editors is at work. */
+  live: boolean
+  /** Two of its editors edited it while both were live. */
+  isShared: boolean
+  added: number
+  removed: number
+  lastAt: number
+  isNew: boolean
+  userModified: boolean
+}
+
+/** The agents by id, for the queries that look many up at once. */
+function agentsById(data: DeckData): Map<string, DeckAgent> {
+  return new Map(data.agents.map(agent => [agent.id, agent]))
+}
+
+/** When an editor counts as live: from its start to its end; the Orchestrator, always. */
+function liveSpanOf(agent: DeckAgent | undefined): [number, number] {
+  if (!agent || agent.kind === 'main') return [-Infinity, Infinity]
+  return [agent.startedAt, agent.endedAt ?? Infinity]
+}
+
+function pairsOf(byId: ReadonlyMap<string, DeckAgent>, file: DeckFile): [string, string][] {
+  const pairs: [string, string][] = []
+  for (let i = 0; i < file.editors.length; i++) {
+    for (let j = i + 1; j < file.editors.length; j++) {
+      const a = file.editors[i]
+      const b = file.editors[j]
+      if (!a || !b) continue
+      const [startA, endA] = liveSpanOf(byId.get(a.agent))
+      const [startB, endB] = liveSpanOf(byId.get(b.agent))
+      const from = Math.max(startA, startB)
+      const to = Math.min(endA, endB)
+      if (from > to) continue
+      const isWithin = (one: DeckFile['editors'][number]) => one.lastAt >= from && one.firstAt <= to
+      if (isWithin(a) && isWithin(b)) pairs.push([a.agent, b.agent])
+    }
+  }
+  return pairs
+}
+
+/** The pairs of a file's editors that edited it while both were live. */
+export function sharersOf(data: DeckData, file: DeckFile): [string, string][] {
+  return pairsOf(agentsById(data), file)
+}
+
+/** Every file agents edited this session, the one edited last first: who edited it, whether one of them is at it now, and whether two share it. */
+export function filesOf(data: DeckData): DeckFileView[] {
+  const byId = agentsById(data)
+  const isLiveId = (id: string) => {
+    const agent = byId.get(id)
+    return agent !== undefined && isLive(agent.status)
+  }
+  return Object.values(data.files)
+    .map(file => ({
+      path: file.path,
+      abs: file.abs,
+      editors: file.editors.map(editor => editor.agent),
+      live: file.editors.some(editor => isLiveId(editor.agent)),
+      isShared: pairsOf(byId, file).length > 0,
+      added: file.added,
+      removed: file.removed,
+      lastAt: file.lastAt,
+      isNew: file.isNew === true,
+      userModified: file.userModified === true,
+    }))
+    .sort((a, b) => b.lastAt - a.lastAt || a.path.localeCompare(b.path))
+}
+
+/** The file two agents at work now both edit, the one edited last; undefined for none. */
+function sharedNowOf(data: DeckData): { file: DeckFile; a: DeckAgent; b: DeckAgent } | undefined {
+  const byId = agentsById(data)
+  const files = Object.values(data.files)
+    .filter(file => file.editors.filter(editor => isLive(byId.get(editor.agent)?.status ?? 'idle')).length >= 2)
+    .sort((x, y) => y.lastAt - x.lastAt)
+  for (const file of files) {
+    for (const [first, second] of pairsOf(byId, file)) {
+      const a = byId.get(first)
+      const b = byId.get(second)
+      if (a && b && isLive(a.status) && isLive(b.status)) return { file, a, b }
+    }
+  }
+  return undefined
+}
+
+// The header: what needs you, and the summary line.
+
+/** What git says of the repository the deck follows, as the header reads it. */
+export type GitFacts = Pick<GitState, 'isRepo' | 'files'> & Partial<Pick<GitState, 'checkedAt' | 'added' | 'removed'>>
+
+/** The one line that leads the Agents tab. */
+export type DeckNeedsLine = {
+  /** `attention`: waits on you, or a shared file; `alert`: a failure; `done`: all done, files to review; `quiet`: nothing. */
+  tone: 'alert' | 'attention' | 'done' | 'quiet'
+  kind: 'blocked' | 'failed' | 'shared' | 'review' | 'none'
+  text: string
+  /** The agent the line is about, which Open (n) selects. */
+  agentId?: string
+  /** The shared file's path. */
+  path?: string
+}
+
+/** What a needs-you note waits on, in words: `allow Bash "npm test"` for a permission prompt, else the notification's own words. */
+export function waitingOnOf(data: DeckData, needs: DeckNeeds): string {
+  const agent = agentOf(data, needs.agent ?? MAIN)
+  const call = needs.call !== undefined && agent ? agent.recent.find(one => one.id === needs.call) : undefined
+  const isPermission = needs.kind === 'permission_prompt' || /permission/i.test(needs.text)
+  if (isPermission && call) {
+    const what = call.command ?? call.target
+    return what ? `allow ${call.tool} "${trunc(oneLine(what), 60)}"` : `allow ${call.tool}`
+  }
+  const tool = isPermission ? /permission to use (.+)$/i.exec(needs.text.trim())?.[1]?.trim() : undefined
+  return tool ? `allow ${tool}` : needs.text
+}
+
+/** How many files the work changed: git's uncommitted files once read, else the files agents edited. */
+function changedCountOf(data: DeckData, git: GitFacts): number {
+  return git.isRepo === true && (git.checkedAt ?? 1) > 0 ? git.files.length : Object.keys(data.files).length
+}
+
+/**
+ * The single most urgent thing, for the needs-you line: a prompt blocked on
+ * you (`<label> waits on you: allow Bash "npm test"`), then a failure of this
+ * goal's, then a file two running agents both edit. Otherwise "All done · N
+ * files to review" once nothing is at work, else "Nothing needs you". `now`
+ * is accepted and unused: the line holds no time.
+ */
+export function needsOf(data: DeckData, git: GitFacts, now?: number): DeckNeedsLine {
+  void now
+  const main = agentOf(data, MAIN)
+  const needs = main?.needs
+  if (needs && needs.kind !== 'idle_prompt') {
+    const id = needs.agent ?? MAIN
+    const agent = agentOf(data, id)
+    return { tone: 'attention', kind: 'blocked', text: `${agent ? labelOf(agent) : ORCHESTRATOR} waits on you: ${waitingOnOf(data, needs)}`, agentId: agent ? id : MAIN }
+  }
+  const goal = goalOf(data)
+  const failed = data.agents
+    .filter(agent => isShownAgent(agent) && agent.status === 'failed' && (goal === undefined || agent.goal === goal.id))
+    .sort((a, b) => (b.endedAt ?? b.lastAt) - (a.endedAt ?? a.lastAt))[0]
+  if (failed) {
+    const why = failureOf(failed)
+    return { tone: 'alert', kind: 'failed', text: why ? `${labelOf(failed)} failed: ${trunc(oneLine(why), 100)}` : `${labelOf(failed)} failed`, agentId: failed.id }
+  }
+  const shared = sharedNowOf(data)
+  if (shared) {
+    return { tone: 'attention', kind: 'shared', text: `${labelOf(shared.a)} and ${labelOf(shared.b)} both edit ${shared.file.path}`, agentId: shared.b.id, path: shared.file.path }
+  }
+  if (goal && !hasLiveAgents(data) && main?.status !== 'running') {
+    const count = changedCountOf(data, git)
+    if (count > 0) return { tone: 'done', kind: 'review', text: `All done · ${plural(count, 'file')} to review` }
+  }
+  return { tone: 'quiet', kind: 'none', text: 'Nothing needs you' }
+}
+
+/** The summary line under the goal. */
+export type DeckSummary = {
+  /** "2 of 4": the step in progress (else the steps done) of the plan's; '' with no plan. */
+  step: string
+  /** This goal's agents, by what they are doing now (one waiting on you is not running). */
+  running: number
+  waiting: number
+  done: number
+  failed: number
+  /** Files changed, lines added and removed: git's once read, else the agents' edits. */
+  files: number
+  added: number
+  removed: number
+  /** Whole minutes since the goal began, to now while work goes on, else to its last news. */
+  minutes: number
+}
+
+/** The summary line's figures: the plan's step, this goal's agents by state, the files and lines changed, and its minutes. */
+export function summaryOf(data: DeckData, git: GitFacts, now?: number): DeckSummary {
+  return summaryWith(data, git, now, planOf(data))
+}
+
+/** `summaryOf` over a plan read already. */
+function summaryWith(data: DeckData, git: GitFacts, now: number | undefined, plan: DeckPlan): DeckSummary {
+  const goal = goalOf(data)
+  const steps = plan.steps
+  const active = steps.findIndex(step => step.status === 'active')
+  const stepsDone = steps.filter(step => step.status === 'done').length
+  const step = steps.length === 0 ? '' : `${active >= 0 ? active + 1 : stepsDone} of ${steps.length}`
+
+  let running = 0
+  let waiting = 0
+  let done = 0
+  let failed = 0
+  for (const agent of data.agents) {
+    if (!isShownAgent(agent) || (goal !== undefined && agent.goal !== goal.id)) continue
+    const shown = statusOf(agent, data)
+    if (shown === 'waiting') waiting += 1
+    else if (shown === 'running') running += 1
+    else if (agent.status === 'completed') done += 1
+    else if (agent.status === 'failed') failed += 1
+  }
+  const main = agentOf(data, MAIN)
+  if (main?.needs && main.needs.kind !== 'idle_prompt' && (main.needs.agent ?? MAIN) === MAIN) waiting += 1
+
+  let files: number
+  let added: number
+  let removed: number
+  if (git.isRepo === true && (git.checkedAt ?? 1) > 0) {
+    files = git.files.length
+    added = git.added ?? git.files.reduce((sum, file) => sum + file.added, 0)
+    removed = git.removed ?? git.files.reduce((sum, file) => sum + file.removed, 0)
+  } else {
+    const edited = Object.values(data.files)
+    files = edited.length
+    added = edited.reduce((sum, file) => sum + file.added, 0)
+    removed = edited.reduce((sum, file) => sum + file.removed, 0)
+  }
+
+  let minutes = 0
+  if (goal) {
+    const isBusy = hasLiveAgents(data) || main?.status === 'running'
+    const news = data.agents.filter(agent => agent.kind === 'main' || agent.goal === goal.id).map(agent => agent.endedAt ?? agent.lastAt)
+    const end = isBusy && now !== undefined ? now : Math.max(goal.at, ...news)
+    minutes = Math.max(0, Math.floor((end - goal.at) / 60_000))
+  }
+  return { step, running, waiting, done, failed, files, added, removed, minutes }
+}
+
+// The redraw policy: what the Agents tab shows, as one signature.
+
+/**
+ * Everything the v3 Agents tab draws, as one short signature: the goal, the
+ * plan (sources, steps, states, links), each agent's row (label, status, step,
+ * last action and whether it runs, checklist, counts, result), the files, the
+ * messages, the needs-you line, the summary (minutes included) and the folded
+ * row. Equal signatures draw the same tab.
+ */
+export function deckKeyOf(data: DeckData, git: GitFacts, now: number): string {
+  const goal = goalOf(data)
+  const plan = planOf(data)
+  const parts: string[] = [
+    goal ? `goal\t${goal.id}\t${goal.headline}\t${goal.followUps.length}\t${goal.plan?.steps.length ?? 0}` : 'goal',
+    `plan\t${plan.source}\t${plan.steps.map(step => `${step.key}:${step.status}:${step.agents.join(',')}:${step.text}`).join('|')}\t${plan.unlinked.join(',')}`,
+  ]
+  for (const agent of data.agents) {
+    const action = lastActionOf(agent)
+    const list = checklistOf(agent, data)
+    const link = plan.links[agent.id]
+    parts.push(
+      [
+        agent.id,
+        labelOf(agent),
+        agent.status,
+        statusOf(agent, data),
+        stepOf(agent),
+        action ? `${action.text}:${action.isLive}:${action.ok ?? ''}` : '',
+        `${list.done}/${list.total}:${list.items.map(item => `${item.key}${item.status[0] ?? ''}`).join('')}`,
+        agent.tools,
+        agent.errors,
+        agent.recent.filter(one => one.ms !== undefined).length,
+        agent.added,
+        agent.removed,
+        agent.answer?.length ?? 0,
+        agent.endedAt ?? '',
+        agent.parentId ?? '',
+        agent.origin ?? '',
+        agent.model ?? '',
+        link ? `${link.key}:${link.how}` : '',
+      ].join('\t'),
+    )
+  }
+  parts.push(`files\t${filesOf(data).map(file => `${file.path}:${file.editors.join(',')}:${file.live}:${file.isShared}:${file.added}:${file.removed}`).join('|')}`)
+  const last = data.messages[data.messages.length - 1]
+  parts.push(`messages\t${data.messages.length}\t${last?.id ?? ''}\t${last?.text.length ?? 0}\t${data.messages.filter(one => one.isDelivered).length}`)
+  const needs = needsOf(data, git)
+  parts.push(`needs\t${needs.kind}\t${needs.text}`, `summary\t${JSON.stringify(summaryWith(data, git, now, plan))}`, `fold\t${foldOf(data)?.text ?? ''}`)
+  const text = parts.join('\n')
+  return `${hash(text).toString(36)}:${text.length}`
+}
+
+// Deliveries: the envelope a message arrives in, and the send it echoes.
+
+/**
+ * A delivery's text out of the envelope the engine wraps it in for its
+ * receiver (`<agent-message from="reviewer">\n…\n</agent-message>`, and the
+ * like for any `*-message` tag: the first one, whatever stands around it),
+ * with the sender the envelope names. Text in no envelope comes back as it is.
+ */
+export function unwrapMessage(text: string): { text: string; from?: string } {
+  const found = /<([a-z][\w-]*-message)\b([^>]*)>([\s\S]*?)<\/\1>/i.exec(text)
+  if (!found) return { text }
+  const body = (found[3] ?? '').replace(/^\s*\n/, '').replace(/\n\s*$/, '').trim()
+  const from = /\b(?:from|sender|teammate_id|teammate)\s*=\s*"([^"]*)"/i.exec(found[2] ?? '')?.[1]?.trim()
+  return from ? { text: body, from } : { text: body }
+}
+
+/**
+ * The send a delivery to `to` echoes, among the last 16 messages of the last
+ * 20 seconds: the same words once the envelope is off (or one the start of
+ * the other), to the receiver or to an agent of the receiver's name. A send
+ * followed by its receive is then logged once.
+ */
+export function echoOf(data: DeckData, to: string, text: string, now: number): DeckMessage | undefined {
+  const body = oneLine(unwrapMessage(text).text)
+  if (body === '') return undefined
+  const head = body.slice(0, 40)
+  const receiver = agentOf(data, to)
+  const name = receiver && !isNameless(receiver) ? receiver.name.toLowerCase() : ''
+  const recent = data.messages.slice(-16)
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const message = recent[i]
+    if (!message || now - message.at >= 20_000 || message.kind === 'result') continue
+    const target = agentOf(data, message.to)
+    const isToReceiver = message.to === to || (name !== '' && target !== undefined && !isNameless(target) && target.name.toLowerCase() === name)
+    if (!isToReceiver) continue
+    const sent = oneLine(message.text)
+    if (sent === body || sent.startsWith(head) || body.startsWith(sent.slice(0, 40))) return message
+  }
+  return undefined
 }

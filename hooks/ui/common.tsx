@@ -14,7 +14,7 @@ import type { DeckData, DeckShownStatus } from '../../types'
 import { codeSourcesOf, type Hunk } from '../diff'
 import * as F from '../format'
 import { MAIN, ORCHESTRATOR, agentOf, labelOf } from '../model'
-import { N, NATIVE_TEXT, STATUS_GLYPH, STATUS_NATIVE } from './theme'
+import { N, NATIVE_TEXT, STATUS_COLOR, STATUS_GLYPH, STATUS_NATIVE, T } from './theme'
 import type { Kit } from './types'
 
 /** Below this many characters left in a budget, a diff is noted as cut rather than drawn a few lines deep. */
@@ -181,4 +181,47 @@ export function treeSize(root: RenderElement): TreeSize {
 export function fitsTree(root: RenderElement): boolean {
   const size = treeSize(root)
   return size.nodes <= TREE_BOUNDS.nodes && size.chars <= TREE_BOUNDS.chars && size.depth <= TREE_BOUNDS.depth
+}
+
+// The bench's exact colours on native text (hex, which native Text takes as given). Only status, add and
+// remove, and the copper selection: text levels stay bold / plain / dim, so they follow a light host theme too.
+
+/** The status square in the bench's own colours (`STATUS_COLOR`): filled, idle hollow. */
+export function square(kit: Kit, status: DeckShownStatus): RenderElement {
+  const { Text } = kit
+  return <Text color={STATUS_COLOR[status]}>{STATUS_GLYPH[status]}</Text>
+}
+
+/** A plan step's or a checklist item's mark: ✓ done (steel), ■ in hand (its status colour), □ not started (dust). */
+export function stepMark(kit: Kit, status: DeckShownStatus): RenderElement {
+  const { Text } = kit
+  if (status === 'done') return <Text color={T.info}>✓</Text>
+  if (status === 'idle') return <Text color={T.text3}>□</Text>
+  return <Text color={STATUS_COLOR[status]}>■</Text>
+}
+
+/** `+a −r` in the bench's add and remove colours (sage, oxide), a zero side left out; null when nothing changed. */
+export function delta(kit: Kit, added: number, removed: number): RenderElement | null {
+  const { Text } = kit
+  if (added <= 0 && removed <= 0) return null
+  return (
+    <Text>
+      {added > 0 ? <Text color={T.ok}>{`+${F.num(added)}`}</Text> : null}
+      {added > 0 && removed > 0 ? ' ' : null}
+      {removed > 0 ? <Text color={T.err}>{`−${F.num(removed)}`}</Text> : null}
+    </Text>
+  )
+}
+
+/** The cells `+a −r` takes as `delta` draws it; 0 when nothing changed. */
+export function deltaWidth(added: number, removed: number): number {
+  const plus = added > 0 ? F.num(added).length + 1 : 0
+  const minus = removed > 0 ? F.num(removed).length + 1 : 0
+  return plus + minus + (plus > 0 && minus > 0 ? 1 : 0)
+}
+
+/** The copper bar a selected row carries in its reserved first column; null leaves the column blank. */
+export function copperBar(kit: Kit, isOn: boolean): RenderElement | null {
+  const { Text } = kit
+  return isOn ? <Text color={T.copper}>▌</Text> : null
 }

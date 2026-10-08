@@ -71,6 +71,12 @@ export function dirOf(file: string): string {
   return BARE_DRIVE.test(dir) ? `${dir}/` : dir
 }
 
+/** `name` inside directory `dir`: one slash between, a root kept whole (`C:/` and `x` make `C:/x`). */
+export function childOf(dir: string, name: string): string {
+  const clean = cleanPath(dir)
+  return clean.endsWith('/') ? `${clean}${name}` : `${clean}/${name}`
+}
+
 /** The root `git rev-parse --show-toplevel` printed, its newline cut; '' when it printed none. */
 export function rootOf(stdout: string): string {
   const line = stdout.split(/\r?\n/)[0] ?? ''

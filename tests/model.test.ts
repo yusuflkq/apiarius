@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { Args, On } from 'claude-code'
 import { expect, mock, test, type MockClock } from 'claude-code/testing'
 
 import { emptyGit, type FileRow } from '../hooks/git'
@@ -406,4 +406,182 @@ test('messages: a pick opens the agent a message went to (its sender for one sen
   // the map's view and the picked message are part of the view a reload keeps
   expect(M.defaultView()).toMatchObject({ map: 'tree', message: '' })
   expect(M.MAP_VIEWS).toEqual(['tree', 'wire'])
+})
+
+// The QA live run's four bugs, each replayed as QA met it. Each fails on the build before its fix.
+
+const ASK = 'Is your diff for the token refresh fix ready to review?'
+const REPORT = 'Fixed needsRefresh() and added two tests; 4 of 4 pass.'
+
+/** The spawn an Agent call naming the agent `name` raises, in the main loop. */
+function named(name: string) {
+  return {
+    tool_use_id: `toolu_${name}`,
+    prompt: `Do the ${name} work.`,
+    description: name,
+    subagentType: 'general-purpose',
+    name,
+    provider: { plugin: 'engine', tier: 'core' as const },
+    parentModel: 'claude-test',
+    background: true,
+    fork: false,
+  }
+}
+
+/** A SubagentHandback call in `agentId`'s loop: a tool this build's table does not list. */
+function handback(agentId: string, message: string): Args<'tool.call'> {
+  return { tool: 'SubagentHandback', message, agentId } as unknown as Args<'tool.call'>
+}
+
+/** A tool call made inside agent `agentId`'s loop, as the engine raises it there. */
+function inLoop<T extends object>(agentId: string, call: T): T & { agentId: string } {
+  return { ...call, agentId }
+}
+
+/**
+ * The QA run's engine, in Claude Code's place: a named spawn is
+ * `agent-<name>`; git sees one repository at `root`, from its own spelling
+ * or the 8.3 short one (`short`) as real git does, and prints `root`; and
+ * `fs.stat` with `resolve` answers the long spelling, as Windows does.
+ * `saved` collects each snapshot the deck keeps.
+ */
+function qaWorld(on: On, saved: DeckSnapshot[], options: { root?: string; short?: string } = {}) {
+  const root = options.root ?? '/repo'
+  const short = options.short
+  const longOf = (path: string): string => {
+    const clean = path.replace(/\\/g, '/')
+    return short && clean.toLowerCase().startsWith(short.toLowerCase()) ? `${root}${clean.slice(short.length)}` : clean
+  }
+  const changed: string[] = []
+  const ran = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  mock.store(on)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
+  on('session.id', () => ({ value: 'session-1' }))
+  on('session.model', () => ({ value: 'claude-test' }))
+  on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [], cost: { usd: 1.25 } } }))
+  on('session.messages', () => ({ value: [] }))
+  on('agent.list', () => ({ value: [] }))
+  on('agent.spawn', ($, e) => ({ model: 'claude-haiku', agentId: `agent-${e.name ?? 'x'}` }))
+  on('session.send', () => ({ isDelivered: true }))
+  on('session.receive', ($, e) => ({ text: e.text }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('classic.SubagentStop', () => ({}))
+  on('fs.read', () => ({ value: '' }))
+  on('fs.stat', ($, e) => {
+    const real = longOf(e.path)
+    return { value: { kind: 'dir' as const, size: 0, mtimeMs: NOW, isLink: false, ...(e.resolve ? { realPath: /^[a-z]:/i.test(real) ? real.replace(/\//g, '\\') : real } : {}) } }
+  })
+  on('process.run', ($, e) => {
+    const line = e.argv.join(' ')
+    const at = longOf(e.init?.cwd ?? '').toLowerCase()
+    if (at !== root.toLowerCase() && !at.startsWith(`${root.toLowerCase()}/`)) return ran(128, '')
+    if (line.includes('rev-parse --show-toplevel')) return ran(0, `${root}\n`)
+    if (line.includes('rev-parse --abbrev-ref HEAD')) return ran(0, 'main\n')
+    if (line.includes('rev-parse --verify --quiet HEAD')) return ran(0, `${HASH}\n`)
+    if (line.includes('status --porcelain')) return ran(0, changed.map(path => ` M ${path}\0`).join(''))
+    if (line.includes('--numstat -z HEAD')) return ran(0, changed.map(path => `1\t1\t${path}\0`).join(''))
+    return ran(1, '')
+  })
+  on('tool.call', ($, e) => {
+    if (e.tool !== 'Edit') return { result: 'ok' }
+    const rel = longOf(e.file_path).slice(root.length + 1)
+    if (!changed.includes(rel)) changed.push(rel)
+    return {
+      result: {
+        filePath: e.file_path,
+        oldString: e.old_string,
+        newString: e.new_string,
+        originalFile: '',
+        structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-before', '+after'] }],
+        userModified: false,
+        replaceAll: false,
+      },
+    }
+  })
+  let version = 0
+  on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
+  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+    saved.push(JSON.parse(JSON.stringify(e.value)) as DeckSnapshot)
+    version += 1
+    return { value: { isSet: true as const, version } }
+  })
+}
+
+test('QA 1: a SendMessage and its delivery, which the receiver reads inside <agent-message from=…>, are logged once', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  qaWorld(on, saved)
+
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+  await $.agent.spawn(named('fixer'))
+  await $.agent.spawn(named('reviewer'))
+  await $.session.send({ to: 'fixer', text: ASK, origin: { kind: 'model' }, agentId: 'agent-reviewer' })
+  await $.session.receive({ origin: { kind: 'peer' }, text: `<agent-message from="reviewer">\n${ASK}\n</agent-message>`, agentId: 'agent-fixer' })
+  await clock.advance(2000)
+
+  const asked = lastOf(saved).data.messages.filter(message => message.kind === 'message')
+  expect(asked.map(message => [message.from, message.to, message.text, message.isDelivered])).toEqual([['agent-reviewer', 'agent-fixer', ASK, true]])
+})
+
+test('QA 2: an agent that ends through SubagentHandback has its report as its result, though its turn answers ""', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  qaWorld(on, saved)
+
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+  await $.agent.spawn(named('fixer'))
+  await $.tool.call(handback('agent-fixer', REPORT))
+  await $.turn.complete({ turnId: 'turn-fixer', answer: '', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-fixer' })
+  // its loop's last words at SubagentStop are no second result
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'agent-fixer', agent_transcript_path: '', agent_type: 'general-purpose', last_assistant_message: 'Handing the report back.' })
+  await clock.advance(2000)
+
+  const data = lastOf(saved).data
+  const fixer = M.agentOf(data, 'agent-fixer')
+  expect([fixer?.status, fixer?.answer]).toEqual(['completed', REPORT])
+  expect(data.messages.filter(message => message.kind === 'result').map(message => [message.from, message.to, message.text])).toEqual([['agent-fixer', M.MAIN, REPORT]])
+})
+
+test('QA 3: an edit spelled with an 8.3 short path (DEVELO~1) reads as git spells it: relative to the repository, and by its agent', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  qaWorld(on, saved, { root: 'C:/Users/developer/demo', short: 'C:/Users/DEVELO~1/demo' })
+
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\developer\\Documents' })
+  await $.agent.spawn(named('fixer'))
+  await $.tool.call(inLoop('agent-fixer', { tool: 'Edit' as const, file_path: 'C:\\Users\\DEVELO~1\\demo\\src\\token.js', old_string: 'before', new_string: 'after' }))
+  await clock.advance(5000)
+
+  const data = lastOf(saved).data
+  expect(data.edits.map(edit => [edit.path, edit.abs])).toEqual([['src/token.js', 'C:/Users/developer/demo/src/token.js']])
+  // what the Changes tab's "by fixer" reads: the agents that edited git's path
+  expect(M.editorsOf(data, 'src/token.js').map(M.labelOf)).toEqual(['fixer'])
+})
+
+test('QA 4: a name two agents carried (a reviewer finished, another spawned) resolves to the newest live one', async () => {
+  const data = M.emptyData(NOW)
+  data.agents.push(
+    M.newAgent('a-old', 'agent', 'reviewer', NOW - 60_000, { status: 'completed', parentId: M.MAIN }),
+    M.newAgent('a-new', 'agent', 'reviewer', NOW - 30_000, { status: 'running', parentId: M.MAIN }),
+    M.newAgent('a-later', 'agent', 'reviewer', NOW - 10_000, { status: 'completed', parentId: M.MAIN }),
+  )
+  expect(M.resolveRecipient(data, 'reviewer')?.id).toBe('a-new')
+  expect(M.resolveRecipient(data, 'Reviewer@team')?.id).toBe('a-new')
+  // none live: the newest
+  M.agentOf(data, 'a-new')!.status = 'completed'
+  expect(M.resolveRecipient(data, 'reviewer')?.id).toBe('a-later')
+  // two live: the newer
+  M.agentOf(data, 'a-new')!.status = 'running'
+  data.agents.push(M.newAgent('a-newest', 'agent', 'reviewer', NOW, { status: 'running', parentId: M.MAIN }))
+  expect(M.resolveRecipient(data, 'reviewer')?.id).toBe('a-newest')
+  // an id is that agent, whatever its name
+  expect(M.resolveRecipient(data, 'a-old')?.id).toBe('a-old')
 })

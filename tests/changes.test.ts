@@ -79,6 +79,9 @@ function recorder(current: () => DeckModel): { actions: Actions; calls: string[]
   }
   const actions: Actions = {
     setTab: note('setTab'),
+    select: note('select'),
+    toggleFold: note('toggleFold'),
+    zoomTo: note('zoomTo'),
     selectAgent: note('selectAgent'),
     setAgentPane: note('setAgentPane'),
     selectFile: path => {
@@ -100,8 +103,6 @@ function recorder(current: () => DeckModel): { actions: Actions; calls: string[]
     },
     review: note('review'),
     open: note('open'),
-    selectMessage: note('selectMessage'),
-    setMapView: note('setMapView'),
     selectRepo: note('selectRepo'),
   }
   return { actions, calls }

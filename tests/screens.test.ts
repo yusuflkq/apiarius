@@ -4,6 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { emptyGit, type FileRow } from '../hooks/git'
 import * as M from '../hooks/model'
 import { treeSize } from '../hooks/ui/common'
+import { T } from '../hooks/ui/theme'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
 
 const HASH = 'a'.repeat(40)
@@ -170,14 +171,27 @@ function fileRow(path: string): FileRow {
 /** The git the stub world shows once read: a repository with two changed files. */
 const GIT = { ...emptyGit(), isRepo: true, files: [fileRow('src/app.ts'), fileRow('notes.txt')] }
 
-type Found = { type: string; key: string | undefined; props: Record<string, unknown>; text: string }
+type Found = { type: string; key: string | undefined; props: Record<string, unknown>; text: string; children: unknown[] }
+type Drawing = { findAll: (query: { type?: string }) => Promise<Found[]> }
 
-/** Every Box drawn with the quote border: the banner's bar, and on the terminal the map's rails. */
-async function quoteBoxes(ui: { findAll: (query: { type?: string }) => Promise<Found[]> }): Promise<Found[]> {
-  return (await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'quote')
+/** The needs-you line's bar: every Box drawn with the quote border in copper. */
+async function copperBars(ui: Drawing): Promise<Found[]> {
+  return (await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'quote' && box.props.borderColor === T.copper)
 }
 
-test('the default tab is Agents: the tab row, then the status bar and the banner, on each surface', async ($, on) => {
+/** The outline's rows, top to bottom, by the id each stands for. */
+async function rowsOf(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('row:')).map(key => key.slice('row:'.length))
+}
+
+/** The cells an outline row is indented: its fold column's left padding. */
+async function indentOf(ui: Drawing, id: string): Promise<number> {
+  const row = (await ui.findAll({ type: 'Box' })).find(box => box.key === `row:${id}`)
+  const line = (row?.children[0] ?? {}) as { children?: { props?: Record<string, unknown> }[] }
+  return Number(line.children?.[1]?.props?.paddingLeft ?? -1)
+}
+
+test('the default tab is Agents: the tab row, then the needs-you line, the goal and summary, and the outline, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -190,25 +204,27 @@ test('the default tab is Agents: the tab row, then the status bar and the banner
     expect((await ui.find({ key: 'tab:agents' }))?.props).toMatchObject({ dimColor: false, hotkey: '1' })
     expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: true, hotkey: '2' })
     expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: true, hotkey: '3' })
-    expect(await ui.find({ type: 'Text', text: 'Agent deck' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: ' · repo · main' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '2 files' })).toBeDefined()
-    // nobody at work: the banner is the uncommitted work, plain, with no bar
-    expect(await ui.find({ type: 'Text', text: M.bannerOf(M.emptyData(NOW), GIT, NOW).text })).toBeDefined()
-    expect((await ui.findAll({ type: 'Box' })).some(box => box.props.borderStyle === 'quote' && box.props.borderColor !== undefined)).toBe(false)
-    // the Orchestrator is selected and opens on its Diffs
-    expect((await ui.find({ key: 'agent:main' }))?.props.variant).toBe('primary')
+    // nothing needs you: the line is quiet, with no bar
+    expect(await ui.find({ type: 'Text', text: M.needsOf(M.emptyData(NOW), GIT).text })).toBeDefined()
+    expect(await copperBars(ui)).toEqual([])
+    expect(await ui.find({ key: 'needs:open' })).toBeUndefined()
+    // no goal yet; the summary counts the two files git found
+    expect(await ui.find({ type: 'Text', text: 'Goal' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^2 files$/ })).toBeDefined()
+    // the Orchestrator alone in the outline, selected, its detail open on Diffs
+    expect(await rowsOf(ui)).toEqual(['main'])
+    expect(await ui.find({ type: 'Text', text: 'No agents yet; delegated work shows here as it starts.' })).toBeDefined()
+    expect((await ui.find({ key: 'agent:main' }))?.props).toMatchObject({ variant: 'primary', hotkey: 'o' })
     expect((await ui.find({ key: 'detail:edits' }))?.props.dimColor).toBe(false)
-    expect(await ui.find({ type: 'Text', text: 'No edits by Orchestrator yet. Its Edit and Write calls show here as exact diffs.' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'No messages yet. Prompts, hand-offs and replies show here in order.' })).toBeDefined()
+    expect(await ui.find({ type: 'Code' })).toBeUndefined()
     await ui.unmount()
   }
 })
 
-const BANNERS: { name: string; data: () => DeckData; isLoud: boolean }[] = [
-  { name: 'who runs, and what the busiest is doing', data: busyData, isLoud: false },
+const NEEDS: { name: string; data: () => DeckData; isLoud: boolean }[] = [
+  { name: 'nothing, while the agents work', data: busyData, isLoud: false },
   {
-    name: 'a failure leads, on the bar',
+    name: 'a failure, on the bar',
     data: () => {
       const data = busyData()
       const fixer = M.agentOf(data, 'agent-fixer')!
@@ -228,78 +244,63 @@ const BANNERS: { name: string; data: () => DeckData; isLoud: boolean }[] = [
   },
 ]
 
-for (const banner of BANNERS) {
-  test(`the banner says the one thing to notice: ${banner.name}`, async ($, on) => {
+for (const needs of NEEDS) {
+  test(`the needs-you line says the one thing to notice: ${needs.name}`, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const data = banner.data()
+    const data = needs.data()
     world(on, { restored: snapshot(data) })
     await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
     await $.command.run(deck(''))
     await clock.advance(1000)
 
-    const said = M.bannerOf(data, GIT, NOW)
-    expect(said.tone === 'alert' || said.tone === 'attention').toBe(banner.isLoud)
+    const said = M.needsOf(data, GIT, NOW)
+    expect(said.tone === 'alert' || said.tone === 'attention').toBe(needs.isLoud)
     for (const surface of SURFACES) {
       const ui = await $.ui.mount(pane(surface))
-      const bars = (await quoteBoxes(ui)).filter(box => box.props.borderColor !== undefined)
-      if (banner.isLoud) {
-        // the subject bold, the rest plain, behind the accent bar
-        const cut = said.text.indexOf(': ')
-        const subject = cut > 0 ? said.text.slice(0, cut) : said.text
+      const bars = await copperBars(ui)
+      if (needs.isLoud) {
+        // one row behind the copper bar: the agent bold, the rest plain, and Open (n) selects it
         expect(bars.length).toBe(1)
-        expect(bars[0]?.text).toContain(subject)
-        expect(await ui.find({ type: 'Text', text: ` ${subject}` })).toBeDefined()
+        expect(bars[0]?.text).toContain(said.text)
+        expect(await ui.find({ type: 'Text', text: ' fixer' })).toBeDefined()
+        expect((await ui.find({ key: 'needs:open' }))?.props.hotkey).toBe('n')
+        await ui.press({ key: 'needs:open' })
+        expect((await ui.find({ key: `agent:${said.agentId}` }))?.props.variant).toBe('primary')
+        await ui.press({ key: 'agent:main' })
       } else {
         expect(bars).toEqual([])
         expect(await ui.find({ type: 'Text', text: said.text })).toBeDefined()
+        expect(await ui.find({ key: 'needs:open' })).toBeUndefined()
       }
       await ui.unmount()
     }
   })
 }
 
-test('the map: an Svg tree on the desktop that Wire switches, railed rows on the terminal', async ($, on) => {
+test('the outline: who started whom, and where each agent is, in native rows on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on, { restored: snapshot(busyData()) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
   await $.command.run(deck('agents'))
   await clock.advance(1000)
 
-  const desktop = await $.ui.mount(pane('desktop'))
-  const tree = String((await desktop.find({ type: 'Svg' }))?.props.source)
-  expect(tree).toContain('class="plate"')
-  expect(tree).toContain('fixer')
-  expect(tree).toContain('helper')
-  // the latest prompt labels the You → Orchestrator edge
-  expect(tree).toContain('Fix the login bug')
-  expect((await desktop.find({ key: 'map:tree' }))?.props.dimColor).toBe(false)
-
-  await desktop.press({ key: 'map:wire' })
-  const wire = String((await desktop.find({ type: 'Svg' }))?.props.source)
-  expect(wire).toContain('class="lane"')
-  expect(wire).not.toContain('class="plate"')
-  expect(wire).toContain('It is src/auth.ts')
-  expect((await desktop.find({ key: 'map:wire' }))?.props.dimColor).toBe(false)
-
-  await desktop.press({ key: 'map:tree' })
-  expect(String((await desktop.find({ type: 'Svg' }))?.props.source)).toBe(tree)
-  await desktop.unmount()
-
-  const terminal = await $.ui.mount(pane('terminal'))
-  expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
-  expect(await terminal.find({ key: 'map:wire' })).toBeUndefined()
-  // helper sits one rail deeper than fixer, which sits one deeper than the Orchestrator
-  const rails = await quoteBoxes(terminal)
-  expect(rails.length).toBe(3)
-  expect(rails[0]?.text).toContain('fixer')
-  expect(rails[2]?.text).toContain('helper')
-  expect(rails[2]?.text).not.toContain('fixer')
-  expect(await terminal.find({ type: 'Text', text: '  Run the unit tests' })).toBeDefined()
-  expect(await terminal.find({ type: 'Text', text: '  Fix the login bug' })).toBeDefined()
-  await terminal.unmount()
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    // no image and no toggle: helper one level under fixer, fixer one under the Orchestrator
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    expect(await ui.find({ key: 'map:wire' })).toBeUndefined()
+    expect(await rowsOf(ui)).toEqual(['main', 'agent-fixer', 'agent-helper'])
+    expect([await indentOf(ui, 'main'), await indentOf(ui, 'agent-fixer'), await indentOf(ui, 'agent-helper')]).toEqual([0, 2, 4])
+    // what the Orchestrator waits on, and each agent's line two: its call, else its task
+    expect(await ui.find({ type: 'Text', text: 'waiting on 1 agent' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Run the unit tests' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Find the auth module' })).toBeDefined()
+    expect((await ui.find({ key: 'agent:agent-helper' }))?.props.label).toBe('helper')
+    await ui.unmount()
+  }
 })
 
-test('pressing an agent in the strip opens its summary, and Diffs shows its exact patch', async ($, on) => {
+test('pressing an agent in the outline opens its detail, and Diffs shows its exact patch', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on, { restored: snapshot(busyData()) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
@@ -308,16 +309,16 @@ test('pressing an agent in the strip opens its summary, and Diffs shows its exac
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    // the strip: a native Button per agent, never plain, the selected one the primary plate
+    // each label a native Button, never plain; the selected one the primary plate
     for (const key of ['agent:main', 'agent:agent-fixer', 'agent:agent-helper']) expect((await ui.find({ key }))?.props.plain).toBeUndefined()
     await ui.press({ key: 'agent:agent-fixer' })
     expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
     expect((await ui.find({ key: 'agent:main' }))?.props.variant).toBeUndefined()
 
-    for (const label of ['Task', 'Now', 'Result', 'Talked to']) expect(await ui.find({ type: 'Text', text: label })).toBeDefined()
+    // its task and where it is
+    for (const label of ['Task', 'Now']) expect(await ui.find({ type: 'Text', text: label })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Fix the login bug in src/auth.ts and run the tests' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Run the unit tests' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: ' ×2' })).toBeDefined()
 
     const code = await ui.find({ type: 'Code' })
     expect(code?.props.format).toBe('diff')
@@ -331,14 +332,14 @@ test('pressing an agent in the strip opens its summary, and Diffs shows its exac
     await ui.press({ key: 'detail:edits' })
 
     await ui.press({ key: 'agent:agent-helper' })
+    expect((await ui.find({ key: 'agent:agent-helper' }))?.props.variant).toBe('primary')
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: 'No edits by helper yet. Its Edit and Write calls show here as exact diffs.' })).toBeDefined()
     await ui.press({ key: 'agent:main' })
     await ui.unmount()
   }
 })
 
-test('a press on a message row selects the agent it went to and marks the row', async ($, on) => {
+test('Talk: the Orchestrator`s is the whole log, who handed what to whom in order; an agent`s is its own; a press opens a message', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const data = busyData()
   world(on, { restored: snapshot(data) })
@@ -347,39 +348,31 @@ test('a press on a message row selects the agent it went to and marks the row', 
   await clock.advance(1000)
 
   const [prompt, toFixer, toHelper, result] = data.messages
+  const talk = async (ui: Drawing) => (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:'))
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    const rows = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:'))
-    expect(rows.map(row => row.props.label)).toEqual(['You → Orchestrator', 'Orchestrator → fixer', 'fixer → helper', 'helper → fixer'])
-    // no row is marked until one is pressed (the pick then stays across surfaces)
-    if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: '▌' })).toBeUndefined()
+    await ui.press({ key: 'detail:chat' })
+    const all = await talk(ui)
+    expect(all.map(row => row.props.label)).toEqual(['You → Orchestrator', 'Orchestrator → fixer', 'fixer → helper', 'helper → fixer'])
+    expect(all.map(row => row.key)).toEqual([prompt, toFixer, toHelper, result].map(message => `msg:${message?.id}`))
 
-    const picks: [string | undefined, string][] = [
-      [toHelper?.id, 'agent:agent-helper'],
-      [result?.id, 'agent:agent-fixer'],
-      [prompt?.id, 'agent:main'],
-      [toFixer?.id, 'agent:agent-fixer'],
-    ]
-    for (const [id, opened] of picks) {
-      await ui.press({ key: `msg:${id}` })
-      expect((await ui.find({ key: opened }))?.props.variant).toBe('primary')
-      expect((await ui.findAll({ type: 'Text', text: '▌' })).length).toBe(1)
-    }
+    await ui.press({ key: 'agent:agent-fixer' })
+    expect((await talk(ui)).map(row => row.props.label)).toEqual(['Orchestrator → fixer', 'fixer → helper', 'helper → fixer'])
+    await ui.press({ key: `msg:${result?.id}` })
+    expect(await ui.find({ type: 'Markdown', text: /It is src\/auth\.ts/ })).toBeDefined()
+    await ui.press({ key: `msg:${result?.id}` })
+    expect(await ui.find({ type: 'Markdown', text: /It is src\/auth\.ts/ })).toBeUndefined()
+
+    await ui.press({ key: 'detail:edits' })
+    await ui.press({ key: 'agent:main' })
     await ui.unmount()
   }
 })
 
-test('Conversation draws the transcript as bubbles, and its field sends to the agent', async ($, on) => {
+test('Talk sends to the agent from its field', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const sent: Sent[] = []
-  world(on, {
-    restored: snapshot(busyData()),
-    sent,
-    messages: [
-      { role: 'user', text: 'Fix the login bug in src/auth.ts', toolUses: [] },
-      { role: 'assistant', text: 'Looking at **src/auth.ts** now.', toolUses: [{ tool_use_id: 'toolu_r', tool: 'Read', input: { file_path: '/repo/src/auth.ts' } }] },
-    ],
-  })
+  world(on, { restored: snapshot(busyData()), sent })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
   await $.command.run(deck(''))
   await clock.advance(1000)
@@ -388,11 +381,10 @@ test('Conversation draws the transcript as bubbles, and its field sends to the a
     const ui = await $.ui.mount(pane(surface))
     await ui.press({ key: 'agent:agent-fixer' })
     await ui.press({ key: 'detail:chat' })
-    expect(await ui.find({ type: 'Markdown', text: /Looking at/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Read src/auth.ts' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'fixer' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Fix the login bug in src/auth.ts and run the tests' })).toBeDefined()
     await ui.input({ key: 'chat:agent-fixer', text: `  hello from ${surface}  ` })
     await ui.press({ key: 'detail:edits' })
+    await ui.press({ key: 'agent:main' })
     await ui.unmount()
   }
 
@@ -508,14 +500,15 @@ test('the Agents tab stays inside the host bounds with eighty agents, two hundre
       expect(size.nodes < 20_000 && size.depth < 32 && size.chars < 100_000).toBe(true)
     }
     expect((await ui.findAll({ type: 'Code' })).length > 0).toBe(true)
-    expect((await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:')).length).toBe(14)
-    expect(await ui.find({ type: 'Text', text: '186 earlier' })).toBeDefined()
-    if (surface === 'desktop') expect(String((await ui.find({ type: 'Svg' }))?.props.source).length < 131_072).toBe(true)
+    // every agent a row of the outline, the selected one among them; no image anywhere
+    expect((await rowsOf(ui)).length).toBe(1 + 78)
+    expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
     await ui.unmount()
   }
 })
 
-test('outside a repository the status bar says so, and the Orchestrator`s edit shows as a diff', async ($, on) => {
+test('outside a repository the summary counts the agents` own edits, and the Orchestrator`s edit shows as a diff', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on, { isRepo: false })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/notes' })
@@ -527,9 +520,9 @@ test('outside a repository the status bar says so, and the Orchestrator`s edit s
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    expect(await ui.find({ type: 'Text', text: ' · no repository' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '1 file' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'All quiet' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^1 file$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^(Nothing needs you|All done · 1 file to review)$/ })).toBeDefined()
+    expect(await copperBars(ui)).toEqual([])
     expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
     await ui.unmount()
   }

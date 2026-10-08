@@ -128,7 +128,7 @@ test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a fil
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
     expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(false)
-    expect(await ui.find({ type: 'Text', text: 'Agent deck' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
 
     await ui.press({ key: 'tab:changes' })
     expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)
@@ -152,7 +152,7 @@ test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a fil
   }
 })
 
-test('a subagent shows in the strip with its task, the Orchestrator`s edit shows as a diff, the map draws it, and chat reaches it', async ($, on) => {
+test('a subagent shows in the outline with its task, the Orchestrator`s edit shows as a diff, and Talk reaches it', async ($, on) => {
   mock.clock(on, { now: NOW })
   const sent: { to: string; text: string }[] = []
   world(on, sent)
@@ -176,12 +176,9 @@ test('a subagent shows in the strip with its task, the Orchestrator`s edit shows
     await ui.press({ key: 'detail:chat' })
     await ui.input({ key: 'chat:agent-x1', text: `hello from ${surface}` })
 
-    if (surface === 'desktop') {
-      const svg = await ui.find({ type: 'Svg' })
-      expect(String(svg?.props.source)).toContain('scout')
-    } else {
-      expect(await ui.find({ type: 'Text', text: ' scout' })).toBeDefined()
-    }
+    // its row in the outline, under its label, selected; no image on either surface
+    expect((await ui.find({ key: 'agent:agent-x1' }))?.props).toMatchObject({ label: 'scout', variant: 'primary' })
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
     await ui.press({ key: 'detail:activity' })
     await ui.unmount()
   }

@@ -9,7 +9,9 @@ import { expect, mock, test, type FoundElement } from 'claude-code/testing'
  * of its own. Fixer and helper edit three files, each Edit answering with the
  * tool's own structuredPatch. Reviewer asks fixer over SendMessage, and fixer
  * answers. Each agent completes with an answer. The deck draws it all on the
- * terminal and on the desktop.
+ * terminal and on the desktop: the goal and what needs you, the outline of
+ * who started whom with where each is, each agent's task, result and exact
+ * diffs, and the whole conversation under the Orchestrator's Talk.
  */
 
 const NOW = 1_700_000_100_000
@@ -159,6 +161,7 @@ function world(on: On): { disk: Disk } {
     listed.set(id, { id, name: e.name, description: e.description, type: e.subagentType, status: 'running', ...(e.parentAgentId ? { parentId: e.parentAgentId } : {}) })
     return { model: 'claude-haiku', agentId: id }
   })
+  on('prompt.submit', ($, e) => ({ text: e.text }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => {
     const done = e.agentId === undefined ? undefined : listed.get(e.agentId)
@@ -249,25 +252,16 @@ function exactly(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 }
 
-type Plate = { x: number; y: number; name: string }
-
-/** The tree's plates by agent id: where each sits, and the name it shows. */
-function platesOf(svg: string): Map<string, Plate> {
-  const plates = new Map<string, Plate>()
-  const pattern = /<g data-id="([^"]*)">(?:<title>[\s\S]*?<\/title>)?<rect class="plate" x="([-\d.]+)" y="([-\d.]+)"[^>]*\/><rect [^>]*\/><text [^>]*>([^<]*)<\/text>/g
-  for (const found of svg.matchAll(pattern)) plates.set(found[1] ?? '', { x: Number(found[2]), y: Number(found[3]), name: found[4] ?? '' })
-  return plates
+/** The outline's rows, top to bottom, by the id each stands for. */
+async function rowsOf(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('row:')).map(key => key.slice('row:'.length))
 }
 
-function plateOf(plates: Map<string, Plate>, id: string): Plate {
-  const plate = plates.get(id)
-  if (!plate) throw new Error(`no plate for ${id}; plates: ${JSON.stringify([...plates.keys()])}`)
-  return plate
-}
-
-/** Every Box drawn with the quote border: on the terminal, the map's rails. */
-async function rails(ui: Drawing): Promise<FoundElement[]> {
-  return (await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'quote')
+/** The cells an outline row is indented: its fold column's left padding. */
+async function indentOf(ui: Drawing, id: string): Promise<number> {
+  const row = (await ui.findAll({ type: 'Box' })).find(box => box.key === `row:${id}`)
+  const line = (row?.children[0] ?? {}) as { children?: { props?: Record<string, unknown> }[] }
+  return Number(line.children?.[1]?.props?.paddingLeft ?? -1)
 }
 
 const ROUTES = [
@@ -293,6 +287,7 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await clock.advance(1000)
 
   // you ask; the Orchestrator delegates to three named agents
+  await $.prompt.submit({ text: PROMPT, wait: false, origin: { kind: 'composer' } })
   await $.turn.start({ text: PROMPT, turnId: 'turn-main' })
   await $.agent.spawn(spawn('scout', 'Explore', 'Find where the token refresh bug is in /repo and report it.'))
   await $.agent.spawn(spawn('fixer', 'general-purpose', FIXER_TASK))
@@ -309,12 +304,16 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await $.tool.call(inLoop('agent-fixer', { tool: 'Bash' as const, command: 'node --test', description: 'Run the unit tests' }))
   await clock.advance(1000)
 
-  // while they work: who runs, and what the busiest one is doing
+  // while they work: the goal, who runs, who started whom and where each is
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await shown(ui, { type: 'Text', text: exactly('4 running · fixer: Run the unit tests') })
-    await shown(ui, { type: 'Text', text: exactly(' 4 running') })
-    expect(await ui.find({ type: 'Text', text: 'All quiet' })).toBeUndefined()
+    await shown(ui, { type: 'Text', text: exactly('Nothing needs you') })
+    await shown(ui, { type: 'Text', text: exactly(PROMPT) })
+    expect((await shown(ui, { type: 'Text', text: /3 running/ })).text).toMatch(/1 done · 3 files/)
+    expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
+    expect(await indentOf(ui, 'agent-helper')).toBe(await indentOf(ui, 'agent-fixer') + 2)
+    await shown(ui, { type: 'Text', text: exactly('Run the unit tests') })
+    await shown(ui, { type: 'Text', text: exactly(`Done: ${ANSWERS.scout}`) })
     await ui.unmount()
   }
 
@@ -331,51 +330,28 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     await ui.press({ key: 'tab:agents' })
     await ui.press({ key: 'agent:main' })
 
-    // nobody runs: the banner is the uncommitted work
-    await shown(ui, { type: 'Text', text: exactly('3 files changed, not committed') })
-    await shown(ui, { type: 'Text', text: exactly(' none running') })
+    // all done: the line says what is left to review, and nobody runs
+    await shown(ui, { type: 'Text', text: exactly('All done · 3 files to review') })
+    await shown(ui, { key: 'needs:review' })
+    expect((await shown(ui, { type: 'Text', text: /4 done/ })).text).not.toMatch(/running/)
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
 
-    // the map: every agent, helper under fixer
-    if (surface === 'desktop') {
-      await ui.press({ key: 'map:tree' })
-      const tree = String((await shown(ui, { type: 'Svg' })).props.source)
-      const plates = platesOf(tree)
-      expect([...plates.values()].map(plate => plate.name).sort()).toEqual(['Orchestrator', 'You', 'fixer', 'helper', 'reviewer', 'scout'])
-      const [orchestrator, scout, fixer, reviewer, helper] = ['main', 'agent-scout', 'agent-fixer', 'agent-reviewer', 'agent-helper'].map(id => plateOf(plates, id))
-      expect(scout?.y).toBe(fixer?.y)
-      expect(reviewer?.y).toBe(fixer?.y)
-      expect(fixer!.y).toBeGreaterThan(orchestrator!.y)
-      expect(helper!.y).toBeGreaterThan(fixer!.y)
-      expect(helper?.x).toBe(fixer?.x)
-      expect(tree).toContain(PROMPT)
+    // the outline: every agent under the Orchestrator in spawn order, each with its result; fixer's helper folded under it
+    expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-reviewer'])
+    for (const [name, said] of Object.entries(ANSWERS)) if (name !== 'helper') await shown(ui, { type: 'Text', text: exactly(`Done: ${said}`) })
+    await ui.press({ key: 'fold:agent-fixer' })
+    expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
+    expect(await indentOf(ui, 'agent-helper')).toBe(await indentOf(ui, 'agent-fixer') + 2)
+    await shown(ui, { type: 'Text', text: exactly(`Done: ${ANSWERS.helper}`) })
 
-      // Wire: one lane each, the ask and the reply between fixer and reviewer
-      await ui.press({ key: 'map:wire' })
-      const wire = String((await shown(ui, { type: 'Svg' })).props.source)
-      for (const name of ['You', 'Orchestrator', 'scout', 'fixer', 'helper', 'reviewer']) expect(wire).toMatch(new RegExp(`class="lane"[^>]*>${name}</text>`))
-      expect(wire).toContain(ASK)
-      expect(wire).toContain(REPLY)
-      expect(wire).toContain('stroke-dasharray="5 4"')
-      expect(wire).not.toContain('earlier message')
-      await ui.press({ key: 'map:tree' })
-    } else {
-      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-      const railed = await rails(ui)
-      expect(railed.length).toBe(3)
-      for (const name of ['scout', 'fixer', 'helper', 'reviewer']) expect(railed[1]?.text).toContain(name)
-      expect(railed[2]?.text).toContain('helper')
-      for (const name of ['scout', 'fixer', 'reviewer']) expect(railed[2]?.text).not.toContain(name)
-    }
-
-    // fixer's strip button: its summary, then Diffs with its own patches
+    // fixer's row: its task, its result, then Diffs with its own patches
     await ui.press({ key: 'agent:agent-fixer' })
     await ui.press({ key: 'detail:edits' })
     expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
     expect((await ui.find({ key: 'agent:main' }))?.props.variant).toBeUndefined()
-    for (const label of ['Task', 'Now', 'Result', 'Talked to']) await shown(ui, { type: 'Text', text: exactly(label) })
+    for (const label of ['Task', 'Result']) await shown(ui, { type: 'Text', text: exactly(label) })
     await shown(ui, { type: 'Text', text: exactly(FIXER_TASK) })
     await shown(ui, { type: 'Text', text: exactly(ANSWERS.fixer) })
-    for (const name of ['helper', 'reviewer', 'Orchestrator']) await shown(ui, { type: 'Text', text: exactly(name) })
     const codes = await ui.findAll({ type: 'Code' })
     expect(codes.map(code => code.props.format)).toEqual(['diff', 'diff'])
     expect(codes.some(code => code.text.includes(FIX_LINE) && code.props.path === 'src/token.js')).toBe(true)
@@ -389,19 +365,21 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     const notes = await ui.findAll({ type: 'Code' })
     expect(notes.length).toBe(1)
     expect(notes[0]?.text).toContain(NOTE_LINE)
+    await ui.press({ key: 'fold:agent-fixer' })
 
-    // the messages log, in order; a press on a row opens the agent it went to
+    // the Orchestrator's Talk is the whole conversation, in order; a press on a row opens its words
+    await ui.press({ key: 'agent:main' })
+    await ui.press({ key: 'detail:chat' })
     const rows = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:'))
     expect(rows.map(row => row.props.label)).toEqual(ROUTES)
     const keyOf = (route: string) => rows.find(row => row.props.label === route)?.key ?? `missing ${route}`
     await ui.press({ key: keyOf('reviewer → fixer') })
-    expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
-    expect((await ui.findAll({ type: 'Text', text: '▌' })).length).toBe(1)
+    await shown(ui, { type: 'Markdown', text: ASK })
+    await ui.press({ key: keyOf('reviewer → fixer') })
     await ui.press({ key: keyOf('fixer → reviewer') })
-    expect((await ui.find({ key: 'agent:agent-reviewer' }))?.props.variant).toBe('primary')
-    expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBeUndefined()
-    await ui.press({ key: keyOf('fixer → helper') })
-    expect((await ui.find({ key: 'agent:agent-helper' }))?.props.variant).toBe('primary')
+    await shown(ui, { type: 'Markdown', text: REPLY })
+    await ui.press({ key: keyOf('fixer → reviewer') })
+    await ui.press({ key: 'detail:edits' })
 
     // Changes: the repository the agents edited, its three files and who touched each
     await ui.press({ key: 'tab:changes' })
@@ -424,8 +402,9 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await clock.advance(10_000)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await shown(ui, { type: 'Text', text: exactly('All quiet') })
-    await shown(ui, { type: 'Text', text: exactly('clean') })
+    await shown(ui, { type: 'Text', text: exactly('Nothing needs you') })
+    expect(await ui.find({ key: 'needs:review' })).toBeUndefined()
+    await shown(ui, { type: 'Text', text: /no files changed/ })
     await ui.unmount()
   }
 })

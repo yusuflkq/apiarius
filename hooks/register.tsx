@@ -27,6 +27,7 @@ import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
 import { bandView } from './ui/band'
+import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
 import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo } from './ui/types'
 import { deckView } from './views'
@@ -97,26 +98,88 @@ function gitKeyOf(state: G.GitState): string {
 }
 
 /**
- * Everything on screen that can change with no event to redraw it (time
- * passing, the background reads): each agent's status, now text and coarse
- * elapsed time while it runs, the banner, git (whether read, HEAD, branch,
- * files and counts), the usage figures rounded, the day history, and on a
- * tab with a per-minute chart the minute. Equal keys draw the same screen.
+ * Everything on screen, as one key: each agent's status, now text and coarse
+ * elapsed time while it runs, the banner; the Agents tab's goal, plan,
+ * checklists, last actions, files, messages, needs-you line and summary
+ * (`M.deckKeyOf`); git (whether read, HEAD, branch, files and counts); the
+ * usage figures rounded; the day history; the edits; and on the Stats tab
+ * the session's totals and the minute. Equal keys draw the same screen.
  */
 function screenKey(now: number): string {
   const figures = usage
     ? [Math.round(usage.contextPercent ?? -1), F.money(usage.costUsd), ...usage.limits.map(limit => `${limit.kind}:${Math.round(limit.percentUsed)}`)].join(' ')
     : ''
-  const minute = isPaneOpen && view.tab === 'stats' ? M.minuteOf(now) : ''
-  return [M.agentsKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute].join('\n\u0001')
+  const isStats = isPaneOpen && view.tab === 'stats'
+  const minute = isStats ? M.minuteOf(now) : ''
+  const totals = isStats ? JSON.stringify([M.totalsOf(data), data.minutes[data.minutes.length - 1] ?? null]) : ''
+  const edits = `${data.edits.length}:${data.edits[data.edits.length - 1]?.id ?? ''}`
+  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits].join('\n\u0001')
 }
 
-/** Redraws only when the screen would change: how the timer and the background reads draw, so nothing moves while nothing changes. */
+/**
+ * Redraws only when the screen would change: how events, the timer and the
+ * background reads draw, so nothing moves while nothing changes. (A press
+ * that changes the view draws unasked, through `changed`.)
+ */
 function redrawIfChanged($: EngineInterface, now: number) {
   const key = screenKey(now)
   if (key === shownKey) return
   shownKey = key
   redraw($)
+}
+
+/** An event changed the data: keep it, and draw if the screen would change. */
+function touched($: EngineInterface, now: number) {
+  save($)
+  redrawIfChanged($, now)
+}
+
+/**
+ * Each directory edited in as the file system spells it, by `R.keyOf`:
+ * `$.fs.stat(dir, { resolve: true }).realPath`, so an 8.3 short name
+ * (`C:\Users\DEVELO~1`) reads as git prints it (`C:/Users/developer`).
+ */
+const realDirs = new Map<string, string>()
+
+/** `abs` with its directory spelled as the file system resolves it; asked once per directory, the spelling given when it cannot be. */
+async function realPathOf($: EngineInterface, abs: string): Promise<string> {
+  const path = R.cleanPath(abs)
+  if (!R.isAbsolute(path)) return path
+  const dir = R.dirOf(path)
+  const key = R.keyOf(dir)
+  let real = realDirs.get(key)
+  if (real === undefined) {
+    try {
+      const stat = await $.fs.stat(dir, { resolve: true })
+      real = stat.realPath ? R.cleanPath(stat.realPath) : dir
+      realDirs.set(key, real)
+    } catch {
+      return path
+    }
+  }
+  return R.childOf(real, F.baseName(path))
+}
+
+/** The same from what is resolved already, with no file system call: for the instant a call starts. */
+function knownRealOf(abs: string): string {
+  const path = R.cleanPath(abs)
+  const real = R.isAbsolute(path) ? realDirs.get(R.keyOf(R.dirOf(path))) : undefined
+  return real === undefined ? path : R.childOf(real, F.baseName(path))
+}
+
+/** A slash command's expansion (classic UserPromptExpansion), held for the prompt it becomes: its headline. */
+let expansion: { headline: string; at: number } | null = null
+
+/**
+ * A placeholder row took its agent's id: what the view held of it (the
+ * selection, a fold, a zoom, as the id or inside a key) follows it.
+ */
+function renameInView(from: string, to: string) {
+  if (from === to) return
+  const swap = (value: string) => (value === from || value === `+${from}` || value.endsWith(`:${from}`) ? `${value.slice(0, value.length - from.length)}${to}` : value)
+  view.agent = swap(view.agent)
+  view.zoom = swap(view.zoom)
+  view.folded = view.folded.map(swap)
 }
 
 /** Keeps the model in `$.state`, so a reload of this module picks it up again. */
@@ -237,6 +300,7 @@ function switchRepo($: EngineInterface, root: string) {
     view.commit = ''
   }
   for (const edit of data.edits) edit.path = M.relOf(edit.abs, root || null)
+  for (const file of Object.values(data.files)) file.path = M.relOf(file.abs, root || null)
   for (const agent of data.agents) agent.files = [...new Set(agent.files.map(path => R.rerootPath(path, from, root)))]
   shownRoot = root
   lastHeavyAt = 0
@@ -512,10 +576,7 @@ async function sendChat($: EngineInterface, agentId: string, text: string): Prom
   if (chat?.agent === agentId) chat.lines.push({ role: 'parent', who: 'You (deck)', text })
   if (sent.isDelivered) {
     $.ui.toast(`Sent to ${M.labelOf(agent)}`)
-    if (M.isEnded(agent.status)) {
-      agent.status = 'running'
-      agent.endedAt = undefined
-    }
+    if (M.isEnded(agent.status)) M.reopen(agent)
   } else {
     $.ui.toast(`Not delivered: ${sent.reason}`)
   }
@@ -613,29 +674,31 @@ async function syncAgents($: EngineInterface): Promise<void> {
 
   for (const info of list) {
     const isKnown = M.agentOf(data, info.id) !== undefined
-    const agent = M.ensureAgent(data, info.id, now)
+    // the engine lists subagents and teammates alone: a row taken for housekeeping is a real agent
+    const agent = M.ensureAgent(data, info.id, now, info.teammateId ? 'teammate' : 'agent')
     if (!isKnown) isChanged = true
     if (info.teammateId) agent.kind = 'teammate'
+    if (agent.origin === 'engine' || agent.origin === undefined) agent.origin = agent.kind === 'teammate' ? 'teammate' : 'agent'
     if (info.description && !agent.description) agent.description = info.description
     if (info.type && (agent.type === 'subagent' || agent.type === '')) agent.type = info.type
-    if (info.name && agent.name.startsWith('agent-')) agent.name = info.name
+    if (info.name && M.isNameless(agent)) agent.name = info.name
     if (info.parentId && (agent.parentId === undefined || agent.parentId === M.MAIN) && M.agentOf(data, info.parentId)) agent.parentId = info.parentId
+    M.fixLabel(data, agent)
     const status = info.status as DeckStatus
-    if (agent.status !== status) {
+    // a row the deck ended (its turn, SubagentStop, TeammateIdle) is not woken by a list that lags: its own next call does that
+    const isEndedHere = agent.endedAt !== undefined && !M.isLive(agent.status) && M.isLive(status)
+    if (agent.status !== status && !isEndedHere) {
       agent.status = status
       if (M.isEnded(status)) {
         agent.endedAt ??= now
-        agent.current = undefined
+        delete agent.current
         delete agent.todo
       }
       isChanged = true
     }
   }
 
-  if (isChanged) {
-    save($)
-    redraw($)
-  }
+  if (isChanged) touched($, now)
 }
 
 /**
@@ -645,7 +708,8 @@ async function syncAgents($: EngineInterface): Promise<void> {
  */
 async function tick($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
-  const isAnyLive = data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
+  // workflow agents and housekeeping loops fold away: they keep nothing on screen live
+  const isAnyLive = M.hasLiveAgents(data)
   if (isAnyLive || isPaneOpen) await syncAgents($)
   if (isPaneOpen) {
     if (now - lastGitAt > 6000) void refreshGit($)
@@ -674,7 +738,7 @@ function changed($: EngineInterface) {
   redraw($)
 }
 
-/** Opens agent `id`'s card; its conversation reloads when that view is the one open. */
+/** Opens row `id` (an agent, a plan step, a file) in the detail block; an agent's conversation reloads when that view is the one open. */
 function pickAgent($: EngineInterface, id: string) {
   view.agent = id
   chat = null
@@ -690,18 +754,25 @@ function actionsFor($: EngineInterface): Actions {
       if (tab === 'changes' && view.file) void loadFileDiff($, view.file)
       changed($)
     },
+    select: id => {
+      pickAgent($, id)
+      // the outline shows what was picked: out of a zoom it lies outside, the branches above it opened
+      const shown = O.revealed(data, view, id)
+      view.folded = shown.folded
+      view.zoom = shown.zoom
+      changed($)
+    },
+    toggleFold: id => {
+      view.folded = O.foldToggled(data, view, id)
+      changed($)
+    },
+    zoomTo: id => {
+      // zooming on the branch already zoomed comes back out: the detail's Zoom and the outline's z both toggle
+      view.zoom = id !== '' && id === view.zoom ? '' : O.zoomFor(data, view, id)
+      changed($)
+    },
     selectAgent: id => {
       pickAgent($, id)
-      changed($)
-    },
-    selectMessage: id => {
-      view.message = data.messages.some(message => message.id === id) ? id : ''
-      const target = M.messageTargetOf(data, id)
-      if (target) pickAgent($, target)
-      changed($)
-    },
-    setMapView: map => {
-      view.map = map
       changed($)
     },
     selectRepo: root => void chooseRepo($, root),
@@ -768,12 +839,12 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
     columns,
     ...('Input' in ui ? { Input: ui.Input } : {}),
     ...('Select' in ui ? { Select: ui.Select } : {}),
-    // the terminal's table answers to Svg but draws nothing for it: there the map falls back to its railed tree
+    // the terminal's table answers to Svg but draws nothing for it: there Stats draws its cards and charts as text
     ...('Svg' in ui && surface !== 'terminal' ? { Svg: ui.Svg } : {}),
   }
 }
 
-/** The state a drawing reads: the live model, as it is now. The map's Svg strings are built from it in the views, memoised by content. */
+/** The state a drawing reads: the live model, as it is now; the views build their rows from it. */
 function modelOf(now: number): DeckModel {
   return {
     data,
@@ -789,15 +860,15 @@ function modelOf(now: number): DeckModel {
   }
 }
 
-/** Records exactly what an Edit, Write or NotebookEdit changed, from the tool's own patch. */
-function recordEdit(agent: DeckAgent, tool: string, id: string, input: Record<string, unknown>, ran: ToolCallResult, now: number) {
-  const abs = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : ''
-  if (!abs) return
-  const record = (ran.result ?? null) as Record<string, unknown> | null
-  if (record && record.staged === true) return
+/** The file an Edit, Write or NotebookEdit call names; '' for none. */
+function editedPathOf(input: Record<string, unknown>): string {
+  return typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : ''
+}
 
-  const patch = record && Array.isArray(record.structuredPatch) ? (record.structuredPatch as unknown[]) : []
-  let hunks: Hunk[] = patch
+/** A tool's `structuredPatch` (or a bashEditDiff file's hunks) as the deck's hunks, each line cleaned. */
+function hunksFrom(value: unknown): Hunk[] {
+  const patch = Array.isArray(value) ? (value as unknown[]) : []
+  return patch
     .filter((hunk): hunk is Record<string, unknown> => typeof hunk === 'object' && hunk !== null)
     .map(hunk => ({
       oldStart: Number(hunk.oldStart) || 0,
@@ -806,6 +877,20 @@ function recordEdit(agent: DeckAgent, tool: string, id: string, input: Record<st
       newLines: Number(hunk.newLines) || 0,
       lines: Array.isArray(hunk.lines) ? hunk.lines.map(line => F.clean(String(line))) : [],
     }))
+}
+
+/**
+ * Records exactly what an Edit, Write or NotebookEdit changed, from the
+ * tool's own patch, under `abs`, the file's path as the file system spells
+ * it (`realPathOf`), so it compares with git's; and whether the person
+ * changed the proposed edit before accepting it (`userModified`).
+ */
+function recordEdit(agent: DeckAgent, tool: string, id: string, input: Record<string, unknown>, ran: ToolCallResult, now: number, abs: string) {
+  if (!abs) return
+  const record = (ran.result ?? null) as Record<string, unknown> | null
+  if (record && record.staged === true) return
+
+  let hunks: Hunk[] = hunksFrom(record?.structuredPatch)
   const isNew = tool === 'Write' && record?.type === 'create'
 
   if (hunks.length === 0) {
@@ -826,9 +911,46 @@ function recordEdit(agent: DeckAgent, tool: string, id: string, input: Record<st
     removed,
     patch: patchOf(hunks, M.LIMITS.patchChars),
     isNew,
+    ...(record?.userModified === true ? { userModified: true } : {}),
   })
   // the next git refresh probes a directory not seen before, and follows the repository edited last
   R.noteEdit(book, abs, now)
+}
+
+/**
+ * Records the files a Bash command changed, from its result's
+ * `bashEditDiff` (feature-detected: an internal field, absent on builds
+ * without it, and skipped when it says the diff is unavailable): one edit
+ * per file, with that file's exact hunks. Answers how many it recorded.
+ */
+async function recordShellEdits($: EngineInterface, agent: DeckAgent, tool: string, id: string, ran: ToolCallResult, now: number): Promise<number> {
+  const record = (ran.result ?? null) as Record<string, unknown> | null
+  const diff = record && typeof record.bashEditDiff === 'object' && record.bashEditDiff !== null ? (record.bashEditDiff as Record<string, unknown>) : null
+  if (!diff || diff.unavailable === true || diff.skipped === true || !Array.isArray(diff.files)) return 0
+  let count = 0
+  for (const file of diff.files as unknown[]) {
+    if (typeof file !== 'object' || file === null) continue
+    const one = file as Record<string, unknown>
+    if (typeof one.filePath !== 'string' || one.filePath === '') continue
+    const abs = await realPathOf($, one.filePath)
+    const hunks = hunksFrom(one.hunks)
+    const { added, removed } = countOf(hunks)
+    M.addEdit(data, agent, {
+      id: `${id}:${count}`,
+      agent: agent.id,
+      tool,
+      path: M.relOf(abs, git.root || null),
+      abs: M.normPath(abs),
+      at: now,
+      added,
+      removed,
+      patch: patchOf(hunks, M.LIMITS.patchChars),
+      isNew: one.created === true,
+    })
+    R.noteEdit(book, abs, now)
+    count += 1
+  }
+  return count
 }
 
 /** Marks the commits a shell command made as that agent's. */
@@ -1074,6 +1196,8 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // the deck's own calls are no agent's work
+    if (next.origin.plugin === $.plugin.name) return next(e)
     const start = await $.clock.now()
     const input = e as unknown as Record<string, unknown>
     const tool = String(e.tool)
@@ -1081,36 +1205,156 @@ export const register: Register = on => {
     const command = typeof input.command === 'string' ? input.command : ''
     const isShell = M.SHELL_TOOLS.includes(tool)
     const isEdit = M.EDIT_TOOLS.includes(tool)
+    const isSpawn = tool === 'Agent' || (tool === 'Task' && typeof input.prompt === 'string')
     let agent: DeckAgent | undefined
 
     try {
-      agent = M.ensureAgent(data, agentId, start)
-      agent.endedAt = undefined
+      // a loop no spawn named is a workflow's agent while a run is live, else the engine's own
+      agent = M.seeLoop(data, agentId, start)
+      // a call is work: an ended agent (a message woke it) or an idle teammate runs again
+      if (M.isEnded(agent.status) || agent.status === 'idle') M.reopen(agent)
+      delete agent.endedAt
       // the agent the engine waited on for the person moved on
       M.clearNeeds(data, { kind: 'start', agent: agentId })
-      M.beginTool(data, agent, M.activityOf(e.tool_use_id, tool, input, git.root || null, start))
-      redraw($)
+      const file = typeof input.file_path === 'string' ? input.file_path : ''
+      const said = file ? { ...input, file_path: knownRealOf(file) } : input
+      M.beginTool(data, agent, M.activityOf(e.tool_use_id, tool, said, git.root || null, start))
     } catch {
       agent = undefined
+    }
+    try {
+      // an Agent call shows its agent at once, keyed by the call until the spawn binds it
+      if (isSpawn) {
+        M.addPlaceholder(data, {
+          toolUseId: e.tool_use_id,
+          parentId: agentId,
+          ...(typeof input.name === 'string' ? { name: input.name } : {}),
+          description: typeof input.description === 'string' ? input.description : '',
+          prompt: typeof input.prompt === 'string' ? input.prompt : '',
+          ...(typeof input.subagent_type === 'string' ? { type: input.subagent_type } : {}),
+          at: start,
+        })
+      }
+      if (tool === 'Workflow') {
+        const meta = typeof input.script === 'string' ? M.workflowMetaOf(input.script) : undefined
+        const named = typeof input.name === 'string' ? input.name : ''
+        M.noteWorkflow(data, { id: e.tool_use_id, caller: agentId, name: meta?.name || named, phases: meta?.phases ?? [], at: start })
+      }
+      touched($, start)
+    } catch {
+      // the call goes ahead whatever the deck makes of it
     }
 
     const before = isShell && git.isRepo && G.mayCommit(command) ? await runGit($, G.argv.head).then(ran => (ran.ok ? ran.out.trim() : '')) : ''
     const ran = await next(e)
 
+    let end = start
+    let ok = false
     try {
-      const end = await $.clock.now()
-      const ok = ran.deny === undefined && ran.isError !== true
+      end = await $.clock.now()
+      ok = ran.deny === undefined && ran.isError !== true
       if (agent) {
         M.endTool(agent, e.tool_use_id, ok, end)
         // a permission prompt holds its call: the call's end is the person's answer
         M.clearNeeds(data, { kind: 'end', agent: agentId, call: e.tool_use_id })
-        if (ok && isEdit) recordEdit(agent, tool, e.tool_use_id, input, ran, end)
-        if (ok && M.LIST_TOOLS.includes(tool)) M.noteTodo(data, agent, tool, input, ran.result)
       }
-      if (isEdit || (isShell && G.mayChangeTree(command))) scheduleGit($, 700)
-      if (isShell && ok && G.mayCommit(command)) void attributeCommits($, agentId, before)
-      save($)
-      redraw($)
+    } catch {
+      // tracking never changes what the tool returned
+    }
+    const record = ran.result !== null && typeof ran.result === 'object' ? (ran.result as Record<string, unknown>) : null
+
+    // the files it changed, spelled as the file system does (an 8.3 short name made long), so git's paths match
+    let shellEdits = 0
+    if (ok && agent) {
+      try {
+        const named = isEdit ? editedPathOf(input) : ''
+        if (named) recordEdit(agent, tool, e.tool_use_id, input, ran, end, await realPathOf($, named))
+        if (tool === 'Bash') shellEdits = await recordShellEdits($, agent, tool, e.tool_use_id, ran, end)
+      } catch {
+        // an edit the deck could not read is left out
+      }
+    }
+
+    // its lists: the whole todo list, and the task board
+    if (ok && agent) {
+      try {
+        if (M.LIST_TOOLS.includes(tool)) M.noteTodo(data, agent, tool, input, ran.result, end)
+        if (M.TASK_TOOLS.includes(tool)) M.noteBoard(data, agent, tool, input, ran.result, end)
+      } catch {
+        // a list the deck could not read is left out
+      }
+    }
+
+    // an Agent call's row: bound to the agent its result names, or ended when none started; a foreground agent's report
+    if (isSpawn) {
+      try {
+        const status = typeof record?.status === 'string' ? record.status : ''
+        const handback = record?.handbackReport
+        const report =
+          handback && typeof handback === 'object' && typeof (handback as { text?: unknown }).text === 'string'
+            ? String((handback as { text: string }).text)
+            : Array.isArray(record?.content)
+              ? (record.content as unknown[]).map(block => (block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string' ? (block as { text: string }).text : '')).join('\n')
+              : ''
+        const settled = M.settleAgentCall(data, {
+          toolUseId: e.tool_use_id,
+          ...(typeof record?.agentId === 'string' && record.agentId !== '' ? { agentId: record.agentId } : {}),
+          isStarted: ok,
+          why: ran.deny ?? (typeof ran.text === 'string' ? ran.text : ''),
+          ...(ok && status === 'completed' && report.trim() !== '' ? { report } : {}),
+          isDone: ok && status === 'completed',
+          isRemote: status === 'remote_launched',
+          at: end,
+        })
+        if (settled?.from !== undefined) renameInView(settled.from, settled.agent.id)
+      } catch {
+        // the call's agent stands as its spawn left it
+      }
+    }
+
+    // an agent's report: SubagentHandback's message, its result whatever its turn's answer says
+    if (ok && agent && tool === 'SubagentHandback') {
+      try {
+        if (typeof input.message === 'string') M.noteResult(data, agent, input.message, end, 'handback')
+      } catch {
+        // the report stands in the agent's own transcript
+      }
+    }
+
+    // the plan the person approved
+    if (ok && tool === 'ExitPlanMode' && record?.awaitingLeaderApproval !== true) {
+      try {
+        let plan = typeof record?.plan === 'string' ? record.plan : typeof input.plan === 'string' ? input.plan : ''
+        if (plan.trim() === '' && typeof record?.filePath === 'string' && record.filePath !== '') plan = await $.fs.read(record.filePath)
+        if (plan.trim() !== '') M.notePlan(data, plan, end)
+      } catch {
+        // no plan the deck could read
+      }
+    }
+
+    // a Workflow run's ids, or its end when it never launched; a TaskStop of one ends it
+    try {
+      if (tool === 'Workflow') {
+        const text = (field: string) => (typeof record?.[field] === 'string' ? (record[field] as string) : undefined)
+        M.launchWorkflow(data, e.tool_use_id, { ok, at: end, ...(text('runId') ? { runId: text('runId') } : {}), ...(text('taskId') ? { taskId: text('taskId') } : {}), ...(text('workflowName') ? { name: text('workflowName') } : {}) })
+      }
+      if (ok && tool === 'TaskStop') M.endWorkflows(data, String(input.task_id ?? input.shell_id ?? ''), end)
+    } catch {
+      // the run stands as it was
+    }
+
+    try {
+      if (isEdit || shellEdits > 0 || (isShell && G.mayChangeTree(command))) scheduleGit($, 700)
+      // a commit the shell reports by its sha is this agent's; else git is asked what is new
+      const operation = record?.gitOperation
+      const commit = operation && typeof operation === 'object' ? (operation as { commit?: { sha?: unknown } }).commit : undefined
+      if (ok && commit && typeof commit.sha === 'string' && commit.sha !== '') {
+        data.commitsBy[commit.sha] = agentId
+        scheduleGit($, 200, true)
+      } else if (isShell && ok && G.mayCommit(command)) {
+        void attributeCommits($, agentId, before)
+      }
+      touched($, end)
     } catch {
       // tracking never changes what the tool returned
     }
@@ -1121,29 +1365,81 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     try {
+      const now = await $.clock.now()
+      const parentId = e.parentAgentId ?? M.MAIN
       if (result.agentId) {
-        const now = await $.clock.now()
-        const parentId = e.parentAgentId ?? M.MAIN
-        if (parentId !== M.MAIN) M.ensureAgent(data, parentId, now)
-        const isNew = M.agentOf(data, result.agentId) === undefined
-        const agent = M.ensureAgent(data, result.agentId, now)
-        agent.kind = e.isTeammate ? 'teammate' : 'agent'
-        if (e.name) agent.name = e.name
-        agent.type = e.subagentType
-        agent.description = e.description
-        agent.prompt = F.trunc(e.prompt, M.LIMITS.promptChars)
-        agent.parentId = parentId
-        agent.model = result.model
-        agent.status = 'running'
-        agent.endedAt = undefined
-        if (isNew) agent.startedAt = now
-        M.addMessage(data, { from: parentId, to: agent.id, kind: 'spawn', text: e.prompt, at: now })
-        changed($)
+        if (parentId !== M.MAIN) M.seeLoop(data, parentId, now)
+        // the row its Agent call made takes the agent's id: the same row, never a second one
+        const { agent, from } = M.noteSpawn(data, {
+          toolUseId: e.tool_use_id,
+          agentId: result.agentId,
+          parentId,
+          ...(e.name ? { name: e.name } : {}),
+          description: e.description,
+          prompt: e.prompt,
+          type: e.subagentType,
+          isTeammate: e.isTeammate === true,
+          ...(e.workflow ? { workflow: e.workflow.runId } : {}),
+          model: result.model,
+          at: now,
+        })
+        if (from !== undefined) renameInView(from, agent.id)
+        // a workflow's agents fold into one row: their hand-offs stay in the run
+        if (!e.workflow) M.addMessage(data, { from: agent.parentId ?? parentId, to: agent.id, kind: 'spawn', text: e.prompt, at: now })
+      } else if (result.deny !== undefined && !e.workflow) {
+        M.settleAgentCall(data, { toolUseId: e.tool_use_id, isStarted: false, why: result.deny, at: now })
       }
+      touched($, now)
     } catch {
       // the spawn stands whatever the deck makes of it
     }
     return result
+  })
+
+  // the person's own words: a new goal, or a follow-up of the one in hand; anything else is an event
+  on('prompt.submit', async ($, e, next) => {
+    let kind: M.PromptKind = 'event'
+    try {
+      kind = M.promptKindOf(data, e)
+    } catch {
+      kind = 'event'
+    }
+    const result = await next(e)
+    try {
+      const now = await $.clock.now()
+      let isChanged = false
+      if (result.drop === undefined) {
+        const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
+        expansion = null
+        if (kind !== 'event') isChanged = M.noteGoal(data, kind, { text: e.text, origin: e.origin.kind, at: now, ...(kind === 'goal' && said ? { headline: said } : {}) }) !== undefined
+        // a background task's notification may end a Workflow run
+        if (e.origin.kind === 'task-notification') isChanged = M.endWorkflows(data, e.text, now) || isChanged
+      }
+      if (isChanged) touched($, now)
+    } catch {
+      // the prompt goes in whatever the deck makes of it
+    }
+    return result
+  })
+
+  // a slash command's own words make a better headline than the prompt it expands to
+  on('classic.UserPromptExpansion', async ($, e, next) => {
+    try {
+      const now = await $.clock.now()
+      const args = F.oneLine(e.command_args)
+      const headline = `/${e.command_name}${args ? ` ${args}` : ''}`
+      const goal = M.goalOf(data)
+      const expanded = F.oneLine(e.prompt).slice(0, 60)
+      const isThisGoal = goal !== undefined && now - goal.at < 5_000 && (goal.text.trim().startsWith(`/${e.command_name}`) || (expanded !== '' && F.oneLine(goal.text).includes(expanded)))
+      if (isThisGoal) {
+        if (M.retitleGoal(data, headline, goal.at)) touched($, now)
+      } else {
+        expansion = { headline, at: now }
+      }
+    } catch {
+      // the prompt keeps its own first line
+    }
+    return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
@@ -1157,7 +1453,7 @@ export const register: Register = on => {
         main.lastAt = now
       }
       if (e.text.trim()) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
-      changed($)
+      touched($, now)
     } catch {
       // a turn starts whatever the deck makes of it
     }
@@ -1177,13 +1473,10 @@ export const register: Register = on => {
         agent.requests += 1
         agent.lastAt = now
         if (!agent.model) agent.model = usageOfStep.model
-        if (agent.kind !== 'main' && M.isEnded(agent.status)) {
-          agent.status = 'running'
-          agent.endedAt = undefined
-        }
+        // a step of an ended agent's loop (a message woke it), or of an idle teammate's, is a new run
+        if (agent.kind !== 'main' && (M.isEnded(agent.status) || agent.status === 'idle')) M.reopen(agent)
         M.bump(data, now, 'tokens', usageOfStep.input_tokens + usageOfStep.output_tokens + usageOfStep.cache_creation_input_tokens + usageOfStep.cache_read_input_tokens)
-        save($)
-        redraw($)
+        touched($, now)
       }
     } catch {
       // counting tokens never changes the response
@@ -1200,18 +1493,16 @@ export const register: Register = on => {
         if (agent) {
           agent.status = e.reason === 'aborted' ? 'killed' : e.reason === 'answer' ? (agent.kind === 'teammate' ? 'idle' : 'completed') : 'failed'
           agent.endedAt = now
-          agent.current = undefined
+          delete agent.current
           delete agent.todo
-          if (e.answer.trim()) {
-            agent.answer = F.trunc(e.answer.trim(), M.LIMITS.answerChars)
-            M.addMessage(data, { from: agent.id, to: agent.parentId ?? M.MAIN, kind: 'result', text: e.answer, at: now })
-          }
+          // its answer is its result unless it handed a report back (whose turn answers "")
+          if (e.answer.trim()) M.noteResult(data, agent, e.answer, now, 'answer')
         }
       } else {
         const main = M.agentOf(data, M.MAIN)
         if (main) {
           main.status = 'idle'
-          main.current = undefined
+          delete main.current
           main.lastAt = now
           delete main.todo
         }
@@ -1222,9 +1513,80 @@ export const register: Register = on => {
       }
       scheduleGit($, 300)
       if (chat && chat.agent === (e.agentId ?? M.MAIN)) void loadChat($, chat.agent)
-      changed($)
+      touched($, now)
     } catch {
       // the turn's end stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  // a subagent starting again (one the deck saw end) runs; one it never saw spawn waits for its first call
+  on('classic.SubagentStart', async ($, e, next) => {
+    try {
+      const agent = M.agentOf(data, e.agent_id)
+      if (agent && M.reopen(agent)) touched($, await $.clock.now())
+    } catch {
+      // the start stands whatever the deck makes of it
+    }
+    return next(e)
+  })
+
+  // a subagent stopped: its row ends at once, and with no report handed back its last message is its result
+  on('classic.SubagentStop', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      // a stop a hook blocked goes on working
+      if (result.block === undefined) {
+        const now = await $.clock.now()
+        if (M.noteStop(data, e.agent_id, e.last_assistant_message ?? '', now)) touched($, now)
+      }
+    } catch {
+      // the stop stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  // a teammate between turns: its row ends at once
+  on('classic.TeammateIdle', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (result.block === undefined) {
+        const now = await $.clock.now()
+        if (M.noteIdle(data, { ...(e.agent_id ? { id: e.agent_id } : {}), name: e.teammate_name }, now)) touched($, now)
+      }
+    } catch {
+      // the teammate idles whatever the deck makes of it
+    }
+    return result
+  })
+
+  // the task board, as the team's own events tell it
+  on('classic.TaskCreated', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (result.block === undefined) {
+        const now = await $.clock.now()
+        const by = e.teammate_name ? M.resolveRecipient(data, e.teammate_name)?.id : e.agent_id
+        const task = { id: e.task_id, subject: e.task_subject, ...(e.task_description ? { description: e.task_description } : {}), ...(by ? { by } : {}) }
+        if (M.noteTaskEvent(data, 'created', task, now)) touched($, now)
+      }
+    } catch {
+      // the task stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  on('classic.TaskCompleted', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (result.block === undefined) {
+        const now = await $.clock.now()
+        const by = e.teammate_name ? M.resolveRecipient(data, e.teammate_name)?.id : e.agent_id
+        const task = { id: e.task_id, subject: e.task_subject, ...(e.task_description ? { description: e.task_description } : {}), ...(by ? { by } : {}) }
+        if (M.noteTaskEvent(data, 'completed', task, now)) touched($, now)
+      }
+    } catch {
+      // the task stands whatever the deck makes of it
     }
     return result
   })
@@ -1236,10 +1598,11 @@ export const register: Register = on => {
       if (!isMine) {
         const now = await $.clock.now()
         const from = e.agentId ?? M.MAIN
-        if (from !== M.MAIN) M.ensureAgent(data, from, now)
+        if (from !== M.MAIN) M.seeLoop(data, from, now)
+        // a name two agents carried goes to the newest live one
         const target = M.resolveRecipient(data, e.to) ?? M.peerOf(data, e.to, now)
         M.addMessage(data, { from, to: target.id, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered })
-        changed($)
+        touched($, now)
       }
     } catch {
       // the message goes whatever the deck makes of it
@@ -1251,26 +1614,26 @@ export const register: Register = on => {
     const result = await next(e)
     try {
       const origin = e.origin
+      const now = await $.clock.now()
+      if (origin.kind === 'task-notification' && M.endWorkflows(data, e.text, now)) touched($, now)
       if (origin.kind === 'peer' || origin.kind === 'coordinator' || origin.kind === 'peer-send-message') {
-        const now = await $.clock.now()
         const to = e.agentId ?? M.MAIN
-        const probe = F.oneLine(e.text).slice(0, 60)
-        const echo = data.messages
-          .slice(-16)
-          .reverse()
-          .find(message => message.to === to && now - message.at < 20_000 && (F.oneLine(message.text).includes(probe.slice(0, 40)) || probe.includes(F.oneLine(message.text).slice(0, 40))))
+        // the receiver reads a send inside an envelope (<agent-message from="…">): matched without it, logged once
+        const echo = M.echoOf(data, to, e.text, now)
         if (echo) {
           echo.isDelivered = true
+          if (echo.to !== to && M.agentOf(data, to)) echo.to = to
         } else if (!('plugin' in origin && origin.plugin === $.plugin.name)) {
-          const from =
-            'teammate' in origin
-              ? (M.resolveRecipient(data, origin.teammate)?.id ?? M.peerOf(data, origin.teammate, now).id)
-              : origin.kind === 'coordinator'
-                ? M.MAIN
-                : M.peerOf(data, origin.kind === 'peer-send-message' ? 'another session' : 'peer', now).id
-          M.addMessage(data, { from, to, kind: 'message', text: e.text, at: now })
+          const unwrapped = M.unwrapMessage(e.text)
+          const named = 'teammate' in origin ? origin.teammate : unwrapped.from
+          const from = named
+            ? (M.resolveRecipient(data, named)?.id ?? M.peerOf(data, named, now).id)
+            : origin.kind === 'coordinator'
+              ? M.MAIN
+              : M.peerOf(data, origin.kind === 'peer-send-message' ? 'another session' : 'peer', now).id
+          if (unwrapped.text.trim() !== '') M.addMessage(data, { from, to, kind: 'message', text: unwrapped.text, at: now })
         }
-        changed($)
+        touched($, now)
       }
     } catch {
       // the delivery stands whatever the deck makes of it
@@ -1284,7 +1647,7 @@ export const register: Register = on => {
       if (M.isNeedsYou(e.notification_type, e.message)) {
         const now = await $.clock.now()
         M.noteNeeds(data, { kind: e.notification_type, text: e.message, at: now, ...(e.agent_id ? { agent: e.agent_id } : {}) })
-        changed($)
+        touched($, now)
       }
     } catch {
       // the notification goes out whatever the deck makes of it
@@ -1301,7 +1664,8 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const isLive = data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
+    // a workflow's agents and the engine's own loops fold away: they raise no band
+    const isLive = M.hasLiveAgents(data)
     if (view.isBandHidden || e.props.hasSurvey || !isLive) return next(e)
     const theirs: RenderElement = await next(e)
     const now = await $.clock.now()

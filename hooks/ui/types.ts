@@ -1,11 +1,11 @@
 /**
  * The types every drawing shares: the surface's elements (Kit), the state to
  * draw (DeckModel) and the closures a press runs (Actions). The hooks module
- * supplies all three; the screens and the map only read them.
+ * supplies all three; the screens only read them.
  */
 import type { Elements, RenderSurface } from 'claude-code'
 
-import type { DeckAgentPane, DeckData, DeckMapView, DeckTab, DeckView } from '../../types'
+import type { DeckAgentPane, DeckData, DeckTab, DeckView } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
 
 type TerminalTable = Elements['terminal']
@@ -63,6 +63,17 @@ export type DeckModel = {
 
 export type Actions = {
   setTab: (tab: DeckTab) => void
+  /**
+   * Opens a row in the detail block: an agent's id (the Orchestrator's is
+   * `main`), a plan step's key (as `planOf` gives it), or `file:` and a file's path.
+   * The outline shows it: a zoom it lies outside ends, and the branches
+   * folded above it open.
+   */
+  select: (id: string) => void
+  /** Folds or opens an outline branch (an agent's id, a plan step's row id, a group's id); the choice stays. */
+  toggleFold: (id: string) => void
+  /** Re-roots the outline on a branch (an agent's id or a plan step's key); '' shows everything again, as does the branch already zoomed. */
+  zoomTo: (id: string) => void
   selectAgent: (id: string) => void
   setAgentPane: (pane: DeckAgentPane) => void
   selectFile: (path: string) => void
@@ -74,10 +85,6 @@ export type Actions = {
   sendChat: (agentId: string, text: string) => void
   review: (text: string) => void
   open: (tab: DeckTab) => void
-  /** Picks a row of the messages log: marks it, and opens the agent it went to (its sender, for one sent to you). */
-  selectMessage: (id: string) => void
-  /** Draws the delegation map as the tidy tree or the wire. */
-  setMapView: (map: DeckMapView) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
   selectRepo: (root: string) => void
 }
