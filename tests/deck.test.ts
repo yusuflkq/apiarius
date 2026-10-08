@@ -3,8 +3,6 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { hunkText, hunksOf } from '../hooks/diff'
 import { filesOf, parseLog, parseNumstat, parseStatus } from '../hooks/git'
-import { buildGraph, layoutOf, svgOf } from '../hooks/graph'
-import * as M from '../hooks/model'
 
 const HASH = 'a'.repeat(40)
 const NOW = 1_700_000_100_000
@@ -15,15 +13,6 @@ const PANE = {
   bodyColumns: 96,
   placement: 'dock',
   scroll: { offset: 0, bodyRows: 60 },
-  view: {},
-} as const
-
-const BAND = {
-  hasSurvey: false,
-  isWorking: true,
-  maxRows: 8,
-  bodyColumns: 100,
-  scroll: { offset: 0, bodyRows: 8 },
   view: {},
 } as const
 
@@ -127,21 +116,23 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
-test('/deck opens the pane: overview, a file diff and the commit log on each surface', async ($, on) => {
-  mock.clock(on, { now: NOW })
+test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a file diff, the commit log) and Stats on each surface', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
   world(on)
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
   const opened = await $.command.run(deck(''))
   expect(opened.text).toBeUndefined()
+  await clock.advance(1000)
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-    await ui.press({ key: 'refresh' })
-    expect(await ui.find({ type: 'Text', text: /Agent Deck/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Tool calls/ })).toBeDefined()
+    expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(false)
+    expect(await ui.find({ type: 'Text', text: 'Agent deck' })).toBeDefined()
 
-    await ui.press({ key: 'tab:diffs' })
+    await ui.press({ key: 'tab:changes' })
+    expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(true)
     expect(await ui.find({ key: 'file:src/app.ts' })).toBeDefined()
     expect(await ui.find({ key: 'file:notes.txt' })).toBeDefined()
     await ui.press({ key: 'file:src/app.ts' })
@@ -149,18 +140,19 @@ test('/deck opens the pane: overview, a file diff and the commit log on each sur
     expect(code?.props.format).toBe('diff')
     await ui.press({ key: 'file:src/app.ts' })
 
-    await ui.press({ key: 'tab:commits' })
     expect(await ui.find({ key: `commit:${HASH}` })).toBeDefined()
     await ui.press({ key: `commit:${HASH}` })
     expect(await ui.find({ key: `review-commit:${HASH}` })).toBeDefined()
     await ui.press({ key: `commit:${HASH}` })
 
-    await ui.press({ key: 'tab:overview' })
+    await ui.press({ key: 'tab:stats' })
+    expect((await ui.find({ key: 'tab:stats' }))?.props.dimColor).toBe(false)
+    await ui.press({ key: 'tab:agents' })
     await ui.unmount()
   }
 })
 
-test('a subagent shows with its task, the edits show as diffs, the graph draws, and chat reaches it', async ($, on) => {
+test('a subagent shows in the strip with its task, the Orchestrator`s edit shows as a diff, the map draws it, and chat reaches it', async ($, on) => {
   mock.clock(on, { now: NOW })
   const sent: { to: string; text: string }[] = []
   world(on, sent)
@@ -176,22 +168,21 @@ test('a subagent shows with its task, the edits show as diffs, the graph draws, 
     expect(await ui.find({ key: 'agent:agent-x1' })).toBeDefined()
 
     await ui.press({ key: 'agent:main' })
-    await ui.press({ key: 'ap:edits' })
+    await ui.press({ key: 'detail:edits' })
     expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
 
     await ui.press({ key: 'agent:agent-x1' })
-    await ui.press({ key: 'ap:chat' })
+    expect(await ui.find({ type: 'Text', text: 'Find the bug in src/app.ts' })).toBeDefined()
+    await ui.press({ key: 'detail:chat' })
     await ui.input({ key: 'chat:agent-x1', text: `hello from ${surface}` })
 
-    await ui.press({ key: 'tab:graph' })
     if (surface === 'desktop') {
       const svg = await ui.find({ type: 'Svg' })
       expect(String(svg?.props.source)).toContain('scout')
     } else {
-      expect(await ui.find({ type: 'Text', text: /scout/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: ' scout' })).toBeDefined()
     }
-    await ui.press({ key: 'tab:agents' })
-    await ui.press({ key: 'ap:activity' })
+    await ui.press({ key: 'detail:activity' })
     await ui.unmount()
   }
 
@@ -199,29 +190,8 @@ test('a subagent shows with its task, the edits show as diffs, the graph draws, 
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it: b was 2.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-x1' })
   const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-  expect(await ui.find({ type: 'Text', text: /done/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Done: Found it: b was 2.' })).toBeDefined()
   await ui.unmount()
-})
-
-test('the band above the prompt shows live subagents only', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  world(on)
-  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const quiet = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'AbovePrompt', viewport: VIEWPORT, props: BAND })
-    expect(await quiet.find({ key: 'band:open' })).toBeUndefined()
-    await quiet.unmount()
-  }
-
-  await $.agent.spawn(spawn('scout', 'look around', 'Look around'))
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const band = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'AbovePrompt', viewport: VIEWPORT, props: BAND })
-    expect(await band.find({ type: 'Text', text: /1 agent working/ })).toBeDefined()
-    expect(await band.find({ key: 'band:open' })).toBeDefined()
-    await band.unmount()
-  }
 })
 
 test('git output parses: renames, untracked counts, the log', async () => {
@@ -253,64 +223,4 @@ test('a hunk cut to fit keeps counts that still parse', async () => {
   const [again] = hunksOf(cut.text)
   expect(again?.newLines).toBe(again?.lines.length)
   expect(cut.text.length <= 2000).toBe(true)
-})
-
-test('the graph links spawns, talk and files, and its SVG stays under the element limit', async () => {
-  const data = M.emptyData(NOW - 600_000)
-  const spawn = (id: string, name: string, parentId: string, status: 'running' | 'completed' | 'failed') =>
-    data.agents.push(M.newAgent(id, 'agent', name, NOW - 500_000, { type: 'general-purpose', parentId, status, tools: 10 }))
-  spawn('a1', 'scout', M.MAIN, 'completed')
-  spawn('a2', 'fixer', M.MAIN, 'running')
-  spawn('a3', 'helper', 'a2', 'running')
-  M.addMessage(data, { from: M.MAIN, to: 'a2', kind: 'spawn', text: 'fix it', at: NOW - 400_000 })
-  M.addMessage(data, { from: 'a2', to: 'a1', kind: 'message', text: 'where is auth?', at: NOW - 5_000 })
-  M.addMessage(data, { from: 'a1', to: 'a2', kind: 'message', text: 'src/auth.ts', at: NOW - 2_000 })
-  for (let i = 0; i < 60; i++) {
-    data.edits.push({ id: `e${i}`, agent: i % 2 ? 'a2' : 'a3', tool: 'Edit', path: `src/file${i}.ts`, abs: `/repo/src/file${i}.ts`, at: NOW - i * 1000, added: 1, removed: 0, patch: '', isNew: false })
-  }
-
-  const graph = buildGraph(data, NOW, true)
-  const talk = graph.edges.find(edge => [edge.a, edge.b].sort().join() === 'a1,a2')
-  expect(talk).toMatchObject({ kind: 'talk', isActive: true })
-  expect(graph.edges.find(edge => edge.b === 'a3' || edge.a === 'a3')?.kind).toBe('spawn')
-  expect(graph.nodes.filter(node => node.kind === 'file').length).toBe(36)
-
-  const svg = svgOf(graph, layoutOf(graph, new Map()), { width: 900, height: 560 }, 'test')
-  expect(svg).toContain('animateMotion')
-  expect(svg).toContain('fixer')
-  expect(svg.length < 131_072).toBe(true)
-})
-
-test('outside a repository the Diffs tab lists the edits agents made, and chat draws bubbles', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  world(on, [], {
-    isRepo: false,
-    messages: [
-      { role: 'user', text: 'Find the bug in src/app.ts', toolUses: [] },
-      { role: 'assistant', text: 'Looking at **src/app.ts** now.', toolUses: [{ tool_use_id: 'toolu_r', tool: 'Read', input: { file_path: '/repo/src/app.ts' } }] },
-    ],
-  })
-
-  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/notes' })
-  await $.command.run(deck('diffs'))
-  await $.agent.spawn(spawn('scout', 'hunt the bug', 'Find the bug in src/app.ts'))
-  await $.tool.call({ tool: 'Edit', file_path: '/repo/src/app.ts', old_string: 'const b = 2', new_string: 'const b = 3' })
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-    await ui.press({ key: 'refresh' })
-    expect(await ui.find({ type: 'Text', text: /not a git repository/ })).toBeDefined()
-    await ui.press({ key: 'file:/repo/src/app.ts' })
-    expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
-    await ui.press({ key: 'file:/repo/src/app.ts' })
-
-    await ui.press({ key: 'tab:agents' })
-    await ui.press({ key: 'agent:agent-x1' })
-    await ui.press({ key: 'ap:chat' })
-    expect(await ui.find({ type: 'Markdown', text: /Looking at/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Read src\/app\.ts|Read \/repo\/src\/app\.ts/ })).toBeDefined()
-    await ui.press({ key: 'ap:activity' })
-    await ui.press({ key: 'tab:diffs' })
-    await ui.unmount()
-  }
 })

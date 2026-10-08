@@ -293,7 +293,8 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   await clock.advance(2000)
   const kept = lastOf(saved)
   expect(kept.v).toBe(M.SNAPSHOT_VERSION)
-  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'graph', agent: 'agent-old', showFiles: false })
+  // its graph tab is the Agents tab now; the pane it had open stays
+  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'activity', showFiles: false })
   expect(kept.data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-old'])
   expect(kept.data.messages.map(message => message.id)).toEqual([spawned.id])
   expect(kept.data.tasks).toEqual({})

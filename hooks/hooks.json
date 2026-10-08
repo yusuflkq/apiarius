@@ -1,4 +1,4 @@
 {
-  "description": "Agent Deck: /deck pane (overview, agents, diffs, commits, graph), agent and edit tracking, the live agents band above the prompt",
+  "description": "Agent Deck: the /deck pane (Agents, Changes, Stats), agent and edit tracking, and the live agents band above the prompt",
   "modules": ["./register.tsx"]
 }

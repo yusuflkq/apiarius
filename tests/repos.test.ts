@@ -113,7 +113,7 @@ test('a session outside any repository follows the one an agent edits: its files
   world(on, runs)
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/notes' })
-  await $.command.run(deck('diffs'))
+  await $.command.run(deck('changes'))
   await $.tool.call(edit('/repo/src/app.ts'))
   await clock.advance(1000)
 
@@ -139,7 +139,7 @@ test('the deck follows the repository edited last', async ($, on) => {
   world(on, runs)
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck('diffs'))
+  await $.command.run(deck('changes'))
   await $.tool.call(edit('/repo/src/app.ts'))
   await clock.advance(1000)
 
@@ -169,7 +169,7 @@ test('Windows spellings: a backslashed path in any case finds the root git print
   world(on, runs)
 
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\Me\\Documents' })
-  await $.command.run(deck('diffs'))
+  await $.command.run(deck('changes'))
   await $.tool.call(edit('C:\\Users\\Me\\proj\\src\\app.ts'))
   await $.tool.call(edit('c:\\users\\me\\PROJ\\src\\util.ts'))
   await clock.advance(1000)

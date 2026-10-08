@@ -123,8 +123,10 @@ export type DeckData = {
   turnMs: number
 }
 
-export type DeckTab = 'overview' | 'agents' | 'diffs' | 'commits' | 'graph' | 'changes' | 'stats'
+/** The pane's tabs. Older builds' names (overview, diffs, commits, graph, flow) are read as these by `tabNamed`. */
+export type DeckTab = 'agents' | 'changes' | 'stats'
 
+/** What the selected agent's detail shows: its exact diffs, its conversation, or its recent tool calls. */
 export type DeckAgentPane = 'activity' | 'edits' | 'chat'
 
 /** How the Agents tab draws the delegation: a tidy tree, or one lane per participant. */
@@ -132,7 +134,7 @@ export type DeckMapView = 'tree' | 'wire'
 
 export type DeckView = {
   tab: DeckTab
-  /** The agent whose card is open on the Flow tab; '' when none is. */
+  /** The agent whose detail is open on the Agents tab; '' when none is (the Orchestrator's shows). */
   agent: string
   agentPane: DeckAgentPane
   file: string

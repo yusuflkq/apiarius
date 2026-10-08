@@ -35,10 +35,35 @@ export const ORCHESTRATOR = 'Orchestrator'
  */
 export const SNAPSHOT_VERSION = 2
 
-/** Every tab, the new ones first so a typed prefix (`/deck c`) finds them. */
-export const TABS: readonly DeckTab[] = ['agents', 'changes', 'stats', 'overview', 'diffs', 'commits', 'graph']
+/** The pane's tabs, in the order the tab row draws them. */
+export const TABS: readonly DeckTab[] = ['agents', 'changes', 'stats']
 export const AGENT_PANES: readonly DeckAgentPane[] = ['activity', 'edits', 'chat']
 export const MAP_VIEWS: readonly DeckMapView[] = ['tree', 'wire']
+
+/** Earlier builds' tabs, by the tab that took each one's place: a saved view or a typed `/deck overview` still lands. */
+export const OLD_TABS: ReadonlyMap<string, DeckTab> = new Map<string, DeckTab>([
+  ['overview', 'stats'],
+  ['diffs', 'changes'],
+  ['commits', 'changes'],
+  ['graph', 'agents'],
+  ['flow', 'agents'],
+])
+
+/** The tab `name` is: one of TABS, or the one an earlier build's name became; undefined for anything else. */
+export function tabNamed(name: unknown): DeckTab | undefined {
+  if (typeof name !== 'string') return undefined
+  return TABS.find(tab => tab === name) ?? OLD_TABS.get(name)
+}
+
+/** The tab a `/deck` argument asks for: a tab's name or its start (`c`), today's names before earlier builds'. */
+export function tabFor(arg: string): DeckTab | undefined {
+  const wanted = arg.trim().toLowerCase()
+  if (wanted === '') return undefined
+  const tab = TABS.find(one => one.startsWith(wanted))
+  if (tab) return tab
+  for (const [old, now] of OLD_TABS) if (old.startsWith(wanted)) return now
+  return undefined
+}
 
 export const LIMITS = {
   recent: 14,
@@ -116,9 +141,9 @@ export function emptyData(now: number): DeckData {
 
 export function defaultView(): DeckView {
   return {
-    tab: 'overview',
+    tab: 'agents',
     agent: MAIN,
-    agentPane: 'activity',
+    agentPane: 'edits',
     file: '',
     commit: '',
     filter: 'all',
@@ -135,8 +160,9 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback
 
 /**
  * A view restored from a snapshot, field by field: one missing, of another
- * type, or naming a tab or map view this build lacks takes its default. With
- * `data`, an agent or a message it no longer holds is let go too.
+ * type, or naming a tab or map view this build lacks takes its default; an
+ * earlier build's tab name becomes the tab that took its place (`tabNamed`).
+ * With `data`, an agent or a message it no longer holds is let go too.
  */
 export function healView(value: unknown, data?: DeckData): DeckView {
   const base = defaultView()
@@ -145,7 +171,7 @@ export function healView(value: unknown, data?: DeckData): DeckView {
   const text = (field: unknown, fallback: string) => (typeof field === 'string' ? field : fallback)
   const flag = (field: unknown, fallback: boolean) => (typeof field === 'boolean' ? field : fallback)
   const view: DeckView = {
-    tab: oneOf(v.tab, TABS, base.tab),
+    tab: tabNamed(v.tab) ?? base.tab,
     agent: text(v.agent, base.agent),
     agentPane: oneOf(v.agentPane, AGENT_PANES, base.agentPane),
     file: text(v.file, base.file),

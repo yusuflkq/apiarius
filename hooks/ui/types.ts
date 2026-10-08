@@ -48,10 +48,15 @@ export type DeckModel = {
   git: GitState
   fileDiff: FileDiff | null
   commit: CommitDetail | null
+  /** The selected agent's conversation; null while it is read (or not asked for). */
   chat: ChatLine[] | null
   usage: UsageInfo | null
   days: DayRow[]
-  graphSvg: string | null
+  /**
+   * The time the drawing shows. Screens draw only what the screen signature
+   * covers from it (a time of day, an agent's coarse elapsed time), so a
+   * redraw that changes nothing else draws the same tree.
+   */
   now: number
   cwd: string
 }

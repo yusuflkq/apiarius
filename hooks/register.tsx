@@ -12,11 +12,11 @@ import type { DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
 import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
-import { buildGraph, layoutOf, shapeKeyOf, svgOf, type Pt } from './graph'
 import * as M from './model'
 import * as R from './repos'
+import { bandView } from './ui/band'
 import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo } from './ui/types'
-import { bandView, deckView } from './views'
+import { deckView } from './views'
 
 const PANE = 'agent-deck'
 const SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
@@ -43,9 +43,6 @@ let isGitQueued = false
 let isHeavyQueued = false
 let lastGitAt = 0
 let lastHeavyAt = 0
-let positions = new Map<string, Pt>()
-let graphShape = ''
-let graphCache: { key: string; svg: string } | null = null
 const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer } = {}
 /** The screen key the last drawing showed (or the last timed redraw asked for); see `screenKey`. */
 let shownKey = ''
@@ -97,7 +94,7 @@ function screenKey(now: number): string {
   const figures = usage
     ? [Math.round(usage.contextPercent ?? -1), F.money(usage.costUsd), ...usage.limits.map(limit => `${limit.kind}:${Math.round(limit.percentUsed)}`)].join(' ')
     : ''
-  const minute = isPaneOpen && (view.tab === 'stats' || view.tab === 'overview') ? M.minuteOf(now) : ''
+  const minute = isPaneOpen && view.tab === 'stats' ? M.minuteOf(now) : ''
   return [M.agentsKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute].join('\n\u0001')
 }
 
@@ -349,7 +346,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     }
 
     git = next
-    if (view.file && view.tab === 'diffs' && view.filter === 'all') void loadFileDiff($, view.file)
+    if (view.file && view.tab === 'changes') void loadFileDiff($, view.file)
   } finally {
     isGitBusy = false
     savePin($)
@@ -677,7 +674,7 @@ function actionsFor($: EngineInterface): Actions {
     setTab: tab => {
       view.tab = tab
       if (tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
-      if (tab === 'diffs' && view.file) void loadFileDiff($, view.file)
+      if (tab === 'changes' && view.file) void loadFileDiff($, view.file)
       changed($)
     },
     selectAgent: id => {
@@ -703,7 +700,7 @@ function actionsFor($: EngineInterface): Actions {
     selectFile: path => {
       view.file = view.file === path ? '' : path
       fileDiff = null
-      if (view.file && view.filter === 'all' && git.isRepo) void loadFileDiff($, path)
+      if (view.file && git.isRepo) void loadFileDiff($, path)
       changed($)
     },
     selectCommit: hash => {
@@ -758,36 +755,13 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
     columns,
     ...('Input' in ui ? { Input: ui.Input } : {}),
     ...('Select' in ui ? { Select: ui.Select } : {}),
-    ...('Svg' in ui ? { Svg: ui.Svg } : {}),
+    // the terminal's table answers to Svg but draws nothing for it: there the map falls back to its railed tree
+    ...('Svg' in ui && surface !== 'terminal' ? { Svg: ui.Svg } : {}),
   }
 }
 
-function graphSvgFor(columns: number, now: number): string {
-  const graph = buildGraph(data, now, view.showFiles)
-  const shape = shapeKeyOf(graph)
-  if (shape !== graphShape) {
-    positions = layoutOf(graph, positions)
-    graphShape = shape
-  }
-  const width = Math.round(Math.max(360, Math.min(1400, columns * 8)))
-  const height = Math.round(Math.max(280, Math.min(640, width * 0.62)))
-  const totals = M.totalsOf(data)
-  const caption = `${totals.agents} agents · ${totals.messages} messages · ${totals.live} live`
-  const key = [
-    shape,
-    width,
-    caption,
-    graph.nodes.map(node => `${node.color}${node.isLive ? 1 : 0}${node.label}${Math.round(node.r)}`).join(','),
-    graph.edges.map(edge => `${edge.kind}${edge.ab}.${edge.ba}${edge.isActive ? 1 : 0}${edge.isWorking ? 1 : 0}`).join(','),
-  ].join('|')
-  if (graphCache?.key === key) return graphCache.svg
-  let svg = svgOf(graph, positions, { width, height }, caption)
-  if (svg.length > 130_000) svg = svgOf(buildGraph(data, now, false), positions, { width, height }, `${caption} · file nodes hidden to fit`)
-  graphCache = { key, svg }
-  return svg
-}
-
-function modelOf(now: number, kit: Kit, withGraph: boolean): DeckModel {
+/** The state a drawing reads: the live model, as it is now. The map's Svg strings are built from it in the views, memoised by content. */
+function modelOf(now: number): DeckModel {
   return {
     data,
     view,
@@ -797,7 +771,6 @@ function modelOf(now: number, kit: Kit, withGraph: boolean): DeckModel {
     chat: chat && chat.agent === view.agent ? chat.lines : null,
     usage,
     days,
-    graphSvg: withGraph && kit.Svg ? graphSvgFor(kit.columns, now) : null,
     now,
     cwd,
   }
@@ -911,8 +884,8 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: diffs, commits, what every agent is doing, chat, stats and the agent graph',
-        argumentHint: '[agents|changes|stats|overview|diffs|commits|graph|close]',
+        description: 'Open Agent Deck: who each agent is, what it is doing, how they talk, and the diffs they make',
+        argumentHint: '[agents|changes|stats|band|close]',
         immediate: true,
       })
     } catch (error) {
@@ -929,9 +902,6 @@ export const register: Register = on => {
     chat = null
     commit = null
     fileDiff = null
-    positions = new Map()
-    graphShape = ''
-    graphCache = null
     changed($)
     return result
   })
@@ -943,7 +913,14 @@ export const register: Register = on => {
       isPaneOpen = false
       return { text: 'Agent Deck closed.' }
     }
-    const tab = arg ? M.TABS.find(one => one.startsWith(arg)) : undefined
+    if (arg === 'band') {
+      view.isBandHidden = !view.isBandHidden
+      void $.store.set('prefs', { isBandHidden: view.isBandHidden }).catch(() => undefined)
+      changed($)
+      return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /deck band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
+    }
+    // a tab's name or its start; an earlier build's name (overview, diffs, commits, graph) lands on the tab that replaced it
+    const tab = M.tabFor(arg)
     if (tab) view.tab = tab
     const isPlaced = await openPane($)
     changed($)
@@ -1180,7 +1157,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
     shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
-    return deckView(kit, modelOf(now, kit, view.tab === 'graph'), actionsFor($))
+    return deckView(kit, modelOf(now), actionsFor($))
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -1191,6 +1168,6 @@ export const register: Register = on => {
     // the band speaks for the screen only while the pane, which shows more, is shut
     if (!isPaneOpen) shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
-    return bandView(kit, modelOf(now, kit, false), actionsFor($), theirs) ?? theirs
+    return bandView(kit, modelOf(now), actionsFor($), theirs) ?? theirs
   })
 }
