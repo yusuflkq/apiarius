@@ -6,7 +6,19 @@
  * messages between agents) into one live model, run git in the background,
  * and draw the views from `./views`. Every `$` call lives in this file.
  */
-import type { AgentInfo, EngineInterface, Register, RenderElement, SessionMessage, Timer, ToolCallResult } from 'claude-code'
+import type {
+  AgentInfo,
+  CommandRunResult,
+  Elements,
+  EngineInterface,
+  Register,
+  RenderElement,
+  RenderInput,
+  RenderSurface,
+  SessionMessage,
+  Timer,
+  ToolCallResult,
+} from 'claude-code'
 
 import type { DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
 import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
@@ -15,6 +27,7 @@ import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
 import { bandView } from './ui/band'
+import { T } from './ui/theme'
 import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo } from './ui/types'
 import { deckView } from './views'
 
@@ -831,6 +844,122 @@ async function attributeCommits($: EngineInterface, agentId: string, before: str
   save($)
 }
 
+/**
+ * `/deck probe`: a pane of its own that settles in one look what a surface
+ * does with a `Client` (./ui/probe.client.tsx) beside native Text and an
+ * Svg. A diagnostic; the deck's screens read none of it.
+ */
+const PROBE = 'agent-deck-probe'
+
+const probe: {
+  /** Bumped every 1500 ms while the pane is open; each bump redraws it, handing the Client new props. */
+  tick: number
+  timer?: Timer
+  /** The last `ui.message` the Client posted, as one line of JSON; '' before the first. */
+  message: string
+  /** The last `ui.fault` the Client raised. */
+  fault: { surface: RenderSurface; phase: string; reason: string } | null
+  /** Where the Client failed: those drawings leave it out (no fault loop) until the probe opens again. */
+  failedOn: Set<RenderSurface>
+} = { tick: 0, message: '', fault: null, failedOn: new Set() }
+
+/** Starts the probe's tick, or restarts it. */
+function startProbe($: EngineInterface) {
+  probe.timer?.cancel()
+  probe.timer = $.clock.every(1500, () => {
+    probe.tick += 1
+    redraw($)
+  })
+}
+
+function stopProbe() {
+  probe.timer?.cancel()
+  probe.timer = undefined
+}
+
+/**
+ * `/deck probe`: opens the probe afresh with the keyboard (Esc closes it),
+ * or closes it while it is open; the `ui.close` hook stops the tick.
+ */
+async function toggleProbe($: EngineInterface): Promise<CommandRunResult> {
+  const panes = await $.ui.panes().catch(() => [])
+  if (panes.some(pane => pane.id === PROBE)) {
+    await $.ui.close({ id: PROBE })
+    return { text: 'Deck probe closed.' }
+  }
+  probe.tick = 0
+  probe.message = ''
+  probe.fault = null
+  probe.failedOn.clear()
+  const opened = await $.ui.open({ id: PROBE, title: 'Deck probe', focus: true, closeOnEscape: true, rows: 24 })
+  startProbe($)
+  return opened.isPlaced ? {} : { text: 'Deck probe is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+}
+
+/** Plain data as one line of JSON, cut to fit a line. */
+function jsonLine(value: unknown): string {
+  let text: string
+  try {
+    text = JSON.stringify(value) ?? String(value)
+  } catch {
+    text = String(value)
+  }
+  return F.trunc(F.oneLine(text), 240)
+}
+
+/**
+ * The probe's Svg: markup far wider than any slot (2400×160 over a 900×60
+ * viewBox), graphite ground, one 13px bone label carrying the tick `count`.
+ * (No `tick` here: the validator resolves the functions handed `$` by name.)
+ */
+function probeSvg(count: number): string {
+  return [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="160" viewBox="0 0 900 60">',
+    `<rect x="0" y="0" width="900" height="60" fill="${T.bg}"/>`,
+    `<text x="16" y="35" font-family="${T.fontLabel}" font-size="13" fill="${T.text1}">tick ${count} &#183; this text is 13px</text>`,
+    '</svg>',
+  ].join('')
+}
+
+/**
+ * The probe pane, top to bottom: the site's numbers and a hex colour in
+ * native Text, the Client, an Svg without `isInteractive`, and the last
+ * `ui.message` and `ui.fault` the Client caused. `Client` and `Svg` are
+ * passed only where the surface draws them.
+ */
+function probeView(
+  ui: ReturnType<EngineInterface['ui']['resolve']>,
+  e: RenderInput<'Pane'>,
+  Client: Elements['desktop']['Client'] | undefined,
+  Svg: Elements['desktop']['Svg'] | undefined,
+): RenderElement {
+  const { Box, Text } = ui
+  const viewport = e.viewport ? `${e.viewport.columns}×${e.viewport.rows}` : 'none'
+  const fault = probe.fault
+  let client: RenderElement
+  if (!Client) client = <Text dimColor>{`No Client on ${e.surface}: its element table has none.`}</Text>
+  else if (probe.failedOn.has(e.surface)) client = <Text dimColor>{`The Client is left out here after its fault; /deck probe twice draws it again.`}</Text>
+  else client = <Client key="probe" module="./ui/probe.client.tsx" width="100%" props={{ tick: probe.tick, cols: e.props.bodyColumns }} />
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Box flexDirection="row" columnGap={2}>
+        <Text>{`bodyColumns=${e.props.bodyColumns}  viewport=${viewport}  placement=${e.props.placement}  bodyRows=${e.props.scroll.bodyRows}  surface=${e.surface}`}</Text>
+        <Text color={T.copper}>copper hex</Text>
+      </Box>
+      {client}
+      {Svg ? (
+        <Svg source={probeSvg(probe.tick)} alt={`tick ${probe.tick}: 13px bone text on graphite, markup 2400×160 over a 900×60 viewBox`} />
+      ) : (
+        <Text dimColor>{`No Svg on ${e.surface}.`}</Text>
+      )}
+      <Box flexDirection="column">
+        <Text dimColor>{`ui.message: ${probe.message || 'none yet'}`}</Text>
+        <Text dimColor>{`ui.fault: ${fault ? `${fault.phase} on ${fault.surface}: ${fault.reason}` : 'none'}`}</Text>
+      </Box>
+    </Box>
+  )
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
@@ -849,7 +978,10 @@ export const register: Register = on => {
     }
 
     try {
-      isPaneOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+      const panes = await $.ui.panes()
+      isPaneOpen = panes.some(pane => pane.id === PANE)
+      // a reload drops the probe's tick with the old environment: start it again while its pane stays up
+      if (panes.some(pane => pane.id === PROBE)) startProbe($)
     } catch {
       isPaneOpen = false
     }
@@ -885,7 +1017,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'deck',
         description: 'Open Agent Deck: who each agent is, what it is doing, how they talk, and the diffs they make',
-        argumentHint: '[agents|changes|stats|band|close]',
+        argumentHint: '[agents|changes|stats|band|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -919,6 +1051,7 @@ export const register: Register = on => {
       changed($)
       return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /deck band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
     }
+    if (arg === 'probe') return toggleProbe($)
     // a tab's name or its start; an earlier build's name (overview, diffs, commits, graph) lands on the tab that replaced it
     const tab = M.tabFor(arg)
     if (tab) view.tab = tab
@@ -930,6 +1063,13 @@ export const register: Register = on => {
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const result = await next(e)
     isPaneOpen = false
+    return result
+  })
+
+  // the probe closes by /deck probe, Esc or its close mark: its tick stops
+  on('ui.close', { id: PROBE }, async ($, e, next) => {
+    const result = await next(e)
+    stopProbe()
     return result
   })
 
@@ -1169,5 +1309,28 @@ export const register: Register = on => {
     if (!isPaneOpen) shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
     return bandView(kit, modelOf(now), actionsFor($), theirs) ?? theirs
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PROBE }, async ($, e) => {
+    const ui = $.ui.resolve(e)
+    // a table answers to every element name (a missing one draws a fragment): the surface says which really draw
+    const Client = (e.surface === 'terminal' || e.surface === 'desktop') && 'Client' in ui ? ui.Client : undefined
+    const Svg = e.surface !== 'terminal' && 'Svg' in ui ? ui.Svg : undefined
+    return probeView(ui, e, Client, Svg)
+  })
+
+  // what the probe's Client posts (a click's cell); only this plugin's hooks hear it
+  on('ui.message', { component: 'Pane', requestId: PROBE }, async ($, e, next) => {
+    probe.message = jsonLine(e.data)
+    redraw($)
+    return next(e)
+  })
+
+  // the probe's Client failed: say when and why, and leave it out of that surface's drawing
+  on('ui.fault', { component: 'Pane', requestId: PROBE }, async ($, e, next) => {
+    probe.fault = { surface: e.surface, phase: e.phase, reason: F.oneLine(e.reason) }
+    probe.failedOn.add(e.surface)
+    redraw($)
+    return next(e)
   })
 }

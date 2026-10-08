@@ -168,7 +168,7 @@ function mapOf(kit: Kit, model: DeckModel, actions: Actions, nodes: MapNode[], t
   return (
     <Box flexDirection="column">
       {toggles(kit, 'map', MAP_VIEWS, view.map, map => actions.setMapView(map))}
-      <Svg source={source} alt={alt} isInteractive />
+      <Svg source={source} alt={alt} />
     </Box>
   )
 }
