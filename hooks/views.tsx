@@ -5,78 +5,16 @@
  * Pure: each takes the surface's elements (Kit), the state to draw (DeckModel)
  * and the closures a press runs (Actions); the hooks module supplies all three.
  */
-import type { Elements, RenderElement, RenderSurface } from 'claude-code'
+import type { RenderElement } from 'claude-code'
 
-import type { DeckAgent, DeckAgentPane, DeckData, DeckMessage, DeckTab, DeckView } from '../types'
+import type { DeckAgent, DeckAgentPane, DeckData, DeckMessage, DeckTab } from '../types'
 import { barsSvg } from './charts'
 import { codeSourcesOf, hunksOf, type Hunk } from './diff'
 import * as F from './format'
-import type { CommitDetail, FileCode, FileDiff, FileRow, GitState } from './git'
+import type { CommitDetail, FileCode, FileRow } from './git'
 import { statusWord, treeOf } from './graph'
 import { MAIN, YOU, agentOf, editorsOf, isEnded, isLive, labelOf, series, totalsOf } from './model'
-
-type TerminalTable = Elements['terminal']
-
-export type Kit = {
-  surface: RenderSurface
-  Box: TerminalTable['Box']
-  Text: TerminalTable['Text']
-  Button: TerminalTable['Button']
-  Code: TerminalTable['Code']
-  Markdown: TerminalTable['Markdown']
-  Input?: TerminalTable['Input']
-  Select?: TerminalTable['Select']
-  Svg?: Elements['desktop']['Svg']
-  columns: number
-}
-
-export type ChatLine = { role: 'parent' | 'agent' | 'tool' | 'note'; who: string; text: string }
-
-export type UsageInfo = {
-  startedAt: number
-  contextPercent?: number
-  costUsd?: number
-  limits: { kind: string; percentUsed: number }[]
-}
-
-export type DayRow = {
-  day: string
-  added: number
-  removed: number
-  tools: number
-  tokens: number
-  sessions: number
-  activeMs: number
-}
-
-export type DeckModel = {
-  data: DeckData
-  view: DeckView
-  git: GitState
-  fileDiff: FileDiff | null
-  commit: CommitDetail | null
-  chat: ChatLine[] | null
-  usage: UsageInfo | null
-  days: DayRow[]
-  graphSvg: string | null
-  now: number
-  cwd: string
-}
-
-export type Actions = {
-  setTab: (tab: DeckTab) => void
-  selectAgent: (id: string) => void
-  setAgentPane: (pane: DeckAgentPane) => void
-  selectFile: (path: string) => void
-  selectCommit: (hash: string) => void
-  setFilter: (filter: string) => void
-  toggleFiles: () => void
-  toggleBand: () => void
-  refresh: () => void
-  sendChat: (agentId: string, text: string) => void
-  review: (text: string) => void
-  open: (tab: DeckTab) => void
-}
+import type { Actions, ChatLine, DeckModel, Kit } from './ui/types'
 
 const C = {
   live: 'green',

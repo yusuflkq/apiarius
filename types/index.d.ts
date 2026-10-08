@@ -7,15 +7,48 @@ export type DeckStatus =
   | 'failed'
   | 'killed'
 
+/**
+ * The five statuses the deck draws (an agent's status square), folded from
+ * DeckStatus and a needs-you note by `statusOf`.
+ */
+export type DeckShownStatus = 'running' | 'waiting' | 'done' | 'failed' | 'idle'
+
 export type DeckKind = 'you' | 'main' | 'agent' | 'teammate' | 'peer'
 
 export type DeckActivity = {
   id: string
   tool: string
   target: string
+  /** The call's own words for what it does: a Bash or PowerShell `description`. */
+  description?: string
   at: number
   ms?: number
   ok?: boolean
+}
+
+/** What an agent said it is working on: the in-progress item of its todo list or task list. */
+export type DeckTodo = {
+  /** The item's `activeForm` ("Running the tests"), else its content or subject. */
+  text: string
+  /** The task's id when a TaskUpdate started it, so that task's end takes it down. */
+  task?: string
+}
+
+/**
+ * The engine told the person it needs them (a permission prompt, an MCP
+ * server's question, Claude waiting for input). Kept on the Orchestrator;
+ * the next tool call or turn takes it down.
+ */
+export type DeckNeeds = {
+  /** The notification's message ("Claude needs your permission to use Bash"). */
+  text: string
+  /** The notification's type: `permission_prompt`, `idle_prompt`, `elicitation_dialog`. */
+  kind: string
+  at: number
+  /** The agent whose tool call waits on the person, when it could be told. */
+  agent?: string
+  /** That tool call's id: its end takes the note down. */
+  call?: string
 }
 
 export type DeckAgent = {
@@ -44,6 +77,10 @@ export type DeckAgent = {
   current?: DeckActivity
   recent: DeckActivity[]
   answer?: string
+  /** The in-progress item of its todo list (TodoWrite) or task list (TaskUpdate). */
+  todo?: DeckTodo
+  /** On the Orchestrator alone: the engine waits on the person. */
+  needs?: DeckNeeds
 }
 
 export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat'
@@ -80,13 +117,18 @@ export type DeckData = {
   edits: DeckEdit[]
   minutes: DeckMinute[]
   commitsBy: Record<string, string>
+  /** What each task of the session's task list says while in progress, by task id (TaskCreate, TaskUpdate). */
+  tasks: Record<string, string>
   turns: number
   turnMs: number
 }
 
-export type DeckTab = 'overview' | 'agents' | 'diffs' | 'commits' | 'graph'
+export type DeckTab = 'overview' | 'agents' | 'diffs' | 'commits' | 'graph' | 'changes' | 'stats'
 
 export type DeckAgentPane = 'activity' | 'edits' | 'chat'
+
+/** How the Agents tab draws the delegation: a tidy tree, or one lane per participant. */
+export type DeckMapView = 'tree' | 'wire'
 
 export type DeckView = {
   tab: DeckTab
@@ -98,6 +140,10 @@ export type DeckView = {
   filter: string
   showFiles: boolean
   isBandHidden: boolean
+  /** The delegation map's view. */
+  map: DeckMapView
+  /** The id of the message picked in the messages log; '' when none is. */
+  message: string
 }
 
 export type DeckSnapshot = {

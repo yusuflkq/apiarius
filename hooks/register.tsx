@@ -8,18 +8,18 @@
  */
 import type { AgentInfo, EngineInterface, Register, RenderElement, SessionMessage, Timer, ToolCallResult } from 'claude-code'
 
-import type { DeckAgent, DeckData, DeckStatus, DeckTab, DeckView } from '../types'
+import type { DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
 import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
 import { buildGraph, layoutOf, shapeKeyOf, svgOf, type Pt } from './graph'
 import * as M from './model'
 import * as R from './repos'
-import { bandView, deckView, type Actions, type ChatLine, type DayRow, type DeckModel, type Kit, type UsageInfo } from './views'
+import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo } from './ui/types'
+import { bandView, deckView } from './views'
 
 const PANE = 'agent-deck'
 const SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
-const TABS: readonly DeckTab[] = ['overview', 'agents', 'diffs', 'commits', 'graph']
 const HISTORY_KEY = 'history'
 const HISTORY_DAYS = 21
 
@@ -47,10 +47,66 @@ let positions = new Map<string, Pt>()
 let graphShape = ''
 let graphCache: { key: string; svg: string } | null = null
 const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer } = {}
+/** The screen key the last drawing showed (or the last timed redraw asked for); see `screenKey`. */
+let shownKey = ''
+let gitKeyMemo: { of: G.GitState; key: string } | null = null
 
-/** Draws every site of this plugin again; the engine folds calls to ten a second. */
+/** Draws every site of this plugin again; the engine folds calls to ten a second. Events that change the data call it. */
 function redraw($: EngineInterface) {
   $.ui.invalidate('ui.render')
+}
+
+/** What the git half of the screen shows: not when git was read, only whether it has been and what it found. */
+function gitKeyOf(state: G.GitState): string {
+  if (gitKeyMemo?.of === state) return gitKeyMemo.key
+  const files = F.hash(state.files.map(file => `${file.code}${file.path}\t${file.added}\t${file.removed}`).join('\n'))
+  const key = [
+    state.isRepo,
+    state.checkedAt > 0,
+    state.root,
+    state.branch,
+    state.head,
+    state.upstream,
+    state.ahead,
+    state.behind,
+    state.files.length,
+    state.added,
+    state.removed,
+    files,
+    state.error ?? '',
+    state.pinned,
+    state.repos.map(repo => repo.root).join(','),
+    state.commits.length,
+    state.today.commits,
+    state.today.added,
+    state.today.removed,
+    state.sessionCommits,
+  ].join('|')
+  gitKeyMemo = { of: state, key }
+  return key
+}
+
+/**
+ * Everything on screen that can change with no event to redraw it (time
+ * passing, the background reads): each agent's status, now text and coarse
+ * elapsed time while it runs, the banner, git (whether read, HEAD, branch,
+ * files and counts), the usage figures rounded, the day history, and on a
+ * tab with a per-minute chart the minute. Equal keys draw the same screen.
+ */
+function screenKey(now: number): string {
+  const figures = usage
+    ? [Math.round(usage.contextPercent ?? -1), F.money(usage.costUsd), ...usage.limits.map(limit => `${limit.kind}:${Math.round(limit.percentUsed)}`)].join(' ')
+    : ''
+  const minute = isPaneOpen && (view.tab === 'stats' || view.tab === 'overview') ? M.minuteOf(now) : ''
+  return [M.agentsKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute].join('\n\u0001')
+}
+
+/** Redraws only when the screen would change: how the timer and the background reads draw, so nothing moves while nothing changes. */
+function redrawIfChanged($: EngineInterface, now: number) {
+  const key = screenKey(now)
+  if (key === shownKey) return
+  shownKey = key
+  redraw($)
 }
 
 /** Keeps the model in `$.state`, so a reload of this module picks it up again. */
@@ -67,7 +123,8 @@ async function restore($: EngineInterface, now: number): Promise<boolean> {
     const { value } = await $.state.get(SNAPSHOT)
     if (value && value.v === M.SNAPSHOT_VERSION) {
       data = M.healData(M.copyOf(value.data), now)
-      view = { ...M.defaultView(), ...M.copyOf(value.view) }
+      // healView builds a fresh view from the snapshot's fields: one missing or unknown takes its default
+      view = M.healView(value.view, data)
       return true
     }
   } catch {
@@ -297,7 +354,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     isGitBusy = false
     savePin($)
     lastGitAt = await $.clock.now()
-    redraw($)
+    redrawIfChanged($, lastGitAt)
     if (isGitQueued) {
       isGitQueued = false
       scheduleGit($, 300)
@@ -340,8 +397,14 @@ async function loadFileDiff($: EngineInterface, path: string): Promise<void> {
 
   // a diff read in the repository the deck has since left stays unshown
   if (!R.sameRoot(root, git.root)) return
+  const isSame = fileDiff !== null && sameFileDiff(fileDiff, found)
   fileDiff = found
-  redraw($)
+  if (!isSame) redraw($)
+}
+
+/** Whether two reads of a file's diff show the same; when each was read does not count. */
+function sameFileDiff(a: G.FileDiff, b: G.FileDiff): boolean {
+  return a.path === b.path && a.isBinary === b.isBinary && a.note === b.note && JSON.stringify(a.hunks) === JSON.stringify(b.hunks)
 }
 
 async function loadCommit($: EngineInterface, hash: string): Promise<void> {
@@ -416,8 +479,9 @@ async function loadChat($: EngineInterface, agentId: string): Promise<void> {
     if (!lines.some(line => line.role === 'parent' && line.text.includes(message.text.slice(0, 40)))) lines.push({ role: 'parent', who: 'You (deck)', text: message.text })
   }
 
+  const isSame = chat !== null && chat.agent === agentId && JSON.stringify(chat.lines) === JSON.stringify(lines)
   chat = { agent: agentId, lines, at: now }
-  redraw($)
+  if (!isSame) redraw($)
 }
 
 async function sendChat($: EngineInterface, agentId: string, text: string): Promise<void> {
@@ -462,6 +526,7 @@ async function loadUsage($: EngineInterface): Promise<void> {
   try {
     usage = usageOf(await $.session.usage())
     usageAt = await $.clock.now()
+    redrawIfChanged($, usageAt)
   } catch {
     // the status line's figures are optional here
   }
@@ -519,6 +584,7 @@ async function loadDays($: EngineInterface): Promise<void> {
     const now = await $.clock.now()
     days = daysOf(historyOf(await $.store.get(HISTORY_KEY)), now)
     daysAt = now
+    redrawIfChanged($, now)
   } catch {
     days = []
   }
@@ -550,6 +616,7 @@ async function syncAgents($: EngineInterface): Promise<void> {
       if (M.isEnded(status)) {
         agent.endedAt ??= now
         agent.current = undefined
+        delete agent.todo
       }
       isChanged = true
     }
@@ -561,19 +628,23 @@ async function syncAgents($: EngineInterface): Promise<void> {
   }
 }
 
+/**
+ * Every 2.5 seconds: folds in the agents' statuses and, while the pane is
+ * open, re-reads git, usage and history in the background. It draws only
+ * when the screen would change (`redrawIfChanged`); events draw for themselves.
+ */
 async function tick($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   const isAnyLive = data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
   if (isAnyLive || isPaneOpen) await syncAgents($)
-  if (!isPaneOpen) {
-    if (isAnyLive) redraw($)
-    return
+  if (isPaneOpen) {
+    if (now - lastGitAt > 6000) void refreshGit($)
+    if (now - usageAt > 10_000) void loadUsage($)
+    if (now - daysAt > 120_000) void loadDays($)
+    if (view.tab === 'agents' && view.agentPane === 'chat' && now - (chat?.at ?? 0) > 6000) void loadChat($, view.agent)
   }
-  if (now - lastGitAt > 6000) void refreshGit($)
-  if (now - usageAt > 10_000) void loadUsage($)
-  if (now - daysAt > 120_000) void loadDays($)
-  if (view.tab === 'agents' && view.agentPane === 'chat' && now - (chat?.at ?? 0) > 6000) void loadChat($, view.agent)
-  redraw($)
+  // with the pane shut and no agent at work nothing of the deck's is on screen: the next event draws
+  if (isPaneOpen || isAnyLive) redrawIfChanged($, now)
 }
 
 async function openPane($: EngineInterface): Promise<boolean> {
@@ -593,6 +664,13 @@ function changed($: EngineInterface) {
   redraw($)
 }
 
+/** Opens agent `id`'s card; its conversation reloads when that view is the one open. */
+function pickAgent($: EngineInterface, id: string) {
+  view.agent = id
+  chat = null
+  if (view.agentPane === 'chat') void loadChat($, id)
+}
+
 /** The closures the views' buttons and fields run. */
 function actionsFor($: EngineInterface): Actions {
   return {
@@ -603,11 +681,20 @@ function actionsFor($: EngineInterface): Actions {
       changed($)
     },
     selectAgent: id => {
-      view.agent = id
-      chat = null
-      if (view.agentPane === 'chat') void loadChat($, id)
+      pickAgent($, id)
       changed($)
     },
+    selectMessage: id => {
+      view.message = data.messages.some(message => message.id === id) ? id : ''
+      const target = M.messageTargetOf(data, id)
+      if (target) pickAgent($, target)
+      changed($)
+    },
+    setMapView: map => {
+      view.map = map
+      changed($)
+    },
+    selectRepo: root => void chooseRepo($, root),
     setAgentPane: pane => {
       view.agentPane = pane
       if (pane === 'chat') void loadChat($, view.agent)
@@ -825,7 +912,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'deck',
         description: 'Open Agent Deck: diffs, commits, what every agent is doing, chat, stats and the agent graph',
-        argumentHint: '[overview|agents|diffs|commits|graph|close]',
+        argumentHint: '[agents|changes|stats|overview|diffs|commits|graph|close]',
         immediate: true,
       })
     } catch (error) {
@@ -856,7 +943,7 @@ export const register: Register = on => {
       isPaneOpen = false
       return { text: 'Agent Deck closed.' }
     }
-    const tab = arg ? TABS.find(one => one.startsWith(arg)) : undefined
+    const tab = arg ? M.TABS.find(one => one.startsWith(arg)) : undefined
     if (tab) view.tab = tab
     const isPlaced = await openPane($)
     changed($)
@@ -882,7 +969,9 @@ export const register: Register = on => {
     try {
       agent = M.ensureAgent(data, agentId, start)
       agent.endedAt = undefined
-      M.beginTool(data, agent, { id: e.tool_use_id, tool, target: M.targetOf(tool, input, git.root || null), at: start })
+      // the agent the engine waited on for the person moved on
+      M.clearNeeds(data, { kind: 'start', agent: agentId })
+      M.beginTool(data, agent, M.activityOf(e.tool_use_id, tool, input, git.root || null, start))
       redraw($)
     } catch {
       agent = undefined
@@ -896,7 +985,10 @@ export const register: Register = on => {
       const ok = ran.deny === undefined && ran.isError !== true
       if (agent) {
         M.endTool(agent, e.tool_use_id, ok, end)
+        // a permission prompt holds its call: the call's end is the person's answer
+        M.clearNeeds(data, { kind: 'end', agent: agentId, call: e.tool_use_id })
         if (ok && isEdit) recordEdit(agent, tool, e.tool_use_id, input, ran, end)
+        if (ok && M.LIST_TOOLS.includes(tool)) M.noteTodo(data, agent, tool, input, ran.result)
       }
       if (isEdit || (isShell && G.mayChangeTree(command))) scheduleGit($, 700)
       if (isShell && ok && G.mayCommit(command)) void attributeCommits($, agentId, before)
@@ -941,6 +1033,8 @@ export const register: Register = on => {
     try {
       const now = await $.clock.now()
       const main = M.agentOf(data, M.MAIN)
+      // you answered, or the Orchestrator went on by itself: it waits on nobody
+      M.clearNeeds(data, { kind: 'turn' })
       if (main) {
         main.status = 'running'
         main.lastAt = now
@@ -990,6 +1084,7 @@ export const register: Register = on => {
           agent.status = e.reason === 'aborted' ? 'killed' : e.reason === 'answer' ? (agent.kind === 'teammate' ? 'idle' : 'completed') : 'failed'
           agent.endedAt = now
           agent.current = undefined
+          delete agent.todo
           if (e.answer.trim()) {
             agent.answer = F.trunc(e.answer.trim(), M.LIMITS.answerChars)
             M.addMessage(data, { from: agent.id, to: agent.parentId ?? M.MAIN, kind: 'result', text: e.answer, at: now })
@@ -1001,6 +1096,7 @@ export const register: Register = on => {
           main.status = 'idle'
           main.current = undefined
           main.lastAt = now
+          delete main.todo
         }
         data.turns += 1
         data.turnMs += e.durationMs
@@ -1065,9 +1161,24 @@ export const register: Register = on => {
     return result
   })
 
+  // Waiting on you: a permission prompt, an MCP server's question, Claude idle for your input. Observe only.
+  on('classic.Notification', async ($, e, next) => {
+    try {
+      if (M.isNeedsYou(e.notification_type, e.message)) {
+        const now = await $.clock.now()
+        M.noteNeeds(data, { kind: e.notification_type, text: e.message, at: now, ...(e.agent_id ? { agent: e.agent_id } : {}) })
+        changed($)
+      }
+    } catch {
+      // the notification goes out whatever the deck makes of it
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     isPaneOpen = true
     const now = await $.clock.now()
+    shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
     return deckView(kit, modelOf(now, kit, view.tab === 'graph'), actionsFor($))
   })
@@ -1077,6 +1188,8 @@ export const register: Register = on => {
     if (view.isBandHidden || e.props.hasSurvey || !isLive) return next(e)
     const theirs: RenderElement = await next(e)
     const now = await $.clock.now()
+    // the band speaks for the screen only while the pane, which shows more, is shut
+    if (!isPaneOpen) shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
     return bandView(kit, modelOf(now, kit, false), actionsFor($), theirs) ?? theirs
   })
