@@ -1,0 +1,972 @@
+/**
+ * Agent Deck: a pane (`/deck`) that shows the session's git state and every
+ * agent's work, and a band above the prompt while subagents run.
+ *
+ * The hooks here record what the engine reports (tool calls, spawns, turns,
+ * messages between agents) into one live model, run git in the background,
+ * and draw the views from `./views`. Every `$` call lives in this file.
+ */
+import type { AgentInfo, EngineInterface, Register, RenderElement, SessionMessage, Timer, ToolCallResult } from 'claude-code'
+
+import type { DeckAgent, DeckData, DeckStatus, DeckTab, DeckView } from '../types'
+import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
+import * as F from './format'
+import * as G from './git'
+import { buildGraph, layoutOf, shapeKeyOf, svgOf, type Pt } from './graph'
+import * as M from './model'
+import { bandView, deckView, type Actions, type ChatLine, type DayRow, type DeckModel, type Kit, type UsageInfo } from './views'
+
+const PANE = 'agent-deck'
+const SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
+const TABS: readonly DeckTab[] = ['overview', 'agents', 'diffs', 'commits', 'graph']
+const HISTORY_KEY = 'history'
+const HISTORY_DAYS = 21
+
+type History = Record<string, Record<string, Omit<DayRow, 'day' | 'sessions'>>>
+
+let data: DeckData = M.emptyData(0)
+let view: DeckView = M.defaultView()
+let git: G.GitState = G.emptyGit()
+let cwd = ''
+let sessionId = ''
+let usage: UsageInfo | null = null
+let usageAt = 0
+let days: DayRow[] = []
+let daysAt = 0
+let fileDiff: G.FileDiff | null = null
+let commit: G.CommitDetail | null = null
+let chat: { agent: string; lines: ChatLine[]; at: number } | null = null
+let isPaneOpen = false
+let isGitBusy = false
+let isGitQueued = false
+let isHeavyQueued = false
+let lastGitAt = 0
+let lastHeavyAt = 0
+let positions = new Map<string, Pt>()
+let graphShape = ''
+let graphCache: { key: string; svg: string } | null = null
+const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer } = {}
+
+/** Draws every site of this plugin again; the engine folds calls to ten a second. */
+function redraw($: EngineInterface) {
+  $.ui.invalidate('ui.render')
+}
+
+/** Keeps the model in `$.state`, so a reload of this module picks it up again. */
+function save($: EngineInterface) {
+  if (timers.save) return
+  timers.save = $.clock.after(1500, () => {
+    timers.save = undefined
+    void $.state.set(SNAPSHOT, M.copyOf({ v: M.SNAPSHOT_VERSION, data, view })).catch(() => undefined)
+  })
+}
+
+async function restore($: EngineInterface, now: number): Promise<boolean> {
+  try {
+    const { value } = await $.state.get(SNAPSHOT)
+    if (value && value.v === M.SNAPSHOT_VERSION) {
+      data = M.healData(M.copyOf(value.data), now)
+      view = { ...M.defaultView(), ...M.copyOf(value.view) }
+      return true
+    }
+  } catch {
+    // a missing or unreadable snapshot starts the deck over
+  }
+  return false
+}
+
+async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 15_000): Promise<{ ok: boolean; out: string; err: string }> {
+  const where = git.root || cwd
+  try {
+    const ran = await $.process.run(args, where ? { cwd: where, env: G.GIT_ENV, timeoutMs } : { env: G.GIT_ENV, timeoutMs })
+    return { ok: ran.exitCode === 0, out: ran.stdout, err: ran.stderr }
+  } catch (error) {
+    return { ok: false, out: '', err: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function joinPath(root: string, rel: string): string {
+  return `${root.replace(/[\\/]+$/, '')}/${rel}`
+}
+
+async function lineCountOf($: EngineInterface, abs: string): Promise<number | null> {
+  try {
+    const stat = await $.fs.stat(abs)
+    if (stat.kind !== 'file' || stat.size > 1_000_000) return null
+    const text = await $.fs.read(abs)
+    if (text.includes('\u0000')) return null
+    if (text === '') return 0
+    return text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+  } catch {
+    return null
+  }
+}
+
+function scheduleGit($: EngineInterface, ms: number, isHeavy = false) {
+  isHeavyQueued ||= isHeavy
+  timers.git?.cancel()
+  timers.git = $.clock.after(ms, () => {
+    timers.git = undefined
+    const heavy = isHeavyQueued
+    isHeavyQueued = false
+    void refreshGit($, heavy)
+  })
+}
+
+/** Reads the repository: branch, uncommitted files with counts, and (when HEAD moved) the log and day totals. */
+async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
+  if (isGitBusy) {
+    isGitQueued = true
+    isHeavyQueued ||= isHeavy
+    return
+  }
+  isGitBusy = true
+
+  try {
+    const now = await $.clock.now()
+
+    if (!git.root) {
+      const top = await runGit($, G.argv.toplevel)
+      if (!top.ok || top.out.trim() === '') {
+        git = { ...G.emptyGit(), isRepo: false, checkedAt: now }
+        return
+      }
+      git = { ...git, root: top.out.trim(), isRepo: true }
+      for (const edit of data.edits) edit.path = M.relOf(edit.abs, git.root)
+      for (const agent of data.agents) agent.files = [...new Set(agent.files.map(path => M.relOf(path, git.root)))]
+    }
+
+    const [branch, head, status] = await Promise.all([runGit($, G.argv.branch), runGit($, G.argv.head), runGit($, G.argv.status)])
+
+    if (!status.ok) {
+      git = { ...G.emptyGit(), isRepo: false, checkedAt: now, error: F.trunc(status.err.trim(), 200) }
+      return
+    }
+
+    const headHash = head.ok ? head.out.trim() : ''
+    const numstat = await runGit($, G.argv.numstat(headHash ? 'HEAD' : G.EMPTY_TREE))
+    const rows = G.parseStatus(status.out)
+    const untracked = new Map<string, number>()
+    await Promise.all(
+      rows
+        .filter(row => row.x === '?')
+        .slice(0, 30)
+        .map(async row => {
+          const lines = await lineCountOf($, joinPath(git.root, row.path))
+          if (lines !== null) untracked.set(row.path, lines)
+        }),
+    )
+
+    const files = G.filesOf(rows, G.parseNumstat(numstat.out), untracked)
+    const next: G.GitState = {
+      ...git,
+      isRepo: true,
+      branch: branch.ok ? branch.out.trim() : '',
+      head: headHash,
+      files,
+      added: files.reduce((sum, file) => sum + file.added, 0),
+      removed: files.reduce((sum, file) => sum + file.removed, 0),
+      checkedAt: now,
+    }
+
+    const isMoved = headHash !== git.head
+    if (isMoved || isHeavy || now - lastHeavyAt > 60_000) {
+      lastHeavyAt = now
+      const [log, upstream, aheadBehind, todayCount, todayStat, sessionCount] = await Promise.all([
+        runGit($, G.argv.log(30)),
+        runGit($, G.argv.upstream),
+        runGit($, G.argv.aheadBehind),
+        runGit($, G.argv.countSince('midnight')),
+        runGit($, G.argv.statSince('midnight')),
+        runGit($, G.argv.countSince(G.sinceOf(data.startedAt - 60_000))),
+      ])
+      const [behind = 0, ahead = 0] = aheadBehind.ok ? aheadBehind.out.trim().split(/\s+/).map(Number) : [0, 0]
+      next.commits = log.ok ? G.parseLog(log.out) : []
+      next.upstream = upstream.ok ? upstream.out.trim() : ''
+      next.ahead = Number.isFinite(ahead) ? ahead : 0
+      next.behind = Number.isFinite(behind) ? behind : 0
+      next.today = { commits: todayCount.ok ? Number(todayCount.out.trim()) || 0 : 0, ...(todayStat.ok ? G.sumShortstats(todayStat.out) : { added: 0, removed: 0 }) }
+      next.sessionCommits = sessionCount.ok ? Number(sessionCount.out.trim()) || 0 : 0
+    }
+
+    git = next
+    if (view.file && view.tab === 'diffs' && view.filter === 'all') void loadFileDiff($, view.file)
+  } finally {
+    isGitBusy = false
+    lastGitAt = await $.clock.now()
+    redraw($)
+    if (isGitQueued) {
+      isGitQueued = false
+      scheduleGit($, 300)
+    }
+  }
+}
+
+async function loadFileDiff($: EngineInterface, path: string): Promise<void> {
+  const row = git.files.find(file => file.path === path)
+  const now = await $.clock.now()
+
+  if (!row) {
+    fileDiff = { path, hunks: [], isBinary: false, note: 'This file has no uncommitted changes any more.', at: now }
+  } else if (row.isUntracked) {
+    try {
+      const abs = joinPath(git.root, path)
+      const stat = await $.fs.stat(abs)
+      if (stat.size > 2_000_000) {
+        fileDiff = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(stat.size / 1024)} KB: too big to show.`, at: now }
+      } else {
+        const text = await $.fs.read(abs)
+        fileDiff = text.includes('\u0000') ? { path, hunks: [], isBinary: true, at: now } : { path, hunks: addedFileHunks(text), isBinary: false, at: now }
+      }
+    } catch {
+      fileDiff = { path, hunks: [], isBinary: false, note: 'Could not read this new file.', at: now }
+    }
+  } else {
+    const paths = row.oldPath ? [row.oldPath, path] : [path]
+    const ran = await runGit($, G.argv.fileDiff(git.head ? 'HEAD' : G.EMPTY_TREE, paths))
+    fileDiff = {
+      path,
+      hunks: hunksOf(ran.out),
+      isBinary: /^Binary files /m.test(ran.out),
+      at: now,
+      ...(ran.ok ? {} : { note: F.trunc(ran.err.trim() || 'git diff failed', 200) }),
+    }
+  }
+
+  redraw($)
+}
+
+async function loadCommit($: EngineInterface, hash: string): Promise<void> {
+  const [meta, numstat, patch] = await Promise.all([
+    runGit($, G.argv.showMeta(hash)),
+    runGit($, G.argv.showNumstat(hash)),
+    runGit($, G.argv.showPatch(hash), 30_000),
+  ])
+
+  if (view.commit !== hash) return
+  if (!meta.ok) {
+    commit = null
+    $.ui.toast(`Could not read commit ${hash.slice(0, 7)}`)
+    return
+  }
+
+  const cap = 160_000
+  commit = {
+    ...G.parseMeta(meta.out),
+    hash,
+    files: G.parseNumstat(numstat.out),
+    patch: patch.out.slice(0, cap),
+    isPatchCut: patch.out.length > cap,
+  }
+  redraw($)
+}
+
+/** Turns an agent's (or the main loop's) transcript into chat bubbles. */
+function chatLinesOf(messages: readonly SessionMessage[], agentName: string, parentName: string): ChatLine[] {
+  const lines: ChatLine[] = []
+  for (const message of messages) {
+    const text = message.text.trim()
+    if (message.role === 'user') {
+      if (text) lines.push({ role: 'parent', who: parentName, text })
+      continue
+    }
+    if (text) lines.push({ role: 'agent', who: agentName, text })
+    const uses = message.toolUses
+    uses.slice(0, 3).forEach(use => lines.push({ role: 'tool', who: agentName, text: `${use.tool} ${M.targetOf(use.tool, use.input, git.root || null)}${use.isError ? ' ✗' : ''}` }))
+    if (uses.length > 3) lines.push({ role: 'tool', who: agentName, text: `… ${uses.length - 3} more tool calls` })
+  }
+  return lines.slice(-28)
+}
+
+async function loadChat($: EngineInterface, agentId: string): Promise<void> {
+  const agent = M.agentOf(data, agentId)
+  const now = await $.clock.now()
+  if (!agent) return
+
+  let lines: ChatLine[] = []
+  try {
+    if (agent.kind === 'main') {
+      const found = await $.session.messages()
+      lines = chatLinesOf(found.slice(-16), 'main', 'You')
+    } else if (agent.kind === 'agent' || agent.kind === 'teammate') {
+      const found = await $.session.messages({ agentId })
+      const parent = agent.parentId ? M.agentOf(data, agent.parentId) : undefined
+      lines = 'deny' in found ? [{ role: 'note', who: '', text: `No transcript to show yet (${found.deny}).` }] : chatLinesOf(found.slice(-18), M.labelOf(agent), parent ? M.labelOf(parent) : 'main')
+    } else {
+      lines = data.messages
+        .filter(message => message.from === agentId || message.to === agentId)
+        .slice(-12)
+        .map(message => ({ role: message.from === agentId ? 'agent' : 'parent', who: message.from === agentId ? M.labelOf(agent) : message.from, text: message.text }))
+    }
+  } catch (error) {
+    lines = [{ role: 'note', who: '', text: `Could not read the conversation: ${error instanceof Error ? error.message : String(error)}` }]
+  }
+
+  const mine = data.messages.filter(message => message.kind === 'chat' && message.to === agentId && message.at > now - 120_000)
+  for (const message of mine) {
+    if (!lines.some(line => line.role === 'parent' && line.text.includes(message.text.slice(0, 40)))) lines.push({ role: 'parent', who: 'You (deck)', text: message.text })
+  }
+
+  chat = { agent: agentId, lines, at: now }
+  redraw($)
+}
+
+async function sendChat($: EngineInterface, agentId: string, text: string): Promise<void> {
+  const agent = M.agentOf(data, agentId)
+  const now = await $.clock.now()
+  if (!agent) return
+
+  if (agent.kind === 'main') {
+    $.ui.toast('Queued for the main loop; it runs when the current turn ends.')
+    void $.prompt.submit({ text, asUser: true }).catch(error => $.ui.toast(`Could not queue the prompt: ${String(error)}`))
+    chat?.lines.push({ role: 'parent', who: 'You', text })
+    redraw($)
+    return
+  }
+
+  const sent = await $.session.send({ to: { agentId }, text }).catch(error => ({ isDelivered: false as const, reason: String(error) }))
+  M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered })
+  if (chat?.agent === agentId) chat.lines.push({ role: 'parent', who: 'You (deck)', text })
+  if (sent.isDelivered) {
+    $.ui.toast(`Sent to ${M.labelOf(agent)}`)
+    if (M.isEnded(agent.status)) {
+      agent.status = 'running'
+      agent.endedAt = undefined
+    }
+  } else {
+    $.ui.toast(`Not delivered: ${sent.reason}`)
+  }
+  save($)
+  redraw($)
+}
+
+function usageOf(raw: Awaited<ReturnType<EngineInterface['session']['usage']>>): UsageInfo {
+  return {
+    startedAt: raw.startedAt,
+    ...(raw.context.percent !== undefined ? { contextPercent: raw.context.percent } : {}),
+    ...(raw.cost ? { costUsd: raw.cost.usd } : {}),
+    limits: raw.rateLimits.map(limit => ({ kind: limit.kind, percentUsed: limit.percentUsed })),
+  }
+}
+
+async function loadUsage($: EngineInterface): Promise<void> {
+  try {
+    usage = usageOf(await $.session.usage())
+    usageAt = await $.clock.now()
+  } catch {
+    // the status line's figures are optional here
+  }
+}
+
+function historyOf(value: unknown): History {
+  return value && typeof value === 'object' ? (value as History) : {}
+}
+
+/** Adds this session's totals to the day it started, kept across sessions in `$.store`. */
+async function recordDay($: EngineInterface): Promise<void> {
+  const totals = M.totalsOf(data)
+  const day = F.dayKey(data.startedAt)
+  const key = `${sessionId || 'session'}:${data.startedAt}`
+  try {
+    const history = M.copyOf(historyOf(await $.store.get(HISTORY_KEY)))
+    const today = history[day] ?? {}
+    today[key] = {
+      added: totals.added,
+      removed: totals.removed,
+      tools: totals.tools,
+      tokens: totals.tokensIn + totals.tokensOut + totals.cacheRead,
+      activeMs: data.turnMs,
+    }
+    history[day] = today
+    const cutoff = F.dayKey(data.startedAt - HISTORY_DAYS * 86_400_000)
+    for (const old of Object.keys(history)) if (old < cutoff) delete history[old]
+    await $.store.set(HISTORY_KEY, history)
+    days = daysOf(history, await $.clock.now())
+  } catch {
+    // history is a nicety; the session's own numbers stand without it
+  }
+}
+
+function daysOf(history: History, now: number): DayRow[] {
+  const out: DayRow[] = []
+  for (let back = 6; back >= 0; back--) {
+    const day = F.dayKey(now - back * 86_400_000)
+    const sessions = Object.values(history[day] ?? {})
+    out.push({
+      day,
+      sessions: sessions.length,
+      added: sessions.reduce((sum, one) => sum + (one.added ?? 0), 0),
+      removed: sessions.reduce((sum, one) => sum + (one.removed ?? 0), 0),
+      tools: sessions.reduce((sum, one) => sum + (one.tools ?? 0), 0),
+      tokens: sessions.reduce((sum, one) => sum + (one.tokens ?? 0), 0),
+      activeMs: sessions.reduce((sum, one) => sum + (one.activeMs ?? 0), 0),
+    })
+  }
+  return out.some(row => row.sessions > 0) ? out : []
+}
+
+async function loadDays($: EngineInterface): Promise<void> {
+  try {
+    const now = await $.clock.now()
+    days = daysOf(historyOf(await $.store.get(HISTORY_KEY)), now)
+    daysAt = now
+  } catch {
+    days = []
+  }
+}
+
+/** Folds in what the engine lists: agents spawned before this module loaded, and each one's status. */
+async function syncAgents($: EngineInterface): Promise<void> {
+  let list: AgentInfo[]
+  try {
+    list = await $.agent.list()
+  } catch {
+    return
+  }
+  const now = await $.clock.now()
+  let isChanged = false
+
+  for (const info of list) {
+    const isKnown = M.agentOf(data, info.id) !== undefined
+    const agent = M.ensureAgent(data, info.id, now)
+    if (!isKnown) isChanged = true
+    if (info.teammateId) agent.kind = 'teammate'
+    if (info.description && !agent.description) agent.description = info.description
+    if (info.type && (agent.type === 'subagent' || agent.type === '')) agent.type = info.type
+    if (info.name && agent.name.startsWith('agent-')) agent.name = info.name
+    if (info.parentId && (agent.parentId === undefined || agent.parentId === M.MAIN) && M.agentOf(data, info.parentId)) agent.parentId = info.parentId
+    const status = info.status as DeckStatus
+    if (agent.status !== status) {
+      agent.status = status
+      if (M.isEnded(status)) {
+        agent.endedAt ??= now
+        agent.current = undefined
+      }
+      isChanged = true
+    }
+  }
+
+  if (isChanged) {
+    save($)
+    redraw($)
+  }
+}
+
+async function tick($: EngineInterface): Promise<void> {
+  const now = await $.clock.now()
+  const isAnyLive = data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
+  if (isAnyLive || isPaneOpen) await syncAgents($)
+  if (!isPaneOpen) {
+    if (isAnyLive) redraw($)
+    return
+  }
+  if (now - lastGitAt > 6000) void refreshGit($)
+  if (now - usageAt > 10_000) void loadUsage($)
+  if (now - daysAt > 120_000) void loadDays($)
+  if (view.tab === 'agents' && view.agentPane === 'chat' && now - (chat?.at ?? 0) > 6000) void loadChat($, view.agent)
+  redraw($)
+}
+
+async function openPane($: EngineInterface): Promise<boolean> {
+  const opened = await $.ui.open({ id: PANE, title: 'Agent Deck', focus: true, columns: 84 })
+  isPaneOpen = true
+  void refreshGit($, true)
+  void loadUsage($)
+  void loadDays($)
+  void syncAgents($)
+  if (view.tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
+  if (view.commit) void loadCommit($, view.commit)
+  return opened.isPlaced
+}
+
+function changed($: EngineInterface) {
+  save($)
+  redraw($)
+}
+
+/** The closures the views' buttons and fields run. */
+function actionsFor($: EngineInterface): Actions {
+  return {
+    setTab: tab => {
+      view.tab = tab
+      if (tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
+      if (tab === 'diffs' && view.file) void loadFileDiff($, view.file)
+      changed($)
+    },
+    selectAgent: id => {
+      view.agent = id
+      chat = null
+      if (view.agentPane === 'chat') void loadChat($, id)
+      changed($)
+    },
+    setAgentPane: pane => {
+      view.agentPane = pane
+      if (pane === 'chat') void loadChat($, view.agent)
+      changed($)
+    },
+    selectFile: path => {
+      view.file = view.file === path ? '' : path
+      fileDiff = null
+      if (view.file && view.filter === 'all' && git.isRepo) void loadFileDiff($, path)
+      changed($)
+    },
+    selectCommit: hash => {
+      view.commit = view.commit === hash ? '' : hash
+      commit = null
+      if (view.commit) void loadCommit($, hash)
+      changed($)
+    },
+    setFilter: filter => {
+      view.filter = filter
+      changed($)
+    },
+    toggleFiles: () => {
+      view.showFiles = !view.showFiles
+      changed($)
+    },
+    toggleBand: () => {
+      view.isBandHidden = !view.isBandHidden
+      void $.store.set('prefs', { isBandHidden: view.isBandHidden }).catch(() => undefined)
+      changed($)
+    },
+    refresh: () => {
+      void refreshGit($, true)
+      void loadUsage($)
+      void syncAgents($)
+      if (view.tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
+      $.ui.toast('Agent Deck refreshed')
+    },
+    sendChat: (agentId, text) => void sendChat($, agentId, text),
+    review: text => {
+      void $.prompt
+        .fill({ text, mode: 'replace' })
+        .then(filled => $.ui.toast(filled.isFilled ? 'The review request is in your prompt; press Enter to send it.' : 'Could not fill the prompt.'))
+        .catch(() => $.ui.toast('Could not fill the prompt.'))
+    },
+    open: tab => {
+      view.tab = tab
+      changed($)
+      void openPane($)
+    },
+  }
+}
+
+function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['surface'], columns: number): Kit {
+  return {
+    surface,
+    Box: ui.Box,
+    Text: ui.Text,
+    Button: ui.Button,
+    Code: ui.Code,
+    Markdown: ui.Markdown,
+    columns,
+    ...('Input' in ui ? { Input: ui.Input } : {}),
+    ...('Select' in ui ? { Select: ui.Select } : {}),
+    ...('Svg' in ui ? { Svg: ui.Svg } : {}),
+  }
+}
+
+function graphSvgFor(columns: number, now: number): string {
+  const graph = buildGraph(data, now, view.showFiles)
+  const shape = shapeKeyOf(graph)
+  if (shape !== graphShape) {
+    positions = layoutOf(graph, positions)
+    graphShape = shape
+  }
+  const width = Math.round(Math.max(360, Math.min(1400, columns * 8)))
+  const height = Math.round(Math.max(280, Math.min(640, width * 0.62)))
+  const totals = M.totalsOf(data)
+  const caption = `${totals.agents} agents · ${totals.messages} messages · ${totals.live} live`
+  const key = [
+    shape,
+    width,
+    caption,
+    graph.nodes.map(node => `${node.color}${node.isLive ? 1 : 0}${node.label}${Math.round(node.r)}`).join(','),
+    graph.edges.map(edge => `${edge.kind}${edge.ab}.${edge.ba}${edge.isActive ? 1 : 0}${edge.isWorking ? 1 : 0}`).join(','),
+  ].join('|')
+  if (graphCache?.key === key) return graphCache.svg
+  let svg = svgOf(graph, positions, { width, height }, caption)
+  if (svg.length > 130_000) svg = svgOf(buildGraph(data, now, false), positions, { width, height }, `${caption} · file nodes hidden to fit`)
+  graphCache = { key, svg }
+  return svg
+}
+
+function modelOf(now: number, kit: Kit, withGraph: boolean): DeckModel {
+  return {
+    data,
+    view,
+    git,
+    fileDiff,
+    commit,
+    chat: chat && chat.agent === view.agent ? chat.lines : null,
+    usage,
+    days,
+    graphSvg: withGraph && kit.Svg ? graphSvgFor(kit.columns, now) : null,
+    now,
+    cwd,
+  }
+}
+
+/** Records exactly what an Edit, Write or NotebookEdit changed, from the tool's own patch. */
+function recordEdit(agent: DeckAgent, tool: string, id: string, input: Record<string, unknown>, ran: ToolCallResult, now: number) {
+  const abs = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : ''
+  if (!abs) return
+  const record = (ran.result ?? null) as Record<string, unknown> | null
+  if (record && record.staged === true) return
+
+  const patch = record && Array.isArray(record.structuredPatch) ? (record.structuredPatch as unknown[]) : []
+  let hunks: Hunk[] = patch
+    .filter((hunk): hunk is Record<string, unknown> => typeof hunk === 'object' && hunk !== null)
+    .map(hunk => ({
+      oldStart: Number(hunk.oldStart) || 0,
+      oldLines: Number(hunk.oldLines) || 0,
+      newStart: Number(hunk.newStart) || 0,
+      newLines: Number(hunk.newLines) || 0,
+      lines: Array.isArray(hunk.lines) ? hunk.lines.map(line => F.clean(String(line))) : [],
+    }))
+  const isNew = tool === 'Write' && record?.type === 'create'
+
+  if (hunks.length === 0) {
+    if (tool === 'Write' && isNew) hunks = addedFileHunks(String(input.content ?? ''))
+    else if (tool === 'Edit') hunks = replaceHunks(String(input.old_string ?? ''), String(input.new_string ?? ''))
+    else if (tool === 'NotebookEdit') hunks = addedFileHunks(String(input.new_source ?? ''))
+  }
+
+  const { added, removed } = countOf(hunks)
+  M.addEdit(data, agent, {
+    id,
+    agent: agent.id,
+    tool,
+    path: M.relOf(abs, git.root || null),
+    abs: M.normPath(abs),
+    at: now,
+    added,
+    removed,
+    patch: patchOf(hunks, M.LIMITS.patchChars),
+    isNew,
+  })
+}
+
+/** Marks the commits a shell command made as that agent's. */
+async function attributeCommits($: EngineInterface, agentId: string, before: string): Promise<void> {
+  const ran = await runGit($, before ? G.argv.newSince(before) : G.argv.recentHashes)
+  if (!ran.ok) return
+  const hashes = ran.out.split('\n').map(line => line.trim()).filter(Boolean)
+  const fresh = before ? hashes : hashes.slice(0, 1).filter(hash => hash !== git.head)
+  for (const hash of fresh) data.commitsBy[hash] = agentId
+  const keys = Object.keys(data.commitsBy)
+  if (keys.length > 300) for (const old of keys.slice(0, keys.length - 300)) delete data.commitsBy[old]
+  if (fresh.length > 0) scheduleGit($, 200, true)
+  save($)
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    const now = await $.clock.now()
+    cwd = e.cwd
+    const isRestored = await restore($, now)
+    if (!isRestored) {
+      data = M.emptyData(now)
+      view = M.defaultView()
+    }
+
+    try {
+      const prefs = await $.store.get('prefs')
+      if (prefs && typeof prefs === 'object' && 'isBandHidden' in prefs) view.isBandHidden = Boolean((prefs as { isBandHidden: unknown }).isBandHidden)
+    } catch {
+      // defaults stand
+    }
+
+    try {
+      isPaneOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+    } catch {
+      isPaneOpen = false
+    }
+
+    try {
+      sessionId = await $.session.id()
+    } catch {
+      sessionId = ''
+    }
+
+    try {
+      const raw = await $.session.usage()
+      usage = usageOf(raw)
+      usageAt = now
+      if (!isRestored) data.startedAt = raw.startedAt
+    } catch {
+      // the session's start stays the module's first look
+    }
+
+    try {
+      const main = M.agentOf(data, M.MAIN)
+      if (main && !main.model) main.model = await $.session.model()
+    } catch {
+      // the model shows once a request reports it
+    }
+
+    void refreshGit($, true)
+    void loadDays($)
+    void syncAgents($)
+    timers.tick = $.clock.every(2500, () => void tick($))
+
+    try {
+      await $.command.register({
+        name: 'deck',
+        description: 'Open Agent Deck: diffs, commits, what every agent is doing, chat, stats and the agent graph',
+        argumentHint: '[overview|agents|diffs|commits|graph|close]',
+        immediate: true,
+      })
+    } catch (error) {
+      $.ui.log(`could not add /deck: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
+    return next(e)
+  })
+
+  on('session.end', { reason: ['clear', 'resume'] }, async ($, e, next) => {
+    const result = await next(e)
+    const now = await $.clock.now()
+    data = M.emptyData(now)
+    chat = null
+    commit = null
+    fileDiff = null
+    positions = new Map()
+    graphShape = ''
+    graphCache = null
+    changed($)
+    return result
+  })
+
+  on('command.run', { command: 'deck' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    if (arg === 'close' || arg === 'off' || arg === 'hide') {
+      await $.ui.close({ id: PANE })
+      isPaneOpen = false
+      return { text: 'Agent Deck closed.' }
+    }
+    const tab = arg ? TABS.find(one => one.startsWith(arg)) : undefined
+    if (tab) view.tab = tab
+    const isPlaced = await openPane($)
+    changed($)
+    return isPlaced ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+  })
+
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    const result = await next(e)
+    isPaneOpen = false
+    return result
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const start = await $.clock.now()
+    const input = e as unknown as Record<string, unknown>
+    const tool = String(e.tool)
+    const agentId = e.agentId ?? M.MAIN
+    const command = typeof input.command === 'string' ? input.command : ''
+    const isShell = M.SHELL_TOOLS.includes(tool)
+    const isEdit = M.EDIT_TOOLS.includes(tool)
+    let agent: DeckAgent | undefined
+
+    try {
+      agent = M.ensureAgent(data, agentId, start)
+      agent.endedAt = undefined
+      M.beginTool(data, agent, { id: e.tool_use_id, tool, target: M.targetOf(tool, input, git.root || null), at: start })
+      redraw($)
+    } catch {
+      agent = undefined
+    }
+
+    const before = isShell && git.isRepo && G.mayCommit(command) ? await runGit($, G.argv.head).then(ran => (ran.ok ? ran.out.trim() : '')) : ''
+    const ran = await next(e)
+
+    try {
+      const end = await $.clock.now()
+      const ok = ran.deny === undefined && ran.isError !== true
+      if (agent) {
+        M.endTool(agent, e.tool_use_id, ok, end)
+        if (ok && isEdit) recordEdit(agent, tool, e.tool_use_id, input, ran, end)
+      }
+      if (isEdit || (isShell && G.mayChangeTree(command))) scheduleGit($, 700)
+      if (isShell && ok && G.mayCommit(command)) void attributeCommits($, agentId, before)
+      save($)
+      redraw($)
+    } catch {
+      // tracking never changes what the tool returned
+    }
+
+    return ran
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      if (result.agentId) {
+        const now = await $.clock.now()
+        const parentId = e.parentAgentId ?? M.MAIN
+        if (parentId !== M.MAIN) M.ensureAgent(data, parentId, now)
+        const isNew = M.agentOf(data, result.agentId) === undefined
+        const agent = M.ensureAgent(data, result.agentId, now)
+        agent.kind = e.isTeammate ? 'teammate' : 'agent'
+        if (e.name) agent.name = e.name
+        agent.type = e.subagentType
+        agent.description = e.description
+        agent.prompt = F.trunc(e.prompt, M.LIMITS.promptChars)
+        agent.parentId = parentId
+        agent.model = result.model
+        agent.status = 'running'
+        agent.endedAt = undefined
+        if (isNew) agent.startedAt = now
+        M.addMessage(data, { from: parentId, to: agent.id, kind: 'spawn', text: e.prompt, at: now })
+        changed($)
+      }
+    } catch {
+      // the spawn stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  on('turn.start', async ($, e, next) => {
+    try {
+      const now = await $.clock.now()
+      const main = M.agentOf(data, M.MAIN)
+      if (main) {
+        main.status = 'running'
+        main.lastAt = now
+      }
+      if (e.text.trim()) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      changed($)
+    } catch {
+      // a turn starts whatever the deck makes of it
+    }
+    return next(e)
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    try {
+      const usageOfStep = result.usage
+      const agent = M.agentOf(data, e.agentId ?? M.MAIN)
+      if (usageOfStep && agent) {
+        const now = await $.clock.now()
+        agent.tokensIn += usageOfStep.input_tokens + usageOfStep.cache_creation_input_tokens
+        agent.cacheRead += usageOfStep.cache_read_input_tokens
+        agent.tokensOut += usageOfStep.output_tokens
+        agent.requests += 1
+        agent.lastAt = now
+        if (!agent.model) agent.model = usageOfStep.model
+        if (agent.kind !== 'main' && M.isEnded(agent.status)) {
+          agent.status = 'running'
+          agent.endedAt = undefined
+        }
+        M.bump(data, now, 'tokens', usageOfStep.input_tokens + usageOfStep.output_tokens + usageOfStep.cache_creation_input_tokens + usageOfStep.cache_read_input_tokens)
+        save($)
+        redraw($)
+      }
+    } catch {
+      // counting tokens never changes the response
+    }
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const now = await $.clock.now()
+      if (e.agentId) {
+        const agent = M.agentOf(data, e.agentId)
+        if (agent) {
+          agent.status = e.reason === 'aborted' ? 'killed' : e.reason === 'answer' ? (agent.kind === 'teammate' ? 'idle' : 'completed') : 'failed'
+          agent.endedAt = now
+          agent.current = undefined
+          if (e.answer.trim()) {
+            agent.answer = F.trunc(e.answer.trim(), M.LIMITS.answerChars)
+            M.addMessage(data, { from: agent.id, to: agent.parentId ?? M.MAIN, kind: 'result', text: e.answer, at: now })
+          }
+        }
+      } else {
+        const main = M.agentOf(data, M.MAIN)
+        if (main) {
+          main.status = 'idle'
+          main.current = undefined
+          main.lastAt = now
+        }
+        data.turns += 1
+        data.turnMs += e.durationMs
+        timers.day?.cancel()
+        timers.day = $.clock.after(400, () => void recordDay($))
+      }
+      scheduleGit($, 300)
+      if (chat && chat.agent === (e.agentId ?? M.MAIN)) void loadChat($, chat.agent)
+      changed($)
+    } catch {
+      // the turn's end stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  on('session.send', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const isMine = e.origin.kind === 'plugin' && e.origin.name === $.plugin.name
+      if (!isMine) {
+        const now = await $.clock.now()
+        const from = e.agentId ?? M.MAIN
+        if (from !== M.MAIN) M.ensureAgent(data, from, now)
+        const target = M.resolveRecipient(data, e.to) ?? M.peerOf(data, e.to, now)
+        M.addMessage(data, { from, to: target.id, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered })
+        changed($)
+      }
+    } catch {
+      // the message goes whatever the deck makes of it
+    }
+    return result
+  })
+
+  on('session.receive', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const origin = e.origin
+      if (origin.kind === 'peer' || origin.kind === 'coordinator' || origin.kind === 'peer-send-message') {
+        const now = await $.clock.now()
+        const to = e.agentId ?? M.MAIN
+        const probe = F.oneLine(e.text).slice(0, 60)
+        const echo = data.messages
+          .slice(-16)
+          .reverse()
+          .find(message => message.to === to && now - message.at < 20_000 && (F.oneLine(message.text).includes(probe.slice(0, 40)) || probe.includes(F.oneLine(message.text).slice(0, 40))))
+        if (echo) {
+          echo.isDelivered = true
+        } else if (!('plugin' in origin && origin.plugin === $.plugin.name)) {
+          const from =
+            'teammate' in origin
+              ? (M.resolveRecipient(data, origin.teammate)?.id ?? M.peerOf(data, origin.teammate, now).id)
+              : origin.kind === 'coordinator'
+                ? M.MAIN
+                : M.peerOf(data, origin.kind === 'peer-send-message' ? 'another session' : 'peer', now).id
+          M.addMessage(data, { from, to, kind: 'message', text: e.text, at: now })
+        }
+        changed($)
+      }
+    } catch {
+      // the delivery stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    isPaneOpen = true
+    const now = await $.clock.now()
+    const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
+    return deckView(kit, modelOf(now, kit, view.tab === 'graph'), actionsFor($))
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const isLive = data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
+    if (view.isBandHidden || e.props.hasSurvey || !isLive) return next(e)
+    const theirs: RenderElement = await next(e)
+    const now = await $.clock.now()
+    const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
+    return bandView(kit, modelOf(now, kit, false), actionsFor($), theirs) ?? theirs
+  })
+}

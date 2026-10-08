@@ -1,0 +1,7 @@
+{
+  "name": "agent-deck",
+  "version": "0.1.0",
+  "description": "Agent Deck: a live dashboard pane for git diffs, commits, every agent's current work and exact edits, chat with subagents, productivity stats, and an Obsidian-style graph of which agents talk to each other",
+  "author": { "name": "Yusuf" },
+  "types": "./types/index.d.ts"
+}
