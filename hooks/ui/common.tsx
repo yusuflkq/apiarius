@@ -14,30 +14,11 @@ import type { DeckData, DeckShownStatus } from '../../types'
 import { codeSourcesOf, type Hunk } from '../diff'
 import * as F from '../format'
 import { MAIN, ORCHESTRATOR, agentOf, labelOf } from '../model'
-import { N, NATIVE_TEXT, STATUS_COLOR, STATUS_GLYPH, STATUS_NATIVE, T } from './theme'
+import { NATIVE_TEXT, STATUS_COLOR, STATUS_GLYPH, T } from './theme'
 import type { Kit } from './types'
 
 /** Below this many characters left in a budget, a diff is noted as cut rather than drawn a few lines deep. */
 const LEAST_DIFF = 400
-
-/** The status square as native text: `■` in its status colour, an idle one hollow and grey. */
-export function glyph(kit: Kit, status: DeckShownStatus): RenderElement {
-  const { Text } = kit
-  return <Text color={STATUS_NATIVE[status]}>{STATUS_GLYPH[status]}</Text>
-}
-
-/** `+a −r` in the add and delete colours, a zero side left out; null when nothing changed. */
-export function plusMinus(kit: Kit, added: number, removed: number): RenderElement | null {
-  const { Text } = kit
-  if (added <= 0 && removed <= 0) return null
-  return (
-    <Text>
-      {added > 0 ? <Text color={N.add}>{`+${F.num(added)}`}</Text> : null}
-      {added > 0 && removed > 0 ? ' ' : null}
-      {removed > 0 ? <Text color={N.del}>{`−${F.num(removed)}`}</Text> : null}
-    </Text>
-  )
-}
 
 /** One quiet line where content will be, saying in a plain sentence what will appear there. */
 export function emptyLine(kit: Kit, text: string): RenderElement {
@@ -93,7 +74,7 @@ export function fileHeader(kit: Kit, path: string, added: number, removed: numbe
   const cut = path.lastIndexOf('/')
   const name = cut >= 0 ? path.slice(cut + 1) : path
   const dir = cut >= 0 ? path.slice(0, cut + 1) : ''
-  const counts = plusMinus(kit, added, removed)
+  const counts = delta(kit, added, removed)
   const countWidth = `+${F.num(added)} −${F.num(removed)}`.length + (note ? note.length + 2 : 0) + 2
   const dirRoom = Math.max(6, room - Array.from(name).length - countWidth)
   return (
@@ -213,6 +194,11 @@ export function delta(kit: Kit, added: number, removed: number): RenderElement |
   )
 }
 
+/** `+a −r` as plain words, a zero side left out: "+4", "+9 −1"; '' when nothing changed. */
+export function deltaText(added: number, removed: number): string {
+  return [added > 0 ? `+${F.num(added)}` : '', removed > 0 ? `−${F.num(removed)}` : ''].filter(part => part !== '').join(' ')
+}
+
 /** The cells `+a −r` takes as `delta` draws it; 0 when nothing changed. */
 export function deltaWidth(added: number, removed: number): number {
   const plus = added > 0 ? F.num(added).length + 1 : 0
@@ -220,8 +206,7 @@ export function deltaWidth(added: number, removed: number): number {
   return plus + minus + (plus > 0 && minus > 0 ? 1 : 0)
 }
 
-/** The copper bar a selected row carries in its reserved first column; null leaves the column blank. */
-export function copperBar(kit: Kit, isOn: boolean): RenderElement | null {
-  const { Text } = kit
-  return isOn ? <Text color={T.copper}>▌</Text> : null
+/** The Box props of the copper rail: what needs you or is selected carries the host's `quote` border in copper, else the same cells as padding, so the text after it never moves. `cells` is the rail's column, the border included. */
+export function rail(isOn: boolean, cells = 2): { paddingLeft: number; borderStyle?: string; borderColor?: string } {
+  return isOn ? { borderStyle: 'quote', borderColor: T.copper, paddingLeft: cells - 1 } : { paddingLeft: cells }
 }

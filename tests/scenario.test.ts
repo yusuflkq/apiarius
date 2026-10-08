@@ -261,7 +261,7 @@ async function rowsOf(ui: Drawing): Promise<string[]> {
 async function indentOf(ui: Drawing, id: string): Promise<number> {
   const row = (await ui.findAll({ type: 'Box' })).find(box => box.key === `row:${id}`)
   const line = (row?.children[0] ?? {}) as { children?: { props?: Record<string, unknown> }[] }
-  return Number(line.children?.[1]?.props?.paddingLeft ?? -1)
+  return Number(line.children?.[0]?.props?.paddingLeft ?? -1)
 }
 
 const ROUTES = [

@@ -1,15 +1,17 @@
 /**
  * The Agents tab, the deck's default view, top to bottom: the header (what
  * needs you, the goal, one summary line) and the outline you click
- * (./outline); the Files section (./files); and the detail block
- * (./detail), the one part a click on the outline changes.
+ * (./outline); the Files section (./files), while files changed; and the
+ * detail block (./detail), the one part a click on the outline changes,
+ * drawn once a row is selected. Before the first prompt the whole tab is one
+ * quiet line.
  *
  * Native text at the host's size throughout: no Svg, no timer-driven text.
  * Pure: Kit, DeckModel and Actions come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
-import { fitsTree } from './common'
+import { emptyLine, fitsTree } from './common'
 import { detailBlock, detailVM } from './detail'
 import { filesSection, filesVM } from './files'
 import { headerBlock, outlineBlock } from './outline'
@@ -32,12 +34,17 @@ export function agentsTab(kit: Kit, model: DeckModel, actions: Actions): RenderE
 function drawAgents(kit: Kit, model: DeckModel, actions: Actions, most: number): RenderElement {
   const { Box } = kit
   const { data, view, git, now } = model
+  const outline = outlineOf(data, view, now, most)
+  // before the first prompt: one line, not a page of placeholders
+  if (outline.empty) return <Box paddingLeft={2}>{emptyLine(kit, outline.empty)}</Box>
+  const files = filesVM(data, git, now, view.agent)
+  const detail = detailVM(data, view, git, model.chat, model.fileDiff, now)
   return (
     <Box flexDirection="column" gap={1}>
       {headerBlock(kit, headerOf(data, git, now), actions)}
-      {outlineBlock(kit, outlineOf(data, view, now, most), actions)}
-      {filesSection(kit, filesVM(data, git, now, view.agent), actions)}
-      {detailBlock(kit, detailVM(data, view, git, model.chat, model.fileDiff, now), actions)}
+      {outlineBlock(kit, outline, actions)}
+      {files.rows.length > 0 ? filesSection(kit, files, actions) : null}
+      {detail.kind !== 'none' ? detailBlock(kit, detail, actions) : null}
     </Box>
   )
 }

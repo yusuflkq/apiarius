@@ -57,7 +57,7 @@ let isGitQueued = false
 let isHeavyQueued = false
 let lastGitAt = 0
 let lastHeavyAt = 0
-const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer } = {}
+const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer; dump?: Timer } = {}
 /** The screen key the last drawing showed (or the last timed redraw asked for); see `screenKey`. */
 let shownKey = ''
 let gitKeyMemo: { of: G.GitState; key: string } | null = null
@@ -170,6 +170,9 @@ function knownRealOf(abs: string): string {
 /** A slash command's expansion (classic UserPromptExpansion), held for the prompt it becomes: its headline. */
 let expansion: { headline: string; at: number } | null = null
 
+/** Whether the last prompt submitted, the one the next turn starts with, is the person's own words; null while none was seen. */
+let isNextTurnTheirs: boolean | null = null
+
 /**
  * A placeholder row took its agent's id: what the view held of it (the
  * selection, a fold, a zoom, as the id or inside a key) follows it.
@@ -182,13 +185,156 @@ function renameInView(from: string, to: string) {
   view.folded = view.folded.map(swap)
 }
 
-/** Keeps the model in `$.state`, so a reload of this module picks it up again. */
+/** Keeps the model in `$.state`, so a reload of this module picks it up again; while the debug folder is there, dumps it too. */
 function save($: EngineInterface) {
+  scheduleDump($)
   if (timers.save) return
   timers.save = $.clock.after(1500, () => {
     timers.save = undefined
     void $.state.set(SNAPSHOT, M.copyOf({ v: M.SNAPSHOT_VERSION, data, view })).catch(() => undefined)
   })
+}
+
+/**
+ * The debug dump: while `<mod>/.debug/` exists, what the live deck believes
+ * goes to `.debug/state.json` about 2 s after the data changes, for a person
+ * or an agent to read without a screenshot. The folder is looked for at
+ * session.start and on each tick, and again right before each write: with it
+ * absent nothing is written (`$.fs.write` would make it).
+ */
+const DEBUG_DIR = '.debug'
+const DUMP_MS = 2000
+const debug = { isOn: false, loadedAt: 0, writes: 0 }
+
+function debugDirOf($: EngineInterface): string {
+  return `${$.plugin.root.replace(/[\\/]+$/, '')}/${DEBUG_DIR}`
+}
+
+/** Whether the debug folder is there; a look that fails counts as absent. */
+async function hasDebugDir($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.fs.exists(debugDirOf($))) === true
+  } catch {
+    return false
+  }
+}
+
+/** Looks for the debug folder again: one that appeared since the last look dumps soon, one gone stops the dump. */
+async function checkDebug($: EngineInterface, isStart = false): Promise<void> {
+  const was = debug.isOn
+  debug.isOn = await hasDebugDir($)
+  if (!debug.isOn) {
+    timers.dump?.cancel()
+    timers.dump = undefined
+  } else if (!was && !isStart) {
+    scheduleDump($)
+  }
+}
+
+/** The data changed: a dump within about 2 s while the debug folder is there; changes meanwhile ride along. */
+function scheduleDump($: EngineInterface) {
+  if (!debug.isOn || timers.dump) return
+  timers.dump = $.clock.after(DUMP_MS, () => {
+    timers.dump = undefined
+    void writeDump($)
+  })
+}
+
+async function writeDump($: EngineInterface): Promise<void> {
+  try {
+    if (!(await hasDebugDir($))) {
+      debug.isOn = false
+      return
+    }
+    const now = await $.clock.now()
+    debug.writes += 1
+    const state = { meta: { at: now, loadedAt: debug.loadedAt, writes: debug.writes }, ...debugStateOf(now) }
+    await $.fs.write(`${debugDirOf($)}/state.json`, `${JSON.stringify(state, null, 2)}\n`)
+  } catch {
+    // a dump that could not be written waits for the next change
+  }
+}
+
+/**
+ * What the deck believes now, as plain data: the raw counts; the goal, the
+ * plan (steps and links), the summary, the needs-you line and the fold; per
+ * agent its label, scope, origin, status, parent, step link, checklist, step,
+ * last action and result; the files; the last 20 messages; the outline's rows.
+ */
+function debugStateOf(now: number) {
+  const plan = M.planOf(data)
+  const goal = M.goalOf(data)
+  const outline = O.outlineOf(data, view, now)
+  const nameOf = (id: string) => {
+    const agent = M.agentOf(data, id)
+    return agent ? M.labelOf(agent) : id
+  }
+  return {
+    counts: {
+      agents: data.agents.length,
+      shownAgents: data.agents.filter(M.isShownAgent).length,
+      messages: data.messages.length,
+      edits: data.edits.length,
+      files: Object.keys(data.files).length,
+      goals: data.goals.length,
+      board: Object.keys(data.board).length,
+      workflows: data.workflows.length,
+      turns: data.turns,
+    },
+    git: { root: git.root, isRepo: git.isRepo, checkedAt: git.checkedAt, files: git.files.map(file => file.path) },
+    view: { tab: view.tab, selected: view.agent, zoom: view.zoom, folded: view.folded },
+    goal: goal
+      ? { id: goal.id, headline: goal.headline, text: F.trunc(F.oneLine(goal.text), 300), origin: goal.origin, at: goal.at, followUps: goal.followUps.map(one => F.trunc(F.oneLine(one.text), 120)), plan: goal.plan?.steps ?? null }
+      : null,
+    plan: { source: plan.source, goal: plan.goal ?? null, steps: plan.steps, unlinked: plan.unlinked, links: plan.links },
+    summary: M.summaryOf(data, git, now),
+    needs: M.needsOf(data, git, now),
+    fold: M.foldOf(data) ?? null,
+    agents: data.agents.map(agent => {
+      const list = M.checklistOf(agent, data)
+      return {
+        id: agent.id,
+        kind: agent.kind,
+        label: M.labelOf(agent),
+        scope: M.scopeOf(agent),
+        origin: M.originOf(agent),
+        status: agent.status,
+        shown: M.statusOf(agent, data),
+        parent: M.parentIdOf(data, agent) ?? null,
+        step: plan.links[agent.id] ?? null,
+        checklist: { done: list.done, total: list.total, items: list.items.map(item => `${item.status}: ${item.text}`) },
+        stepOf: M.stepOf(agent),
+        lastAction: M.lastActionOf(agent) ?? null,
+        answer: agent.answer === undefined ? null : agent.answer.slice(0, 200),
+        resultVia: agent.resultVia ?? null,
+        tools: agent.tools,
+        files: agent.files,
+      }
+    }),
+    files: M.filesOf(data).map(file => ({ ...file, by: file.editors.map(nameOf) })),
+    messages: data.messages.slice(-20).map(message => ({
+      from: message.from,
+      to: message.to,
+      route: `${nameOf(message.from)} → ${nameOf(message.to)}`,
+      kind: message.kind,
+      text: F.oneLine(message.text).slice(0, 80),
+    })),
+    outline: {
+      rows: outline.rows.map(row => ({
+        id: row.id,
+        depth: row.depth,
+        label: row.label,
+        kind: row.kind,
+        status: row.status,
+        fold: row.fold,
+        columns: { count: row.count, minutes: row.minutes, added: row.added, removed: row.removed },
+        note: row.note,
+      })),
+      crumbs: outline.crumbs,
+      empty: outline.empty,
+      hidden: outline.hidden,
+    },
+  }
 }
 
 async function restore($: EngineInterface, now: number): Promise<boolean> {
@@ -701,12 +847,70 @@ async function syncAgents($: EngineInterface): Promise<void> {
   if (isChanged) touched($, now)
 }
 
+/** The most agents' transcripts one recovery pass reads. */
+const RECOVER_MOST = 12
+
+/**
+ * Recovery's own state: a pass under way, the agents whose transcripts were
+ * read (each once while this module runs), and whether the pane's first tick
+ * has looked yet (it looks again each time the pane opens).
+ */
+const recovery = { isBusy: false, isPaneSeen: false, tried: new Set<string>() }
+
+/**
+ * Reads back what a reload can cost the deck. With no goal in hand, the
+ * person's newest prompt in their own words becomes one (`M.recoverGoal`).
+ * Each ended agent with no result (at most 12 a pass, the latest to end
+ * first) takes the hand-back or last words its own transcript holds, unless
+ * the read is denied. Run unawaited from session.start and the pane's first
+ * tick, one pass at a time; what it fails at leaves the deck as it was.
+ */
+async function recoverLost($: EngineInterface): Promise<void> {
+  if (recovery.isBusy) return
+  recovery.isBusy = true
+  try {
+    const now = await $.clock.now()
+    let isChanged = false
+    if (!M.goalOf(data)) {
+      try {
+        const found = M.recoverGoal(await $.session.messages())
+        // a prompt may have started a goal while the transcript was read
+        if (found && !M.goalOf(data)) isChanged = M.noteRecoveredGoal(data, found, now) !== undefined
+      } catch {
+        // no goal recovered: the person's next prompt starts one
+      }
+    }
+    const ids = M.unansweredOf(data)
+      .map(agent => agent.id)
+      .filter(id => !recovery.tried.has(id))
+      .slice(0, RECOVER_MOST)
+    for (const id of ids) {
+      recovery.tried.add(id)
+      try {
+        const found = await $.session.messages({ agentId: id })
+        const result = Array.isArray(found) ? M.recoverResult(found) : undefined
+        // the row as it stands now: a result that came meanwhile stays
+        const agent = M.agentOf(data, id)
+        if (result && agent && M.isEnded(agent.status) && !agent.answer) isChanged = M.noteResult(data, agent, result.text, agent.endedAt ?? now, result.via) || isChanged
+      } catch {
+        // that agent stays without a result
+      }
+    }
+    if (isChanged) changed($)
+  } catch {
+    // recovery is a nicety: the deck goes on as it was
+  } finally {
+    recovery.isBusy = false
+  }
+}
+
 /**
  * Every 2.5 seconds: folds in the agents' statuses and, while the pane is
  * open, re-reads git, usage and history in the background. It draws only
  * when the screen would change (`redrawIfChanged`); events draw for themselves.
  */
 async function tick($: EngineInterface): Promise<void> {
+  await checkDebug($)
   const now = await $.clock.now()
   // workflow agents and housekeeping loops fold away: they keep nothing on screen live
   const isAnyLive = M.hasLiveAgents(data)
@@ -716,6 +920,13 @@ async function tick($: EngineInterface): Promise<void> {
     if (now - usageAt > 10_000) void loadUsage($)
     if (now - daysAt > 120_000) void loadDays($)
     if (view.tab === 'agents' && view.agentPane === 'chat' && now - (chat?.at ?? 0) > 6000) void loadChat($, view.agent)
+  }
+  // the pane's first tick looks again for what a reload lost (once a pass under way is done)
+  if (!isPaneOpen) {
+    recovery.isPaneSeen = false
+  } else if (!recovery.isPaneSeen && !recovery.isBusy) {
+    recovery.isPaneSeen = true
+    void recoverLost($)
   }
   // with the pane shut and no agent at work nothing of the deck's is on screen: the next event draws
   if (isPaneOpen || isAnyLive) redrawIfChanged($, now)
@@ -1086,6 +1297,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const now = await $.clock.now()
     cwd = e.cwd
+    debug.loadedAt = now
+    await checkDebug($, true)
     const isRestored = await restore($, now)
     if (!isRestored) {
       data = M.emptyData(now)
@@ -1133,6 +1346,8 @@ export const register: Register = on => {
     void startRepos($)
     void loadDays($)
     void syncAgents($)
+    // what a reload lost (the goal, an ended agent's result), read back from the transcripts: never awaited, it redraws when done
+    void recoverLost($)
     timers.tick = $.clock.every(2500, () => void tick($))
 
     try {
@@ -1409,6 +1624,8 @@ export const register: Register = on => {
       const now = await $.clock.now()
       let isChanged = false
       if (result.drop === undefined) {
+        // the turn it starts logs it as yours only when it is in your words: an agent's hand-back or a notification is not
+        isNextTurnTheirs = M.isUsersWords(e.origin)
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
         expansion = null
         if (kind !== 'event') isChanged = M.noteGoal(data, kind, { text: e.text, origin: e.origin.kind, at: now, ...(kind === 'goal' && said ? { headline: said } : {}) }) !== undefined
@@ -1452,7 +1669,10 @@ export const register: Register = on => {
         main.status = 'running'
         main.lastAt = now
       }
-      if (e.text.trim()) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      // a turn whose prompt came from elsewhere (an agent's hand-back, already its result) is no prompt of yours; none seen counts as yours
+      const isTheirs = isNextTurnTheirs ?? true
+      isNextTurnTheirs = null
+      if (e.text.trim() && isTheirs) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
       touched($, now)
     } catch {
       // a turn starts whatever the deck makes of it

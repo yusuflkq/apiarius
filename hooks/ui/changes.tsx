@@ -16,7 +16,9 @@ import { codeSourcesOf, filePatchesOf, hunksOf, type Hunk } from '../diff'
 import * as F from '../format'
 import type { Commit, CommitDetail, FileCode, FileRow, GitRepo } from '../git'
 import { agentOf, editorsOf, labelOf } from '../model'
-import { N, NATIVE_TEXT } from './theme'
+import { delta, square } from './common'
+import { editorsText } from './files'
+import { NATIVE_TEXT, T } from './theme'
 import type { Actions, DeckModel, Kit } from './types'
 
 /** How much one drawing shows: diff characters (the open file's and the open commit's together) and rows of each list. */
@@ -107,7 +109,7 @@ function repoLine({ kit, model }: Ctx): RenderElement {
       const why = F.oneLine(git.error ?? '') || 'git status failed'
       return (
         <Text wrap="truncate-end">
-          <Text color={N.err}>■</Text>
+          {square(kit, 'failed')}
           {` git failed in ${F.baseName(git.root)}: ${why}`}
           {hasEdits ? <Text dimColor>. The edits agents made are below, exact.</Text> : null}
         </Text>
@@ -124,7 +126,7 @@ function repoLine({ kit, model }: Ctx): RenderElement {
   const head = git.head.slice(0, 7)
   const branch = git.branch === '' || git.branch === 'HEAD' ? 'detached' : git.branch
   const count = git.files.length
-  const counts = signed(kit, git.added, git.removed)
+  const counts = delta(kit, git.added, git.removed)
   const tail = count === 0 ? (head ? ` · clean at ${head}` : ' · no commits yet') : `${counts ? ' in ' : ''}${F.plural(count, 'file')} vs ${head || 'the empty tree'}`
 
   return (
@@ -187,7 +189,7 @@ function repoPicker({ kit, model, actions }: Ctx): RenderElement | null {
 function gitFiles(ctx: Ctx): RenderElement {
   const { kit, model, actions, limits } = ctx
   const { Box, Text, Button } = kit
-  const { git, data, view } = model
+  const { git, view } = model
 
   if (git.files.length === 0) return quiet(kit, 'Working tree clean: nothing to commit.')
 
@@ -198,7 +200,7 @@ function gitFiles(ctx: Ctx): RenderElement {
       code: file.code,
       added: file.added,
       removed: file.removed,
-      note: noteOf(file, editorsOf(data, file.path).map(labelOf)),
+      note: noteOf(file, byOf(model, file.path)),
     },
   }))
   const cols = colsOf(kit, items.map(item => item.row))
@@ -278,7 +280,7 @@ function editsList(ctx: Ctx): RenderElement {
       code: (file.isNew ? 'N' : 'M') as FileCode,
       added: file.added,
       removed: file.removed,
-      note: noteOf(null, editorsOf(data, file.path).map(labelOf)),
+      note: noteOf(null, byOf(model, file.path)),
     },
   }))
   const cols = colsOf(kit, items.map(item => item.row))
@@ -353,19 +355,19 @@ function fileRow(kit: Kit, cols: Cols, row: Row, isOpen: boolean, onPress: () =>
   return (
     <Box flexDirection="row" columnGap={1}>
       <Box width={1} flexShrink={0}>
-        <Text color={codeColor(row.code)}>{row.code}</Text>
+        <Text dimColor>{row.code}</Text>
       </Box>
       <Box width={cols.box} flexShrink={0}>
         <Button key={`file:${row.path}`} label={F.truncStart(row.path, cols.label)} plain dimColor={!isOpen} onPress={onPress} />
       </Box>
       {cols.add > 0 ? (
         <Box width={cols.add} flexShrink={0} justifyContent="flex-end">
-          {row.added > 0 ? <Text color={N.add}>{`+${F.num(row.added)}`}</Text> : null}
+          {row.added > 0 ? <Text color={T.ok}>{`+${F.num(row.added)}`}</Text> : null}
         </Box>
       ) : null}
       {cols.del > 0 ? (
         <Box width={cols.del} flexShrink={0} justifyContent="flex-end">
-          {row.removed > 0 ? <Text color={N.del}>{`−${F.num(row.removed)}`}</Text> : null}
+          {row.removed > 0 ? <Text color={T.err}>{`−${F.num(row.removed)}`}</Text> : null}
         </Box>
       ) : null}
       {row.note ? (
@@ -377,31 +379,20 @@ function fileRow(kit: Kit, cols: Cols, row: Row, isOpen: boolean, onPress: () =>
   )
 }
 
+/** Who edited `path` this session, as every list of editors says it ("fixer + scout"); '' for nobody. */
+function byOf(model: DeckModel, path: string): string {
+  const ids = editorsOf(model.data, path).map(agent => agent.id)
+  return ids.length > 0 ? editorsText(model.data, ids) : ''
+}
+
 /** The dim words after a file's counts: where a rename came from, binary, staged, and the agents that edited it. */
-function noteOf(file: FileRow | null, editors: readonly string[]): string {
+function noteOf(file: FileRow | null, editors: string): string {
   const parts: string[] = []
   if (file?.oldPath) parts.push(`from ${F.truncStart(file.oldPath, 32)}`)
   if (file?.isBinary) parts.push('binary')
   if (file?.isStaged) parts.push(file.isUnstaged ? 'partly staged' : 'staged')
-  if (editors.length > 0) parts.push(`by ${editors.join(', ')}`)
+  if (editors !== '') parts.push(`by ${editors}`)
   return parts.join(' · ')
-}
-
-/** The status code's colour: added and new green, deleted red, a conflict red, renamed blue, modified yellow. */
-function codeColor(code: FileCode): string {
-  switch (code) {
-    case 'A':
-    case 'N':
-      return N.add
-    case 'D':
-      return N.del
-    case '!':
-      return N.err
-    case 'R':
-      return N.info
-    default:
-      return N.warn
-  }
 }
 
 // Commits: the last ones on the branch, this session's and each agent's marked.
@@ -434,7 +425,7 @@ function commitRow(ctx: Ctx, commit: Commit): RenderElement {
   const isSession = commit.at >= data.startedAt - 60_000
   const marks = [isSession ? 'this session' : '', agent ? `by ${labelOf(agent)}` : ''].filter(mark => mark !== '').join(' · ')
   const subjectRoom = Math.max(16, Math.min(60, kit.columns - 9 - (marks ? marks.length + 1 : 0) - 18))
-  const counts = signed(kit, commit.added, commit.removed)
+  const counts = delta(kit, commit.added, commit.removed)
 
   const line = (
     <Box flexDirection="row" columnGap={1}>
@@ -567,7 +558,7 @@ function fileHeader(kit: Kit, path: string, added: number, removed: number, note
   const { Text } = kit
   const name = F.baseName(path)
   const dir = path.slice(0, Math.max(0, path.length - name.length))
-  const counts = signed(kit, added, removed)
+  const counts = delta(kit, added, removed)
   const room = Math.max(8, kit.columns - 6 - Array.from(name).length - 14)
   return (
     <Text wrap="truncate-end">
@@ -576,19 +567,6 @@ function fileHeader(kit: Kit, path: string, added: number, removed: number, note
       {counts ? '  ' : null}
       {counts}
       {note ? <Text dimColor>{`  ${note}`}</Text> : null}
-    </Text>
-  )
-}
-
-/** `+a −r` in the add and remove colours, a zero side left out; null when both are zero. */
-function signed(kit: Kit, added: number, removed: number): RenderElement | null {
-  const { Text } = kit
-  if (added <= 0 && removed <= 0) return null
-  return (
-    <Text>
-      {added > 0 ? <Text color={N.add}>{`+${F.num(added)}`}</Text> : null}
-      {added > 0 && removed > 0 ? ' ' : null}
-      {removed > 0 ? <Text color={N.del}>{`−${F.num(removed)}`}</Text> : null}
     </Text>
   )
 }

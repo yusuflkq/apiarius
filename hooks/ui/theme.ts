@@ -4,9 +4,10 @@
  * graphite, four levels of bone text, one copper accent, muted status
  * colours. `.interface-design/system.md` documents the decisions behind them.
  *
- * `T` is for SVG (exact colours and fonts); `N` maps the same roles onto
- * the colour names the native Text element takes, where only weight, dim
- * and colour are available. Every value in `T` is a 6-digit hex: the
+ * `T` holds the exact colours and fonts. SVG takes all of them; native Text
+ * takes the status hues, the add and remove hues and copper as given (hex),
+ * and carries the four text levels as weight and dim (`NATIVE_TEXT`), so
+ * they follow the host's theme. Every value in `T` is a 6-digit hex: the
  * emulator's translucent lines are flattened onto `Panel` here.
  */
 
@@ -71,29 +72,6 @@ export const STATUS_GLYPH: Record<Status, string> = {
   done: '■',
   failed: '■',
   idle: '□',
-}
-
-/**
- * The same roles as native Text colour names. The host's theme decides the
- * exact shade, and `accent` shares yellow with `warn`, so native selection
- * is the primary Button plate and the bar glyph, never the hue alone.
- */
-export const N = {
-  ok: 'green',
-  warn: 'yellow',
-  err: 'red',
-  info: 'blue',
-  accent: 'yellow',
-  add: 'green',
-  del: 'red',
-} as const
-
-export const STATUS_NATIVE: Record<Status, string> = {
-  running: N.ok,
-  waiting: N.warn,
-  done: N.info,
-  failed: N.err,
-  idle: 'gray',
 }
 
 /** The four text levels as native Text props: no font or size natively, so weight and dim carry the ramp. */

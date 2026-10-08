@@ -1,17 +1,26 @@
 /**
  * The Agents tab's header and outline, read off the deck's live data.
  *
- * The header: what needs you (one line), the goal, and one summary line.
- * The outline you click: the Orchestrator, its plan steps, the agents under
- * the step each serves (straight under the Orchestrator when there is no
- * plan or no step claims them), and sub-agents under the agent that spawned
- * them. Workflow and housekeeping loops fold into one "+N background" row,
- * a finished agent's subtree folds, and once a branch holds more than about
+ * The header: what needs you (one line), the goal and its minutes, and one
+ * summary line that leads with the plan's step in hand. The outline you
+ * click: the Orchestrator, its plan steps, the agents under the step each
+ * serves (straight under the Orchestrator when there is no plan or no step
+ * claims them), and sub-agents under the agent that spawned them. Workflow
+ * and housekeeping loops fold into one "+N background" row, drawn only while
+ * a workflow's agent works (or once the person opened it); a finished step's and a
+ * finished agent's branch fold, and once a branch holds more than about
  * twelve agent rows each branch folds its finished agents into "+N done".
- * Zoom re-roots the outline on one branch, with breadcrumbs back up.
+ * Zoom re-roots the outline on one branch, with breadcrumbs back up. Before
+ * the first prompt there is nothing to outline, and the tab says so in one
+ * line (`isUntouched`).
  *
  * `view.folded` holds the person's own choices, which win over those
- * defaults: a branch's id folds it, `+` and its id keeps it open.
+ * defaults: a branch's id folds it, `+` and its id keeps it open. Nothing is
+ * selected until the person picks a row (`view.agent` is '').
+ *
+ * "Waits on you" is said only of the one the engine waits on the person for
+ * (the Orchestrator's needs-you note names it): an agent the engine lists as
+ * waiting on its own background work is busy, not waiting on you.
  *
  * Pure: nothing here reads a clock but the `now` it is handed, and the texts
  * it makes change only when the data does (statuses, steps, coarse minutes),
@@ -36,10 +45,11 @@ function planStepsOf(data: DeckData): readonly M.DeckPlanStep[] {
 }
 
 /**
- * The goal in hand, on one line; '' before the first prompt. A goal whose
- * headline is not its words' first line (a slash command's) shows that headline.
+ * The goal in hand as the header shows it, on one line; '' before the first
+ * prompt. A goal whose headline is not its words' first line (a slash
+ * command's) shows that headline.
  */
-function goalTextOf(data: DeckData): string {
+export function goalLineOf(data: DeckData): string {
   const goal = M.goalOf(data)
   if (!goal) return ''
   const text = F.oneLine(goal.text)
@@ -77,11 +87,46 @@ function waitWordsOf(data: DeckData): string {
   return needs ? M.waitingOnOf(data, needs) : ''
 }
 
+/**
+ * Whether the engine waits on the person for `id`: the Orchestrator's
+ * needs-you note names it (a note naming no agent is the Orchestrator's own).
+ * An agent the engine lists as waiting with no such note waits on its own
+ * work, not on you.
+ */
+export function waitsOnYou(data: DeckData, id: string): boolean {
+  const needs = M.agentOf(data, M.MAIN)?.needs
+  return needs !== undefined && (needs.agent ?? M.MAIN) === id
+}
+
+/** `status` (the agent's `statusOf`) as the deck draws it: a wait on anything but you is work going on, so it runs. */
+function shownOf(data: DeckData, agent: DeckAgent, status: DeckShownStatus): DeckShownStatus {
+  return status === 'waiting' && !waitsOnYou(data, agent.id) ? 'running' : status
+}
+
+/** The status the deck draws for `agent`: `statusOf`, save that waiting (ochre) is only ever the one that waits on you. */
+export function shownStatusOf(agent: DeckAgent, data: DeckData): DeckShownStatus {
+  return shownOf(data, agent, M.statusOf(agent, data))
+}
+
+/**
+ * Before the first prompt: no goal, no message, no edit, no agent, and the
+ * Orchestrator has made no call. The Agents tab is then one quiet line.
+ */
+export function isUntouched(data: DeckData): boolean {
+  if (M.goalOf(data) || data.messages.length > 0 || data.edits.length > 0) return false
+  if (data.agents.some(isWorker)) return false
+  const main = M.agentOf(data, M.MAIN)
+  return main === undefined || (!M.isLive(main.status) && main.tools === 0)
+}
+
+/** The one line the Agents tab shows before the first prompt. */
+export const UNTOUCHED = 'No goal yet: your next prompt sets it, and its agents show here.'
+
 // 2. The view-models the drawing reads (./outline.tsx).
 
 /** The needs-you line: always one row. */
 export type NeedsVM = {
-  /** Something needs the person: the line carries the copper bar. */
+  /** Something needs the person: the line carries the copper rail. */
   isLoud: boolean
   /** The status square before the words; null for none. */
   status: DeckShownStatus | null
@@ -94,10 +139,15 @@ export type NeedsVM = {
   canReview: boolean
 }
 
-/** The summary line: its words, then the session's `+a −r`, then its tail (" · 18m"). */
-export type SummaryVM = { lead: string; added: number; removed: number; tail: string }
+/**
+ * The summary line: the plan's step in hand ("Step 2 of 4 · Build the
+ * outline view", plain; '' without a real plan), then the counts (dim), then
+ * the session's `+a −r`.
+ */
+export type SummaryVM = { step: string; lead: string; added: number; removed: number }
 
-export type HeaderVM = { needs: NeedsVM; goal: string; summary: SummaryVM }
+/** The header: the needs-you line, the goal (bold) with its minutes at the right, and the summary. */
+export type HeaderVM = { needs: NeedsVM; goal: string; minutes: string; summary: SummaryVM }
 
 export type RowKind = 'orchestrator' | 'step' | 'agent' | 'background' | 'done'
 
@@ -108,7 +158,7 @@ export type RowVM = {
   /** What a press selects or folds: an agent's id, a plan step's key (as `planOf` gives it), or a group's own id. */
   id: string
   kind: RowKind
-  /** Levels below the row the outline starts at; the drawing indents at most three. */
+  /** Levels below the row the outline starts at; the drawing indents at most four. */
   depth: number
   /** The status square (agents) or the step mark (✓ ■ □) it draws; null for the rows that stand for several. */
   status: DeckShownStatus | null
@@ -116,7 +166,7 @@ export type RowVM = {
   /** ▾ open, ▸ folded; null for a row with nothing under it (or the zoomed row, always open). */
   fold: 'open' | 'closed' | null
   isSelected: boolean
-  /** The right columns: done/total ("2/4", "done"), minutes, and the row's edits. */
+  /** An agent row's columns after its label: done/total ("2/4", "done"), minutes, and its edits. */
   count: string
   minutes: string
   added: number
@@ -132,7 +182,7 @@ export type OutlineVM = {
   rows: RowVM[]
   /** While zoomed: All, each level between, and last the zoomed row itself; null otherwise. */
   crumbs: Crumb[] | null
-  /** The dim line under the Orchestrator while nothing is delegated; '' otherwise. */
+  /** Before the first prompt, the one line the tab shows instead of the outline (UNTOUCHED); '' otherwise. */
   empty: string
   /** Rows past the cap, not drawn. */
   hidden: number
@@ -204,13 +254,30 @@ function parentOf(data: DeckData, agent: DeckAgent, workers: ReadonlyMap<string,
 }
 
 /**
+ * Whether a background loop is at work: a workflow's agent while its run
+ * goes on. The engine's own housekeeping loops never say when they end (the
+ * deck sees them only through a call), so they never count.
+ */
+function isBackgroundAtWork(data: DeckData, agent: DeckAgent): boolean {
+  if (agent.origin !== 'workflow' || !M.isLive(agent.status)) return false
+  const run = agent.workflow === undefined ? undefined : data.workflows.find(one => one.id === agent.workflow)
+  return run === undefined || run.endedAt === undefined
+}
+
+/** Whether a background loop in `node`'s branch is at work. */
+function hasWorkUnder(data: DeckData, node: Node): boolean {
+  return node.kids.some(kid => (kid.agent !== undefined && isBackgroundAtWork(data, kid.agent)) || hasWorkUnder(data, kid))
+}
+
+/**
  * Every row of the outline, unfolded: the Orchestrator; its plan steps in
  * plan order; the agents each step claims (the first step to name an agent
  * keeps it), then the agents no step claims; sub-agents under their parent;
- * last the background row, every workflow agent and housekeeping loop in it.
+ * last the background row, every workflow agent and housekeeping loop in it,
+ * while a workflow's agent works or once the person opened it (`folds`).
  * Siblings keep spawn order.
  */
-function treeOf(data: DeckData): { root: Node; byId: Map<string, Node> } {
+function treeOf(data: DeckData, folds: ReadonlySet<string>): { root: Node; byId: Map<string, Node> } {
   const main = M.agentOf(data, M.MAIN)
   const root: Node = { id: M.MAIN, kind: 'orchestrator', ...(main ? { agent: main } : {}), kids: [], parent: null }
   const byId = new Map<string, Node>([[root.id, root]])
@@ -243,15 +310,18 @@ function treeOf(data: DeckData): { root: Node; byId: Map<string, Node> } {
   }
 
   root.kids = [...steps, ...direct]
-  if (background.kids.length > 0) {
+  // at rest the background row is left out: it shows while a workflow's agents work, and stays once the person opened it
+  if (background.kids.length > 0 && (folds.has(OPEN + BACKGROUND) || hasWorkUnder(data, background))) {
     root.kids.push(background)
     byId.set(background.id, background)
   }
   return { root, byId }
 }
 
+/** Folded until the person opens it: the groups, a finished step's branch, a finished agent's subtree. */
 function isFoldedByDefault(node: Node, shape: Shape): boolean {
   if (node.kind === 'background' || node.kind === 'done') return true
+  if (node.kind === 'step') return node.step?.status === 'done'
   return node.kind === 'agent' && node.agent !== undefined && isFinished(statusIn(node.agent, shape.data))
 }
 
@@ -297,9 +367,10 @@ function isZoomable(node: Node | undefined): node is Node {
 
 /** The outline's tree for `view`: zoomed, folded, and grouped once it runs long. */
 function shapeOf(data: DeckData, view: Pick<DeckView, 'folded' | 'zoom'>): Shape {
-  const { root, byId } = treeOf(data)
+  const folds = new Set(view.folded)
+  const { root, byId } = treeOf(data, folds)
   const zoomed = view.zoom ? byId.get(view.zoom) : undefined
-  const shape: Shape = { root, top: isZoomable(zoomed) ? zoomed : root, byId, folds: new Set(view.folded), data }
+  const shape: Shape = { root, top: isZoomable(zoomed) ? zoomed : root, byId, folds, data }
   if (agentRowsUnder(shape.top, shape) > ROOMY) foldDone(shape.top, shape)
   return shape
 }
@@ -334,13 +405,23 @@ function failureOf(agent: DeckAgent): string {
   return ''
 }
 
+/** "Waits on you: allow Bash "npm test"": what the engine waits on the person for. */
+function waitsNote(data: DeckData): { note: string; noteTone: NoteTone } {
+  const what = waitWordsOf(data)
+  return { note: what ? `Waits on you: ${what}` : 'Waits on you', noteTone: 'waiting' }
+}
+
+/** An agent held on work of its own, not on you: the child at work under it, else its background work. */
+function heldNote(node: Node): { note: string; noteTone: NoteTone } {
+  const child = node.kids.find(kid => kid.agent !== undefined && M.isLive(kid.agent.status))?.agent
+  return { note: child ? `Waiting on ${labelTextOf(child)}` : 'Waiting on background work', noteTone: 'dim' }
+}
+
 /** An agent's line two: where it is, as its status says it. */
-function noteOf(data: DeckData, agent: DeckAgent, status: DeckShownStatus): { note: string; noteTone: NoteTone } {
+function noteOf(data: DeckData, node: Node, agent: DeckAgent, status: DeckShownStatus): { note: string; noteTone: NoteTone } {
   switch (status) {
-    case 'waiting': {
-      const what = waitWordsOf(data)
-      return { note: what ? `Waits on you: ${what}` : 'Waits on you', noteTone: 'waiting' }
-    }
+    case 'waiting':
+      return waitsOnYou(data, agent.id) ? waitsNote(data) : heldNote(node)
     case 'failed': {
       if (agent.status === 'killed') return { note: 'Stopped', noteTone: 'dim' }
       const why = failureOf(agent)
@@ -358,11 +439,8 @@ function noteOf(data: DeckData, agent: DeckAgent, status: DeckShownStatus): { no
 }
 
 /** The Orchestrator's state, said inline on its row: waiting on you, on the agents it started, or what it is at. */
-function orchestratorNoteOf(data: DeckData, main: DeckAgent | undefined, status: DeckShownStatus): { note: string; noteTone: NoteTone } {
-  if (status === 'waiting') {
-    const what = waitWordsOf(data)
-    return { note: what ? `Waits on you: ${what}` : 'Waits on you', noteTone: 'waiting' }
-  }
+function orchestratorNoteOf(data: DeckData, node: Node, main: DeckAgent | undefined, status: DeckShownStatus): { note: string; noteTone: NoteTone } {
+  if (status === 'waiting') return waitsOnYou(data, M.MAIN) ? waitsNote(data) : heldNote(node)
   const live = data.agents.filter(agent => isWorker(agent) && !isBackground(agent) && M.isLive(agent.status) && M.parentIdOf(data, agent) === M.MAIN).length
   if (live > 0 && !main?.current) return { note: `waiting on ${F.plural(live, 'agent')}`, noteTone: 'dim' }
   if (status === 'running' && main) return { note: stepTextOf(main) || 'Working', noteTone: 'dim' }
@@ -379,7 +457,7 @@ function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected
   if (node.kind === 'orchestrator') {
     const main = node.agent
     const status = main ? statusIn(main, data) : 'idle'
-    return { ...base, status, label: M.ORCHESTRATOR, added: main?.added ?? 0, removed: main?.removed ?? 0, ...orchestratorNoteOf(data, main, status) }
+    return { ...base, status: main ? shownOf(data, main, status) : status, label: M.ORCHESTRATOR, ...orchestratorNoteOf(data, node, main, status) }
   }
   if (node.kind === 'step' && node.step) {
     return { ...base, status: STEP_STATUS[node.step.status], label: F.trunc(F.oneLine(node.step.text), STEP_CHARS) }
@@ -395,13 +473,13 @@ function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected
   const list = checklistCountOf(agent, data)
   return {
     ...base,
-    status,
+    status: shownOf(data, agent, status),
     label: labelTextOf(agent),
     count: status === 'done' ? 'done' : list ? `${list.done}/${list.total}` : '',
     minutes: minutesOf(agent, status, now),
     added: agent.added,
     removed: agent.removed,
-    ...noteOf(data, agent, status),
+    ...noteOf(data, node, agent, status),
   }
 }
 
@@ -413,11 +491,12 @@ function crumbOf(node: Node): Crumb {
 /**
  * The outline as the view has it: rows in tree order from the zoomed branch
  * (else the Orchestrator), each folded branch one row; the crumbs while
- * zoomed. At most `most` rows; `hidden` counts the rest.
+ * zoomed; `view.agent`'s row selected (none while it is ''). At most `most`
+ * rows; `hidden` counts the rest.
  */
 export function outlineOf(data: DeckData, view: DeckView, now: number, most = MOST_ROWS): OutlineVM {
   const shape = shapeOf(data, view)
-  const selected = view.agent || M.MAIN
+  const selected = view.agent
   const rows: RowVM[] = []
   let hidden = 0
 
@@ -432,7 +511,7 @@ export function outlineOf(data: DeckData, view: DeckView, now: number, most = MO
   return {
     rows,
     crumbs: isZoomed ? [{ id: '', label: 'All' }, ...levelsAbove(shape.top, shape.root).map(crumbOf), crumbOf(shape.top)] : null,
-    empty: !isZoomed && shape.root.kids.length === 0 ? 'No agents yet; delegated work shows here as it starts.' : '',
+    empty: isUntouched(data) ? UNTOUCHED : '',
     hidden,
   }
 }
@@ -444,6 +523,19 @@ export function foldToggled(data: DeckData, view: Pick<DeckView, 'folded' | 'zoo
   const rest = view.folded.filter(one => one !== id && one !== OPEN + id)
   if (!node || node.kids.length === 0) return rest
   return [...rest, isClosed(node, shape) ? OPEN + id : id].slice(-FOLDS_KEPT)
+}
+
+/**
+ * Whether row `id`'s branch shows open or folded, as its toggle says; null
+ * for a row with nothing under it, the zoomed row (always open) and an id
+ * the outline does not hold. The detail's Fold (f) reads it.
+ */
+export function foldStateOf(data: DeckData, view: Pick<DeckView, 'folded' | 'zoom'>, id: string): 'open' | 'closed' | null {
+  if (id === '') return null
+  const shape = shapeOf(data, view)
+  const node = shape.byId.get(id)
+  if (!node || isZoomRoot(node, shape) || node.kids.length === 0) return null
+  return isClosed(node, shape) ? 'closed' : 'open'
 }
 
 /**
@@ -481,7 +573,7 @@ export function zoomFor(data: DeckData, view: Pick<DeckView, 'folded' | 'zoom'>,
 // 5. The header.
 
 /**
- * The needs-you line (`needsOf`): loud, with the copper bar, for a prompt
+ * The needs-you line (`needsOf`): loud, with the copper rail, for a prompt
  * blocked on you, a failure or a file two live agents share; the agent's
  * label (the two agents' labels for a shared file) leads in bold, and Open
  * selects the agent (the shared file). Quiet otherwise, with Review once
@@ -505,30 +597,58 @@ function needsVMOf(data: DeckData, git: GitState, now: number): NeedsVM {
   }
 }
 
-/** Whole minutes as the summary says them: "<1m", "18m", "1h 05m". */
+/** Whole minutes as the header says them: "<1m", "18m", "1h 05m". */
 function minutesText(minutes: number): string {
   return minutes < 1 ? '<1m' : F.dur(minutes * 60_000)
 }
 
+/** "Step 2 of 4 · Build the outline view": the real plan's step in hand; with none in hand, how many are done; '' without a real plan. */
+function stepLineOf(data: DeckData): string {
+  const steps = planStepsOf(data)
+  if (steps.length === 0) return ''
+  const at = steps.findIndex(step => step.status === 'active')
+  const active = steps[at]
+  if (active) return `Step ${at + 1} of ${steps.length} · ${F.oneLine(active.text)}`
+  const done = steps.filter(step => step.status === 'done').length
+  return done === steps.length ? `All ${steps.length} steps done` : `${done} of ${steps.length} steps done`
+}
+
+/** This goal's agents at work and waiting on you, the way the rows draw them: one held on its own work counts as running. */
+function atWorkOf(data: DeckData): { running: number; waiting: number } {
+  const goal = M.goalOf(data)
+  let running = 0
+  let waiting = 0
+  for (const agent of data.agents) {
+    if (!M.isShownAgent(agent) || (goal !== undefined && agent.goal !== goal.id)) continue
+    const status = shownStatusOf(agent, data)
+    if (status === 'waiting') waiting += 1
+    else if (status === 'running') running += 1
+  }
+  const needs = M.agentOf(data, M.MAIN)?.needs
+  if (needs && needs.kind !== 'idle_prompt' && (needs.agent ?? M.MAIN) === M.MAIN) waiting += 1
+  return { running, waiting }
+}
+
 /**
- * The summary line (`summaryOf`): the plan's step (a real plan's only: an
- * implicit one is just the agents, counted next), this goal's agents by
- * state, the files and lines changed, its minutes.
+ * The summary line (`summaryOf`): the plan's step in hand (a real plan's
+ * only: an implicit one is just the agents, counted next), then this goal's
+ * agents by state, the files and lines changed.
  */
-function summaryVMOf(data: DeckData, git: GitState, now: number): SummaryVM {
-  const sum = M.summaryOf(data, git, now)
+function summaryVMOf(data: DeckData, sum: M.DeckSummary): SummaryVM {
+  const { running, waiting } = atWorkOf(data)
   const parts = [
-    sum.step && planStepsOf(data).length > 0 ? `plan ${sum.step}` : '',
-    sum.running > 0 ? `${sum.running} running` : '',
-    sum.waiting > 0 ? `${sum.waiting} waits on you` : '',
+    running > 0 ? `${running} running` : '',
+    waiting > 0 ? `${waiting} waits on you` : '',
     sum.failed > 0 ? `${sum.failed} failed` : '',
     sum.done > 0 ? `${sum.done} done` : '',
     sum.files > 0 ? F.plural(sum.files, 'file') : 'no files changed',
   ].filter(part => part !== '')
-  return { lead: parts.join(' · '), added: sum.added, removed: sum.removed, tail: M.goalOf(data) ? ` · ${minutesText(sum.minutes)}` : '' }
+  return { step: stepLineOf(data), lead: parts.join(' · '), added: sum.added, removed: sum.removed }
 }
 
-/** The header: what needs you, the goal, the summary. */
+/** The header: what needs you, the goal and its minutes, the summary. */
 export function headerOf(data: DeckData, git: GitState, now: number): HeaderVM {
-  return { needs: needsVMOf(data, git, now), goal: goalTextOf(data), summary: summaryVMOf(data, git, now) }
+  const goal = goalLineOf(data)
+  const sum = M.summaryOf(data, git, now)
+  return { needs: needsVMOf(data, git, now), goal, minutes: goal ? minutesText(sum.minutes) : '', summary: summaryVMOf(data, sum) }
 }

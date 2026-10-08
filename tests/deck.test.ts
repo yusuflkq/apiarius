@@ -128,7 +128,8 @@ test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a fil
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
     expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(false)
-    expect(await ui.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
+    // before the first prompt the tab is one quiet line
+    expect(await ui.find({ type: 'Text', text: /^No goal yet: your next prompt sets it/ })).toBeDefined()
 
     await ui.press({ key: 'tab:changes' })
     expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)

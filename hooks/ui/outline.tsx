@@ -2,51 +2,70 @@
  * The Agents tab's header and outline, in native text at the host's own
  * size, no image anywhere.
  *
- * The header: the needs-you line (always one row: the copper bar only when
- * something needs you, and Open, key n, selects it), the goal (at most two
- * lines) and one dim summary line.
+ * The header: the needs-you line (always one row: the copper rail only when
+ * something needs you, and Open, key n, selects it), the goal in bold (at
+ * most two lines, its minutes at the right) and one summary line that leads
+ * with the plan's step in hand, the counts after it dim.
  *
  * The outline you click, one row per Orchestrator, plan step, agent or
- * folded group. Every row keeps the same columns whether it is selected or
- * not: the reserved bar column (the copper ▌ on the selected row), the
- * indent (two cells a level, three levels at most), the fold toggle (▾ ▸),
- * the status square or step mark, the label (a Button that selects the row,
- * the selected one the primary plate), then done/total, minutes and
- * `+a −r` at the right. An agent's line two says where it is. Rows never
- * wrap; their order is the tree's, never sorted.
+ * folded group. Every row keeps its columns whether it is selected or not:
+ * the rail (the copper `quote` border on the selected row, the same cells as
+ * padding on the others), the indent (two cells a level, four levels at
+ * most), the fold toggle (▾ ▸, two cells), the status square or step mark,
+ * then the label. An agent's label sits in a fixed column, LABEL + (3 −
+ * depth) × 2 cells, so its done/total, minutes and `+a −r` line up right
+ * after it at every depth and every width; a step's, the Orchestrator's and a
+ * group's label runs the full width. An agent's line two says where it is.
+ * Rows never wrap; their order is the tree's, never sorted.
  *
- * Keys: n opens what needs you, o selects the Orchestrator, z (or a second
- * press on the selected row) zooms on its branch or back out, u goes up one
- * level of the zoom.
+ * Labels are plain Buttons; the selected one is the primary plate, and a
+ * press on it again does nothing. Keys: n opens what needs you, o selects the
+ * Orchestrator, u goes up one level of the zoom; the detail's Fold (f) and
+ * Zoom (z) act on the selection.
  *
  * Pure: Kit, the view-models (./outlineModel) and Actions come from the caller.
  */
 import type { RenderElement } from 'claude-code'
 
 import * as F from '../format'
-import { copperBar, delta, emptyLine, square, stepMark } from './common'
+import { delta, emptyLine, rail, square, stepMark } from './common'
 import type { Crumb, HeaderVM, NeedsVM, OutlineVM, RowVM, SummaryVM } from './outlineModel'
 import { T } from './theme'
 import type { Actions, Kit } from './types'
 
 /** The goal's label column: "Goal" and two spaces. */
 const GOAL_LABEL = 6
-/** The reserved bar column every row starts with, the copper ▌ and a space. */
+/** The rail every row starts with: the copper border and a space when selected, two cells of padding otherwise. */
 const BAR = 2
 /** Cells per level of nesting, and the levels indented at most. */
 const INDENT = 2
-const INDENTS = 3
+const INDENTS = 4
 /** The fold toggle's column and the square's, each a glyph and a space. */
 const FOLD = 2
 const MARK = 2
-/** The right columns: done/total ("12/12", "done"), minutes ("1h 05m"), `+a −r`. */
+/** An agent's label column at depth 3: a level less deep is a level's cells wider, so indent and label end together. */
+const LABEL = 20
+/** The columns after an agent's label: done/total ("12/12", "done"), minutes ("1h 05m"), `+a −r`. */
 const COUNT = 6
 const MINUTES = 7
 const DELTA = 12
-/** What a native Button draws around its label on the terminal: `[ ` and ` ]`. */
-const CHROME = 4
-/** Below this many cells for the label, the done/total and minutes columns give way (on every row alike). */
-const LEAST_LABEL = 14
+/** Where an agent's label column ends, from the row's left edge, at every depth. */
+const LABEL_END = BAR + INDENT * 3 + FOLD + MARK + LABEL
+/** The goal line's minutes, at its right. */
+const GOAL_MINUTES = 8
+
+/** A fold toggle's label: the arrow and a figure space, so it is two cells wide to click. */
+export const FOLD_LABEL = { open: '▾ ', closed: '▸ ' } as const
+
+/** What a Button draws around its label: the terminal's `[ ` and ` ]` on the primary plate; a desktop's native button its padding. */
+function chromeOf(kit: Kit): number {
+  return kit.surface === 'terminal' ? 4 : 2
+}
+
+/** The characters of the goal the header shows at `columns`: about two lines of its column. The Orchestrator's detail shows the whole goal only past this. */
+export function goalChars(columns: number): number {
+  return Math.floor(Math.max(12, columns - BAR - GOAL_LABEL - GOAL_MINUTES) * 1.8)
+}
 
 // The header.
 
@@ -61,7 +80,7 @@ export function headerBlock(kit: Kit, vm: HeaderVM, actions: Actions): RenderEle
   )
 }
 
-/** Always one row. Loud (a blocked prompt, a failure, a shared file): the copper bar, the square, the subject bold, and Open. */
+/** Always one row. Loud (a blocked prompt, a failure, a shared file): the copper rail, the square, the subject bold, and Open. */
 function needsLine(kit: Kit, needs: NeedsVM, actions: Actions): RenderElement {
   const { Box, Text, Button } = kit
   const target = needs.open
@@ -74,7 +93,7 @@ function needsLine(kit: Kit, needs: NeedsVM, actions: Actions): RenderElement {
 
   if (!needs.isLoud) {
     return (
-      <Box flexDirection="row" justifyContent="space-between" columnGap={2} paddingLeft={BAR}>
+      <Box flexDirection="row" justifyContent="space-between" columnGap={2} {...rail(false, BAR)}>
         <Text dimColor wrap="truncate-end">
           {`${needs.subject}${needs.rest}`}
         </Text>
@@ -83,7 +102,7 @@ function needsLine(kit: Kit, needs: NeedsVM, actions: Actions): RenderElement {
     )
   }
   return (
-    <Box flexDirection="row" justifyContent="space-between" columnGap={2} borderStyle="quote" borderColor={T.copper} paddingLeft={BAR - 1}>
+    <Box flexDirection="row" justifyContent="space-between" columnGap={2} {...rail(true, BAR)}>
       <Text wrap="truncate-end">
         {needs.status ? square(kit, needs.status) : null}
         <Text bold>{needs.status ? ` ${needs.subject}` : needs.subject}</Text>
@@ -94,49 +113,64 @@ function needsLine(kit: Kit, needs: NeedsVM, actions: Actions): RenderElement {
   )
 }
 
-/** The goal in its label column, at most two lines, and the summary line under it. */
+/** The goal in bold in its label column, at most two lines, its minutes at the right; the summary line under it. */
 function goalBlock(kit: Kit, vm: HeaderVM): RenderElement {
   const { Box, Text } = kit
-  const room = Math.max(12, kit.columns - BAR - GOAL_LABEL)
   return (
-    <Box flexDirection="row" paddingLeft={BAR}>
-      <Box width={GOAL_LABEL} flexShrink={0}>
-        <Text dimColor>Goal</Text>
-      </Box>
-      <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-        {vm.goal ? <Text wrap="wrap">{F.trunc(vm.goal, Math.floor(room * 1.8))}</Text> : emptyLine(kit, 'No goal yet: your next prompt sets it.')}
-        {summaryLine(kit, vm.summary)}
-      </Box>
+    <Box flexDirection="column" paddingLeft={BAR}>
+      {vm.goal ? (
+        <Box flexDirection="row">
+          <Box width={GOAL_LABEL} flexShrink={0}>
+            <Text dimColor>Goal</Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1}>
+            <Text bold wrap="wrap">
+              {F.trunc(vm.goal, goalChars(kit.columns))}
+            </Text>
+          </Box>
+          {vm.minutes ? (
+            <Box flexShrink={0} paddingLeft={2}>
+              <Text dimColor>{vm.minutes}</Text>
+            </Box>
+          ) : null}
+        </Box>
+      ) : null}
+      <Box paddingLeft={GOAL_LABEL}>{summaryLine(kit, vm.summary)}</Box>
     </Box>
   )
 }
 
-/** One dim line; only `+a −r` keeps its colours. */
+/** One line: the step in hand plain, the counts dim, `+a −r` in its colours. */
 function summaryLine(kit: Kit, summary: SummaryVM): RenderElement {
   const { Text } = kit
   const counts = delta(kit, summary.added, summary.removed)
   return (
     <Text wrap="truncate-end">
+      {summary.step ? <Text>{summary.step}</Text> : null}
+      {summary.step && summary.lead ? <Text dimColor> · </Text> : null}
       <Text dimColor>{summary.lead}</Text>
       {counts ? <Text> </Text> : null}
       {counts}
-      {summary.tail ? <Text dimColor>{summary.tail}</Text> : null}
     </Text>
   )
 }
 
 // The outline.
 
-/** Which right columns the rows carry: every row the same, as the pane's width allows. */
-type Columns = { count: boolean; minutes: boolean }
+/** Which columns follow an agent's label (every agent row the same, as the pane's width allows), and the cells its label column gives up in a pane too narrow for it. */
+type Columns = { count: boolean; minutes: boolean; squeeze: number }
 
 function columnsFor(kit: Kit): Columns {
-  const fixed = BAR + INDENT * INDENTS + FOLD + MARK + CHROME + DELTA
-  const room = kit.columns - fixed
-  return { count: room - COUNT - MINUTES >= LEAST_LABEL, minutes: room - MINUTES >= LEAST_LABEL }
+  const room = kit.columns - LABEL_END - DELTA
+  return { count: room >= MINUTES + COUNT, minutes: room >= MINUTES, squeeze: Math.max(0, -room) }
 }
 
-/** The outline: the crumbs while zoomed, then the rows; a quiet line when nothing is delegated or rows are left out. */
+/** An agent's label column at `depth`: LABEL + (3 − depth) × 2 cells, so the columns after it start at the same cell on every row. */
+function labelColumn(depth: number, columns: Columns): number {
+  return Math.max(8, LABEL + (3 - depth) * INDENT - columns.squeeze)
+}
+
+/** The outline: the crumbs while zoomed, then the rows; a quiet line when rows are left out. */
 export function outlineBlock(kit: Kit, vm: OutlineVM, actions: Actions): RenderElement {
   const { Box } = kit
   const columns = columnsFor(kit)
@@ -144,7 +178,6 @@ export function outlineBlock(kit: Kit, vm: OutlineVM, actions: Actions): RenderE
     <Box flexDirection="column">
       {vm.crumbs ? crumbRow(kit, vm.crumbs, actions) : null}
       {vm.rows.map(row => rowBlock(kit, row, columns, actions))}
-      {vm.empty ? <Box paddingLeft={BAR + INDENT + FOLD + MARK}>{emptyLine(kit, vm.empty)}</Box> : null}
       {vm.hidden > 0 ? <Box paddingLeft={BAR}>{emptyLine(kit, `${F.plural(vm.hidden, 'more row')} not shown: zoom in on a branch, or fold one.`)}</Box> : null}
     </Box>
   )
@@ -205,99 +238,105 @@ function noteProps(row: RowVM): { color?: string; dimColor?: boolean } {
 }
 
 /**
- * A row's label: a Button that selects it. The selected one is the primary
- * plate, and pressing it again (or z) zooms the outline on its branch, or
- * back out when it is the branch zoomed; the Orchestrator's answers o.
+ * A row's label: a plain Button that selects it, cut to `room` characters.
+ * The selected one is the primary plate, and a press on it again does
+ * nothing (Zoom and Fold are the detail's, z and f); the Orchestrator's answers o.
  */
 function labelButton(kit: Kit, row: RowVM, room: number, actions: Actions): RenderElement {
   const { Button } = kit
-  const hotkey = row.kind === 'orchestrator' ? 'o' : row.isSelected ? 'z' : ''
   return (
     <Button
       key={labelKey(row)}
-      label={F.trunc(row.label, room)}
-      {...(row.isSelected ? { variant: 'primary' as const } : {})}
-      {...(hotkey ? { hotkey } : {})}
-      onPress={() => (row.isSelected ? actions.zoomTo(row.id) : actions.select(row.id))}
+      label={F.trunc(row.label, Math.max(4, room))}
+      {...(row.isSelected ? { variant: 'primary' as const } : { plain: true as const })}
+      {...(row.kind === 'orchestrator' ? { hotkey: 'o' } : {})}
+      onPress={() => {
+        if (!row.isSelected) actions.select(row.id)
+      }}
     />
   )
 }
 
-/** One row: its first line in the reserved columns, and an agent's line two under its label. */
+/** One row: the rail, its first line in the reserved columns, and an agent's line two under its label. */
 function rowBlock(kit: Kit, row: RowVM, columns: Columns, actions: Actions): RenderElement {
   const { Box, Text, Button } = kit
-  const indent = Math.min(row.depth, INDENTS) * INDENT
-  const isGroup = row.kind === 'background' || row.kind === 'done'
-  const isInline = row.kind === 'orchestrator'
-  const fold = row.fold ? (
-    <Button key={`fold:${row.id}`} label={row.fold === 'open' ? '▾' : '▸'} plain dimColor onPress={() => actions.toggleFold(row.id)} />
-  ) : null
+  const depth = Math.min(row.depth, INDENTS)
+  const indent = depth * INDENT
+  const lead = indent + FOLD + MARK
+  const fold = row.fold ? <Button key={`fold:${row.id}`} label={FOLD_LABEL[row.fold]} plain dimColor onPress={() => actions.toggleFold(row.id)} /> : null
   const mark = row.status === null ? null : row.kind === 'step' ? stepMark(kit, row.status) : square(kit, row.status)
-  const right = DELTA + (columns.count ? COUNT : 0) + (columns.minutes ? MINUTES : 0)
-  const room = Math.max(6, kit.columns - BAR - indent - FOLD - MARK - CHROME - right)
-  const label = isGroup ? (
-    <Text dimColor wrap="truncate-end">
-      {row.label}
-    </Text>
-  ) : (
-    labelButton(kit, row, room, actions)
-  )
   // the Orchestrator says its state beside its label; an agent says it on line two
   const note = row.note ? (
     <Text wrap="truncate-end" {...noteProps(row)}>
       {row.note}
     </Text>
   ) : null
-
-  const first = (
-    <Box flexDirection="row">
-      <Box width={BAR} flexShrink={0}>
-        {copperBar(kit, row.isSelected)}
-      </Box>
-      <Box width={indent + FOLD} paddingLeft={indent} flexShrink={0}>
-        {fold}
-      </Box>
-      <Box width={MARK} flexShrink={0}>
-        {mark}
-      </Box>
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} columnGap={2}>
-        {isInline ? <Box flexShrink={0}>{label}</Box> : label}
-        {isInline ? note : null}
-      </Box>
-      {columns.count ? (
-        <Box width={COUNT} flexShrink={0} justifyContent="flex-end">
-          {row.count ? <Text dimColor>{row.count}</Text> : null}
-        </Box>
-      ) : null}
-      {columns.minutes ? (
-        <Box width={MINUTES} flexShrink={0} justifyContent="flex-end">
-          {row.minutes ? <Text dimColor>{row.minutes}</Text> : null}
-        </Box>
-      ) : null}
-      <Box width={DELTA} flexShrink={0} justifyContent="flex-end">
-        {delta(kit, row.added, row.removed)}
-      </Box>
+  const foldColumn = (
+    <Box width={indent + FOLD} paddingLeft={indent} flexShrink={0}>
+      {fold}
+    </Box>
+  )
+  const markColumn = (
+    <Box width={MARK} flexShrink={0}>
+      {mark}
     </Box>
   )
 
-  if (isInline || !note) {
-    return (
-      <Box key={`row:${row.id}`} flexDirection="column">
-        {first}
+  let first: RenderElement
+  if (row.kind === 'agent') {
+    // a fixed label column, then its numbers right after it: they line up on every row, and stay near the label on a wide pane
+    const width = labelColumn(depth, columns)
+    first = (
+      <Box flexDirection="row">
+        {foldColumn}
+        {markColumn}
+        <Box width={width} flexShrink={0}>
+          {labelButton(kit, row, width - chromeOf(kit), actions)}
+        </Box>
+        {columns.count ? (
+          <Box width={COUNT} flexShrink={0} justifyContent="flex-end">
+            {row.count ? <Text dimColor>{row.count}</Text> : null}
+          </Box>
+        ) : null}
+        {columns.minutes ? (
+          <Box width={MINUTES} flexShrink={0} justifyContent="flex-end">
+            {row.minutes ? <Text dimColor>{row.minutes}</Text> : null}
+          </Box>
+        ) : null}
+        <Box width={DELTA} flexShrink={0} justifyContent="flex-end">
+          {delta(kit, row.added, row.removed)}
+        </Box>
+      </Box>
+    )
+  } else {
+    // a step's, the Orchestrator's and a group's label: the full width, no columns after it
+    const room = Math.max(6, kit.columns - BAR - lead - chromeOf(kit))
+    const isGroup = row.kind === 'background' || row.kind === 'done'
+    const label = isGroup ? (
+      <Text dimColor wrap="truncate-end">
+        {row.label}
+      </Text>
+    ) : (
+      labelButton(kit, row, room, actions)
+    )
+    const isInline = row.kind === 'orchestrator'
+    first = (
+      <Box flexDirection="row">
+        {foldColumn}
+        {markColumn}
+        <Box flexDirection="row" flexGrow={1} flexShrink={1} columnGap={2}>
+          {isInline ? <Box flexShrink={0}>{label}</Box> : label}
+          {isInline ? note : null}
+        </Box>
       </Box>
     )
   }
+
+  const second = row.kind !== 'orchestrator' && note ? <Box paddingLeft={lead}>{note}</Box> : null
   return (
-    <Box key={`row:${row.id}`} flexDirection="column">
+    <Box key={`row:${row.id}`} flexDirection="column" {...rail(row.isSelected, BAR)}>
       {first}
-      <Box flexDirection="row">
-        <Box width={BAR} flexShrink={0}>
-          {copperBar(kit, row.isSelected)}
-        </Box>
-        <Box flexGrow={1} flexShrink={1} paddingLeft={indent + FOLD + MARK}>
-          {note}
-        </Box>
-      </Box>
+      {second}
     </Box>
   )
 }

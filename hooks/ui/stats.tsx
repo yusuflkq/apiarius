@@ -16,7 +16,7 @@ import type { RenderElement } from 'claude-code'
 import { CHART, barsSvg, svgOpen } from '../charts'
 import * as F from '../format'
 import { series, totalsOf } from '../model'
-import { N, NATIVE_TEXT, RADIUS, SIZE, T } from './theme'
+import { NATIVE_TEXT, RADIUS, SIZE, T } from './theme'
 import type { Actions, DayRow, DeckModel, Kit } from './types'
 
 type Piece = { text: string; tone?: 'add' | 'del' }
@@ -138,7 +138,7 @@ function nativeCards(kit: Kit, cards: readonly Card[]): RenderElement {
             </Text>
           ) : (
             <Text bold wrap="truncate-end">
-              {card.value.map(piece => (piece.tone ? <Text color={piece.tone === 'add' ? N.add : N.del}>{piece.text}</Text> : piece.text))}
+              {card.value.map(piece => (piece.tone ? <Text color={piece.tone === 'add' ? T.ok : T.err}>{piece.text}</Text> : piece.text))}
             </Text>
           )}
           <Text wrap="truncate-end">{card.sub}</Text>
@@ -364,11 +364,11 @@ function weekChart(kit: Kit, days: readonly DayRow[]): RenderElement {
     <Box flexDirection="column">
       {heading(kit, 'Lines changed by agents', 'last 7 days, a cell a day')}
       <Text wrap="truncate-end">
-        <Text color={N.add}>{F.sparkline(added)}</Text>
+        <Text color={T.ok}>{F.sparkline(added)}</Text>
         <Text dimColor>{`  +${F.num(sum(added))} added`}</Text>
       </Text>
       <Text wrap="truncate-end">
-        <Text color={N.del}>{F.sparkline(removed)}</Text>
+        <Text color={T.err}>{F.sparkline(removed)}</Text>
         <Text dimColor>{`  −${F.num(sum(removed))} removed`}</Text>
       </Text>
     </Box>

@@ -264,18 +264,22 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   data.agents.push(M.newAgent('agent-old', 'agent', 'scout', NOW, { status: 'running', parentId: M.MAIN }))
   const spawned = M.addMessage(data, { from: M.MAIN, to: 'agent-old', kind: 'spawn', text: 'look around', at: NOW })
 
+  // a fresh view selects nothing: no detail until a row is picked
+  expect(M.defaultView().agent).toBe('')
   expect(M.healView(undefined)).toEqual(M.defaultView())
   expect(M.healView('agents')).toEqual(M.defaultView())
   expect(
     M.healView({ tab: 'flow', agent: 'agent-old', agentPane: 'chat', file: 7, showFiles: 'no', isBandHidden: true, map: 'sideways', message: 'gone' }, data),
   ).toEqual({ ...M.defaultView(), agent: 'agent-old', agentPane: 'chat', isBandHidden: true })
+  // an agent it no longer holds is let go: nothing selected; a saved selection it holds stays, the Orchestrator's too
   expect(M.healView({ tab: 'stats', map: 'wire', agent: 'agent-gone', message: spawned.id }, data)).toEqual({
     ...M.defaultView(),
     tab: 'stats',
     map: 'wire',
-    agent: M.MAIN,
+    agent: '',
     message: spawned.id,
   })
+  expect(M.healView({ agent: M.MAIN }, data).agent).toBe(M.MAIN)
 
   // what an older build kept: no map, no message, no task book
   const { tasks: _tasks, ...olderData } = data

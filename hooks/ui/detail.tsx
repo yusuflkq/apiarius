@@ -1,26 +1,32 @@
 /**
  * The Agents tab's detail block, the one part that changes on a click: the
- * outline's selection (`view.agent`) in full.
+ * outline's selection (`view.agent`) in full. Nothing is selected at rest
+ * (`view.agent` is ''), and then there is no detail block at all.
  *
- * - An agent: label and scope, Zoom, minutes and `+a −r`; its task (two
- *   lines, "more" for the rest); its checklist, the live call beside the
- *   item in hand; its result once it ended; then Diffs · Talk · Tool calls.
- * - The Orchestrator ('' or `main`): the whole goal and the follow-ups, the
- *   plan with each step's agents, then its own Diffs, Talk (the whole
- *   message log) and Tool calls.
+ * - An agent: label and scope, Fold, Zoom, minutes and `+a −r`; its task (two
+ *   lines, "more" for the rest); what it waits on, and where to answer; its
+ *   checklist, the live call beside the item in hand; its result once it
+ *   ended; then Diffs · Talk · Tool calls.
+ * - The Orchestrator (`main`): the goal only when the header had to cut it,
+ *   the follow-ups, what it waits on; then its own Diffs, Talk (the whole
+ *   message log, open first) and Tool calls.
  * - A plan step (its key: `todo:<item>`, `task:<id>`, `plan:<n>`…): its
- *   status, its agents (a link made from words alone said to be a guess),
- *   the files they changed.
+ *   status, and the files its agents changed in the Files section's columns
+ *   (the agents themselves are the outline's rows under it).
  * - A file (`file:<path>`): its hunks by the agent that made them, and Open in Changes.
+ *
+ * The header carries the copper rail, and Fold (f) and Zoom (z) for the
+ * selected branch: the outline's own labels do nothing when pressed again.
  *
  * `detailVM` reads the deck into plain rows; `detailBlock` draws them. No
  * text moves with the clock alone: times are times of day and an agent's
  * minutes are the coarse ones the screen signature covers. The "more" a
- * person opens is the detail's own state, kept here while the module lives.
+ * person opens and the pane the Orchestrator shows are the detail's own
+ * state, kept here while the module lives.
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckAgent, DeckAgentPane, DeckData, DeckEdit, DeckMessage, DeckMessageKind, DeckShownStatus, DeckStepStatus, DeckView } from '../../types'
+import type { DeckAgent, DeckAgentPane, DeckData, DeckEdit, DeckMessage, DeckShownStatus, DeckStepStatus, DeckView } from '../../types'
 import { hunksOf, type Hunk } from '../diff'
 import * as F from '../format'
 import type { FileDiff, GitState } from '../git'
@@ -41,13 +47,14 @@ import {
   samePath,
   scopeOf,
   statusOf,
-  stepOf,
   waitingOnOf,
   type DeckPlanSource,
   type DeckStepLink,
 } from '../model'
-import { codeBlocks, copperBar, delta, emptyLine, square, stepMark, toggles, treeSize, type ToggleItem } from './common'
-import { fileFactsOf, isEditOf, joinLabels } from './files'
+import { codeBlocks, delta, deltaText, emptyLine, rail, square, stepMark, toggles, treeSize, type ToggleItem } from './common'
+import { editorsText, fileColsOf, fileFactsOf, fileLine, fileStatusOf, isEditOf, type FileRowVM } from './files'
+import { goalChars } from './outline'
+import { foldStateOf, goalLineOf, shownStatusOf, waitsOnYou } from './outlineModel'
 import { NATIVE_TEXT, T } from './theme'
 import type { Actions, ChatLine, Kit } from './types'
 
@@ -61,26 +68,21 @@ export const DETAIL_LEAN: DetailRoom = { diffChars: 6_000, files: 4, editsPerFil
 /** The characters of text the detail's tree may hold, its share of the host's 100,000 beside the outline and Files. */
 export const DETAIL_CHARS = 50_000
 
-/** The label column of Task, Todo, Result, Goal and Plan, in cells. */
+/** The label column of Task, Todo, Result, Goal, Status, in cells. */
 const LABEL_WIDTH = 8
-/** The reserved bar column and the mark's, each a glyph and a space, as the outline's rows keep them; the body sits under the mark. */
+/** The rail and the mark's column, each two cells, as the outline's rows keep them; the body sits under the mark. */
 const BAR = 2
 const MARK = 2
-/** Cells a desktop's native button takes beyond its label's characters. */
-const BUTTON_SLACK = 4
 /** The most characters a message, task or result opened in full holds. */
 const FULL_CHARS = 2400
 /** Below this many characters left in the budget, a diff is noted as cut rather than drawn a few lines deep. */
 const LEAST_DIFF = 400
+/** Where the person answers what the engine waits on them for. */
+const ANSWER_WHERE = 'Answer the prompt in the conversation.'
 
 // The view model.
 
-/** A message's direction tag, as the messages log drew it: you ask, a task goes down, a result comes back, the rest are messages. */
-export type Tag = 'ask' | 'task' | 'result' | 'msg'
-
-const TAG_OF: Readonly<Record<DeckMessageKind, Tag>> = { prompt: 'ask', spawn: 'task', result: 'result', message: 'msg', chat: 'msg' }
-
-/** The header row: the copper bar, a mark, the title bold and a dim note; Zoom, minutes and `+a −r` at the right. */
+/** The header row: the copper rail, a mark, the title bold and a dim note; Fold, Zoom, minutes and `+a −r` at the right. */
 export type HeaderVM = {
   /** The mark before the title: an agent's status square, or a step's ✓ ■ □ (`isStep`); null for none. */
   status: DeckShownStatus | null
@@ -88,7 +90,12 @@ export type HeaderVM = {
   title: string
   /** The title is a path: its directory dim, its name bold. */
   isPath: boolean
+  /** Its scope or state, dim; '' for none (never a bare type). */
   sub: string
+  /** The selected branch's fold as its outline toggle has it (f folds or opens it); null where there is nothing to fold. */
+  fold: 'open' | 'closed' | null
+  /** The outline id Fold and Zoom act on. */
+  id: string
   /** The outline id Zoom re-roots on; '' draws no Zoom. */
   zoom: string
   /** The outline is zoomed on it already: the button zooms back out to everything. */
@@ -107,7 +114,7 @@ export type CheckVM = { text: string; status: DeckShownStatus; isCurrent: boolea
 /** The checklist: its rows, done of total, and the done items folded before them and the open ones after, past the room. */
 export type ChecklistVM = { rows: CheckVM[]; done: number; total: number; earlierDone: number; laterTodo: number }
 
-export type TalkRowVM = { id: string; at: string; route: string; tag: Tag; text: string; isOpen: boolean }
+export type TalkRowVM = { id: string; at: string; route: string; text: string; isOpen: boolean }
 
 export type TalkVM = {
   /** Oldest first. */
@@ -132,8 +139,22 @@ export type DiffGroupVM = { path: string; added: number; removed: number; isNew:
 /** Diffs: the files in the order they were first edited. */
 export type DiffsVM = { groups: DiffGroupVM[]; empty: string }
 
-/** The switch and the one pane it shows: only the open pane's rows are read. */
-export type PaneVM = { open: DeckAgentPane; talk: number; calls: number; diffs: DiffsVM | null; chat: TalkVM | null; activity: CallsVM | null }
+/**
+ * The switch and the one pane it shows: only the open pane's rows are read.
+ * An agent shows the view's pane (`view.agentPane`, Diffs first); the
+ * Orchestrator keeps its own, Talk first (`isMain`). `viewPane` is the
+ * view's, which a press that only redraws sends back unchanged.
+ */
+export type PaneVM = {
+  open: DeckAgentPane
+  isMain: boolean
+  viewPane: DeckAgentPane
+  talk: number
+  calls: number
+  diffs: DiffsVM | null
+  chat: TalkVM | null
+  activity: CallsVM | null
+}
 
 export type AgentDetailVM = {
   kind: 'agent'
@@ -145,47 +166,26 @@ export type AgentDetailVM = {
   /** "Waits on you: …" while the engine waits on the person for it; '' otherwise. */
   needs: string
   checklist: ChecklistVM | null
-  /** What it is doing, when it keeps no checklist; '' once it stopped. */
+  /** What it is doing (or holds on) when it keeps no checklist, or what it waits on that is not you; '' once it stopped. */
   now: string
   result: (ExpandVM & { isFailed: boolean }) | null
   pane: PaneVM
   room: DetailRoom
 }
 
-export type PlanRowVM = { key: string; text: string; status: DeckShownStatus; agents: string }
-
-export type PlanVM = { source: string; rows: PlanRowVM[] }
-
 export type OrchestratorDetailVM = {
   kind: 'orchestrator'
   header: HeaderVM
   needs: string
+  /** The whole goal, for the Markdown; '' before any. */
   goal: string
+  /** The goal's words on one line, and the line the header shows: the detail repeats the goal only when the header cut it. */
+  goalWords: string
+  goalLine: string
   followUps: { at: string; text: string }[]
-  plan: PlanVM | null
   pane: PaneVM
   room: DetailRoom
 }
-
-/**
- * An agent of a step's: its row's columns; whether it is a sub-agent of one
- * of the step's own (drawn a level in), and whether its tie to the step is a
- * guess from the words of its task.
- */
-export type StepAgentVM = {
-  id: string
-  label: string
-  status: DeckShownStatus
-  progress: string
-  minutes: string
-  added: number
-  removed: number
-  now: string
-  isNested: boolean
-  isGuess: boolean
-}
-
-export type StepFileVM = { path: string; added: number; removed: number; by: string }
 
 export type StepDetailVM = {
   kind: 'step'
@@ -194,8 +194,8 @@ export type StepDetailVM = {
   /** The step's state in a word or two, and where the plan came from. */
   status: string
   source: string
-  agents: StepAgentVM[]
-  files: StepFileVM[]
+  /** The files its agents (and theirs) changed, as the Files section's rows. */
+  files: FileRowVM[]
   room: DetailRoom
 }
 
@@ -218,11 +218,17 @@ export type FileDetailVM = {
 
 export type EmptyDetailVM = { kind: 'empty'; text: string; room: DetailRoom }
 
-export type DetailVM = AgentDetailVM | OrchestratorDetailVM | StepDetailVM | FileDetailVM | EmptyDetailVM
+/** Nothing selected: no detail block. */
+export type NoDetailVM = { kind: 'none'; room: DetailRoom }
 
-// What the person opened with "more" or a press on a message: the detail's own, kept while the module lives.
+export type DetailVM = AgentDetailVM | OrchestratorDetailVM | StepDetailVM | FileDetailVM | EmptyDetailVM | NoDetailVM
+
+// What the person opened with "more" or a press on a message, and the Orchestrator's pane: the detail's own, kept while the module lives.
 
 const opened = new Set<string>()
+
+/** The pane the Orchestrator's detail shows: Talk (its whole log) until the person picks another for it. */
+let mainPane: DeckAgentPane = 'chat'
 
 /** Opens or closes the text `key` names ("task:<id>", "result:<id>", "msg:<id>"). */
 export function toggleOpen(key: string): void {
@@ -236,18 +242,19 @@ export function isOpen(key: string): boolean {
 }
 
 /**
- * Draws again after a "more": the detail's own state changed, not the
- * deck's, so it asks for the pane already open, which only redraws.
+ * Draws again after a "more" or a pick of the Orchestrator's pane: the
+ * detail's own state changed, not the deck's, so it asks for the view's pane
+ * as it is, which only redraws.
  */
-function redrawFor(actions: Actions, pane: DeckAgentPane): void {
-  actions.setAgentPane(pane)
+function redrawFor(actions: Actions, viewPane: DeckAgentPane): void {
+  actions.setAgentPane(viewPane)
 }
 
 // 1. The data worker's queries (model.ts), read here and nowhere else in the detail.
 
 type CheckItem = { text: string; state: DeckStepStatus }
 type PlanStep = { key: string; text: string; status: DeckShownStatus; agents: string[] }
-type Plan = { source: string; isImplicit: boolean; steps: PlanStep[]; links: Record<string, DeckStepLink> }
+type Plan = { source: string; steps: PlanStep[]; links: Record<string, DeckStepLink> }
 type Goal = { text: string; followUps: { text: string; at: number }[] }
 
 /** The agent's checklist: its items in order, the one in hand in its own words ("Running the tests"); null while it keeps none. */
@@ -270,11 +277,7 @@ function stepStatusOf(data: DeckData, status: DeckStepStatus, agents: readonly s
   if (status === 'done') return 'done'
   if (status === 'failed') return 'failed'
   if (status === 'pending') return 'idle'
-  const waits = agents.some(id => {
-    const agent = agentOf(data, id)
-    return agent !== undefined && statusOf(agent, data) === 'waiting'
-  })
-  return waits ? 'waiting' : 'running'
+  return agents.some(id => waitsOnYou(data, id)) ? 'waiting' : 'running'
 }
 
 /** Where a plan came from, in words. */
@@ -287,19 +290,23 @@ const SOURCE_WORDS: Readonly<Record<DeckPlanSource, string>> = {
   none: 'nothing yet',
 }
 
-/** The plan: the steps in order, each with its status and the agents that serve it, and how each agent was tied to its step; null while there is none. */
+/**
+ * The plan: the steps in order, each with its status and the agents that
+ * serve it, and how each agent was tied to its step; null while there is
+ * none, and for an implicit plan (each Agent call a step), which only
+ * repeats the agents.
+ */
 function planFor(data: DeckData): Plan | null {
   const plan = planOf(data)
-  if (plan.steps.length === 0) return null
+  if (plan.steps.length === 0 || plan.source === 'implicit' || plan.source === 'none') return null
   return {
     source: SOURCE_WORDS[plan.source],
-    isImplicit: plan.source === 'implicit',
     steps: plan.steps.map(step => ({ key: step.key, text: step.text, status: stepStatusOf(data, step.status, step.agents), agents: [...step.agents] })),
     links: plan.links,
   }
 }
 
-/** The plan's steps as the detail reads them (the key `select` takes for each, its words and its agents); none without a plan. */
+/** The plan's steps as the detail reads them (the key `select` takes for each, its words and its agents); none without a real plan. */
 export function planStepsOf(data: DeckData): { key: string; text: string; agents: string[] }[] {
   return (planFor(data)?.steps ?? []).map(step => ({ key: step.key, text: step.text, agents: step.agents }))
 }
@@ -337,37 +344,24 @@ function minutesOf(agent: DeckAgent, now: number): string {
   return isLive(agent.status) || agent.endedAt !== undefined ? elapsedOf(agent, now) : ''
 }
 
-/** "Waits on you: allow Bash "npm test"" while the engine waits on the person for agent `id`; '' otherwise. */
+/** "Waits on you: allow Bash "npm test"" while the engine waits on the person for `id`; '' otherwise (an idle prompt is not a question). */
 function waitsOf(data: DeckData, id: string): string {
   const needs = agentOf(data, MAIN)?.needs
-  if (needs && needs.kind !== 'idle_prompt' && (needs.agent ?? MAIN) === id) return `Waits on you: ${waitingOnOf(data, needs)}`
-  const agent = agentOf(data, id)
-  if (agent && agent.kind !== 'main' && statusOf(agent, data) === 'waiting') return `Waiting: ${nowOf(agent)}`
-  return ''
+  return needs && needs.kind !== 'idle_prompt' && waitsOnYou(data, id) ? `Waits on you: ${waitingOnOf(data, needs)}` : ''
 }
 
-/** What an agent's row says of it in one line: waiting on you, its failure, its result, else what it is on. */
-function nowLineOf(data: DeckData, agent: DeckAgent): string {
-  const waits = waitsOf(data, agent.id)
-  if (waits) return waits
-  const said = agent.answer ? F.firstLine(agent.answer) : ''
-  switch (statusOf(agent, data)) {
-    case 'failed':
-      return agent.status === 'killed' ? 'Stopped' : `Failed${said ? `: ${said}` : ''}`
-    case 'done':
-      return said ? `Done: ${said}` : 'Done'
-    case 'idle':
-      return 'Idle'
-    default:
-      return F.oneLine(stepOf(agent)) || liveCallOf(data, agent) || nowOf(agent) || 'Working'
-  }
+/** What an agent the engine holds, but not on you, waits on: the child of its own at work, else its background work; '' when it is not held. */
+function heldOf(data: DeckData, agent: DeckAgent): string {
+  if (statusOf(agent, data) !== 'waiting' || waitsOnYou(data, agent.id)) return ''
+  const child = data.agents.find(one => one.id !== agent.id && (one.kind === 'agent' || one.kind === 'teammate') && isLive(one.status) && parentIdOf(data, one) === agent.id)
+  return child ? `Waiting on ${labelOf(child)}` : 'Waiting on background work'
 }
 
 /** The agent's checklist as rows: the item in hand in its status colour with the live call beside it. */
 function checklistVM(data: DeckData, agent: DeckAgent): ChecklistVM | null {
   const list = checklistFor(data, agent)
   if (!list) return null
-  const status = statusOf(agent, data)
+  const status = shownStatusOf(agent, data)
   const live = liveCallOf(data, agent)
   const rows = list.items.map(
     (item): CheckVM => ({
@@ -412,13 +406,12 @@ function groupsOf(edits: readonly DeckEdit[]): DiffGroupVM[] {
 
 function diffsVM(data: DeckData, agent: DeckAgent): DiffsVM {
   const groups = groupsOf(data.edits.filter(edit => edit.agent === agent.id))
-  const name = labelOf(agent)
   const empty =
     agent.kind === 'peer'
       ? 'A peer edits outside this session; what it sends is under Talk.'
       : agent.kind === 'main'
-        ? 'The Orchestrator has edited nothing itself yet. Its own Edit and Write calls show here as exact diffs.'
-        : `No edits by ${name} yet. Its Edit and Write calls show here as exact diffs.`
+        ? 'No edits by the Orchestrator itself.'
+        : `No edits by ${labelOf(agent)} yet.`
   return { groups, empty }
 }
 
@@ -437,7 +430,7 @@ function talkVM(data: DeckData, agent: DeckAgent, room: DetailRoom): TalkVM {
   return {
     rows: shown.map(message => talkRowOf(data, message)),
     earlier: all.length - shown.length,
-    empty: isAll ? 'No messages yet. Prompts, hand-offs and replies show here in order.' : `No messages with ${name} yet. Its task, its result and what it sends show here.`,
+    empty: isAll ? 'No messages yet.' : `No messages with ${name} yet.`,
     send: canSend ? { id: agent.id, label: `To ${name}`, placeholder: isAll ? 'Your next prompt for the Orchestrator…' : `Message ${name}…` } : null,
     how,
   }
@@ -448,7 +441,6 @@ function talkRowOf(data: DeckData, message: DeckMessage): TalkRowVM {
     id: message.id,
     at: clockOf(message.at),
     route: `${nameOf(data, message.from)} → ${nameOf(data, message.to)}`,
-    tag: TAG_OF[message.kind],
     text: message.text,
     isOpen: opened.has(`msg:${message.id}`),
   }
@@ -470,15 +462,19 @@ function callsVM(agent: DeckAgent): CallsVM {
       took: call.ms === undefined ? 'running' : F.dur(call.ms),
     })),
     counted,
-    empty: `No tool calls by ${labelOf(agent)} yet. Each call shows here as it runs.`,
+    empty: `No tool calls by ${labelOf(agent)} yet.`,
   }
 }
 
 function paneVM(data: DeckData, view: DeckView, agent: DeckAgent, room: DetailRoom): PaneVM {
-  const open = PANES.includes(view.agentPane) ? view.agentPane : 'edits'
-  const talk = agent.kind === 'main' ? data.messages.length : data.messages.filter(message => message.from === agent.id || message.to === agent.id).length
+  const viewPane = PANES.includes(view.agentPane) ? view.agentPane : 'edits'
+  const isMain = agent.kind === 'main'
+  const open = isMain ? mainPane : viewPane
+  const talk = isMain ? data.messages.length : data.messages.filter(message => message.from === agent.id || message.to === agent.id).length
   return {
     open,
+    isMain,
+    viewPane,
     talk,
     calls: agent.tools,
     diffs: open === 'edits' ? diffsVM(data, agent) : null,
@@ -488,12 +484,13 @@ function paneVM(data: DeckData, view: DeckView, agent: DeckAgent, room: DetailRo
 }
 
 function agentDetailVM(data: DeckData, view: DeckView, agent: DeckAgent, now: number, room: DetailRoom): AgentDetailVM {
-  const status = statusOf(agent, data)
+  const status = shownStatusOf(agent, data)
   const scope = F.oneLine(scopeOf(agent))
   const task = F.clean(agent.prompt || agent.description).trim()
   const checklist = checklistVM(data, agent)
   const isEnded = status === 'done' || status === 'failed'
   const answer = F.clean(agent.answer ?? '').trim()
+  const held = heldOf(data, agent)
   const result =
     isEnded && (answer || status === 'failed')
       ? {
@@ -511,7 +508,9 @@ function agentDetailVM(data: DeckData, view: DeckView, agent: DeckAgent, now: nu
       isStep: false,
       title: labelOf(agent),
       isPath: false,
-      sub: scope || (agent.kind === 'peer' ? 'a session outside this one' : agent.type),
+      sub: scope || (agent.kind === 'peer' ? 'a session outside this one' : ''),
+      fold: agent.kind === 'peer' ? null : foldStateOf(data, view, agent.id),
+      id: agent.id,
       zoom: agent.kind === 'peer' ? '' : agent.id,
       isZoomed: view.zoom === agent.id,
       minutes: minutesOf(agent, now),
@@ -522,7 +521,7 @@ function agentDetailVM(data: DeckData, view: DeckView, agent: DeckAgent, now: nu
     noTask: agent.kind === 'peer' ? '' : 'No task was given in words.',
     needs: waitsOf(data, agent.id),
     checklist: checklist ? foldChecklist(checklist, room.items) : null,
-    now: checklist === null && (status === 'running' || status === 'waiting') ? liveCallOf(data, agent) || nowOf(agent) : '',
+    now: held || (checklist === null && status === 'running' ? liveCallOf(data, agent) || nowOf(agent) : ''),
     result,
     pane: paneVM(data, view, agent, room),
     room,
@@ -540,20 +539,8 @@ function orchestratorSub(data: DeckData, main: DeckAgent): string {
     agent => (agent.kind === 'agent' || agent.kind === 'teammate') && agent.origin !== 'workflow' && agent.origin !== 'engine' && isLive(agent.status) && parentIdOf(data, agent) === MAIN,
   ).length
   if (live > 0 && !main.current) return `waiting on ${F.plural(live, 'agent')}`
-  const status = statusOf(main, data)
+  const status = shownStatusOf(main, data)
   return status === 'running' ? 'working' : status === 'failed' ? 'stopped' : 'idle'
-}
-
-function planVM(data: DeckData): PlanVM | null {
-  const plan = planFor(data)
-  if (!plan) return null
-  const rows = plan.steps.map(step => {
-    const text = F.oneLine(step.text)
-    const agents = joinLabels(step.agents.map(id => nameOf(data, id)))
-    // a step that is one Agent call says its agent already
-    return { key: step.key, text, status: step.status, agents: plan.isImplicit || agents === text ? '' : agents }
-  })
-  return { source: plan.source, rows }
 }
 
 function orchestratorDetailVM(data: DeckData, view: DeckView, room: DetailRoom): OrchestratorDetailVM | EmptyDetailVM {
@@ -563,11 +550,13 @@ function orchestratorDetailVM(data: DeckData, view: DeckView, room: DetailRoom):
   return {
     kind: 'orchestrator',
     header: {
-      status: statusOf(main, data),
+      status: shownStatusOf(main, data),
       isStep: false,
       title: ORCHESTRATOR,
       isPath: false,
       sub: orchestratorSub(data, main),
+      fold: foldStateOf(data, view, MAIN),
+      id: MAIN,
       zoom: '',
       isZoomed: false,
       minutes: '',
@@ -576,8 +565,9 @@ function orchestratorDetailVM(data: DeckData, view: DeckView, room: DetailRoom):
     },
     needs: waitsOf(data, MAIN),
     goal: goal ? F.clean(goal.text).trim() : '',
+    goalWords: goal ? F.oneLine(goal.text) : '',
+    goalLine: goalLineOf(data),
     followUps: (goal?.followUps ?? []).map(one => ({ at: clockOf(one.at), text: F.firstLine(one.text) })),
-    plan: planVM(data),
     pane: paneVM(data, view, main, room),
     room,
   }
@@ -591,26 +581,32 @@ function stepAt(plan: Plan | null, id: string): number {
   return plan.steps.findIndex(step => step.key === id || `step:${step.key}` === id)
 }
 
-function stepDetailVM(data: DeckData, view: DeckView, plan: Plan, at: number, now: number, room: DetailRoom): StepDetailVM | EmptyDetailVM {
+function stepDetailVM(data: DeckData, view: DeckView, plan: Plan, at: number, room: DetailRoom): StepDetailVM | EmptyDetailVM {
   const step = plan.steps[at]
   if (!step) return { kind: 'empty', text: 'That step is no longer in the plan. Pick another row of the outline.', room }
   const key = step.key
 
-  // the agents the step's own serve through, each right after the one of the step's it works under
+  // the step's own agents and the agents they handed work to: their edits are the step's
   const direct = step.agents.flatMap(id => {
     const agent = agentOf(data, id)
     return agent ? [agent] : []
   })
-  const nested = data.agents.filter(agent => !step.agents.includes(agent.id) && plan.links[agent.id]?.key === key)
-  const agents = direct.flatMap(top => [top, ...nested.filter(agent => ancestorIn(data, agent, step.agents) === top.id)])
-  for (const agent of nested) if (!agents.includes(agent)) agents.push(agent)
-  const ids = new Set(agents.map(agent => agent.id))
-  const files = groupsOf(data.edits.filter(edit => ids.has(edit.agent))).map(group => ({
-    path: group.path,
-    added: group.added,
-    removed: group.removed,
-    by: joinLabels(agents.filter(agent => data.edits.some(edit => edit.agent === agent.id && samePath(edit.path, group.path))).map(agent => labelOf(agent))),
-  }))
+  const nested = data.agents.filter(agent => !step.agents.includes(agent.id) && (plan.links[agent.id]?.key === key || ancestorIn(data, agent, step.agents) !== ''))
+  const ids = new Set([...direct, ...nested].map(agent => agent.id))
+  const facts = fileFactsOf(data)
+  const files = groupsOf(data.edits.filter(edit => ids.has(edit.agent))).map((group): FileRowVM => {
+    const fact = facts.find(one => samePath(one.path, group.path))
+    const by = [...new Set(data.edits.filter(edit => ids.has(edit.agent) && samePath(edit.path, group.path)).map(edit => edit.agent))]
+    return {
+      path: group.path,
+      status: fileStatusOf(data, (fact?.live ?? []).filter(id => ids.has(id))),
+      editors: editorsText(data, by),
+      note: '',
+      added: group.added,
+      removed: group.removed,
+      isSelected: false,
+    }
+  })
   return {
     kind: 'step',
     key,
@@ -620,29 +616,16 @@ function stepDetailVM(data: DeckData, view: DeckView, plan: Plan, at: number, no
       title: F.oneLine(step.text),
       isPath: false,
       sub: `step ${at + 1} of ${plan.steps.length}`,
-      zoom: step.key,
-      isZoomed: view.zoom === step.key,
+      fold: foldStateOf(data, view, key),
+      id: key,
+      zoom: key,
+      isZoomed: view.zoom === key,
       minutes: '',
       added: files.reduce((sum, one) => sum + one.added, 0),
       removed: files.reduce((sum, one) => sum + one.removed, 0),
     },
     status: STEP_WORDS[step.status],
     source: plan.source,
-    agents: agents.map(agent => {
-      const list = checklistFor(data, agent)
-      return {
-        id: agent.id,
-        label: labelOf(agent),
-        status: statusOf(agent, data),
-        progress: list && list.total > 0 ? `${list.done}/${list.total}` : '',
-        minutes: minutesOf(agent, now),
-        added: agent.added,
-        removed: agent.removed,
-        now: nowLineOf(data, agent),
-        isNested: !step.agents.includes(agent.id),
-        isGuess: plan.links[agent.id]?.how === 'words',
-      }
-    }),
     files,
     room,
   }
@@ -672,7 +655,7 @@ function fileDetailVM(data: DeckData, view: DeckView, git: GitState, fileDiff: F
     let group = byAgent.find(one => one.id === edit.agent)
     if (!group) {
       const agent = agentOf(data, edit.agent)
-      group = { id: edit.agent, label: nameOf(data, edit.agent), status: agent ? statusOf(agent, data) : 'idle', added: 0, removed: 0, edits: [] }
+      group = { id: edit.agent, label: nameOf(data, edit.agent), status: agent ? shownStatusOf(agent, data) : 'idle', added: 0, removed: 0, edits: [] }
       byAgent.push(group)
     }
     group.edits.push({ id: edit.id, path: edit.path, patch: edit.patch, order })
@@ -681,30 +664,28 @@ function fileDetailVM(data: DeckData, view: DeckView, git: GitState, fileDiff: F
   })
 
   const live = facts?.live ?? []
-  const statuses = live.map(id => agentOf(data, id)).flatMap(agent => (agent ? [statusOf(agent, data)] : []))
   const added = edits.length > 0 ? byAgent.reduce((sum, one) => sum + one.added, 0) : (inGit?.added ?? 0)
   const removed = edits.length > 0 ? byAgent.reduce((sum, one) => sum + one.removed, 0) : (inGit?.removed ?? 0)
-  const gitNote = git.isRepo
-    ? inGit
-      ? `Uncommitted in git${inGit.added > 0 || inGit.removed > 0 ? `: +${F.num(inGit.added)} −${F.num(inGit.removed)} against HEAD` : ''}.`
-      : 'Nothing uncommitted in git: committed, or put back.'
-    : ''
+  const counts = inGit ? deltaText(inGit.added, inGit.removed) : ''
+  const gitNote = git.isRepo ? (inGit ? `Uncommitted in git${counts ? `: ${counts} against HEAD` : ''}.` : 'Nothing uncommitted in git: committed, or put back.') : ''
   return {
     kind: 'file',
     path,
     header: {
-      status: statuses.includes('waiting') ? 'waiting' : statuses.length > 0 ? 'running' : null,
+      status: fileStatusOf(data, live),
       isStep: false,
       title: path,
       isPath: true,
       sub: '',
+      fold: null,
+      id: `file:${path}`,
       zoom: '',
       isZoomed: false,
       minutes: '',
       added,
       removed,
     },
-    shared: facts?.isShared ? `Shared: ${joinLabels(live.map(id => nameOf(data, id)))} are both on it now.` : '',
+    shared: facts?.isShared ? `Shared: ${editorsText(data, live)} are both on it now.` : '',
     gitNote,
     isOpenInChanges: view.file === path,
     byAgent,
@@ -715,11 +696,11 @@ function fileDetailVM(data: DeckData, view: DeckView, git: GitState, fileDiff: F
 
 /**
  * The detail of the outline's selection. `view.agent` names it: `file:<path>`,
- * an agent's id, a plan step's key (or `step:<key>`), or '' and `main` for
- * the Orchestrator; what the deck no longer holds shows the Orchestrator (a
- * step gone from the plan says so). `chat` is read nowhere: Talk is the
- * deck's own message log, and its field sends through `sendChat`. `room`
- * caps the lists (DETAIL_LEAN for a lean drawing).
+ * an agent's id (`main` for the Orchestrator), or a plan step's key (or
+ * `step:<key>`); '' is nothing selected, and so is what the deck no longer
+ * holds (a step gone from the plan says so). `chat` is read nowhere: Talk is
+ * the deck's own message log, and its field sends through `sendChat`.
+ * `room` caps the lists (DETAIL_LEAN for a lean drawing).
  */
 export function detailVM(
   data: DeckData,
@@ -732,24 +713,21 @@ export function detailVM(
 ): DetailVM {
   void chat
   const id = view.agent
+  if (id === '') return { kind: 'none', room }
   if (id.startsWith('file:')) return fileDetailVM(data, view, git, fileDiff, id.slice(5), room)
-  const agent = id === '' ? undefined : agentOf(data, id)
-  if (agent && agent.kind !== 'main' && agent.kind !== 'you') return agentDetailVM(data, view, agent, now, room)
-  if (!agent && id !== '') {
-    const plan = planFor(data)
-    const at = stepAt(plan, id)
-    if (plan && at >= 0) return stepDetailVM(data, view, plan, at, now, room)
-    if (id.startsWith('step:')) return { kind: 'empty', text: 'That step is no longer in the plan. Pick another row of the outline.', room }
-  }
-  return orchestratorDetailVM(data, view, room)
+  const agent = agentOf(data, id)
+  if (agent && agent.kind === 'main') return orchestratorDetailVM(data, view, room)
+  if (agent && agent.kind !== 'you') return agentDetailVM(data, view, agent, now, room)
+  const plan = planFor(data)
+  const at = stepAt(plan, id)
+  if (plan && at >= 0) return stepDetailVM(data, view, plan, at, room)
+  if (id.startsWith('step:')) return { kind: 'empty', text: 'That step is no longer in the plan. Pick another row of the outline.', room }
+  return { kind: 'none', room }
 }
 
 // 3. The drawing.
 
 const PANES: readonly DeckAgentPane[] = ['edits', 'chat', 'activity']
-
-/** Native weight of a direction tag: ask and task bold, result plain, msg dim. */
-const TAG_TEXT: Record<Tag, { bold?: true; dimColor?: true }> = { ask: { bold: true }, task: { bold: true }, result: {}, msg: { dimColor: true } }
 
 /**
  * The detail block: the selection's header, what it is, and (for an agent
@@ -785,21 +763,21 @@ function drawDetail(kit: Kit, vm: DetailVM, actions: Actions): RenderElement {
       return stepDetail(kit, vm, actions)
     case 'file':
       return fileDetail(kit, vm, actions)
+    case 'none':
+      return <Box flexDirection="column" />
     default:
       return <Box paddingLeft={BAR}>{emptyLine(kit, vm.text)}</Box>
   }
 }
 
+/** The header row behind the copper rail: mark, title bold and its note dim; Fold (f), Zoom (z), minutes and `+a −r` at the right. */
 function header(kit: Kit, head: HeaderVM, actions: Actions): RenderElement {
   const { Box, Text, Button } = kit
   const mark = head.status === null ? null : head.isStep ? stepMark(kit, head.status) : square(kit, head.status)
   const name = head.isPath ? F.baseName(head.title) : head.title
   const dir = head.isPath ? head.title.slice(0, Math.max(0, head.title.length - name.length)) : ''
   return (
-    <Box flexDirection="row">
-      <Box width={BAR} flexShrink={0}>
-        {copperBar(kit, true)}
-      </Box>
+    <Box flexDirection="row" {...rail(true, BAR)}>
       <Box width={MARK} flexShrink={0}>
         {mark}
       </Box>
@@ -811,7 +789,10 @@ function header(kit: Kit, head: HeaderVM, actions: Actions): RenderElement {
         </Text>
       </Box>
       <Box flexDirection="row" columnGap={2} flexShrink={0} marginLeft={2}>
-        {head.zoom ? <Button key="detail:zoom" label={head.isZoomed ? 'Unzoom' : 'Zoom'} plain dimColor onPress={() => actions.zoomTo(head.isZoomed ? '' : head.zoom)} /> : null}
+        {head.fold ? <Button key="detail:fold" label={head.fold === 'open' ? 'Fold' : 'Unfold'} plain dimColor hotkey="f" onPress={() => actions.toggleFold(head.id)} /> : null}
+        {head.zoom ? (
+          <Button key="detail:zoom" label={head.isZoomed ? 'Unzoom' : 'Zoom'} plain dimColor hotkey="z" onPress={() => actions.zoomTo(head.isZoomed ? '' : head.zoom)} />
+        ) : null}
         {head.minutes ? <Text dimColor>{head.minutes}</Text> : null}
         {delta(kit, head.added, head.removed)}
       </Box>
@@ -839,13 +820,30 @@ function field(kit: Kit, label: string, value: RenderElement, side: RenderElemen
   )
 }
 
+/** "Now: Waits on you: …" in ochre, and under it where to answer. */
+function waitsField(kit: Kit, needs: string): RenderElement {
+  const { Box, Text } = kit
+  return field(
+    kit,
+    'Now',
+    <Box flexDirection="column">
+      <Text color={T.warn} wrap="truncate-end">
+        {F.trunc(needs, kit.columns * 2)}
+      </Text>
+      <Text dimColor wrap="truncate-end">
+        {ANSWER_WHERE}
+      </Text>
+    </Box>,
+  )
+}
+
 /** The characters two lines of a field's value hold here (a little under, for the "more" beside it). */
 function twoLines(kit: Kit): number {
   return Math.max(24, (kit.columns - LABEL_WIDTH - 8) * 2)
 }
 
 /** A text two lines long at most, with "more" beside it when there is more; open, the whole text as Markdown and "less". */
-function expandable(kit: Kit, label: string, text: ExpandVM, actions: Actions, pane: DeckAgentPane, tone: { color?: string } = {}): RenderElement {
+function expandable(kit: Kit, label: string, text: ExpandVM, actions: Actions, viewPane: DeckAgentPane, tone: { color?: string } = {}): RenderElement {
   const { Text, Markdown, Button } = kit
   const flat = F.oneLine(text.text)
   const room = twoLines(kit)
@@ -858,7 +856,7 @@ function expandable(kit: Kit, label: string, text: ExpandVM, actions: Actions, p
       dimColor
       onPress={() => {
         toggleOpen(text.key)
-        redrawFor(actions, pane)
+        redrawFor(actions, viewPane)
       }}
     />
   ) : null
@@ -902,7 +900,7 @@ function checklist(kit: Kit, list: ChecklistVM, most: number): RenderElement {
   )
 }
 
-/** Diffs · Talk N · Tool calls N, and the pane open under it. */
+/** Diffs · Talk N · Tool calls N, and the pane open under it; the Orchestrator's pick is its own, an agent's the view's. */
 function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: Actions): RenderElement {
   const { Box } = kit
   const pane = vm.pane
@@ -911,10 +909,15 @@ function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: 
     { id: 'chat', label: pane.talk > 0 ? `Talk ${F.num(pane.talk)}` : 'Talk', hotkey: 't' },
     { id: 'activity', label: pane.calls > 0 ? `Tool calls ${F.num(pane.calls)}` : 'Tool calls', hotkey: 'c' },
   ]
-  const body = pane.chat ? talk(kit, pane.chat, vm.room, actions, pane.open) : pane.activity ? calls(kit, pane.activity) : pane.diffs ? diffs(kit, pane.diffs, vm.room) : null
+  const pick = (one: DeckAgentPane) => {
+    if (!pane.isMain) return actions.setAgentPane(one)
+    mainPane = one
+    redrawFor(actions, pane.viewPane)
+  }
+  const body = pane.chat ? talk(kit, pane.chat, vm.room, actions, pane.viewPane) : pane.activity ? calls(kit, pane.activity) : pane.diffs ? diffs(kit, pane.diffs, vm.room) : null
   return (
     <Box flexDirection="column">
-      {toggles(kit, 'detail', items, pane.open, one => actions.setAgentPane(one))}
+      {toggles(kit, 'detail', items, pane.open, pick)}
       {body}
     </Box>
   )
@@ -923,11 +926,12 @@ function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: 
 /** The selection's block: its header row, then its sections under the mark's column, a blank row between them. */
 function framed(kit: Kit, head: RenderElement, first: readonly (RenderElement | null)[], ...rest: (RenderElement | null)[]): RenderElement {
   const { Box } = kit
+  const shown = first.filter(one => one !== null)
   return (
     <Box flexDirection="column">
       {head}
       <Box flexDirection="column" paddingLeft={BAR} gap={1}>
-        <Box flexDirection="column">{first}</Box>
+        {shown.length > 0 ? <Box flexDirection="column">{shown}</Box> : null}
         {rest}
       </Box>
     </Box>
@@ -936,28 +940,26 @@ function framed(kit: Kit, head: RenderElement, first: readonly (RenderElement | 
 
 function agentDetail(kit: Kit, vm: AgentDetailVM, actions: Actions): RenderElement {
   const { Text } = kit
-  const open = vm.pane.open
+  const viewPane = vm.pane.viewPane
   return framed(
     kit,
     header(kit, vm.header, actions),
     [
-      vm.task ? expandable(kit, 'Task', vm.task, actions, open) : null,
+      vm.task ? expandable(kit, 'Task', vm.task, actions, viewPane) : null,
       !vm.task && vm.noTask ? field(kit, 'Task', emptyLine(kit, vm.noTask)) : null,
-      vm.needs
-        ? field(
-            kit,
-            'Now',
-            <Text color={T.warn} wrap="truncate-end">
-              {F.trunc(vm.needs, kit.columns * 2)}
-            </Text>,
-          )
-        : null,
+      vm.needs ? waitsField(kit, vm.needs) : null,
       vm.checklist ? checklist(kit, vm.checklist, vm.room.items) : null,
       vm.now && !vm.needs ? field(kit, 'Now', <Text wrap="truncate-end">{F.trunc(vm.now, kit.columns)}</Text>) : null,
-      vm.result ? expandable(kit, vm.result.isFailed ? 'Failed' : 'Result', vm.result, actions, open, vm.result.isFailed ? { color: T.err } : {}) : null,
+      vm.result ? expandable(kit, vm.result.isFailed ? 'Failed' : 'Result', vm.result, actions, viewPane, vm.result.isFailed ? { color: T.err } : {}) : null,
     ],
     paneBlock(kit, vm, actions),
   )
+}
+
+/** Whether the header showed the goal whole: then the Orchestrator's detail leaves it out. */
+function isGoalCut(kit: Kit, vm: OrchestratorDetailVM): boolean {
+  if (vm.goal === '') return false
+  return vm.goalLine !== vm.goalWords || Array.from(vm.goalLine).length > goalChars(kit.columns)
 }
 
 function orchestratorDetail(kit: Kit, vm: OrchestratorDetailVM, actions: Actions): RenderElement {
@@ -966,7 +968,7 @@ function orchestratorDetail(kit: Kit, vm: OrchestratorDetailVM, actions: Actions
     kit,
     header(kit, vm.header, actions),
     [
-      field(kit, 'Goal', vm.goal ? <Markdown text={F.trunc(vm.goal, FULL_CHARS)} /> : emptyLine(kit, 'No goal yet. Your first prompt to the Orchestrator shows here.')),
+      isGoalCut(kit, vm) ? field(kit, 'Goal', <Markdown text={F.trunc(vm.goal, FULL_CHARS)} />) : null,
       vm.followUps.length > 0
         ? field(
             kit,
@@ -981,50 +983,15 @@ function orchestratorDetail(kit: Kit, vm: OrchestratorDetailVM, actions: Actions
             </Box>,
           )
         : null,
-      vm.needs
-        ? field(
-            kit,
-            'Now',
-            <Text color={T.warn} wrap="truncate-end">
-              {F.trunc(vm.needs, kit.columns * 2)}
-            </Text>,
-          )
-        : null,
-      vm.plan ? planBlock(kit, vm.plan, vm.room.steps) : field(kit, 'Plan', emptyLine(kit, 'No plan yet. Its steps show here once the Orchestrator lists them or hands out work.')),
+      vm.needs ? waitsField(kit, vm.needs) : null,
     ],
     paneBlock(kit, vm, actions),
   )
 }
 
-function planBlock(kit: Kit, plan: PlanVM, most: number): RenderElement {
-  const { Box, Text } = kit
-  const rows = plan.rows.slice(0, most)
-  const hidden = plan.rows.length - rows.length
-  return field(
-    kit,
-    'Plan',
-    <Box flexDirection="column">
-      <Text dimColor wrap="truncate-end">{`From ${plan.source}`}</Text>
-      {rows.map(step => (
-        <Box flexDirection="row" columnGap={1}>
-          <Box width={1} flexShrink={0}>
-            {stepMark(kit, step.status)}
-          </Box>
-          <Text wrap="truncate-end">
-            <Text {...(step.status === 'running' || step.status === 'waiting' ? NATIVE_TEXT.text1 : step.status === 'done' ? NATIVE_TEXT.text3 : NATIVE_TEXT.text2)}>{F.trunc(step.text, kit.columns)}</Text>
-            {step.agents ? <Text dimColor>{`  ${F.trunc(step.agents, kit.columns)}`}</Text> : null}
-          </Text>
-        </Box>
-      ))}
-      {hidden > 0 ? emptyLine(kit, `${F.plural(hidden, 'more step')} in the outline.`) : null}
-    </Box>,
-  )
-}
-
 function stepDetail(kit: Kit, vm: StepDetailVM, actions: Actions): RenderElement {
-  const { Box, Text, Button } = kit
-  const width = Math.min(18, Math.max(8, ...vm.agents.map(agent => Array.from(agent.label).length)))
-  const slack = kit.surface === 'terminal' ? 0 : BUTTON_SLACK
+  const { Box, Text } = kit
+  const cols = fileColsOf(kit)
   return framed(
     kit,
     header(kit, vm.header, actions),
@@ -1039,52 +1006,12 @@ function stepDetail(kit: Kit, vm: StepDetailVM, actions: Actions): RenderElement
       ),
     ],
     <Box flexDirection="column">
-      <Text bold>Agents</Text>
-      {vm.agents.length === 0 ? emptyLine(kit, 'No agent works on this step yet; the ones handed it show here.') : null}
-      {vm.agents.map(agent => (
-        <Box flexDirection="row" columnGap={1} paddingLeft={agent.isNested ? 2 : 0}>
-          <Box width={1} flexShrink={0}>
-            {square(kit, agent.status)}
-          </Box>
-          <Box width={width + slack} flexShrink={0}>
-            <Button key={`detail:agent:${agent.id}`} label={F.trunc(agent.label, width)} plain onPress={() => actions.select(agent.id)} />
-          </Box>
-          <Box flexGrow={1} flexShrink={1}>
-            <Text wrap="truncate-end">
-              {agent.isGuess ? <Text dimColor>a guess · </Text> : null}
-              <Text {...(agent.status === 'waiting' ? { color: T.warn } : agent.status === 'failed' ? { color: T.err } : { dimColor: true })}>{F.trunc(agent.now, kit.columns)}</Text>
-            </Text>
-          </Box>
-          <Box flexDirection="row" columnGap={2} flexShrink={0}>
-            {agent.progress ? <Text dimColor>{agent.progress}</Text> : null}
-            {agent.minutes ? <Text dimColor>{agent.minutes}</Text> : null}
-            {delta(kit, agent.added, agent.removed)}
-          </Box>
-        </Box>
-      ))}
-    </Box>,
-    <Box flexDirection="column">
-      <Text bold>Files</Text>
+      <Text wrap="truncate-end">
+        <Text bold>Files</Text>
+        {vm.files.length > 0 ? <Text dimColor>{`  ${F.num(vm.files.length)} changed`}</Text> : null}
+      </Text>
       {vm.files.length === 0 ? emptyLine(kit, 'No files changed for this step yet.') : null}
-      {vm.files.map(file => (
-        <Box flexDirection="row" columnGap={1}>
-          <Box flexShrink={1}>
-            <Button
-              key={`detail:file:${file.path}`}
-              label={F.truncStart(file.path, Math.max(12, Math.floor(kit.columns * 0.5)))}
-              plain
-              dimColor
-              onPress={() => actions.select(`file:${file.path}`)}
-            />
-          </Box>
-          <Box flexGrow={1} flexShrink={1}>
-            <Text dimColor wrap="truncate-end">
-              {file.by}
-            </Text>
-          </Box>
-          <Box flexShrink={0}>{delta(kit, file.added, file.removed)}</Box>
-        </Box>
-      ))}
+      {vm.files.map(file => fileLine(kit, cols, file, `detail:file:${file.path}`, () => actions.select(`file:${file.path}`)))}
     </Box>,
   )
 }
@@ -1214,15 +1141,17 @@ function diffHeader(kit: Kit, group: DiffGroupVM): RenderElement {
   )
 }
 
-/** Talk: one row per message (time, from → to, tag, first line), a press opening its whole text under it; then the field that sends. */
-function talk(kit: Kit, vm: TalkVM, room: DetailRoom, actions: Actions, pane: DeckAgentPane): RenderElement {
+/**
+ * Talk: two lines a message, so a narrow pane reads them whole: who to whom
+ * (a press opens the message) and its time, then its first line under it,
+ * or the whole of it once opened; then the field that sends.
+ */
+function talk(kit: Kit, vm: TalkVM, room: DetailRoom, actions: Actions, viewPane: DeckAgentPane): RenderElement {
   const { Box, Text, Button, Markdown, Input } = kit
   const rows = vm.rows.slice(-Math.max(1, room.talk))
   const earlier = vm.earlier + vm.rows.length - rows.length
-  const widest = Math.max(0, ...rows.map(row => Array.from(row.route).length))
-  const routeWidth = Math.max(10, Math.min(widest, Math.floor(kit.columns * 0.4)))
-  const slack = kit.surface === 'terminal' ? 0 : BUTTON_SLACK
-  const textRoom = Math.max(12, kit.columns - routeWidth - slack - 16)
+  const routeRoom = Math.max(12, kit.columns - BAR - 10)
+  const textRoom = Math.max(12, kit.columns - BAR - 2)
   const send = vm.send
 
   return (
@@ -1230,41 +1159,36 @@ function talk(kit: Kit, vm: TalkVM, room: DetailRoom, actions: Actions, pane: De
       <Box flexDirection="column">
         {rows.length === 0 ? emptyLine(kit, vm.empty) : null}
         {earlier > 0 ? <Text dimColor>{`${F.num(earlier)} earlier`}</Text> : null}
-        {rows.flatMap(row => [
-          <Box flexDirection="row" columnGap={1}>
-            <Box width={1} flexShrink={0}>
-              {copperBar(kit, row.isOpen)}
+        {rows.map(row => (
+          <Box flexDirection="column">
+            <Box flexDirection="row" columnGap={2}>
+              <Box flexShrink={1}>
+                <Button
+                  key={`msg:${row.id}`}
+                  label={F.trunc(row.route, routeRoom)}
+                  plain
+                  dimColor={!row.isOpen}
+                  onPress={() => {
+                    toggleOpen(`msg:${row.id}`)
+                    redrawFor(actions, viewPane)
+                  }}
+                />
+              </Box>
+              <Box flexShrink={0}>
+                <Text dimColor>{row.at}</Text>
+              </Box>
             </Box>
-            <Box width={5} flexShrink={0}>
-              <Text dimColor>{row.at}</Text>
+            <Box paddingLeft={2}>
+              {row.isOpen ? (
+                <Markdown text={F.trunc(F.clean(row.text), FULL_CHARS)} />
+              ) : (
+                <Text dimColor wrap="truncate-end">
+                  {F.trunc(F.firstLine(row.text), textRoom) || '—'}
+                </Text>
+              )}
             </Box>
-            <Box width={routeWidth + slack} flexShrink={0}>
-              <Button
-                key={`msg:${row.id}`}
-                label={F.trunc(row.route, routeWidth)}
-                plain
-                dimColor={!row.isOpen}
-                onPress={() => {
-                  toggleOpen(`msg:${row.id}`)
-                  redrawFor(actions, pane)
-                }}
-              />
-            </Box>
-            <Box width={6} flexShrink={0}>
-              <Text {...TAG_TEXT[row.tag]}>{row.tag}</Text>
-            </Box>
-            <Box flexGrow={1} flexShrink={1}>
-              <Text dimColor={!row.isOpen} wrap="truncate-end">
-                {F.trunc(F.firstLine(row.text), textRoom) || '—'}
-              </Text>
-            </Box>
-          </Box>,
-          row.isOpen ? (
-            <Box paddingLeft={7}>
-              <Markdown text={F.trunc(F.clean(row.text), FULL_CHARS)} />
-            </Box>
-          ) : null,
-        ])}
+          </Box>
+        ))}
       </Box>
       {send && Input ? (
         <Box flexDirection="column">

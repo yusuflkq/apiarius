@@ -170,7 +170,8 @@ test('the files list shows each file with the agents that touched it, and pressi
     await shown(ui, { type: 'Text', text: /in 2 files vs aaaaaaa/ })
     expect((await ui.find({ key: 'file:src/app.ts' }))?.props.label).toBe('src/app.ts')
     await shown(ui, { key: 'file:notes.txt' })
-    await shown(ui, { type: 'Text', text: 'by fixer, scout' })
+    // the editors as every list says them: spawn order, joined with +
+    await shown(ui, { type: 'Text', text: 'by fixer + scout' })
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
 
     await ui.press({ plugin: 'test', key: 'file:src/app.ts' })

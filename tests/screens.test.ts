@@ -4,6 +4,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { emptyGit, type FileRow } from '../hooks/git'
 import * as M from '../hooks/model'
 import { treeSize } from '../hooks/ui/common'
+import { UNTOUCHED } from '../hooks/ui/outlineModel'
 import { T } from '../hooks/ui/theme'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
 
@@ -188,10 +189,10 @@ async function rowsOf(ui: Drawing): Promise<string[]> {
 async function indentOf(ui: Drawing, id: string): Promise<number> {
   const row = (await ui.findAll({ type: 'Box' })).find(box => box.key === `row:${id}`)
   const line = (row?.children[0] ?? {}) as { children?: { props?: Record<string, unknown> }[] }
-  return Number(line.children?.[1]?.props?.paddingLeft ?? -1)
+  return Number(line.children?.[0]?.props?.paddingLeft ?? -1)
 }
 
-test('the default tab is Agents: the tab row, then the needs-you line, the goal and summary, and the outline, on each surface', async ($, on) => {
+test('the default tab is Agents: the tab row, then, before the first prompt, one quiet line for the whole tab, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -204,19 +205,14 @@ test('the default tab is Agents: the tab row, then the needs-you line, the goal 
     expect((await ui.find({ key: 'tab:agents' }))?.props).toMatchObject({ dimColor: false, hotkey: '1' })
     expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: true, hotkey: '2' })
     expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: true, hotkey: '3' })
-    // nothing needs you: the line is quiet, with no bar
-    expect(await ui.find({ type: 'Text', text: M.needsOf(M.emptyData(NOW), GIT).text })).toBeDefined()
+    // one dim italic line where the needs-you line, the goal, the outline, Files and the detail will be
+    const line = await ui.find({ type: 'Text', text: UNTOUCHED })
+    expect(line?.props).toMatchObject({ dimColor: true, italic: true })
+    expect((await ui.findAll({ type: 'Text' })).filter(text => text.props.italic === true)).toHaveLength(1)
+    for (const text of [M.needsOf(M.emptyData(NOW), GIT).text, 'Goal', /files?$/, 'No agents yet']) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
     expect(await copperBars(ui)).toEqual([])
-    expect(await ui.find({ key: 'needs:open' })).toBeUndefined()
-    // no goal yet; the summary counts the two files git found
-    expect(await ui.find({ type: 'Text', text: 'Goal' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^2 files$/ })).toBeDefined()
-    // the Orchestrator alone in the outline, selected, its detail open on Diffs
-    expect(await rowsOf(ui)).toEqual(['main'])
-    expect(await ui.find({ type: 'Text', text: 'No agents yet; delegated work shows here as it starts.' })).toBeDefined()
-    expect((await ui.find({ key: 'agent:main' }))?.props).toMatchObject({ variant: 'primary', hotkey: 'o' })
-    expect((await ui.find({ key: 'detail:edits' }))?.props.dimColor).toBe(false)
-    expect(await ui.find({ type: 'Code' })).toBeUndefined()
+    expect(await rowsOf(ui)).toEqual([])
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats'])
     await ui.unmount()
   }
 })
@@ -259,9 +255,9 @@ for (const needs of NEEDS) {
       const ui = await $.ui.mount(pane(surface))
       const bars = await copperBars(ui)
       if (needs.isLoud) {
-        // one row behind the copper bar: the agent bold, the rest plain, and Open (n) selects it
-        expect(bars.length).toBe(1)
-        expect(bars[0]?.text).toContain(said.text)
+        // one row behind the copper rail: the agent bold, the rest plain, and Open (n) selects it
+        const lines = bars.filter(bar => bar.text.includes(said.text))
+        expect(lines.length).toBe(1)
         expect(await ui.find({ type: 'Text', text: ' fixer' })).toBeDefined()
         expect((await ui.find({ key: 'needs:open' }))?.props.hotkey).toBe('n')
         await ui.press({ key: 'needs:open' })
@@ -309,9 +305,15 @@ test('pressing an agent in the outline opens its detail, and Diffs shows its exa
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    // each label a native Button, never plain; the selected one the primary plate
-    for (const key of ['agent:main', 'agent:agent-fixer', 'agent:agent-helper']) expect((await ui.find({ key }))?.props.plain).toBeUndefined()
+    // each label a plain Button; the selected one, and only it, the primary plate
+    for (const key of ['agent:main', 'agent:agent-fixer', 'agent:agent-helper']) {
+      const props = (await ui.find({ key }))?.props
+      if (props?.variant === 'primary') expect(props.plain).toBeUndefined()
+      else expect(props?.plain).toBe(true)
+    }
     await ui.press({ key: 'agent:agent-fixer' })
+    expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.plain).toBeUndefined()
+    expect((await ui.find({ key: 'agent:agent-helper' }))?.props.plain).toBe(true)
     expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
     expect((await ui.find({ key: 'agent:main' }))?.props.variant).toBeUndefined()
 
@@ -351,12 +353,17 @@ test('Talk: the Orchestrator`s is the whole log, who handed what to whom in orde
   const talk = async (ui: Drawing) => (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:'))
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await ui.press({ key: 'detail:chat' })
+    // the Orchestrator opens on Talk
+    await ui.press({ key: 'agent:main' })
+    expect((await ui.find({ key: 'detail:chat' }))?.props.dimColor).toBe(false)
     const all = await talk(ui)
     expect(all.map(row => row.props.label)).toEqual(['You → Orchestrator', 'Orchestrator → fixer', 'fixer → helper', 'helper → fixer'])
     expect(all.map(row => row.key)).toEqual([prompt, toFixer, toHelper, result].map(message => `msg:${message?.id}`))
 
+    // an agent opens on Diffs; its Talk is its own
     await ui.press({ key: 'agent:agent-fixer' })
+    expect(await talk(ui)).toEqual([])
+    await ui.press({ key: 'detail:chat' })
     expect((await talk(ui)).map(row => row.props.label)).toEqual(['Orchestrator → fixer', 'fixer → helper', 'helper → fixer'])
     await ui.press({ key: `msg:${result?.id}` })
     expect(await ui.find({ type: 'Markdown', text: /It is src\/auth\.ts/ })).toBeDefined()
@@ -431,6 +438,31 @@ test('the band above the prompt shows only while a subagent runs, one line and a
     const done = await $.ui.mount(band(surface))
     expect(await done.find({ key: 'band:open' })).toBeUndefined()
     await done.unmount()
+  }
+})
+
+test('the band puts the agent that waits on you first, saying for what; the others follow in spawn order', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const data = busyData()
+  const helper = M.agentOf(data, 'agent-helper')!
+  M.beginTool(data, helper, M.activityOf('t2', 'Bash', { command: 'npm run lint', description: 'Lint the auth module' }, '/repo', NOW - 10_000))
+  M.noteNeeds(data, { kind: 'permission_prompt', text: 'Claude needs your permission to use Bash', at: NOW - 5_000, agent: helper.id })
+  world(on, { restored: snapshot(data) })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+  await clock.advance(1000)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(band(surface))
+    const labels = (await ui.findAll({ type: 'Text' })).filter(text => text.props.bold === true).map(text => text.text)
+    expect(labels).toEqual([' helper', ' fixer'])
+    const waits = (await ui.findAll({ type: 'Text', text: ' waits on you: allow Bash "npm run lint"' })).filter(text => text.children.every(child => typeof child === 'string'))
+    expect(waits.map(text => text.props.color)).toEqual([T.warn])
+    const squares = (await ui.findAll({ type: 'Text', text: '■' })).filter(text => text.children.every(child => typeof child === 'string'))
+    expect(squares.map(square => square.props.color)).toEqual([T.warn, T.ok])
+    // the line reads in that order
+    const line = (await ui.findAll({ type: 'Text' })).find(text => text.text.includes(' waits on you'))
+    expect(line?.text.indexOf(' helper')).toBeLessThan(line?.text.indexOf(' fixer') ?? -1)
+    await ui.unmount()
   }
 })
 
@@ -522,7 +554,10 @@ test('outside a repository the summary counts the agents` own edits, and the Orc
     const ui = await $.ui.mount(pane(surface))
     expect(await ui.find({ type: 'Text', text: /^1 file$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^(Nothing needs you|All done · 1 file to review)$/ })).toBeDefined()
-    expect(await copperBars(ui)).toEqual([])
+    expect((await copperBars(ui)).filter(bar => /Nothing needs you|All done/.test(bar.text))).toEqual([])
+    // its own edit, under its detail's Diffs
+    await ui.press({ key: 'agent:main' })
+    await ui.press({ key: 'detail:edits' })
     expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
     await ui.unmount()
   }

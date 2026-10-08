@@ -350,9 +350,27 @@ async function buttonKeys(ui: Drawing, prefix: string): Promise<string[]> {
   return (await ui.findAll({ type: 'Button' })).map(one => one.key ?? '').filter(key => key.startsWith(prefix))
 }
 
+/** The Boxes that carry the copper rail: the host's `quote` border in copper. */
+async function rails(ui: Drawing): Promise<FoundElement[]> {
+  return (await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'quote' && box.props.borderColor === T.copper)
+}
+
+type Child = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+
+/** The widths of the columns of the file row whose path Button is keyed `key` ('flex' for the one that grows). */
+async function columnsOfFile(ui: Drawing, key: string): Promise<(number | string)[]> {
+  const holds = (node: unknown): boolean => {
+    const one = node as Child
+    return (one.props?.key === key && one.type === 'Button') || (one.children ?? []).some(holds)
+  }
+  const boxes = (await ui.findAll({ type: 'Box' })).filter(box => box.props.flexDirection === 'row' && box.children.some(child => (child as Child).props?.width !== undefined && holds(child)))
+  const line = boxes[boxes.length - 1]
+  return ((line?.children ?? []) as Child[]).map(child => (typeof child.props?.width === 'number' ? child.props.width : child.props?.flexGrow ? 'flex' : '?'))
+}
+
 // Files.
 
-test('Files: one row per file, who is on it, "editing" and "shared", and "N more in Changes"', async ($, on) => {
+test('Files: while agents work, the files in work (editing, shared) and "N more in Changes"; once none works, the files edited last', async ($, on) => {
   mock.clock(on, { now: NOW })
   const data = deckData()
   const a = agentIn(data, 'agent-a', 'Phase A')
@@ -377,30 +395,28 @@ test('Files: one row per file, who is on it, "editing" and "shared", and "N more
     model.view.agent = ''
     const ui = await $.ui.mount(mountOn(surface))
 
-    // eight files: six rows, the live and shared ones among them, in the order they were first edited
+    // eight files, two agents at work: the file each has in hand and the one both share, in the order they were first edited
     const rows = (await buttonKeys(ui, 'files:')).filter(key => key !== 'files:more')
-    expect(rows.length).toBe(ROWS)
-    expect(rows).toEqual(['files:docs/three.md', 'files:docs/four.md', 'files:hooks/ui/agents.tsx', 'files:hooks/model.ts', `files:${LONG}`, 'files:docs/five.md'])
+    expect(rows).toEqual(['files:hooks/ui/agents.tsx', 'files:hooks/model.ts', `files:${LONG}`])
     await shown(ui, { type: 'Text', text: exactly('Files') })
     await shown(ui, { type: 'Text', text: exactly('  8 changed ·') })
-    expect((await shown(ui, { key: 'files:more' })).props.label).toBe('2 more in Changes')
+    expect((await shown(ui, { key: 'files:more' })).props.label).toBe('5 more in Changes')
 
-    // who: two live agents on agents.tsx share it; each running agent's last file is "editing"
-    await shown(ui, { type: 'Text', text: exactly('Phase B + A · shared') })
+    // who, in spawn order: two live agents on agents.tsx share it; each running agent's last file is "editing"
+    await shown(ui, { type: 'Text', text: exactly('Phase A + B · shared') })
     await shown(ui, { type: 'Text', text: exactly('Phase A · editing') })
     await shown(ui, { type: 'Text', text: exactly('Phase B · editing') })
     const shared = await leaves(ui, exactly(' · shared'))
     expect(shared.length).toBe(1)
     expect(shared[0]?.props.color).toBe(T.warn)
     expect((await leaves(ui, exactly(' · editing'))).length).toBe(2)
-    expect((await leaves(ui, exactly('scout'))).length).toBe(2)
+    expect(await ui.find({ type: 'Text', text: /scout/ })).toBeUndefined()
 
-    // a square where a live agent is on the file; the rest of the paths dim
+    // a square where a live agent is on the file
     const squares = await leaves(ui, exactly('■'))
     expect(squares.length).toBe(3)
     expect(squares.every(one => one.props.color === T.ok)).toBe(true)
     expect((await shown(ui, { key: 'files:hooks/model.ts' })).props.dimColor).toBe(false)
-    expect((await shown(ui, { key: 'files:docs/three.md' })).props.dimColor).toBe(true)
 
     // a long path is cut from its start: the file name stays
     const long = String((await shown(ui, { key: `files:${LONG}` })).props.label)
@@ -408,26 +424,28 @@ test('Files: one row per file, who is on it, "editing" and "shared", and "N more
     expect(long.endsWith('/component.tsx')).toBe(true)
     expect(Array.from(long).length).toBeLessThan(LONG.length)
 
-    // +a −r at the right, in sage and oxide
+    // +a −r right after the path's fixed column, in sage and oxide, then the editors
     const plus = await leaves(ui, exactly('+2'))
     expect(plus.length).toBe(2)
     expect(plus.every(one => one.props.color === T.ok)).toBe(true)
     expect((await shown(ui, { type: 'Text', text: exactly('−1') })).props.color).toBe(T.err)
+    expect(await columnsOfFile(ui, 'files:hooks/model.ts')).toEqual([2, 28, 12, 'flex'])
 
-    // a press selects the file; its row then carries the copper bar
-    expect(await ui.find({ type: 'Text', text: exactly('▌') })).toBeUndefined()
+    // a press selects the file; its row then carries the copper rail
+    expect(await rails(ui)).toEqual([])
     await ui.press({ plugin: 'test', key: 'files:hooks/model.ts' })
     expect(calls).toContain('select:file:hooks/model.ts')
     await ui.redraw()
-    const bars = await leaves(ui, exactly('▌'))
-    expect(bars.length).toBe(1)
-    expect(bars[0]?.props.color).toBe(T.copper)
+    const railed = await rails(ui)
+    expect(railed.length).toBe(1)
+    expect(railed[0]?.text).toContain('model.ts')
+    expect(await ui.find({ type: 'Text', text: exactly('▌') })).toBeUndefined()
 
-    // a selected file outside the six still shows
+    // a selected file outside the ones in work still shows
     model.view.agent = 'file:docs/one.md'
     await ui.redraw()
     expect(await buttonKeys(ui, 'files:docs/one.md')).toEqual(['files:docs/one.md'])
-    expect((await shown(ui, { key: 'files:more' })).props.label).toBe('2 more in Changes')
+    expect((await shown(ui, { key: 'files:more' })).props.label).toBe('4 more in Changes')
 
     // "N more in Changes" opens the Changes tab
     await ui.press({ plugin: 'test', key: 'files:more' })
@@ -435,12 +453,26 @@ test('Files: one row per file, who is on it, "editing" and "shared", and "N more
     await ui.unmount()
   }
 
-  // nothing edited yet: one plain sentence
+  // nobody at work: the six files edited last, for review, their paths dim
+  for (const agent of [a, b]) Object.assign(agent, { status: 'completed', endedAt: NOW - 30_000 })
+  for (const surface of SURFACES) {
+    model.view.agent = ''
+    const ui = await $.ui.mount(mountOn(surface))
+    const rows = (await buttonKeys(ui, 'files:')).filter(key => key !== 'files:more')
+    expect(rows.length).toBe(ROWS)
+    expect(rows).toEqual(['files:docs/three.md', 'files:docs/four.md', 'files:hooks/ui/agents.tsx', 'files:hooks/model.ts', `files:${LONG}`, 'files:docs/five.md'])
+    expect((await shown(ui, { key: 'files:docs/three.md' })).props.dimColor).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /editing|shared/ })).toBeUndefined()
+    expect((await shown(ui, { key: 'files:more' })).props.label).toBe('2 more in Changes')
+    await ui.unmount()
+  }
+
+  // nothing edited yet: no section at all
   model.data = deckData()
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(mountOn(surface))
-    await shown(ui, { type: 'Text', text: 'No files changed yet' })
     expect(await buttonKeys(ui, 'files:')).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /Files|changed/ })).toBeUndefined()
     await ui.unmount()
   }
 })
@@ -493,11 +525,16 @@ test("an agent's detail: header, task with more, checklist with the live call, D
     model.view.agentPane = 'edits'
     const ui = await $.ui.mount(mountOn(surface))
 
-    // the header: the copper bar, the square, the label and its scope; Zoom, minutes, +a −r
-    expect((await shown(ui, { type: 'Text', text: exactly('▌') })).props.color).toBe(T.copper)
+    // the header behind the copper rail (the host's border, no glyph): the square, the label and its scope; Zoom (z), minutes, +a −r
+    const railed = await rails(ui)
+    expect(railed.length).toBe(1)
+    expect(railed[0]?.text).toContain('Phase A')
+    expect(await ui.find({ type: 'Text', text: exactly('▌') })).toBeUndefined()
     expect((await shown(ui, { type: 'Text', text: exactly('Phase A') })).props.bold).toBe(true)
     await shown(ui, { type: 'Text', text: exactly('  data, banner, redraw policy') })
-    expect((await shown(ui, { key: 'detail:zoom' })).props.label).toBe('Zoom')
+    expect((await shown(ui, { key: 'detail:zoom' })).props).toMatchObject({ label: 'Zoom', hotkey: 'z' })
+    // nothing under it in the outline: nothing to fold
+    expect(await ui.find({ key: 'detail:fold' })).toBeUndefined()
     await shown(ui, { type: 'Text', text: exactly('10m') })
     expect((await shown(ui, { type: 'Text', text: exactly('+2') })).props.color).toBe(T.ok)
     await ui.press({ plugin: 'test', key: 'detail:zoom' })
@@ -559,14 +596,16 @@ test("an agent's detail: header, task with more, checklist with the live call, D
     await ui.redraw()
     const routes = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:'))
     expect(routes.map(route => route.props.label)).toEqual(['Orchestrator → Phase A', 'Phase B → Phase A', 'Phase A → Phase B'])
-    expect((await shown(ui, { type: 'Text', text: exactly('task') })).props.bold).toBe(true)
-    expect((await leaves(ui, exactly('msg'))).length).toBe(2)
-    await shown(ui, { type: 'Text', text: exactly('Is the stamp ready for Phase B?') })
+    // two lines a message: who to whom and the time, then its first line under it, dim; no tag column
+    for (const tag of ['task', 'msg', 'ask', 'result']) expect(await ui.find({ type: 'Text', text: exactly(tag) })).toBeUndefined()
+    expect((await shown(ui, { type: 'Text', text: exactly('Is the stamp ready for Phase B?') })).props.dimColor).toBe(true)
+    expect((await leaves(ui, /^\d\d:\d\d$/)).length).toBe(3)
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
     await ui.press({ plugin: 'test', key: `msg:${question.id}` })
     await ui.redraw()
     expect((await shown(ui, { type: 'Markdown' })).props.text).toBe('Is the stamp ready for Phase B?')
-    expect((await leaves(ui, exactly('▌'))).length).toBe(2)
+    expect((await shown(ui, { key: `msg:${question.id}` })).props.dimColor).toBe(false)
+    expect(await ui.find({ type: 'Text', text: exactly('Is the stamp ready for Phase B?') })).toBeUndefined()
     await ui.press({ plugin: 'test', key: `msg:${question.id}` })
     await ui.redraw()
     expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
@@ -611,11 +650,12 @@ test("an agent's detail: header, task with more, checklist with the live call, D
   ])
 })
 
-test('an agent that waits on you says on what, in ochre; one with no edits, calls or messages says what will show', async ($, on) => {
+test('an agent that waits on you says on what, in ochre, and where to answer; one held on its own work does not; one with nothing yet says so', async ($, on) => {
   mock.clock(on, { now: NOW })
   const data = deckData()
   const blocked = agentIn(data, 'agent-w', 'tester', { prompt: 'Run the tests.' })
   const quiet = agentIn(data, 'agent-q', 'quiet one', { prompt: 'Look around.' })
+  const held = agentIn(data, 'agent-h', 'holder', { prompt: 'Start the build and watch it.', status: 'waiting' })
   const call = { id: 'toolu-bash', tool: 'Bash', target: 'Run the tests', description: 'Run the tests', command: 'npm test', at: NOW - 20_000 }
   blocked.current = call
   blocked.recent = [call]
@@ -633,17 +673,27 @@ test('an agent that waits on you says on what, in ochre; one with no edits, call
     const blockedUi = await $.ui.mount(mountOn(surface))
     expect((await shown(blockedUi, { type: 'Text', text: exactly('Waits on you: allow Bash "npm test"') })).props.color).toBe(T.warn)
     expect((await shown(blockedUi, { type: 'Text', text: exactly('■') })).props.color).toBe(T.warn)
+    // and where to answer it
+    expect((await shown(blockedUi, { type: 'Text', text: exactly('Answer the prompt in the conversation.') })).props.dimColor).toBe(true)
     await blockedUi.unmount()
+
+    // one the engine lists as waiting with no prompt for you is busy on its own work: no ochre, no "Waits on you"
+    model.view.agent = held.id
+    const heldUi = await $.ui.mount(mountOn(surface))
+    expect(await heldUi.find({ type: 'Text', text: /Waits on you/ })).toBeUndefined()
+    expect((await shown(heldUi, { type: 'Text', text: exactly('Waiting on background work') })).props.color).toBeUndefined()
+    expect((await shown(heldUi, { type: 'Text', text: exactly('■') })).props.color).toBe(T.ok)
+    await heldUi.unmount()
 
     model.view.agent = quiet.id
     const ui = await $.ui.mount(mountOn(surface))
     expect(await ui.find({ type: 'Text', text: /^Waits on you/ })).toBeUndefined()
     expect(await ui.find({ key: 'more:task:agent-q' })).toBeUndefined()
     await shown(ui, { type: 'Text', text: exactly('Look around.') })
-    await shown(ui, { type: 'Text', text: exactly('No edits by quiet one yet. Its Edit and Write calls show here as exact diffs.') })
+    await shown(ui, { type: 'Text', text: exactly('No edits by quiet one yet.') })
     model.view.agentPane = 'activity'
     await ui.redraw()
-    await shown(ui, { type: 'Text', text: exactly('No tool calls by quiet one yet. Each call shows here as it runs.') })
+    await shown(ui, { type: 'Text', text: exactly('No tool calls by quiet one yet.') })
     model.view.agentPane = 'chat'
     await ui.redraw()
     await shown(ui, { type: 'Text', text: /^No messages with quiet one yet\./ })
@@ -653,7 +703,7 @@ test('an agent that waits on you says on what, in ochre; one with no edits, call
 
 // The Orchestrator.
 
-test("the Orchestrator's detail: the whole goal and its follow-ups, the plan, its own edits, and Talk with the whole log", async ($, on) => {
+test("the Orchestrator's detail: the goal only when the header cut it, its follow-ups, Talk (the whole log) first, then its own edits", async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const sent: Sent[] = []
   const { data, a } = phaseA()
@@ -671,30 +721,23 @@ test("the Orchestrator's detail: the whole goal and its follow-ups, the plan, it
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
 
   for (const surface of SURFACES) {
-    model.view.agent = ''
+    model.view.agent = M.MAIN
     model.view.agentPane = 'edits'
+    data.goals[0] = { ...data.goals[0]!, text: GOAL }
     const ui = await $.ui.mount(mountOn(surface))
 
-    // its header, the whole goal as Markdown, the follow-up, the plan
+    // its header and its follow-up; the goal the header shows whole, and the plan the outline shows, are not repeated
     expect((await shown(ui, { type: 'Text', text: exactly('Orchestrator') })).props.bold).toBe(true)
     await shown(ui, { type: 'Text', text: exactly('  waiting on 2 agents') })
     expect(await ui.find({ key: 'detail:zoom' })).toBeUndefined()
-    await shown(ui, { type: 'Text', text: exactly('Goal') })
-    expect((await shown(ui, { type: 'Markdown' })).props.text).toBe(GOAL)
     await shown(ui, { type: 'Text', text: exactly('Then') })
     await shown(ui, { type: 'Text', text: exactly(FOLLOW_UP) })
-    await shown(ui, { type: 'Text', text: exactly('Plan') })
+    for (const text of ['Goal', 'Plan']) expect(await ui.find({ type: 'Text', text: exactly(text) })).toBeUndefined()
+    expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
 
-    // Diffs: its own edits only
-    const codes = await ui.findAll({ type: 'Code' })
-    expect(codes.length).toBe(1)
-    expect(String(codes[0]?.props.source)).toContain(MAIN_LINE)
-    expect(codes[0]?.props.path).toBe('README.md')
-
-    // Talk: the whole message log, every row, and the field for your next prompt
-    expect((await shown(ui, { key: 'detail:chat' })).props.label).toBe(`Talk ${all}`)
-    await ui.press({ plugin: 'test', key: 'detail:chat' })
-    await ui.redraw()
+    // Talk first, whatever the agents' pane: the whole message log, every row, and the field for your next prompt
+    expect((await shown(ui, { key: 'detail:chat' })).props).toMatchObject({ label: `Talk ${all}`, dimColor: false })
+    expect((await shown(ui, { key: 'detail:edits' })).props.dimColor).toBe(true)
     const rows = await buttonKeys(ui, 'msg:')
     expect(rows.length).toBe(all)
     expect(await ui.find({ type: 'Text', text: /earlier$/ })).toBeUndefined()
@@ -707,13 +750,34 @@ test("the Orchestrator's detail: the whole goal and its follow-ups, the plan, it
     await ui.input({ plugin: 'test', key: 'chat:main', text: 'Ship it' })
     await clock.settle()
     expect(calls).toContain('sendChat:main:Ship it')
+
+    // Diffs: its own edits only; the pick is the Orchestrator's own, the agents' pane stays as it was
+    await ui.press({ plugin: 'test', key: 'detail:edits' })
+    await ui.redraw()
+    const codes = await ui.findAll({ type: 'Code' })
+    expect(codes.length).toBe(1)
+    expect(String(codes[0]?.props.source)).toContain(MAIN_LINE)
+    expect(codes[0]?.props.path).toBe('README.md')
+    model.view.agentPane = 'chat'
+    await ui.redraw()
+    expect(await ui.findAll({ type: 'Code' })).toHaveLength(1)
+    await ui.press({ plugin: 'test', key: 'detail:chat' })
+    await ui.redraw()
+    expect(model.view.agentPane).toBe('chat')
+    expect(await ui.find({ type: 'Code' })).toBeUndefined()
+
+    // a goal longer than the header's two lines: the whole of it here, as Markdown
+    data.goals[0] = { ...data.goals[0]!, text: `${GOAL}\n\n${'- one more thing the deck must do\n'.repeat(8)}` }
+    await ui.redraw()
+    await shown(ui, { type: 'Text', text: exactly('Goal') })
+    expect(String((await shown(ui, { type: 'Markdown' })).props.text)).toContain('one more thing the deck must do')
     await ui.unmount()
   }
 })
 
 // A plan step.
 
-test("a plan step's detail: its status, its agents as buttons that select them, and the files they changed", async ($, on) => {
+test("a plan step's detail: its status and the files its agents changed in the Files section's columns; its agents are the outline's rows", async ($, on) => {
   mock.clock(on, { now: NOW })
   const { data, a } = phaseA()
   const main = M.agentOf(data, M.MAIN)
@@ -740,22 +804,25 @@ test("a plan step's detail: its status, its agents as buttons that select them, 
     expect((await shown(ui, { type: 'Text', text: exactly('■') })).props.color).toBe(T.ok)
     await shown(ui, { type: 'Text', text: exactly('Status') })
     await shown(ui, { type: 'Text', text: exactly('In progress') })
-    await shown(ui, { type: 'Text', text: exactly('Agents') })
-    expect((await shown(ui, { key: `detail:agent:${a.id}` })).props.label).toBe('Phase A')
-    await shown(ui, { type: 'Text', text: exactly('Stamping spawns with their step') })
-    // its agents: Phase A, then the helper it handed work to, a level in; the files all of them changed
-    expect(await buttonKeys(ui, 'detail:agent:')).toEqual([`detail:agent:${a.id}`, `detail:agent:${helper.id}`])
+    expect((await shown(ui, { key: 'detail:fold' })).props).toMatchObject({ label: 'Fold', hotkey: 'f' })
+    // no agent rows: the outline shows them under the step
+    expect(await buttonKeys(ui, 'detail:agent:')).toEqual([])
+    expect(await ui.find({ type: 'Text', text: exactly('Agents') })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: exactly('Stamping spawns with their step') })).toBeUndefined()
+    // the files all of its agents changed, the helper's too, each row in the Files section's columns, editors after +a −r
+    await shown(ui, { type: 'Text', text: exactly('Files') })
     expect(await buttonKeys(ui, 'detail:file:')).toEqual(['detail:file:hooks/model.ts', 'detail:file:hooks/types.ts', 'detail:file:README.md'])
+    expect(await columnsOfFile(ui, 'detail:file:README.md')).toEqual([2, 28, 12, 'flex'])
+    await shown(ui, { type: 'Text', text: exactly('helper') })
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
 
     await ui.press({ plugin: 'test', key: 'detail:zoom' })
     expect(calls).toContain(`zoomTo:${step.key}`)
     model.view.zoom = ''
+    await ui.press({ plugin: 'test', key: 'detail:fold' })
+    expect(calls).toContain(`toggleFold:${step.key}`)
     await ui.press({ plugin: 'test', key: 'detail:file:hooks/types.ts' })
     expect(calls).toContain('select:file:hooks/types.ts')
-    model.view.agent = step.key
-    await ui.press({ plugin: 'test', key: `detail:agent:${a.id}` })
-    expect(calls).toContain(`select:${a.id}`)
     await ui.unmount()
   }
 
@@ -764,6 +831,11 @@ test("a plan step's detail: its status, its agents as buttons that select them, 
   const ui = await $.ui.mount(mountOn('terminal'))
   await shown(ui, { type: 'Text', text: exactly('That step is no longer in the plan. Pick another row of the outline.') })
   await ui.unmount()
+
+  // an implicit plan (each Agent call a step) is no plan the detail reads
+  delete main.todos
+  for (const agent of data.agents) delete agent.during
+  expect(planStepsOf(data)).toEqual([])
 })
 
 // A file.
@@ -790,8 +862,10 @@ test("a file's detail: its hunks grouped by the agent that made them, two live a
     // the header: its directory dim, its name bold, the square of the live agents on it, its +a −r
     expect((await shown(ui, { type: 'Text', text: exactly('agents.tsx') })).props.bold).toBe(true)
     expect((await shown(ui, { type: 'Text', text: exactly('hooks/ui/') })).props.dimColor).toBe(true)
-    expect((await shown(ui, { type: 'Text', text: exactly('Shared: Phase B + A are both on it now.') })).props.color).toBe(T.warn)
+    // the editors in spawn order, as Files and Changes say them
+    expect((await shown(ui, { type: 'Text', text: exactly('Shared: Phase A + B are both on it now.') })).props.color).toBe(T.warn)
     await shown(ui, { type: 'Text', text: exactly('Uncommitted in git: +2 −1 against HEAD.') })
+    expect(await rails(ui)).toHaveLength(1)
 
     // its hunks by agent: Phase B's first (it edited first), then Phase A's; nothing of the other file
     expect(await buttonKeys(ui, 'detail:agent:')).toEqual(['detail:agent:agent-b', 'detail:agent:agent-a'])
@@ -817,6 +891,14 @@ test("a file's detail: its hunks grouped by the agent that made them, two live a
     expect(model.view.file).toBe('hooks/ui/agents.tsx')
     await ui.unmount()
   }
+
+  // git's note leaves a zero side out, as +a −r does everywhere
+  model.git = gitOf([{ path: 'hooks/ui/agents.tsx', code: 'M', isStaged: false, isUnstaged: true, isUntracked: false, isBinary: false, added: 4, removed: 0 }])
+  model.view.agent = 'file:hooks/ui/agents.tsx'
+  const added = await $.ui.mount(mountOn('desktop'))
+  await shown(added, { type: 'Text', text: exactly('Uncommitted in git: +4 against HEAD.') })
+  expect(await added.find({ type: 'Text', text: /−0/ })).toBeUndefined()
+  await added.unmount()
 
   // a file nobody changed: one plain sentence
   model.view.agent = 'file:nowhere.txt'
@@ -845,7 +927,7 @@ test('the detail stays inside the host bounds with two hundred messages and long
     for (const [agent, pane] of [
       ['agent-a', 'edits'],
       ['agent-a', 'chat'],
-      ['', 'chat'],
+      [M.MAIN, 'chat'],
       ['file:src/file-3.ts', 'edits'],
     ] as const) {
       model.view.agent = agent

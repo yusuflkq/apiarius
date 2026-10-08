@@ -1,7 +1,10 @@
 import type { On } from 'claude-code'
 import { expect, mock, test, type ElementQuery, type Engine, type FoundElement } from 'claude-code/testing'
 
+import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
+import { FOLD_LABEL } from '../hooks/ui/outline'
+import { UNTOUCHED, headerOf, outlineOf } from '../hooks/ui/outlineModel'
 import { T } from '../hooks/ui/theme'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
 
@@ -103,7 +106,7 @@ function during(step: number) {
  * plan (a TodoWrite) has three steps, the second in hand. For it, Phase A
  * and Phase B run and Phase C is done; Phase B handed the tests to "Run
  * outline tests", which waits on you to allow Bash. A compaction loop and a
- * workflow agent ran in the background.
+ * workflow agent ran in the background, the workflow agent still at it.
  */
 function runData(): DeckData {
   const data = M.emptyData(NOW - 18 * 60_000)
@@ -166,8 +169,8 @@ function firstLineOf(row: FoundElement): Child {
 
 /** The cells a row is indented: its fold column's left padding. */
 function indentOf(row: FoundElement): number {
-  const fold = (firstLineOf(row).children?.[1] ?? {}) as Child
-  return Number(fold.props?.paddingLeft ?? 0)
+  const fold = (firstLineOf(row).children?.[0] ?? {}) as Child
+  return Number(fold.props?.paddingLeft ?? -1)
 }
 
 /** The widths of a row's columns, left to right ('flex' for the one that grows). */
@@ -178,8 +181,18 @@ function columnsOf(row: FoundElement): string[] {
   })
 }
 
+/** Whether a Box carries the copper rail: the host's `quote` border in copper. */
+function hasRail(box: FoundElement): boolean {
+  return box.props.borderStyle === 'quote' && box.props.borderColor === T.copper
+}
+
 async function rowOf(ui: Drawing, id: string): Promise<FoundElement> {
   return shown(ui, { type: 'Box', key: `row:${id}` })
+}
+
+/** The label Buttons of the outline: agents (the Orchestrator too) and plan steps. */
+async function labelsOf(ui: Drawing): Promise<FoundElement[]> {
+  return (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('agent:') || button.key?.startsWith('step:'))
 }
 
 /** The detail block's title: the one bold Text exactly `title`, as its header draws it. */
@@ -196,23 +209,84 @@ async function opened(on: On, $: Engine, data: DeckData, view: Partial<DeckSnaps
   await clock.advance(1000)
 }
 
-test('the header: what needs you on one barred row with Open (n), the goal, and one summary line', async ($, on) => {
+test('the header: what needs you on one railed row with Open (n), the goal in bold with its minutes, and the summary', async ($, on) => {
   await opened(on, $, runData())
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    const bars = (await ui.findAll({ type: 'Box' })).filter(box => box.props.borderStyle === 'quote' && box.props.borderColor === T.copper)
-    expect(bars.length).toBe(1)
-    expect(bars[0]?.text).toContain('Run outline tests')
-    expect(bars[0]?.text).toContain('npm test')
+    const rails = (await ui.findAll({ type: 'Box' })).filter(hasRail)
+    expect(rails.length).toBe(1)
+    expect(rails[0]?.text).toContain('Run outline tests')
+    expect(rails[0]?.text).toContain('npm test')
     const open = await shown(ui, { key: 'needs:open' })
     expect(open.props).toMatchObject({ label: 'Open', hotkey: 'n' })
     await shown(ui, { type: 'Text', text: exactly('Goal') })
-    await shown(ui, { type: 'Text', text: exactly(GOAL) })
+    // the goal leads: bold, its minutes dim at the right of its line
+    expect((await shown(ui, { type: 'Text', text: exactly(GOAL) })).props.bold).toBe(true)
+    expect((await shown(ui, { type: 'Text', text: exactly('18m') })).props.dimColor).toBe(true)
     const summary = await shown(ui, { type: 'Text', text: /2 running/ })
-    expect(summary.text).toMatch(/plan 2 of 3/)
-    expect(summary.text).toMatch(/1 waits on you/)
-    expect(summary.text).toMatch(/1 done/)
+    expect(summary.text).toMatch(/^Step 2 of 3 · Build the outline view · 2 running · 1 waits on you · 1 done/)
     expect(summary.text).toMatch(/\+88 −12/)
+    expect(summary.text).not.toMatch(/18m/)
+    await ui.unmount()
+  }
+})
+
+test('the summary leads with the step in hand, plain, the counts after it dim; with every step done it says so', async ($, on) => {
+  const data = runData()
+  await opened(on, $, data)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    const step = await shown(ui, { type: 'Text', text: exactly('Step 2 of 3 · Build the outline view') })
+    expect(step.props.dimColor).toBeUndefined()
+    expect(step.props.bold).toBeUndefined()
+    expect((await shown(ui, { type: 'Text', text: /^2 running · 1 waits on you · 1 done · / })).props.dimColor).toBe(true)
+    await ui.unmount()
+  }
+  // the plan done: no step in hand, and the line says the plan is through
+  const done = runData()
+  M.agentOf(done, M.MAIN)!.todos = STEPS.map(text => ({ key: text.toLowerCase(), text, status: 'done' as const }))
+  expect(headerOf(done, emptyGit(), NOW).summary.step).toBe('All 3 steps done')
+  expect(headerOf(runData(), emptyGit(), NOW).summary.step).toBe('Step 2 of 3 · Build the outline view')
+})
+
+test('nothing is selected at rest: no plate, no rail on a row, no detail block until a label is pressed', async ($, on) => {
+  await opened(on, $, runData())
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    expect((await labelsOf(ui)).filter(button => button.props.variant === 'primary')).toEqual([])
+    for (const id of await rowsOf(ui)) expect(hasRail(await rowOf(ui, id))).toBe(false)
+    expect(await ui.find({ key: 'detail:edits' })).toBeUndefined()
+    expect(await ui.find({ key: 'detail:zoom' })).toBeUndefined()
+    expect(await ui.find({ type: 'Code' })).toBeUndefined()
+    await ui.unmount()
+  }
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await ui.press({ key: 'agent:agent-a' })
+    expect(await hasTitle(ui, 'Phase A')).toBe(true)
+    expect(hasRail(await rowOf(ui, 'agent-a'))).toBe(true)
+    await ui.unmount()
+  }
+})
+
+test('labels are plain Buttons, and only the selected one is the primary plate', async ($, on) => {
+  await opened(on, $, runData())
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    const before = await labelsOf(ui)
+    expect(before.length).toBeGreaterThan(5)
+    expect(before.every(button => button.props.plain === true && button.props.variant === undefined)).toBe(true)
+    await ui.unmount()
+  }
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await ui.press({ key: 'agent:agent-b' })
+    for (const button of await labelsOf(ui)) {
+      if (button.key === 'agent:agent-b') expect(button.props).toMatchObject({ variant: 'primary' })
+      else expect(button.props).toMatchObject({ plain: true })
+      if (button.key === 'agent:agent-b') expect(button.props.plain).toBeUndefined()
+      else expect(button.props.variant).toBeUndefined()
+    }
     await ui.unmount()
   }
 })
@@ -226,15 +300,55 @@ test('the outline nests the Orchestrator, its plan steps, the agents under their
     const steps = rows.filter(id => id.startsWith('todo:'))
     expect(steps.length).toBe(3)
     const [read, build, review] = steps
-    // spawn order under the step in hand; the sub-agent right under its parent; the background loops one row
+    // spawn order under the step in hand; the sub-agent right under its parent; the workflow agent at work in one background row
     expect(rows).toEqual(['main', read, build, 'agent-a', 'agent-b', 'agent-t', 'agent-c', review, 'group:background'])
     expect(await Promise.all(rows.map(async id => indentOf(await rowOf(ui, id))))).toEqual([0, 2, 2, 4, 4, 6, 4, 2, 2])
     for (const [i, text] of STEPS.entries()) expect((await shown(ui, { key: `step:${steps[i]}` })).props.label).toBe(text)
-    expect((await shown(ui, { key: 'fold:main' })).props.label).toBe('▾')
+    expect((await shown(ui, { key: 'fold:main' })).props.label).toBe(FOLD_LABEL.open)
     // line two: where each agent is
     await shown(ui, { type: 'Text', text: exactly('Waits on you: allow Bash "npm test"') })
     await shown(ui, { type: 'Text', text: exactly('Done: Files section flags shared files') })
-    expect((await shown(ui, { key: 'agent:main' })).props).toMatchObject({ label: 'Orchestrator', hotkey: 'o', variant: 'primary' })
+    expect((await shown(ui, { key: 'agent:main' })).props).toMatchObject({ label: 'Orchestrator', hotkey: 'o', plain: true })
+    await ui.unmount()
+  }
+})
+
+test('step names run the full width; an agent row keeps a fixed label column with its numbers right after it', async ($, on) => {
+  const data = runData()
+  const main = M.agentOf(data, M.MAIN)!
+  const long = 'Build the outline view, the Files section, the detail block and every test that covers them'
+  main.todos = STEPS.map((text, i) => ({ key: text.toLowerCase(), text: i === 1 ? long : text, status: i === 0 ? 'done' : i === 1 ? 'active' : 'pending' }))
+  for (const agent of data.agents) if (agent.during?.text === STEPS[1]) agent.during = { kind: 'todo', key: STEPS[1].toLowerCase(), text: long }
+  await opened(on, $, data)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    const build = (await rowsOf(ui)).filter(id => id.startsWith('todo:'))[1] ?? 'no step'
+    // the step's row: its fold, its mark, then its label growing to the pane's edge; no columns after it
+    expect(columnsOf(await rowOf(ui, build))).toEqual(['4', '2', 'flex'])
+    expect(String((await shown(ui, { key: `step:${build}` })).props.label).length).toBeGreaterThan(60)
+    // agent rows: the label column narrows a level deeper so done/total, minutes and +a −r start on the same cell
+    const a = columnsOf(await rowOf(ui, 'agent-a'))
+    const t = columnsOf(await rowOf(ui, 'agent-t'))
+    expect(a).toEqual(['6', '2', '22', '6', '7', '12'])
+    expect(t).toEqual(['8', '2', '20', '6', '7', '12'])
+    const end = (columns: string[]) => columns.slice(0, 3).reduce((sum, one) => sum + Number(one), 0)
+    expect(end(a)).toBe(end(t))
+    await ui.unmount()
+  }
+})
+
+test('nesting indents four levels at most; a deeper row keeps the fourth level and its columns', async ($, on) => {
+  const data = runData()
+  worker(data, 'agent-a1', 'A one', { parentId: 'agent-a' })
+  worker(data, 'agent-a2', 'A two', { parentId: 'agent-a1' })
+  worker(data, 'agent-a3', 'A three', { parentId: 'agent-a2' })
+  await opened(on, $, data)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    const depths = await Promise.all(['agent-a', 'agent-a1', 'agent-a2', 'agent-a3'].map(async id => indentOf(await rowOf(ui, id))))
+    expect(depths).toEqual([4, 6, 8, 8])
+    expect(columnsOf(await rowOf(ui, 'agent-a2'))).toEqual(['10', '2', '18', '6', '7', '12'])
+    expect(columnsOf(await rowOf(ui, 'agent-a3'))).toEqual(['10', '2', '18', '6', '7', '12'])
     await ui.unmount()
   }
 })
@@ -267,25 +381,28 @@ test('clicking a label selects its row, and the detail block below follows it', 
     await ui.press({ key: 'detail:zoom' })
     expect((await rowsOf(ui))[0]).toBe('main')
 
-    // o: the Orchestrator again
+    // o: the Orchestrator
     await ui.press({ key: 'agent:main' })
     expect((await shown(ui, { key: 'agent:main' })).props.variant).toBe('primary')
     await ui.unmount()
   }
 })
 
-test('the selected row keeps its columns: only the bar and the plate change', async ($, on) => {
+test('the selected row keeps its columns: only the rail and the plate change, and the rail is a border, not a glyph', async ($, on) => {
   await opened(on, $, runData())
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     const before = await rowOf(ui, 'agent-b')
-    expect(before.text).not.toContain('▌')
+    expect(hasRail(before)).toBe(false)
+    expect(before.props.paddingLeft).toBe(2)
     await ui.press({ key: 'agent:agent-b' })
     const after = await rowOf(ui, 'agent-b')
     expect(columnsOf(after)).toEqual(columnsOf(before))
     expect(columnsOf(after)).toEqual(columnsOf(await rowOf(ui, 'agent-a')))
-    expect(after.text).toContain('▌')
-    expect((await ui.findAll({ type: 'Text', text: exactly('▌') })).filter(one => one.props.color === T.copper).length).toBeGreaterThan(0)
+    // the copper rail: the border's cell and one of padding, the same two cells as before
+    expect(hasRail(after)).toBe(true)
+    expect(after.props.paddingLeft).toBe(1)
+    expect(await ui.find({ type: 'Text', text: exactly('▌') })).toBeUndefined()
     await ui.press({ key: 'agent:main' })
     await ui.unmount()
   }
@@ -302,10 +419,12 @@ test('Open on the needs-you line selects the agent that waits, unfolding and unz
     expect((await shown(ui, { key: 'agent:agent-t' })).props.variant).toBe('primary')
     expect(await hasTitle(ui, 'Run outline tests')).toBe(true)
     expect(await ui.find({ key: 'crumb:all' })).toBeUndefined()
+    // where to answer it
+    await shown(ui, { type: 'Text', text: exactly('Answer the prompt in the conversation.') })
     // back to the person's own state for the next surface: Phase B folded, zoomed on Phase A
     await ui.press({ key: 'fold:agent-b' })
     await ui.press({ key: 'agent:agent-a' })
-    await ui.press({ key: 'agent:agent-a' })
+    await ui.press({ key: 'detail:zoom' })
     expect(await rowsOf(ui)).toEqual(['agent-a', 'agent-ah'])
     await ui.unmount()
   }
@@ -320,12 +439,14 @@ test('a fold toggle folds a branch and opens it again; the branch of a finished 
     const ui = await $.ui.mount(pane(surface))
     expect(await rowsOf(ui)).toContain('agent-t')
     expect(await rowsOf(ui)).not.toContain('agent-ch')
-    expect((await shown(ui, { key: 'fold:agent-b' })).props.label).toBe('▾')
-    expect((await shown(ui, { key: 'fold:agent-c' })).props.label).toBe('▸')
+    // two cells to click: the arrow and a figure space
+    expect(Array.from(String((await shown(ui, { key: 'fold:agent-b' })).props.label)).length).toBe(2)
+    expect((await shown(ui, { key: 'fold:agent-b' })).props.label).toBe(FOLD_LABEL.open)
+    expect((await shown(ui, { key: 'fold:agent-c' })).props.label).toBe(FOLD_LABEL.closed)
 
     await ui.press({ key: 'fold:agent-b' })
     expect(await rowsOf(ui)).not.toContain('agent-t')
-    expect((await shown(ui, { key: 'fold:agent-b' })).props.label).toBe('▸')
+    expect((await shown(ui, { key: 'fold:agent-b' })).props.label).toBe(FOLD_LABEL.closed)
     await ui.press({ key: 'fold:agent-c' })
     expect(await rowsOf(ui)).toContain('agent-ch')
 
@@ -337,17 +458,67 @@ test('a fold toggle folds a branch and opens it again; the branch of a finished 
   }
 })
 
-test('zoom re-roots the outline on the selected branch (z, or the selected row pressed again), with crumbs back up (u)', async ($, on) => {
+test('a finished step starts folded, its agents a press away', async ($, on) => {
+  const data = runData()
+  worker(data, 'agent-s', 'scout', { during: during(0), status: 'completed', endedAt: NOW - 15 * 60_000, answer: 'The tab must lead with the goal.' })
+  await opened(on, $, data)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    const read = (await rowsOf(ui)).filter(id => id.startsWith('todo:'))[0] ?? 'no step'
+    expect((await shown(ui, { key: `fold:${read}` })).props.label).toBe(FOLD_LABEL.closed)
+    expect(await rowsOf(ui)).not.toContain('agent-s')
+    expect(await ui.find({ type: 'Text', text: /The tab must lead/ })).toBeUndefined()
+    await ui.press({ key: `fold:${read}` })
+    expect((await rowsOf(ui)).slice(1, 3)).toEqual([read, 'agent-s'])
+    await ui.press({ key: `fold:${read}` })
+    expect(await rowsOf(ui)).not.toContain('agent-s')
+    await ui.unmount()
+  }
+})
+
+test('f folds and opens the selected branch from the detail; z zooms on it; a second press on its label does nothing', async ($, on) => {
+  await opened(on, $, runData())
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await ui.press({ key: 'agent:agent-b' })
+    // the label keys: the Orchestrator o, the others none; Fold f and Zoom z sit in the detail's header
+    expect((await shown(ui, { key: 'agent:agent-b' })).props.hotkey).toBeUndefined()
+    expect((await shown(ui, { key: 'agent:main' })).props.hotkey).toBe('o')
+    expect((await shown(ui, { key: 'agent:agent-a' })).props.hotkey).toBeUndefined()
+    expect((await shown(ui, { key: 'detail:fold' })).props).toMatchObject({ label: 'Fold', hotkey: 'f' })
+    expect((await shown(ui, { key: 'detail:zoom' })).props).toMatchObject({ label: 'Zoom', hotkey: 'z' })
+
+    // f: Phase B's branch folds, its row and selection kept; f again opens it
+    await ui.press({ key: 'detail:fold' })
+    expect(await rowsOf(ui)).not.toContain('agent-t')
+    expect((await shown(ui, { key: 'fold:agent-b' })).props.label).toBe(FOLD_LABEL.closed)
+    expect((await shown(ui, { key: 'detail:fold' })).props.label).toBe('Unfold')
+    expect((await shown(ui, { key: 'agent:agent-b' })).props.variant).toBe('primary')
+    await ui.press({ key: 'detail:fold' })
+    expect(await rowsOf(ui)).toContain('agent-t')
+
+    // a second press on the selected label: nothing moves
+    const rows = await rowsOf(ui)
+    await ui.press({ key: 'agent:agent-b' })
+    expect(await rowsOf(ui)).toEqual(rows)
+    expect(await ui.find({ key: 'crumb:all' })).toBeUndefined()
+    expect((await shown(ui, { key: 'agent:agent-b' })).props.variant).toBe('primary')
+
+    // a row with nothing under it has no Fold
+    await ui.press({ key: 'agent:agent-a' })
+    expect(await ui.find({ key: 'detail:fold' })).toBeUndefined()
+    await ui.press({ key: 'agent:agent-b' })
+    await ui.unmount()
+  }
+})
+
+test('zoom re-roots the outline on the selected branch (z, the detail`s Zoom), with crumbs back up (u)', async ($, on) => {
   await opened(on, $, runData())
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     const build = (await rowsOf(ui)).filter(id => id.startsWith('todo:'))[1] ?? 'no step'
     await ui.press({ key: 'agent:agent-b' })
-    // the selected row answers z; the Orchestrator o; the others no key
-    expect((await shown(ui, { key: 'agent:agent-b' })).props.hotkey).toBe('z')
-    expect((await shown(ui, { key: 'agent:main' })).props.hotkey).toBe('o')
-    expect((await shown(ui, { key: 'agent:agent-a' })).props.hotkey).toBeUndefined()
-    await ui.press({ key: 'agent:agent-b' })
+    await ui.press({ key: 'detail:zoom' })
 
     expect(await rowsOf(ui)).toEqual(['agent-b', 'agent-t'])
     expect(indentOf(await rowOf(ui, 'agent-t'))).toBe(2)
@@ -356,7 +527,7 @@ test('zoom re-roots the outline on the selected branch (z, or the selected row p
     expect((await shown(ui, { key: 'crumb:all' })).props.label).toBe('All')
     expect((await shown(ui, { key: `crumb:${build}` })).props).toMatchObject({ label: STEPS[1], hotkey: 'u' })
     expect((await shown(ui, { key: 'crumb:all' })).props.hotkey).toBeUndefined()
-    await shown(ui, { type: 'Text', text: exactly('Phase B') })
+    expect((await shown(ui, { key: 'detail:zoom' })).props.label).toBe('Unzoom')
 
     // u: up to the step, its three agents and the sub-agent
     await ui.press({ key: `crumb:${build}` })
@@ -371,22 +542,15 @@ test('zoom re-roots the outline on the selected branch (z, or the selected row p
     expect((await shown(ui, { key: 'agent:agent-b' })).props.variant).toBe('primary')
 
     // z twice: in on the selection, and back out
-    await ui.press({ key: 'agent:agent-b' })
-    expect((await rowsOf(ui))[0]).toBe('agent-b')
-    await ui.press({ key: 'agent:agent-b' })
-    expect((await rowsOf(ui))[0]).toBe('main')
-
-    // the detail's own Zoom does the same
     await ui.press({ key: 'detail:zoom' })
     expect((await rowsOf(ui))[0]).toBe('agent-b')
     await ui.press({ key: 'detail:zoom' })
     expect((await rowsOf(ui))[0]).toBe('main')
-    await ui.press({ key: 'agent:main' })
     await ui.unmount()
   }
 })
 
-test('workflow and housekeeping loops fold into one dim background row', async ($, on) => {
+test('workflow and housekeeping loops fold into one dim background row while a workflow`s agent works', async ($, on) => {
   await opened(on, $, runData())
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
@@ -398,6 +562,21 @@ test('workflow and housekeeping loops fold into one dim background row', async (
     expect(await rowsOf(ui)).toContain('agent-flow')
     await ui.press({ key: 'fold:group:background' })
     expect(await rowsOf(ui)).not.toContain('agent-flow')
+    await ui.unmount()
+  }
+})
+
+test('at rest, with no workflow agent at work, there is no background row', async ($, on) => {
+  const data = runData()
+  Object.assign(M.agentOf(data, 'agent-flow')!, { status: 'completed', endedAt: NOW - 1000 })
+  // the engine's own loop is never seen to end: still no row for it
+  worker(data, 'agent-fork', 'agent-a8c41f', { origin: 'engine' })
+  await opened(on, $, data)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    expect(await rowsOf(ui)).not.toContain('group:background')
+    expect(await ui.find({ type: 'Text', text: /background/ })).toBeUndefined()
+    expect((await rowsOf(ui)).at(-1)).toBe((await rowsOf(ui)).filter(id => id.startsWith('todo:')).at(-1))
     await ui.unmount()
   }
 })
@@ -425,7 +604,7 @@ test('past twelve agent rows a branch folds its finished agents into "+N done"',
   }
 })
 
-test('with no plan the agents sit straight under the Orchestrator; an empty session says what will show', async ($, on) => {
+test('with no plan the agents sit straight under the Orchestrator, and the summary names no step', async ($, on) => {
   const data = runData()
   const main = M.agentOf(data, M.MAIN)!
   delete main.todos
@@ -439,19 +618,36 @@ test('with no plan the agents sit straight under the Orchestrator; an empty sess
     expect((await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('step:'))).toEqual([])
     expect(rows.slice(0, 5)).toEqual(['main', 'agent-a', 'agent-b', 'agent-t', 'agent-c'])
     expect(indentOf(await rowOf(ui, 'agent-a'))).toBe(2)
+    expect(await ui.find({ type: 'Text', text: /^Step / })).toBeUndefined()
+    await shown(ui, { type: 'Text', text: /^2 running · 1 waits on you/ })
     await ui.unmount()
   }
 })
 
-test('an empty session: the Orchestrator alone, and a quiet line saying what will show', async ($, on) => {
+test('an agent the engine holds with no prompt for you is busy: "Waiting on background work", a sage square, not counted as waiting on you', async () => {
+  const data = runData()
+  // Phase A is held on work of its own; Run outline tests still waits on you
+  M.agentOf(data, 'agent-a')!.status = 'waiting'
+  const rows = outlineOf(data, M.defaultView(), NOW).rows
+  expect(rows.find(row => row.id === 'agent-a')).toMatchObject({ status: 'running', note: 'Waiting on background work', noteTone: 'dim' })
+  expect(rows.find(row => row.id === 'agent-t')).toMatchObject({ status: 'waiting', note: 'Waits on you: allow Bash "npm test"', noteTone: 'waiting' })
+  expect(headerOf(data, emptyGit(), NOW).summary.lead).toMatch(/^2 running · 1 waits on you · 1 done/)
+  // nothing is selected in a fresh view
+  expect(rows.filter(row => row.isSelected)).toEqual([])
+})
+
+test('before the first prompt the whole tab is one quiet line', async ($, on) => {
   await opened(on, $, M.emptyData(NOW - 60_000))
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    expect(await rowsOf(ui)).toEqual(['main'])
-    await shown(ui, { type: 'Text', text: exactly('No agents yet; delegated work shows here as it starts.') })
-    await shown(ui, { type: 'Text', text: exactly('Nothing needs you') })
-    expect(await ui.find({ key: 'needs:open' })).toBeUndefined()
-    expect((await ui.findAll({ type: 'Box' })).some(box => box.props.borderStyle === 'quote' && box.props.borderColor === T.copper)).toBe(false)
+    expect(await rowsOf(ui)).toEqual([])
+    const line = await shown(ui, { type: 'Text', text: exactly(UNTOUCHED) })
+    expect(line.props).toMatchObject({ dimColor: true, italic: true })
+    // nothing else of the tab: no needs-you line, no goal, no Files, no detail; the tab row stays
+    for (const text of ['Nothing needs you', 'Goal', 'Files', 'No agents yet']) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
+    expect((await ui.findAll({ type: 'Text' })).filter(one => one.props.italic === true).length).toBe(1)
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats'])
+    expect((await ui.findAll({ type: 'Box' })).some(hasRail)).toBe(false)
     await ui.unmount()
   }
 })

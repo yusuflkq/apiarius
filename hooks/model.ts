@@ -171,10 +171,11 @@ export function emptyData(now: number): DeckData {
   }
 }
 
+/** A fresh view: the Agents tab with nothing selected (no detail until a row is picked), agents' panes on Diffs. */
 export function defaultView(): DeckView {
   return {
     tab: 'agents',
-    agent: MAIN,
+    agent: '',
     agentPane: 'edits',
     file: '',
     commit: '',
@@ -867,7 +868,9 @@ export function nowOf(agent: DeckAgent): string {
  *
  * Without `data` the note counts where it is kept, on the Orchestrator. With
  * it, it counts on the agent whose call waits: a subagent's permission prompt
- * makes that subagent `waiting`, not the Orchestrator.
+ * makes that subagent `waiting`, not the Orchestrator. With it too, a loop
+ * held while a child agent of its own is at work (a background subagent's
+ * foreground Agent call) is `running`: busy, nothing waits on you.
  */
 export function statusOf(agent: DeckAgent, data?: DeckData): DeckShownStatus {
   if (agent.kind === 'you' || agent.kind === 'peer') return 'idle'
@@ -883,7 +886,7 @@ export function statusOf(agent: DeckAgent, data?: DeckData): DeckShownStatus {
     case 'pending':
       return 'running'
     case 'waiting':
-      return 'waiting'
+      return data !== undefined && hasLiveChild(data, agent.id) ? 'running' : 'waiting'
     case 'completed':
       return 'done'
     case 'failed':
@@ -1282,7 +1285,9 @@ function lastResultOf(data: DeckData, id: string): DeckMessage | undefined {
  * SubagentHandback `message` (strongest), its turn's answer, its foreground
  * Agent call's text, or SubagentStop's last message. One result message per
  * run: the same report again adds nothing, a weaker source never replaces a
- * stronger one, and a stronger one rewrites the result in place.
+ * stronger one, and a stronger one rewrites the result in place. A run
+ * reopened only to report the same again (an answer, then the hand-back the
+ * engine asked for) rewrites its last result message rather than adding one.
  */
 export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: number, via: NonNullable<DeckAgent['resultVia']> = 'answer'): boolean {
   const body = text.trim()
@@ -1298,6 +1303,15 @@ export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: n
     agent.resultVia = via
     const shown = lastResultOf(data, agent.id)
     if (shown) {
+      shown.text = trunc(body, LIMITS.messageChars)
+      return true
+    }
+  } else if (agent.answer !== undefined && isSameReport(agent.answer, body)) {
+    // a run reopened to hand back what it reported already (the engine asked for its hand-back): still one result message
+    const shown = lastResultOf(data, agent.id)
+    if (shown) {
+      agent.answer = trunc(body, LIMITS.answerChars)
+      agent.resultVia = via
       shown.text = trunc(body, LIMITS.messageChars)
       return true
     }
@@ -1654,6 +1668,132 @@ export function retitleGoal(data: DeckData, headline: string, since: number): bo
   if (!goal || goal.at < since || next === '' || next === goal.headline) return false
   goal.headline = next
   return true
+}
+
+// Recovery: what a reload lost, read back from the transcripts.
+
+/** A transcript's message as `$.session.messages()` reads it, as far as recovery looks. */
+export type TranscriptMessage = {
+  role: string
+  text: string
+  toolUses?: readonly { tool: string; input: Record<string, unknown>; isError?: true }[]
+  toolResults?: readonly unknown[]
+}
+
+/** Marks of a user message that is not the person's own words, anywhere in its text: a notification, an agent's, a teammate's or another session's message, a command's record, a reminder. */
+const NOT_OWN_MARKS: readonly string[] = [
+  '<task-notification',
+  '<agent-message',
+  '[SYSTEM NOTIFICATION',
+  '<local-command-caveat>',
+  '<command-name>',
+  '<system-reminder>',
+  '[Subagent hand-back]',
+  '<cross-session-message',
+  '<teammate-message',
+]
+
+/** How the engine's own user messages open: an interruption, a local command's or the shell's output, a skill's text. */
+const ENGINE_OPENINGS: readonly string[] = ['[Request interrupted by user', '<local-command-stdout>', '<local-command-stderr>', '<bash-input>', '<bash-stdout>', '<bash-stderr>', 'Base directory for this skill:']
+
+/** An image's place in a prompt's text: `[Image #1]`, or the engine's own `[Image: source: …]` after it. */
+const IMAGE_MARK = /\[Image(?: #\d+|:[^\]\n]*)\]/g
+
+/**
+ * Whether a user message's text is the person's own words: no notification,
+ * agent-message, command or reminder mark anywhere in it, no engine opening,
+ * and something left beside whitespace and image marks.
+ */
+export function isOwnWords(text: string): boolean {
+  if (NOT_OWN_MARKS.some(mark => text.includes(mark))) return false
+  const lead = text.trimStart()
+  if (ENGINE_OPENINGS.some(opening => lead.startsWith(opening))) return false
+  return text.replace(IMAGE_MARK, '').trim() !== ''
+}
+
+const PASTE_OPEN = /^<pasted_content(?:\s[^>]*)?>/
+const PASTE_CLOSE = /<\/pasted_content(?:\s[^>]*)?>/
+
+/** `text` with the `<pasted_content …>` blocks it opens with cut to each block's first line. */
+function unpasted(text: string): string {
+  const kept: string[] = []
+  let rest = text.trimStart()
+  for (let open = PASTE_OPEN.exec(rest); open; open = PASTE_OPEN.exec(rest)) {
+    const body = rest.slice(open[0].length)
+    const close = PASTE_CLOSE.exec(body)
+    const first = (close ? body.slice(0, close.index) : body)
+      .split('\n')
+      .map(line => line.trim())
+      .find(line => line !== '')
+    if (first) kept.push(first)
+    rest = close ? body.slice(close.index + close[0].length).trimStart() : ''
+  }
+  return [...kept, rest].filter(part => part !== '').join('\n')
+}
+
+/**
+ * The goal a transcript holds: its newest user message in the person's own
+ * words (`isOwnWords`; one of tool results alone, or of whitespace, is none),
+ * the pasted blocks it opens with cut to their first line, and its headline,
+ * the first line that says something (80 characters at most). Undefined when
+ * there is none. One goal: the messages before it are not its follow-ups.
+ */
+export function recoverGoal(messages: readonly TranscriptMessage[]): { text: string; headline: string } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (!message || message.role !== 'user' || message.text.trim() === '') continue
+    const text = unpasted(message.text).trim()
+    if (isOwnWords(text)) return { text, headline: headlineOf(text) }
+  }
+  return undefined
+}
+
+/**
+ * Records the goal `recoverGoal` found, while none is in hand, as `recovered`.
+ * It takes over what the deck held with no goal (the agents, the board's
+ * tasks, the Workflow runs), so the plan and the summary count as before, and
+ * dates from the earliest of that work and the Orchestrator's todo list, now
+ * at the latest. Undefined while a goal is in hand.
+ */
+export function noteRecoveredGoal(data: DeckData, recovered: { text: string; headline: string }, now: number): DeckGoal | undefined {
+  if (goalOf(data)) return undefined
+  const agents = data.agents.filter(agent => agent.kind === 'agent' || agent.kind === 'teammate')
+  const tasks = Object.values(data.board)
+  const times = [...agents.map(agent => agent.startedAt), ...tasks.map(task => task.at), ...data.workflows.map(run => run.startedAt), agentOf(data, MAIN)?.todosAt ?? now]
+  const at = Math.min(now, ...times.filter(time => time > 0))
+  const goal = noteGoal(data, 'goal', { text: recovered.text, headline: recovered.headline, origin: 'recovered', at })
+  if (!goal) return undefined
+  for (const one of [...agents, ...tasks, ...data.workflows]) one.goal = goal.id
+  return goal
+}
+
+/** The agents the outline shows that ended with no result, the latest to end first: the ones a reload may have cost theirs. */
+export function unansweredOf(data: DeckData): DeckAgent[] {
+  return data.agents
+    .filter(agent => isShownAgent(agent) && !isPlaceholder(agent) && isEnded(agent.status) && !agent.answer?.trim())
+    .sort((a, b) => (b.endedAt ?? b.lastAt) - (a.endedAt ?? a.lastAt))
+}
+
+/**
+ * An ended agent's result as its own transcript holds it: the `message` of
+ * its last SubagentHandback (a hand-back), else the text of its last message
+ * that says or does anything (SubagentStop's last message); undefined with neither.
+ */
+export function recoverResult(messages: readonly TranscriptMessage[]): { text: string; via: 'handback' | 'stop' } | undefined {
+  let last: string | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (!message || message.role !== 'assistant') continue
+    const uses = message.toolUses ?? []
+    for (let j = uses.length - 1; j >= 0; j--) {
+      const use = uses[j]
+      const report = use && use.tool === 'SubagentHandback' && use.isError !== true ? use.input.message : undefined
+      if (typeof report === 'string' && report.trim() !== '') return { text: report.trim(), via: 'handback' }
+    }
+    // a message of thinking alone says nothing
+    if (last === undefined && (message.text.trim() !== '' || uses.length > 0)) last = message.text.trim()
+  }
+  return last ? { text: last, via: 'stop' } : undefined
 }
 
 // Checklists: each agent's whole todo list, and what it is on now.
