@@ -1,26 +1,40 @@
 /**
  * Small formatting helpers shared by the views: durations, counts, money,
  * one-line text, and the block-character sparklines the terminal draws.
+ *
+ * Times are coarse on purpose (no seconds past a minute), so a redraw that
+ * changes nothing else draws the same text and nothing on screen moves.
  */
 
 const SPARKS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█']
 
+/** How long ago, to the minute: "just now", "3m ago", "2h ago", "4d ago". */
 export function ago(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 5) return 'now'
-  if (s < 60) return `${s}s ago`
-  const m = Math.round(s / 60)
+  const m = Math.floor(Math.max(0, ms) / 60_000)
+  if (m < 1) return 'just now'
   if (m < 60) return `${m}m ago`
-  const h = Math.round(m / 60)
+  const h = Math.floor(m / 60)
   if (h < 48) return `${h}h ago`
-  return `${Math.round(h / 24)}d ago`
+  return `${Math.floor(h / 24)}d ago`
 }
 
+/** The same as a short column: "now", "3m", "2h", "4d". */
+export function since(ms: number): string {
+  const m = Math.floor(Math.max(0, ms) / 60_000)
+  if (m < 1) return 'now'
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
+
+/** A duration: seconds under a minute, whole minutes under an hour, then hours and minutes. */
 export function dur(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000))
+  if (ms < 1000) return '<1s'
+  const s = Math.floor(ms / 1000)
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
+  if (m < 60) return `${m}m`
   const h = Math.floor(m / 60)
   return `${h}h ${String(m % 60).padStart(2, '0')}m`
 }
@@ -40,6 +54,24 @@ export function money(usd: number | undefined): string {
 /** Collapses whitespace and strips control characters so text fits one row. */
 export function oneLine(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * The first line of text that says something, on one row: markdown's
+ * heading, list and quote marks and bold stars dropped.
+ */
+export function firstLine(text: string): string {
+  for (const raw of text.split('\n')) {
+    if (/^\s*(```|~~~|---+\s*$)/.test(raw)) continue
+    const line = oneLine(raw.replace(/^\s*(#{1,6}\s+|[-*+>]\s+|\d+[.)]\s+)/, '').replace(/\*\*|__|`/g, ''))
+    if (line !== '') return line
+  }
+  return ''
+}
+
+/** A model id without the vendor prefix and date: `claude-haiku-4-5-20251001` is `haiku-4-5`. */
+export function shortModel(model: string): string {
+  return model.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/\[[^\]]*\]$/, '')
 }
 
 /** Removes control characters a Text leaf may not hold, keeping newlines and tabs. */

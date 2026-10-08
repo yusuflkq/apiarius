@@ -1,16 +1,19 @@
 /**
- * The agent graph, Obsidian style: you, the main loop, every subagent and
- * outside peer as nodes, spawns and messages as links (files each agent
- * edited as small satellite nodes), laid out by a force simulation that
- * warm-starts from the last layout so the picture stays put as it grows.
+ * The agent map, Obsidian style: you, the Orchestrator (the main loop),
+ * every subagent and outside peer as nodes, spawns and messages as links
+ * (files each agent edited as small satellite nodes), laid out by a force
+ * simulation that warm-starts from the last layout so the picture stays put
+ * as it grows, and spreads wide to match the canvas.
  *
  * Drawn as an interactive SVG for the desktop (hover a node to light its
  * links, tooltips, pulsing live agents, packets flowing along links that
- * carried a message lately) and as an indented tree for the terminal.
+ * carried a message lately) filling the pane's width, and as an indented
+ * tree for the terminal.
  */
 import type { DeckAgent, DeckData } from '../types'
-import { baseName, hash, num, oneLine, trunc } from './format'
-import { MAIN, YOU, isEnded, isLive, labelOf, linksOf } from './model'
+import { svgOpen } from './charts'
+import { baseName, hash, oneLine, trunc } from './format'
+import { MAIN, YOU, isEnded, isLive, labelOf, linksOf, totalsOf } from './model'
 
 export type GNodeKind = 'you' | 'main' | 'agent' | 'peer' | 'file'
 
@@ -81,18 +84,23 @@ export function statusWord(agent: DeckAgent): string {
   }
 }
 
-function tipOf(agent: DeckAgent, now: number): string {
-  const lines = [
-    `${agent.name} · ${agent.type}`,
-    `status: ${statusWord(agent)}`,
-    `${agent.tools} tool calls${agent.errors ? `, ${agent.errors} failed` : ''}`,
-  ]
-  if (agent.added || agent.removed) lines.push(`+${agent.added} −${agent.removed} lines in ${agent.files.length} files`)
-  if (agent.tokensOut) lines.push(`${num(agent.tokensIn + agent.cacheRead)} in · ${num(agent.tokensOut)} out tokens`)
-  if (agent.current) lines.push(`now: ${agent.current.tool} ${agent.current.target}`)
-  if (agent.description && agent.kind !== 'main') lines.push(`task: ${trunc(oneLine(agent.description), 80)}`)
-  if (now - agent.startedAt > 0 && agent.kind !== 'you') lines.push(`started ${Math.round((now - agent.startedAt) / 60_000)}m ago`)
+/**
+ * A node's tooltip: who it is and what it was asked, nothing that moves with
+ * every tool call, so the drawing (and the frame showing it) stays the same
+ * until something on the map changes. The Flow tab has the live numbers.
+ */
+function tipOf(agent: DeckAgent): string {
+  const lines = [`${labelOf(agent)} · ${agent.kind === 'main' ? 'orchestrator' : agent.type}`]
+  if (agent.kind !== 'you') lines.push(`status: ${statusWord(agent)}`)
+  if (agent.description && agent.kind !== 'main' && agent.kind !== 'you') lines.push(`task: ${trunc(oneLine(agent.description), 80)}`)
+  if (agent.model) lines.push(`model: ${agent.model}`)
   return lines.join('\n')
+}
+
+/** The line under the map: how many agents, messages and live ones. */
+export function captionOf(data: DeckData): string {
+  const totals = totalsOf(data)
+  return `${totals.agents} agent${totals.agents === 1 ? '' : 's'} · ${totals.messages} message${totals.messages === 1 ? '' : 's'} · ${totals.live} live`
 }
 
 /** Nodes and links for the session as it stands; files only when `withFiles`. */
@@ -103,7 +111,7 @@ export function buildGraph(data: DeckData, now: number, withFiles: boolean): Gra
 
   for (const agent of data.agents) {
     const size =
-      agent.kind === 'main' ? 15 : agent.kind === 'you' ? 12 : agent.kind === 'peer' ? 8 : 7 + Math.min(8, Math.sqrt(agent.tools))
+      agent.kind === 'main' ? 18 : agent.kind === 'you' ? 14 : agent.kind === 'peer' ? 10 : 9 + Math.min(8, Math.round(Math.sqrt(agent.tools)))
     nodes.push({
       id: agent.id,
       kind: agent.kind === 'teammate' ? 'agent' : agent.kind,
@@ -111,7 +119,7 @@ export function buildGraph(data: DeckData, now: number, withFiles: boolean): Gra
       color: colorOf(agent),
       r: size,
       isLive: agent.kind !== 'you' && agent.kind !== 'peer' && isLive(agent.status),
-      tip: tipOf(agent, now),
+      tip: tipOf(agent),
       ...(agent.parentId ? { anchor: agent.parentId } : {}),
     })
     ids.add(agent.id)
@@ -145,6 +153,7 @@ export function buildGraph(data: DeckData, now: number, withFiles: boolean): Gra
   }
 
   if (withFiles) {
+    const labels = new Map(nodes.map(node => [node.id, node.label]))
     const recent = new Map<string, { path: string; agents: Set<string>; last: number; count: number }>()
     for (const edit of data.edits) {
       const entry = recent.get(edit.path) ?? { path: edit.path, agents: new Set<string>(), last: 0, count: 0 }
@@ -163,9 +172,9 @@ export function buildGraph(data: DeckData, now: number, withFiles: boolean): Gra
         kind: 'file',
         label: trunc(baseName(file.path), 18),
         color: PALETTE.file,
-        r: 3.5 + Math.min(3, file.count / 2),
+        r: 4 + Math.min(3, Math.round(file.count / 2)),
         isLive: false,
-        tip: `${file.path}\n${file.count} edit${file.count === 1 ? '' : 's'} by ${owners.length} agent${owners.length === 1 ? '' : 's'}`,
+        tip: `${file.path}\nedited by ${owners.map(owner => labels.get(owner) ?? owner).join(', ')}`,
         anchor: owners[0] ?? MAIN,
       })
       ids.add(id)
@@ -184,9 +193,19 @@ export function shapeKeyOf(graph: Graph): string {
   return `${graph.nodes.map(node => node.id).join(',')}#${graph.edges.map(edge => `${edge.a}-${edge.b}`).join(',')}`
 }
 
+/** The ideal length of a link, in the layout's units. */
+export const LINK_LENGTH = 120
+
 /**
- * Force layout (Fruchterman–Reingold with gravity), the main loop pinned at
- * the origin; known nodes start where they were, new ones beside their anchor.
+ * Pull towards the middle on each axis: weaker across than down, so the
+ * layout spreads about as wide as the map's canvas is (1.7 to 1).
+ */
+const GRAVITY = { x: 0.03, y: 0.09 } as const
+
+/**
+ * Force layout (Fruchterman–Reingold with gravity), the Orchestrator pinned
+ * at the origin; known nodes start where they were, new ones beside their
+ * anchor.
  */
 export function layoutOf(graph: Graph, previous: ReadonlyMap<string, Pt>): Map<string, Pt> {
   const nodes = graph.nodes
@@ -194,7 +213,7 @@ export function layoutOf(graph: Graph, previous: ReadonlyMap<string, Pt>): Map<s
   const index = new Map(nodes.map((node, i) => [node.id, i]))
   const xs = new Float64Array(count)
   const ys = new Float64Array(count)
-  const K = 74
+  const K = LINK_LENGTH
   let known = 0
 
   nodes.forEach((node, i) => {
@@ -207,15 +226,15 @@ export function layoutOf(graph: Graph, previous: ReadonlyMap<string, Pt>): Map<s
     }
     const anchor = node.anchor ? previous.get(node.anchor) : undefined
     const angle = ((hash(node.id) % 360) * Math.PI) / 180
-    const reach = node.kind === 'file' ? 40 : node.kind === 'you' ? 90 : 80
-    xs[i] = (anchor?.x ?? 0) + Math.cos(angle) * reach
-    ys[i] = (anchor?.y ?? 0) + Math.sin(angle) * reach
+    const reach = node.kind === 'file' ? K * 0.45 : K
+    xs[i] = (anchor?.x ?? 0) + Math.cos(angle) * reach * 1.4
+    ys[i] = (anchor?.y ?? 0) + Math.sin(angle) * reach * 0.8
   })
 
   const pinned = index.get(MAIN)
   const isWarm = known >= count * 0.6 && known > 0
   const rounds = isWarm ? 90 : 260
-  let heat = isWarm ? 14 : 70
+  let heat = isWarm ? K * 0.19 : K * 0.95
 
   const springs = graph.edges
     .map(edge => {
@@ -223,7 +242,7 @@ export function layoutOf(graph: Graph, previous: ReadonlyMap<string, Pt>): Map<s
       const b = index.get(edge.b)
       if (a === undefined || b === undefined) return null
       const weight = edge.kind === 'file' ? 0.7 : edge.kind === 'talk' ? 1.2 + Math.log1p(edge.ab + edge.ba) * 0.25 : 1
-      const length = edge.kind === 'file' ? K * 0.55 : K
+      const length = edge.kind === 'file' ? K * 0.5 : K
       return { a, b, weight, length }
     })
     .filter((spring): spring is { a: number; b: number; weight: number; length: number } => spring !== null)
@@ -272,8 +291,8 @@ export function layoutOf(graph: Graph, previous: ReadonlyMap<string, Pt>): Map<s
 
     for (let i = 0; i < count; i++) {
       if (i === pinned) continue
-      const gx = (dx[i] ?? 0) - (xs[i] ?? 0) * 0.06
-      const gy = (dy[i] ?? 0) - (ys[i] ?? 0) * 0.06
+      const gx = (dx[i] ?? 0) - (xs[i] ?? 0) * GRAVITY.x
+      const gy = (dy[i] ?? 0) - (ys[i] ?? 0) * GRAVITY.y
       const length = Math.sqrt(gx * gx + gy * gy) || 0.01
       const step = Math.min(length, heat)
       xs[i] = (xs[i] ?? 0) + (gx / length) * step
@@ -285,7 +304,7 @@ export function layoutOf(graph: Graph, previous: ReadonlyMap<string, Pt>): Map<s
       ys[pinned] = 0
     }
 
-    heat = Math.max(0.6, heat * (isWarm ? 0.96 : 0.975))
+    heat = Math.max(K / 120, heat * (isWarm ? 0.96 : 0.975))
   }
 
   const out = new Map<string, Pt>()
@@ -303,12 +322,22 @@ function fixed(n: number): string {
 
 export type SvgSize = { width: number; height: number }
 
-/** The graph as a self-contained interactive SVG document. */
-export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: SvgSize, caption: string): string {
+/**
+ * The map's logical canvas: about a pane wide, so 13px labels read as 13px
+ * where the pane is that wide; the markup declares a far larger width, so
+ * the desktop scales it to the pane's full width.
+ */
+export const MAP_SIZE: SvgSize = { width: 960, height: 560 }
+
+/** The most a layout unit is magnified, so a map of two nodes is not drawn edge to edge. */
+const MAX_SCALE = 2.4
+
+/** The graph as a self-contained interactive SVG document filling `size` (the map's canvas by default). */
+export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: SvgSize = MAP_SIZE, caption = ''): string {
   const { width, height } = size
-  const pad = 34
-  const top = 34
-  const bottom = 30
+  const padX = 74
+  const top = caption ? 48 : 30
+  const bottom = 58
   const points = graph.nodes.map(node => positions.get(node.id) ?? { x: 0, y: 0 })
   const minX = Math.min(...points.map(p => p.x), 0)
   const maxX = Math.max(...points.map(p => p.x), 0)
@@ -316,7 +345,7 @@ export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: Sv
   const maxY = Math.max(...points.map(p => p.y), 0)
   const spanX = Math.max(1, maxX - minX)
   const spanY = Math.max(1, maxY - minY)
-  const scale = Math.min((width - pad * 2) / spanX, (height - top - bottom - pad) / spanY, 1.6)
+  const scale = Math.min((width - padX * 2) / spanX, (height - top - bottom) / spanY, MAX_SCALE)
   const offX = (width - spanX * scale) / 2 - minX * scale
   const offY = top + (height - top - bottom - spanY * scale) / 2 - minY * scale
   const at = (id: string): Pt => {
@@ -341,13 +370,13 @@ export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: Sv
     `.e.file{stroke:#2c3244;stroke-dasharray:2 3}`,
     `.e.work{stroke:${PALETTE.running};opacity:.6}`,
     `.n{transition:opacity .15s}`,
-    `.n text{fill:${PALETTE.text};font-size:11px;paint-order:stroke;stroke:${PALETTE.bg1};stroke-width:3px;stroke-linejoin:round}`,
-    `.n.file text{fill:${PALETTE.dim};font-size:9px}`,
-    `.n.main text,.n.you text{font-weight:600;font-size:12px}`,
+    `.n text{fill:${PALETTE.text};font-size:13px;paint-order:stroke;stroke:${PALETTE.bg1};stroke-width:4px;stroke-linejoin:round}`,
+    `.n.file text{fill:${PALETTE.dim};font-size:11px}`,
+    `.n.main text,.n.you text{font-weight:600;font-size:14px}`,
     `.n:hover .core{stroke:#fff;stroke-width:2}`,
     `.pk{fill:#ddd6fe}`,
-    `.cap{fill:${PALETTE.dim};font-size:11px}`,
-    `.lg text{fill:${PALETTE.dim};font-size:10px}`,
+    `.cap{fill:${PALETTE.dim};font-size:13px}`,
+    `.lg text{fill:${PALETTE.dim};font-size:12px}`,
     `svg:has(.n:hover) .n{opacity:.22}`,
     `svg:has(.n:hover) .e{opacity:.07}`,
     `svg:has(.n:hover) .pk{opacity:.15}`,
@@ -395,8 +424,8 @@ export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: Sv
 
     if (edge.kind === 'talk' && edge.isActive) {
       const dur = (1.2 + d / 260).toFixed(2)
-      if (edge.ab > 0) packets.push(`<circle class="pk l${ia} l${ib}" r="2.6"><animateMotion dur="${dur}s" repeatCount="indefinite" path="${path}"/></circle>`)
-      if (edge.ba > 0) packets.push(`<circle class="pk l${ia} l${ib}" r="2.6"><animateMotion dur="${dur}s" begin="${(Number(dur) / 2).toFixed(2)}s" repeatCount="indefinite" path="${back}"/></circle>`)
+      if (edge.ab > 0) packets.push(`<circle class="pk l${ia} l${ib}" r="3"><animateMotion dur="${dur}s" repeatCount="indefinite" path="${path}"/></circle>`)
+      if (edge.ba > 0) packets.push(`<circle class="pk l${ia} l${ib}" r="3"><animateMotion dur="${dur}s" begin="${(Number(dur) / 2).toFixed(2)}s" repeatCount="indefinite" path="${back}"/></circle>`)
     }
   })
 
@@ -404,39 +433,44 @@ export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: Sv
     const p = at(node.id)
     const near = [...(neighbors[i] ?? [])].map(j => `q${j}`).join(' ')
     const halo = node.isLive
-      ? `<circle r="${fixed(node.r + 4)}" fill="${node.color}" opacity=".25"><animate attributeName="r" values="${fixed(node.r + 2)};${fixed(node.r + 11)};${fixed(node.r + 2)}" dur="1.8s" repeatCount="indefinite"/><animate attributeName="opacity" values=".35;0;.35" dur="1.8s" repeatCount="indefinite"/></circle>`
+      ? `<circle r="${fixed(node.r + 4)}" fill="${node.color}" opacity=".25"><animate attributeName="r" values="${fixed(node.r + 2)};${fixed(node.r + 12)};${fixed(node.r + 2)}" dur="1.8s" repeatCount="indefinite"/><animate attributeName="opacity" values=".35;0;.35" dur="1.8s" repeatCount="indefinite"/></circle>`
       : ''
     const glow = node.kind === 'file' ? '' : ' filter="url(#glow)"'
-    const label = `<text y="${fixed(node.r + 13)}" text-anchor="middle">${esc(node.label)}</text>`
+    const label = `<text y="${fixed(node.r + 17)}" text-anchor="middle">${esc(node.label)}</text>`
     return `<g class="n ${node.kind} ${near}" id="n${i}" transform="translate(${fixed(p.x)} ${fixed(p.y)})"><title>${esc(node.tip)}</title>${halo}<circle class="core" r="${fixed(node.r)}" fill="${node.color}"${glow}/>${label}</g>`
   })
 
+  let x = 20
   const legend = [
     ['you', PALETTE.you],
-    ['main', PALETTE.main],
+    ['orchestrator', PALETTE.main],
     ['running', PALETTE.running],
     ['waiting', PALETTE.waiting],
     ['done', PALETTE.done],
     ['failed', PALETTE.failed],
     ['file', PALETTE.file],
   ]
-    .map(([name, color], i) => `<g transform="translate(${16 + i * 66} ${height - 14})"><circle r="4.5" fill="${color}"/><text x="9" y="3.5">${name}</text></g>`)
+    .map(([name = '', color = '']) => {
+      const item = `<g transform="translate(${x} ${height - 18})"><circle r="5.5" fill="${color}"/><text x="11" y="4.5">${name}</text></g>`
+      x += 26 + name.length * 7
+      return item
+    })
     .join('')
 
-  const links = `<g transform="translate(${Math.max(16, width - 190)} ${height - 14})"><path d="M0 0H22" stroke="${PALETTE.edge}" stroke-width="2"/><text x="27" y="3.5">spawned</text><path d="M84 0H106" stroke="${PALETTE.talk}" stroke-width="2" stroke-dasharray="7 5"/><text x="111" y="3.5">talking</text></g>`
+  const links = `<g transform="translate(${Math.max(x + 16, width - 230)} ${height - 18})"><path d="M0 0H26" stroke="${PALETTE.edge}" stroke-width="2.5"/><text x="32" y="4.5">delegated</text><path d="M110 0H136" stroke="${PALETTE.talk}" stroke-width="2.5" stroke-dasharray="7 5"/><text x="142" y="4.5">talking</text></g>`
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif">`,
+    svgOpen(width, height, ` font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif"`),
     '<defs>',
-    `<radialGradient id="bg" cx="50%" cy="42%" r="78%"><stop offset="0" stop-color="${PALETTE.bg0}"/><stop offset="1" stop-color="${PALETTE.bg1}"/></radialGradient>`,
+    `<radialGradient id="bg" cx="50%" cy="45%" r="75%"><stop offset="0" stop-color="${PALETTE.bg0}"/><stop offset="1" stop-color="${PALETTE.bg1}"/></radialGradient>`,
     '<filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="2.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>',
     `<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 1L10 5L0 9z" fill="${PALETTE.edge}"/></marker>`,
     `<marker id="arrt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 1L10 5L0 9z" fill="${PALETTE.talk}"/></marker>`,
     `<marker id="arrs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10 1L0 5L10 9z" fill="${PALETTE.talk}"/></marker>`,
     '</defs>',
     `<style>${css.join('')}</style>`,
-    `<rect width="${width}" height="${height}" rx="12" fill="url(#bg)"/>`,
-    `<text class="cap" x="16" y="22">${esc(caption)}</text>`,
+    `<rect width="${width}" height="${height}" fill="url(#bg)"/>`,
+    caption ? `<text class="cap" x="20" y="28">${esc(caption)}</text>` : '',
     `<g>${edgeMarkup.join('')}</g>`,
     `<g>${packets.join('')}</g>`,
     `<g>${nodeMarkup.join('')}</g>`,
@@ -447,7 +481,7 @@ export function svgOf(graph: Graph, positions: ReadonlyMap<string, Pt>, size: Sv
 
 function edgeTitle(graph: Graph, edge: GEdge): string {
   const name = (id: string) => graph.nodes.find(node => node.id === id)?.label ?? id
-  if (edge.ab + edge.ba === 0) return `${name(edge.a)} spawned ${name(edge.b)}`
+  if (edge.ab + edge.ba === 0) return `${name(edge.a)} delegated to ${name(edge.b)}`
   return `${name(edge.a)} → ${name(edge.b)}: ${edge.ab}\n${name(edge.b)} → ${name(edge.a)}: ${edge.ba}`
 }
 

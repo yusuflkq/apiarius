@@ -99,8 +99,18 @@ export type FileDiff = {
   at: number
 }
 
+/**
+ * A repository the deck can show: the session's own, or one an agent edited
+ * a file in. `root` is the top level as git prints it (`C:/Users/...` on
+ * Windows), `name` its last segment, `lastEditAt` the time of the last edit
+ * an agent made in it (0 for none yet), `isCwd` whether it holds the
+ * session's working directory.
+ */
+export type GitRepo = { root: string; name: string; lastEditAt: number; isCwd: boolean }
+
 export type GitState = {
   isRepo: boolean | null
+  /** The repository shown (every git command runs there); '' for none. */
   root: string
   branch: string
   head: string
@@ -115,6 +125,10 @@ export type GitState = {
   sessionCommits: number
   checkedAt: number
   error?: string
+  /** Every repository found so far, the one edited last first. */
+  repos: GitRepo[]
+  /** The root the person pinned the deck to; '' while it follows the work. */
+  pinned: string
 }
 
 export function emptyGit(): GitState {
@@ -133,6 +147,8 @@ export function emptyGit(): GitState {
     today: { commits: 0, added: 0, removed: 0 },
     sessionCommits: 0,
     checkedAt: 0,
+    repos: [],
+    pinned: '',
   }
 }
 

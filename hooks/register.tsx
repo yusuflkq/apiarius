@@ -14,6 +14,7 @@ import * as F from './format'
 import * as G from './git'
 import { buildGraph, layoutOf, shapeKeyOf, svgOf, type Pt } from './graph'
 import * as M from './model'
+import * as R from './repos'
 import { bandView, deckView, type Actions, type ChatLine, type DayRow, type DeckModel, type Kit, type UsageInfo } from './views'
 
 const PANE = 'agent-deck'
@@ -75,14 +76,105 @@ async function restore($: EngineInterface, now: number): Promise<boolean> {
   return false
 }
 
-async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 15_000): Promise<{ ok: boolean; out: string; err: string }> {
-  const where = git.root || cwd
+const REPO_PIN = { plugin: 'agent-deck', key: 'repo' } as const
+
+/** Which repository each directory agents edit in belongs to, and the one the deck follows. */
+let book: R.RepoBook = R.emptyBook()
+/** The pin as `$.state` holds it. */
+let savedPin = ''
+/** The root the edits' display paths are made against; null until the first look. */
+let shownRoot: string | null = null
+
+/** Runs git in `where`, the repository shown unless told otherwise; with none, runs nothing. */
+async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 15_000, where = git.root): Promise<{ ok: boolean; out: string; err: string }> {
+  if (!where) return { ok: false, out: '', err: 'not in a git repository' }
   try {
-    const ran = await $.process.run(args, where ? { cwd: where, env: G.GIT_ENV, timeoutMs } : { env: G.GIT_ENV, timeoutMs })
+    const ran = await $.process.run(args, { cwd: where, env: G.GIT_ENV, timeoutMs })
     return { ok: ran.exitCode === 0, out: ran.stdout, err: ran.stderr }
   } catch (error) {
     return { ok: false, out: '', err: error instanceof Error ? error.message : String(error) }
   }
+}
+
+/** The root of the repository holding `dir` as git spells it; null outside one, or where git cannot run. */
+async function probeRoot($: EngineInterface, dir: string): Promise<string | null> {
+  const ran = await runGit($, G.argv.toplevel, 10_000, dir || '.')
+  return (ran.ok && R.rootOf(ran.out)) || null
+}
+
+/** Probes what the book has not seen yet (the session's directory, a kept pin, each new edited directory), four at a time. */
+async function discoverRepos($: EngineInterface): Promise<void> {
+  const probes = R.probesOf(book)
+  for (let i = 0; i < probes.length; i += 4) {
+    await Promise.all(probes.slice(i, i + 4).map(async probe => R.settle(book, probe, await probeRoot($, probe.dir))))
+  }
+}
+
+/** Keeps the pin in `$.state`, so a reload of the deck keeps it too. */
+function savePin($: EngineInterface) {
+  if (book.pinned === savedPin) return
+  savedPin = book.pinned
+  void $.state.set(REPO_PIN, book.pinned).catch(() => undefined)
+}
+
+/** Starts following the work: the session's repository, the ones restored edits lie in, and a pin kept from before a reload. */
+async function startRepos($: EngineInterface): Promise<void> {
+  R.setCwd(book, cwd)
+  for (const edit of data.edits) R.noteEdit(book, edit.abs, edit.at)
+  try {
+    const { value } = await $.state.get(REPO_PIN)
+    if (typeof value === 'string') {
+      book.pinned = value
+      savedPin = value
+    }
+  } catch {
+    // no pin kept: the deck follows the work
+  }
+  await refreshGit($, true)
+}
+
+/**
+ * Pins the deck to the repository holding `root` (a root from `git.repos`,
+ * or any directory inside a repository); '' lets it follow the work again:
+ * the repository an agent edited last, else the session's own.
+ */
+async function chooseRepo($: EngineInterface, root: string): Promise<void> {
+  const wanted = root.trim()
+  let pin = ''
+  if (wanted) {
+    const known = R.lookup(book, wanted)
+    pin = (known === undefined ? await probeRoot($, wanted) : known) ?? ''
+    if (!pin) {
+      $.ui.toast(`Not in a git repository: ${wanted}`)
+      return
+    }
+    if (known === undefined) R.settleDir(book, wanted, pin)
+  }
+  book.pinned = pin
+  savePin($)
+  git = { ...git, pinned: pin, repos: R.repoList(book) }
+  redraw($)
+  await refreshGit($, true)
+}
+
+/**
+ * Moves the deck to the repository at `root` ('' for none): the file and
+ * commit open in the last one close, and edits read from the new root.
+ */
+function switchRepo($: EngineInterface, root: string) {
+  const from = shownRoot ?? R.rootOfEdits(data.edits)
+  if (shownRoot !== null || (from !== '' && !R.sameRoot(from, root))) {
+    fileDiff = null
+    commit = null
+    view.file = ''
+    view.commit = ''
+  }
+  for (const edit of data.edits) edit.path = M.relOf(edit.abs, root || null)
+  for (const agent of data.agents) agent.files = [...new Set(agent.files.map(path => R.rerootPath(path, from, root)))]
+  shownRoot = root
+  lastHeavyAt = 0
+  git = { ...G.emptyGit(), root, repos: R.repoList(book), pinned: book.pinned }
+  save($)
 }
 
 function joinPath(root: string, rel: string): string {
@@ -113,7 +205,11 @@ function scheduleGit($: EngineInterface, ms: number, isHeavy = false) {
   })
 }
 
-/** Reads the repository: branch, uncommitted files with counts, and (when HEAD moved) the log and day totals. */
+/**
+ * Reads the repository the deck follows (after probing any directory agents
+ * newly edited in): branch, uncommitted files with counts, and (when HEAD
+ * moved) the log and day totals.
+ */
 async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
   if (isGitBusy) {
     isGitQueued = true
@@ -123,28 +219,32 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
   isGitBusy = true
 
   try {
+    await discoverRepos($)
     const now = await $.clock.now()
+    const root = R.activeRoot(book)
+    if (shownRoot === null || !R.sameRoot(root, shownRoot)) switchRepo($, root)
+    const repos = R.repoList(book)
 
-    if (!git.root) {
-      const top = await runGit($, G.argv.toplevel)
-      if (!top.ok || top.out.trim() === '') {
-        git = { ...G.emptyGit(), isRepo: false, checkedAt: now }
-        return
-      }
-      git = { ...git, root: top.out.trim(), isRepo: true }
-      for (const edit of data.edits) edit.path = M.relOf(edit.abs, git.root)
-      for (const agent of data.agents) agent.files = [...new Set(agent.files.map(path => M.relOf(path, git.root)))]
+    if (!root) {
+      git = { ...G.emptyGit(), isRepo: false, checkedAt: now, repos, pinned: book.pinned }
+      return
     }
 
-    const [branch, head, status] = await Promise.all([runGit($, G.argv.branch), runGit($, G.argv.head), runGit($, G.argv.status)])
+    const run = (args: readonly string[]) => runGit($, args, 15_000, root)
+    const [branch, head, status] = await Promise.all([run(G.argv.branch), run(G.argv.head), run(G.argv.status)])
 
     if (!status.ok) {
-      git = { ...G.emptyGit(), isRepo: false, checkedAt: now, error: F.trunc(status.err.trim(), 200) }
+      if (!R.sameRoot((await probeRoot($, root)) ?? '', root)) {
+        // gone: follow the work to another repository, if any
+        R.dropRepo(book, root)
+        isGitQueued = true
+      }
+      git = { ...G.emptyGit(), root, isRepo: false, checkedAt: now, error: F.trunc(status.err.trim(), 200), repos: R.repoList(book), pinned: book.pinned }
       return
     }
 
     const headHash = head.ok ? head.out.trim() : ''
-    const numstat = await runGit($, G.argv.numstat(headHash ? 'HEAD' : G.EMPTY_TREE))
+    const numstat = await run(G.argv.numstat(headHash ? 'HEAD' : G.EMPTY_TREE))
     const rows = G.parseStatus(status.out)
     const untracked = new Map<string, number>()
     await Promise.all(
@@ -152,7 +252,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
         .filter(row => row.x === '?')
         .slice(0, 30)
         .map(async row => {
-          const lines = await lineCountOf($, joinPath(git.root, row.path))
+          const lines = await lineCountOf($, joinPath(root, row.path))
           if (lines !== null) untracked.set(row.path, lines)
         }),
     )
@@ -167,18 +267,20 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
       added: files.reduce((sum, file) => sum + file.added, 0),
       removed: files.reduce((sum, file) => sum + file.removed, 0),
       checkedAt: now,
+      repos,
+      pinned: book.pinned,
     }
 
     const isMoved = headHash !== git.head
     if (isMoved || isHeavy || now - lastHeavyAt > 60_000) {
       lastHeavyAt = now
       const [log, upstream, aheadBehind, todayCount, todayStat, sessionCount] = await Promise.all([
-        runGit($, G.argv.log(30)),
-        runGit($, G.argv.upstream),
-        runGit($, G.argv.aheadBehind),
-        runGit($, G.argv.countSince('midnight')),
-        runGit($, G.argv.statSince('midnight')),
-        runGit($, G.argv.countSince(G.sinceOf(data.startedAt - 60_000))),
+        run(G.argv.log(30)),
+        run(G.argv.upstream),
+        run(G.argv.aheadBehind),
+        run(G.argv.countSince('midnight')),
+        run(G.argv.statSince('midnight')),
+        run(G.argv.countSince(G.sinceOf(data.startedAt - 60_000))),
       ])
       const [behind = 0, ahead = 0] = aheadBehind.ok ? aheadBehind.out.trim().split(/\s+/).map(Number) : [0, 0]
       next.commits = log.ok ? G.parseLog(log.out) : []
@@ -193,6 +295,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     if (view.file && view.tab === 'diffs' && view.filter === 'all') void loadFileDiff($, view.file)
   } finally {
     isGitBusy = false
+    savePin($)
     lastGitAt = await $.clock.now()
     redraw($)
     if (isGitQueued) {
@@ -203,28 +306,30 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
 }
 
 async function loadFileDiff($: EngineInterface, path: string): Promise<void> {
+  const { root, head } = git
   const row = git.files.find(file => file.path === path)
   const now = await $.clock.now()
+  let found: G.FileDiff
 
   if (!row) {
-    fileDiff = { path, hunks: [], isBinary: false, note: 'This file has no uncommitted changes any more.', at: now }
+    found = { path, hunks: [], isBinary: false, note: 'This file has no uncommitted changes any more.', at: now }
   } else if (row.isUntracked) {
     try {
-      const abs = joinPath(git.root, path)
+      const abs = joinPath(root, path)
       const stat = await $.fs.stat(abs)
       if (stat.size > 2_000_000) {
-        fileDiff = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(stat.size / 1024)} KB: too big to show.`, at: now }
+        found = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(stat.size / 1024)} KB: too big to show.`, at: now }
       } else {
         const text = await $.fs.read(abs)
-        fileDiff = text.includes('\u0000') ? { path, hunks: [], isBinary: true, at: now } : { path, hunks: addedFileHunks(text), isBinary: false, at: now }
+        found = text.includes('\u0000') ? { path, hunks: [], isBinary: true, at: now } : { path, hunks: addedFileHunks(text), isBinary: false, at: now }
       }
     } catch {
-      fileDiff = { path, hunks: [], isBinary: false, note: 'Could not read this new file.', at: now }
+      found = { path, hunks: [], isBinary: false, note: 'Could not read this new file.', at: now }
     }
   } else {
     const paths = row.oldPath ? [row.oldPath, path] : [path]
-    const ran = await runGit($, G.argv.fileDiff(git.head ? 'HEAD' : G.EMPTY_TREE, paths))
-    fileDiff = {
+    const ran = await runGit($, G.argv.fileDiff(head ? 'HEAD' : G.EMPTY_TREE, paths), 15_000, root)
+    found = {
       path,
       hunks: hunksOf(ran.out),
       isBinary: /^Binary files /m.test(ran.out),
@@ -233,17 +338,21 @@ async function loadFileDiff($: EngineInterface, path: string): Promise<void> {
     }
   }
 
+  // a diff read in the repository the deck has since left stays unshown
+  if (!R.sameRoot(root, git.root)) return
+  fileDiff = found
   redraw($)
 }
 
 async function loadCommit($: EngineInterface, hash: string): Promise<void> {
+  const root = git.root
   const [meta, numstat, patch] = await Promise.all([
-    runGit($, G.argv.showMeta(hash)),
-    runGit($, G.argv.showNumstat(hash)),
-    runGit($, G.argv.showPatch(hash), 30_000),
+    runGit($, G.argv.showMeta(hash), 15_000, root),
+    runGit($, G.argv.showNumstat(hash), 15_000, root),
+    runGit($, G.argv.showPatch(hash), 30_000, root),
   ])
 
-  if (view.commit !== hash) return
+  if (view.commit !== hash || !R.sameRoot(root, git.root)) return
   if (!meta.ok) {
     commit = null
     $.ui.toast(`Could not read commit ${hash.slice(0, 7)}`)
@@ -645,6 +754,8 @@ function recordEdit(agent: DeckAgent, tool: string, id: string, input: Record<st
     patch: patchOf(hunks, M.LIMITS.patchChars),
     isNew,
   })
+  // the next git refresh probes a directory not seen before, and follows the repository edited last
+  R.noteEdit(book, abs, now)
 }
 
 /** Marks the commits a shell command made as that agent's. */
@@ -705,7 +816,7 @@ export const register: Register = on => {
       // the model shows once a request reports it
     }
 
-    void refreshGit($, true)
+    void startRepos($)
     void loadDays($)
     void syncAgents($)
     timers.tick = $.clock.every(2500, () => void tick($))

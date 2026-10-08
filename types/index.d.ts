@@ -90,6 +90,7 @@ export type DeckAgentPane = 'activity' | 'edits' | 'chat'
 
 export type DeckView = {
   tab: DeckTab
+  /** The agent whose card is open on the Flow tab; '' when none is. */
   agent: string
   agentPane: DeckAgentPane
   file: string
@@ -107,6 +108,10 @@ export type DeckSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-deck': { snapshot: DeckSnapshot }
+    'agent-deck': {
+      snapshot: DeckSnapshot
+      /** The repository root the person pinned the deck to; '' while it follows the work. */
+      repo: string
+    }
   }
 }

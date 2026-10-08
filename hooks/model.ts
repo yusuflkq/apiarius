@@ -21,6 +21,8 @@ import { baseName, oneLine, trunc, truncStart } from './format'
 
 export const MAIN = 'main'
 export const YOU = 'you'
+/** What the deck calls the main loop (internal id `main`) everywhere it draws it. */
+export const ORCHESTRATOR = 'Orchestrator'
 export const SNAPSHOT_VERSION = 2
 
 export const LIMITS = {
@@ -133,11 +135,24 @@ function pruneAgents(data: DeckData) {
   data.agents = data.agents.filter(agent => !drop.has(agent.id))
 }
 
-/** A short label for the agent: its name, else its description, else its type. */
+/** A short label for the agent: its name, else its description, else its type; the main loop is the Orchestrator. */
 export function labelOf(agent: DeckAgent): string {
-  if (agent.kind === 'you' || agent.kind === 'main') return agent.name
+  if (agent.kind === 'main') return ORCHESTRATOR
+  if (agent.kind === 'you') return agent.name
   const named = agent.name && !agent.name.startsWith('agent-') ? agent.name : ''
   return trunc(named || agent.description || agent.type || agent.name, 28)
+}
+
+/**
+ * Who handed `agent` its work, for drawing: you for the Orchestrator, the
+ * agent that spawned a subagent (the Orchestrator when that one is gone or
+ * unknown), nobody for you and outside peers.
+ */
+export function parentIdOf(data: DeckData, agent: DeckAgent): string | undefined {
+  if (agent.kind === 'you' || agent.kind === 'peer') return undefined
+  if (agent.kind === 'main') return YOU
+  const parent = agent.parentId
+  return parent && parent !== agent.id && parent !== YOU && agentOf(data, parent) ? parent : MAIN
 }
 
 export function minuteOf(now: number): number {
