@@ -81,21 +81,20 @@ function isBackground(agent: DeckAgent): boolean {
   return M.isFolded(agent)
 }
 
-/** What the engine waits on the person for, in few words (`allow Bash "npm test"`); '' while it waits on nothing. */
-function waitWordsOf(data: DeckData): string {
-  const needs = M.agentOf(data, M.MAIN)?.needs
-  return needs ? M.waitingOnOf(data, needs) : ''
+/** What the engine waits on the person for agent `id`, as a line of its own ("Asks: Which library?", "Needs your OK to run `npm test`"); '' while it waits on nothing. */
+function waitWordsOf(data: DeckData, id: string): string {
+  return M.waitLineOf(M.waitPhraseOf(data, id))
 }
 
 /**
- * Whether the engine waits on the person for `id`: the Orchestrator's
- * needs-you note names it (a note naming no agent is the Orchestrator's own).
- * An agent the engine lists as waiting with no such note waits on its own
- * work, not on you.
+ * Whether the engine waits on the person for `id`: a call of its is held on
+ * them (a question, a permission prompt), or the Orchestrator's needs-you
+ * note names it (a note naming no agent is the Orchestrator's own). An
+ * agent the engine lists as waiting with neither waits on its own work, not on you.
+ * With `isIdleCounted` false, a note that Claude is only idle does not count.
  */
-export function waitsOnYou(data: DeckData, id: string): boolean {
-  const needs = M.agentOf(data, M.MAIN)?.needs
-  return needs !== undefined && (needs.agent ?? M.MAIN) === id
+export function waitsOnYou(data: DeckData, id: string, isIdleCounted = true): boolean {
+  return M.waitsOnYou(data, id, isIdleCounted)
 }
 
 /** `status` (the agent's `statusOf`) as the deck draws it: a wait on anything but you is work going on, so it runs. */
@@ -406,10 +405,9 @@ function failureOf(agent: DeckAgent, root: string): string {
   return ''
 }
 
-/** "Waits on you: allow Bash "npm test"": what the engine waits on the person for. */
-function waitsNote(data: DeckData): { note: string; noteTone: NoteTone } {
-  const what = waitWordsOf(data)
-  return { note: what ? `Waits on you: ${what}` : 'Waits on you', noteTone: 'waiting' }
+/** "Asks: Which library?", "Needs your OK to run `npm test`": what the engine waits on the person for, for agent `id`. */
+function waitsNote(data: DeckData, id: string): { note: string; noteTone: NoteTone } {
+  return { note: waitWordsOf(data, id) || 'Waits on you', noteTone: 'waiting' }
 }
 
 /** An agent held on work of its own, not on you: the child at work under it, else its background work. */
@@ -427,7 +425,7 @@ function heldNote(node: Node): { note: string; noteTone: NoteTone } {
 function noteOf(data: DeckData, node: Node, agent: DeckAgent, status: DeckShownStatus, root: string): { note: string; noteTone: NoteTone } {
   switch (status) {
     case 'waiting':
-      return waitsOnYou(data, agent.id) ? waitsNote(data) : heldNote(node)
+      return waitsOnYou(data, agent.id) ? waitsNote(data, agent.id) : heldNote(node)
     case 'failed': {
       if (agent.status === 'killed') return { note: 'Stopped', noteTone: 'dim' }
       const why = failureOf(agent, root)
@@ -446,7 +444,7 @@ function noteOf(data: DeckData, node: Node, agent: DeckAgent, status: DeckShownS
 
 /** The Orchestrator's state, said inline on its row: waiting on you, on the agents it started, or what it is at. */
 function orchestratorNoteOf(data: DeckData, node: Node, main: DeckAgent | undefined, status: DeckShownStatus): { note: string; noteTone: NoteTone } {
-  if (status === 'waiting') return waitsOnYou(data, M.MAIN) ? waitsNote(data) : heldNote(node)
+  if (status === 'waiting') return waitsOnYou(data, M.MAIN) ? waitsNote(data, M.MAIN) : heldNote(node)
   const live = data.agents.filter(agent => isWorker(agent) && !isBackground(agent) && M.isLive(agent.status) && M.parentIdOf(data, agent) === M.MAIN).length
   if (live > 0 && !main?.current) return { note: `waiting on ${F.plural(live, 'agent')}`, noteTone: 'dim' }
   if (status === 'running' && main) return { note: stepTextOf(main) || 'Working', noteTone: 'dim' }
@@ -631,8 +629,7 @@ function atWorkOf(data: DeckData): { running: number; waiting: number } {
     if (status === 'waiting') waiting += 1
     else if (status === 'running') running += 1
   }
-  const needs = M.agentOf(data, M.MAIN)?.needs
-  if (needs && needs.kind !== 'idle_prompt' && (needs.agent ?? M.MAIN) === M.MAIN) waiting += 1
+  if (M.waitsOnYou(data, M.MAIN, false)) waiting += 1
   return { running, waiting }
 }
 

@@ -1,15 +1,15 @@
 /**
  * The web deck's half of the mod: what `.web/<sessionId>/state.json` holds
- * (`webStateOf`, the v1 `WebState` of web/CONTRACT.md), the patch files
- * written beside it, and the lines the server prints back (`splitLines`,
- * `parseLine`, `routeOf`).
+ * (`webStateOf`, the v1 `WebState` of web/CONTRACT.md), the patch and
+ * message files written beside it, and the lines the server prints back
+ * (`splitLines`, `parseLine`, `routeOf`, and the checks on an answer).
  *
  * Pure, like the model: nothing here reads a clock but the `now` it is
  * handed, and every query is model.ts's own, so the page and the pane say
  * the same thing. The hooks module (register.tsx) writes the files, starts
  * the server and acts on the commands.
  */
-import type { DeckAgent, DeckData, DeckStepStatus, DeckView } from '../types'
+import type { DeckAgent, DeckData, DeckMessageKind, DeckPending, DeckStepStatus, DeckView } from '../types'
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
@@ -35,7 +35,7 @@ export type WebAgent = {
   /** The Orchestrator's is null; the user is not an agent here. */
   parent: string | null
   status: WebStatus
-  /** `allow Bash "npm test"` while it waits on the user. */
+  /** What it waits on you for, as the words after its label: `asks: Which library?`, `needs your OK to run \`npm test\``. */
   needsYou: string | null
   startedAt: number
   endedAt: number | null
@@ -89,7 +89,7 @@ export type WebState = {
   plan: { source: M.DeckPlanSource; steps: { key: string; text: string; status: DeckStepStatus; agents: string[] }[] }
   agents: WebAgent[]
   /** The newest 200, oldest first, each text at most 600 characters; 'you' is the user. */
-  messages: { id: string; at: number; from: string; to: string; kind: 'prompt' | 'spawn' | 'result' | 'message' | 'chat'; text: string }[]
+  messages: WebMessage[]
   /** The newest 150 tool calls of all agents, oldest first. */
   activity: { at: number; agent: string; tool: string; target: string; ok: boolean | null; ms: number | null }[]
   /** Every file agents edited, the one edited last first. */
@@ -100,10 +100,38 @@ export type WebState = {
   changes: { path: string; code: string; added: number; removed: number; editors: string[] }[]
   /** The newest 20, newest first. */
   commits: { hash: string; short: string; subject: string; author: string; at: number; added: number; removed: number; files: number; agent: string | null }[]
+  /** The calls the engine holds on you now, oldest first: questions the deck may answer, permission prompts it shows. */
+  pending: WebPending[]
+  /** What came of the page's commands, by their `id`: the newest 50, oldest first. */
+  acks: WebAck[]
 }
 
+export type WebMessage = {
+  /** `[A-Za-z0-9_-]` only; a cut one's whole text at /message/<id>. */
+  id: string
+  at: number
+  from: string
+  to: string
+  kind: DeckMessageKind
+  text: string
+  /** Its text was cut to 600 characters: the whole is at /message/<id>. */
+  isCut?: true
+  /** The id of the page's command that sent it: what came of it is the ack of that id. */
+  ackId?: string
+  /** A question's or a choice's call (the pending item's `id` while it is held). */
+  callId?: string
+}
+
+export type WebPending = Omit<DeckPending, 'questions'> & {
+  questions?: { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }[]
+  /** True only for a question this mod instance can still answer from the deck (its race is live); false after a reload. */
+  isAnswerable: boolean
+}
+
+export type WebAck = { id: string; ok: boolean; status: 'queued' | 'delivered' | 'answered' | 'failed'; text: string; at: number }
+
 /** The contract's sizes. */
-export const WEB_CAPS = { task: 2000, result: 4000, messages: 200, messageChars: 600, activity: 150, edits: 300, commits: 20 } as const
+export const WEB_CAPS = { task: 2000, result: 4000, messages: 200, messageChars: 600, activity: 150, edits: 300, commits: 20, acks: 50 } as const
 
 /** The longest command text the mod acts on. */
 export const MOST_TEXT = 4000
@@ -185,11 +213,13 @@ function statusOf(agent: DeckAgent, data: DeckData): WebStatus {
   return shownStatusOf(agent, data)
 }
 
-/** What the engine waits on the person for, when it waits for this agent: `allow Bash "npm test"`; null otherwise. */
+/**
+ * What the engine waits on the person for, when it waits for this agent, as
+ * the words after its label: `asks: Which library?`, `needs your OK to run
+ * \`npm test\``; null otherwise.
+ */
 function needsYouOf(data: DeckData, agent: DeckAgent): string | null {
-  const needs = M.agentOf(data, M.MAIN)?.needs
-  if (!needs || (needs.agent ?? M.MAIN) !== agent.id) return null
-  return M.waitingOnOf(data, needs)
+  return M.waitPhraseOf(data, agent.id) || null
 }
 
 /** Why an agent failed, in one line: its report's, else its last failed call's. */
@@ -211,7 +241,8 @@ export function agentLineOf(data: DeckData, agent: DeckAgent, root: string): str
 function nowLineOf(data: DeckData, agent: DeckAgent, status: WebStatus, needsYou: string | null, root: string): string {
   const last = M.lastActionOf(agent)
   const action = last?.text ?? ''
-  if (needsYou !== null) return `Waits on you: ${needsYou}`
+  // "Asks: Which library?", "Needs your OK to run `npm test`"
+  if (needsYou !== null) return M.waitLineOf(needsYou)
   if (agent.kind === 'main') {
     // between turns: what it last answered you; at work: its call in flight, the agents it waits on, its step. An earlier
     // turn's last call is no news (a background agent's notification starts a turn long after it), so it is never shown.
@@ -297,12 +328,55 @@ function editorsByPath(data: DeckData): Map<string, string[]> {
   return byPath
 }
 
+/** A message as the page reads it: its id file-safe, its text cut at 600 characters (`isCut` then), and the command or call it belongs to. */
+function webMessageOf(message: DeckData['messages'][number]): WebMessage {
+  const text = cutMarkdown(message.text, WEB_CAPS.messageChars)
+  return {
+    id: webIdOf(message.id),
+    at: message.at,
+    from: message.from,
+    to: message.to,
+    kind: message.kind,
+    text,
+    ...(text !== message.text ? { isCut: true as const } : {}),
+    ...(message.ackId ? { ackId: message.ackId } : {}),
+    ...(message.callId ? { callId: message.callId } : {}),
+  }
+}
+
+/** A call held on you as the page reads it; `answerable` holds the calls the deck can still answer (their races live in this module). */
+function webPendingOf(item: DeckPending, answerable: ReadonlySet<string>): WebPending {
+  return {
+    id: item.id,
+    agentId: item.agentId,
+    kind: item.kind,
+    tool: item.tool,
+    at: item.at,
+    ...(item.questions ? { questions: item.questions.map(one => ({ question: one.question, header: one.header, multiSelect: one.multiSelect, options: one.options.map(option => ({ label: option.label, description: option.description })) })) } : {}),
+    ...(item.command ? { command: item.command } : {}),
+    ...(item.path ? { path: item.path } : {}),
+    ...(item.description ? { description: item.description } : {}),
+    isAnswerable: item.kind === 'question' && answerable.has(item.id),
+  }
+}
+
 /**
  * The whole state the page reads, as web/CONTRACT.md (v1) lays it out, from
  * the deck's live model at `now`. `view` is the pane's and changes nothing
- * here: the page keeps its own.
+ * here: the page keeps its own. `answerable` holds the questions whose race
+ * is live in this mod instance (none after a reload): only those the page
+ * may answer.
  */
-export function webStateOf(data: DeckData, view: DeckView, git: GitState, usage: UsageInfo | null, now: number, sessionId: string, cwd: string): WebState {
+export function webStateOf(
+  data: DeckData,
+  view: DeckView,
+  git: GitState,
+  usage: UsageInfo | null,
+  now: number,
+  sessionId: string,
+  cwd: string,
+  answerable: ReadonlySet<string> = new Set(),
+): WebState {
   void view
   const root = git.root || ''
   const goal = M.goalOf(data)
@@ -346,14 +420,7 @@ export function webStateOf(data: DeckData, view: DeckView, git: GitState, usage:
     },
     plan: { source: plan.source, steps: plan.steps.map(step => ({ key: step.key, text: step.text, status: step.status, agents: [...step.agents] })) },
     agents: agents.map(agent => webAgentOf(data, agent, root, plan)),
-    messages: data.messages.slice(-WEB_CAPS.messages).map(message => ({
-      id: message.id,
-      at: message.at,
-      from: message.from,
-      to: message.to,
-      kind: message.kind,
-      text: cutMarkdown(message.text, WEB_CAPS.messageChars),
-    })),
+    messages: data.messages.slice(-WEB_CAPS.messages).map(webMessageOf),
     activity,
     files: M.filesOf(data).map(file => ({ path: file.path, editors: file.editors, live: file.live, isShared: file.isShared, added: file.added, removed: file.removed, lastAt: file.lastAt })),
     edits: data.edits.slice(-WEB_CAPS.edits).map(edit => ({ id: webIdOf(edit.id), agent: edit.agent, tool: edit.tool, path: edit.path, at: edit.at, added: edit.added, removed: edit.removed })),
@@ -371,7 +438,22 @@ export function webStateOf(data: DeckData, view: DeckView, git: GitState, usage:
           agent: data.commitsBy[commit.hash] ?? null,
         }))
       : [],
+    pending: data.pending.map(item => webPendingOf(item, answerable)),
+    acks: data.acks.slice(-WEB_CAPS.acks).map(ack => ({ id: ack.id, ok: ack.ok, status: ack.status, text: ack.text, at: ack.at })),
   }
+}
+
+/**
+ * The message files still to write: each message the page shows cut
+ * (`isCut`) and not written yet (`isSaved`), once, as `messages/<id>.md`
+ * holds it: its whole text, or as much of it as the deck kept. `message` is
+ * the deck's own, for the hooks module to mark written.
+ */
+export function newMessageFilesOf(data: DeckData): { id: string; text: string; message: DeckData['messages'][number] }[] {
+  return data.messages
+    .slice(-WEB_CAPS.messages)
+    .filter(message => message.isSaved !== true && Array.from(message.text).length > WEB_CAPS.messageChars)
+    .map(message => ({ id: webIdOf(message.id), text: `${(message.full ?? message.text).trim()}\n`, message }))
 }
 
 /** The patch files still to write: each edit once (`written` holds the ids written already), as `patches/<id>.diff` holds it. */
@@ -401,7 +483,12 @@ export function serverArgvOf(script: string, dir: string, pid: string, port: num
 export type ServerLine = { kind: 'ready'; port: number } | { kind: 'cmd'; cmd: Record<string, unknown> }
 
 /** What a command from the page asks the mod to do, checked against the model. */
-export type WebRoute = { kind: 'chat'; agentId: string; text: string } | { kind: 'review'; text: string } | { kind: 'ping' }
+export type WebRoute =
+  | { kind: 'chat'; agentId: string; text: string }
+  | { kind: 'review'; text: string }
+  /** Answers to a question the engine holds a call on: by question text, a label, labels comma-joined, or words of your own. */
+  | { kind: 'answer'; callId: string; answers: Record<string, string> }
+  | { kind: 'ping' }
 
 /** The most a line may grow without a newline before it is dropped: past any command the server passes (16 KB). */
 const MOST_LINE = 65_536
@@ -441,15 +528,45 @@ export function parseLine(line: string): ServerLine | null {
 /** The agents a message from the page may go to: the Orchestrator, subagents and teammates. */
 const CHATTY: readonly DeckAgent['kind'][] = ['main', 'agent', 'teammate']
 
+/** The most questions one AskUserQuestion call asks, and the longest question or answer an answer carries. */
+const MOST_QUESTIONS = 4
+const MOST_ANSWER = 2000
+
+/** The `id` a command carries for its ack: `[A-Za-z0-9_-]{1,40}`; '' for none, or one of any other shape. */
+export function cmdIdOf(cmd: unknown): string {
+  return isRecord(cmd) && typeof cmd.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(cmd.id) ? cmd.id : ''
+}
+
+/** An answer command's answers: question text to a non-blank string, at most four, each at most 2000 characters (a blank one is a question left unanswered); null for any other shape or none. */
+function answersOf(value: unknown): Record<string, string> | null {
+  if (!isRecord(value)) return null
+  const entries = Object.entries(value)
+  if (entries.length === 0 || entries.length > MOST_QUESTIONS) return null
+  const out: Record<string, string> = {}
+  for (const [question, answer] of entries) {
+    if (typeof answer !== 'string' || question.length > MOST_ANSWER || answer.length > MOST_ANSWER) return null
+    if (answer.trim() !== '') out[question] = answer.trim()
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 /**
  * What a command asks, once it is checked against the model: a `chat` to an
  * agent the deck holds (the Orchestrator, a subagent, a teammate), a `review`
- * prompt, or a `ping`. Text must be a string, not blank, at most 4000
- * characters. Anything else is null, to be ignored.
+ * prompt, an `answer` to a question (its call and answers; whether that call
+ * still waits is the hooks module's to tell), or a `ping`. Text must be a
+ * string, not blank, at most 4000 characters. Anything else is null, to be
+ * refused (`refusalOf` says why).
  */
 export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
   if (!isRecord(cmd)) return null
   if (cmd.cmd === 'ping') return { kind: 'ping' }
+  // an answer has no text of its own: it is read before the text is
+  if (cmd.cmd === 'answer') {
+    const answers = answersOf(cmd.answers)
+    const callId = typeof cmd.callId === 'string' ? cmd.callId.trim() : ''
+    return callId !== '' && callId.length <= 200 && answers ? { kind: 'answer', callId, answers } : null
+  }
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '' || text.length > MOST_TEXT) return null
   if (cmd.cmd === 'review') return { kind: 'review', text }
@@ -457,4 +574,67 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
   const agent = M.agentOf(data, cmd.agentId)
   if (!agent || !CHATTY.includes(agent.kind)) return null
   return { kind: 'chat', agentId: agent.id, text }
+}
+
+/**
+ * What the page's Review does once the prompt box answered its fill: done
+ * (the request is in the box, for you to send); sent as your next prompt
+ * where the session binds no box (`no_composer`: the Desktop app draws its
+ * own composer); else refused, saying why. A refusal with no cause is not
+ * taken to mean no box exists (a hook's own refusal carries none).
+ */
+export function reviewStepOf(filled: { isFilled: boolean; refusal?: 'no_composer' | 'dialog' } | undefined): { kind: 'filled' } | { kind: 'queue' } | { kind: 'failed'; why: string } {
+  if (filled?.isFilled) return { kind: 'filled' }
+  if (filled?.refusal === 'no_composer') return { kind: 'queue' }
+  return { kind: 'failed', why: filled?.refusal === 'dialog' ? 'A dialog is open in Claude Code: answer it, then try again' : 'Could not fill the prompt box' }
+}
+
+/** Why `routeOf` refused a command, as its ack says it. */
+export function refusalOf(cmd: unknown, data: DeckData): string {
+  if (!isRecord(cmd) || typeof cmd.cmd !== 'string') return 'Not a command the deck reads'
+  if (cmd.cmd === 'answer') return 'Not an answer the deck can read'
+  if (cmd.cmd !== 'chat' && cmd.cmd !== 'review') return `Not a command the deck knows: ${F.trunc(F.oneLine(cmd.cmd), 40)}`
+  const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
+  if (text === '') return 'Nothing to send'
+  if (text.length > MOST_TEXT) return `Too long: at most ${MOST_TEXT} characters`
+  if (cmd.cmd === 'chat') {
+    const agent = typeof cmd.agentId === 'string' ? M.agentOf(data, cmd.agentId) : undefined
+    if (!agent) return 'No such agent in this session'
+    if (!CHATTY.includes(agent.kind)) return 'Only the Orchestrator, its agents and teammates take messages from here'
+  }
+  return 'Not sent'
+}
+
+/**
+ * Why answers cannot go to the held call `item`; '' when they can: it must
+ * be a question still held, and each answer must be to one of its questions
+ * (one of its labels, labels comma-joined for a multi-select one, or words
+ * of your own, as its dialog's Other takes them).
+ */
+export function answerProblemOf(item: DeckPending | undefined, answers: Readonly<Record<string, string>>): string {
+  if (!item || item.kind !== 'question') return 'No longer pending'
+  const asked = new Set((item.questions ?? []).map(one => one.question))
+  const stray = Object.keys(answers).find(question => !asked.has(question))
+  return stray === undefined ? '' : `Not a question it asked: ${F.trunc(F.oneLine(stray), 60)}`
+}
+
+/**
+ * The answers as the question's own dialog gives them: an option's label as
+ * the option spells it, a multi-select's labels joined with ", ", words of
+ * your own as typed. Questions left unanswered stay out.
+ */
+export function answersFor(item: DeckPending, answers: Readonly<Record<string, string>>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const one of item.questions ?? []) {
+    const said = answers[one.question]
+    if (said === undefined) continue
+    const labelOf = (text: string) => one.options.find(option => option.label.trim().toLowerCase() === text.trim().toLowerCase())?.label
+    if (!one.multiSelect) {
+      out[one.question] = labelOf(said) ?? said
+      continue
+    }
+    const labels = said.split(',').map(labelOf)
+    out[one.question] = labels.every(label => label !== undefined) ? labels.join(', ') : said
+  }
+  return out
 }

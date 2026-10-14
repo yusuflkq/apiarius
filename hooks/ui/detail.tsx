@@ -47,7 +47,8 @@ import {
   samePath,
   scopeOf,
   statusOf,
-  waitingOnOf,
+  waitLineOf,
+  waitPhraseOf,
   type DeckPlanSource,
   type DeckStepLink,
 } from '../model'
@@ -344,10 +345,9 @@ function minutesOf(agent: DeckAgent, now: number): string {
   return isLive(agent.status) || agent.endedAt !== undefined ? elapsedOf(agent, now) : ''
 }
 
-/** "Waits on you: allow Bash "npm test"" while the engine waits on the person for `id`; '' otherwise (an idle prompt is not a question). */
+/** "Asks: Which library?", "Needs your OK to run `npm test`" while the engine waits on the person for `id`; '' otherwise (an idle prompt is not a question). */
 function waitsOf(data: DeckData, id: string): string {
-  const needs = agentOf(data, MAIN)?.needs
-  return needs && needs.kind !== 'idle_prompt' && waitsOnYou(data, id) ? `Waits on you: ${waitingOnOf(data, needs)}` : ''
+  return waitsOnYou(data, id, false) ? waitLineOf(waitPhraseOf(data, id)) : ''
 }
 
 /** What an agent the engine holds, but not on you, waits on: the child of its own at work, else its background work; '' when it is not held. */

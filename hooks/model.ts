@@ -7,6 +7,7 @@
  * these helpers; nothing here reaches the engine.
  */
 import type {
+  DeckAck,
   DeckActivity,
   DeckAgent,
   DeckAgentPane,
@@ -21,6 +22,8 @@ import type {
   DeckMessageKind,
   DeckNeeds,
   DeckOrigin,
+  DeckPending,
+  DeckQuestion,
   DeckShownStatus,
   DeckStatus,
   DeckStepHow,
@@ -84,6 +87,12 @@ export const LIMITS = {
   promptChars: 2000,
   answerChars: 4000,
   messageChars: 700,
+  /** A cut message's whole text, kept for the web deck's `messages/<id>.md` until written, on the newest `fullTexts` that have one. */
+  fullChars: 20_000,
+  fullTexts: 20,
+  /** The calls held on the person at once, and the web deck's command outcomes kept. */
+  pending: 20,
+  acks: 50,
   agents: 80,
   /** The goals a snapshot keeps, and each one's follow-ups. */
   goals: 20,
@@ -171,6 +180,8 @@ export function emptyData(now: number): DeckData {
     board: {},
     files: {},
     workflows: [],
+    pending: [],
+    acks: [],
   }
 }
 
@@ -570,12 +581,39 @@ export function targetOf(tool: string, input: Record<string, unknown>, root: str
       const names = query.startsWith('select:') ? query.slice('select:'.length).split(',').map(name => name.trim()).filter(name => name !== '') : []
       return trunc(names.length > 0 ? names.join(', ') : query, 60)
     }
+    case 'AskUserQuestion':
+      // what it asks you: its first question
+      return trunc(oneLine(questionsOf(input.questions)[0]?.question ?? ''), 80)
     default: {
       if (tool.startsWith('mcp__')) return trunc(tool.split('__').slice(1).join(' / '), 60)
-      const first = Object.values(input).find(value => typeof value === 'string')
+      // the call's own words, not the event's: its tool's name, its id and its loop ride beside them
+      const first = Object.entries(input).find(([key, value]) => typeof value === 'string' && !EVENT_FIELDS.includes(key))?.[1]
       return typeof first === 'string' ? trunc(oneLine(first), 60) : ''
     }
   }
+}
+
+/** What a `tool.call` event carries beside the tool's own arguments: never what a call is aimed at. */
+const EVENT_FIELDS: readonly string[] = ['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent']
+
+/**
+ * An AskUserQuestion call's questions as its dialog draws them: each one's
+ * question, header (its chip; '' for none), whether several options may be
+ * picked, and its options' labels and descriptions. Anything not of that
+ * shape is left out; at most four.
+ */
+export function questionsOf(value: unknown): DeckQuestion[] {
+  if (!Array.isArray(value)) return []
+  const out: DeckQuestion[] = []
+  for (const raw of value) {
+    if (!isRecord(raw) || typeof raw.question !== 'string' || raw.question.trim() === '') continue
+    const options = Array.isArray(raw.options)
+      ? raw.options.filter(isRecord).flatMap(option => (typeof option.label === 'string' ? [{ label: option.label, description: typeof option.description === 'string' ? option.description : '' }] : []))
+      : []
+    out.push({ question: raw.question, header: typeof raw.header === 'string' ? raw.header : '', multiSelect: raw.multiSelect === true, options })
+    if (out.length >= 4) break
+  }
+  return out
 }
 
 /** One tool call as the deck keeps it: what it is aimed at (`board` names a task-board call's task), and a shell call's own description of itself and its command. */
@@ -661,17 +699,52 @@ export function noteFile(data: DeckData, edit: Pick<DeckEdit, 'agent' | 'path' |
   return file
 }
 
+/**
+ * A new message's id, from when it was said and between whom: `[A-Za-z0-9_]`
+ * only, so the web deck serves it as a file name as it stands; `_2`, `_3`
+ * after one taken.
+ */
+function messageIdOf(data: DeckData, at: number, from: string, to: string): string {
+  const base = `m${at}_${from}_${to}`.replace(/[^A-Za-z0-9_]/g, '_')
+  let id = base
+  for (let n = 2; data.messages.some(one => one.id === id); n++) id = `${base}_${n}`
+  return id
+}
+
+/**
+ * Gives a message its words: cut at 700 characters, a longer one's whole
+ * text (at most 20,000) kept as `full` for the web deck's file, which is
+ * written again (`isSaved` cleared).
+ */
+export function setMessageText(message: DeckMessage, text: string): void {
+  const body = text.trim()
+  message.text = trunc(body, LIMITS.messageChars)
+  if (message.text === body) delete message.full
+  else message.full = trunc(body, LIMITS.fullChars)
+  delete message.isSaved
+}
+
+/** Only the newest messages (LIMITS.fullTexts) keep a whole text the web deck has yet to write: an older one keeps its cut. */
+function pruneFull(data: DeckData): void {
+  let kept = 0
+  for (let i = data.messages.length - 1; i >= 0; i--) {
+    const one = data.messages[i]
+    if (one?.full === undefined) continue
+    kept += 1
+    if (kept > LIMITS.fullTexts) delete one.full
+  }
+}
+
 export function addMessage(
   data: DeckData,
   message: Omit<DeckMessage, 'id' | 'text'> & { text: string },
 ): DeckMessage {
-  const made: DeckMessage = {
-    ...message,
-    id: `${message.at}-${data.messages.length}-${message.from}-${message.to}`,
-    text: trunc(message.text.trim(), LIMITS.messageChars),
-  }
+  const { text, ...rest } = message
+  const made: DeckMessage = { ...rest, id: messageIdOf(data, message.at, message.from, message.to), text: '' }
+  setMessageText(made, text)
   data.messages.push(made)
   if (data.messages.length > LIMITS.messages) data.messages.splice(0, data.messages.length - LIMITS.messages)
+  pruneFull(data)
   return made
 }
 
@@ -792,7 +865,9 @@ export function healData(value: DeckData, now: number): DeckData {
   data.agents = Array.isArray(value.agents) ? value.agents.filter(isRecord).map(agent => healAgent({ ...newAgent(agent.id, agent.kind, agent.name, now), ...agent })) : base.agents
   if (!agentOf(data, YOU)) data.agents.unshift(base.agents[0] as DeckAgent)
   if (!agentOf(data, MAIN)) data.agents.splice(1, 0, base.agents[1] as DeckAgent)
-  data.messages = Array.isArray(value.messages) ? value.messages : []
+  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage) : []
+  data.pending = healPending(value.pending)
+  data.acks = healAcks(value.acks)
   data.edits = Array.isArray(value.edits) ? value.edits : []
   data.minutes = Array.isArray(value.minutes) ? value.minutes : []
   data.commitsBy = value.commitsBy && typeof value.commitsBy === 'object' ? value.commitsBy : {}
@@ -935,6 +1010,43 @@ function healWorkflows(value: unknown): DeckWorkflow[] {
     .slice(-LIMITS.workflows)
 }
 
+/** One restored message's newer fields, each kept only in its own shape. */
+function healMessage(value: Record<string, unknown>): DeckMessage {
+  const message = value as unknown as DeckMessage
+  if (typeof value.full !== 'string') delete message.full
+  if (value.isSaved !== true) delete message.isSaved
+  for (const field of ['ackId', 'callId'] as const) if (typeof value[field] !== 'string') delete message[field]
+  return message
+}
+
+const PENDING_KINDS: readonly DeckPending['kind'][] = ['question', 'permission']
+
+/** The calls a snapshot says were held on the person: each of its shape, at most 20. Restored, none has a deck answer waiting on it (`isAnswerable`). */
+function healPending(value: unknown): DeckPending[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(isRecord)
+    .filter(item => typeof item.id === 'string' && typeof item.agentId === 'string' && PENDING_KINDS.includes(item.kind as DeckPending['kind']) && typeof item.tool === 'string' && num(item.at) !== undefined)
+    .map(item => {
+      const healed: DeckPending = { id: item.id as string, agentId: item.agentId as string, kind: item.kind as DeckPending['kind'], tool: item.tool as string, at: item.at as number }
+      if (item.questions !== undefined) healed.questions = questionsOf(item.questions)
+      for (const field of ['command', 'path', 'description'] as const) if (typeof item[field] === 'string') healed[field] = item[field] as string
+      return healed
+    })
+    .slice(-LIMITS.pending)
+}
+
+const ACK_STATES: readonly DeckAck['status'][] = ['queued', 'delivered', 'answered', 'failed']
+
+function healAcks(value: unknown): DeckAck[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(isRecord)
+    .filter(ack => typeof ack.id === 'string' && ACK_STATES.includes(ack.status as DeckAck['status']) && typeof ack.text === 'string' && num(ack.at) !== undefined)
+    .map(ack => ({ id: ack.id as string, ok: ack.ok === true, status: ack.status as DeckAck['status'], text: ack.text as string, at: ack.at as number }))
+    .slice(-LIMITS.acks)
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -981,15 +1093,16 @@ export function nowOf(agent: DeckAgent): string {
  *
  * Without `data` the note counts where it is kept, on the Orchestrator. With
  * it, it counts on the agent whose call waits: a subagent's permission prompt
- * makes that subagent `waiting`, not the Orchestrator. With it too, a loop
+ * makes that subagent `waiting`, not the Orchestrator, and so does a call of
+ * its held on you (`pending`: a question, a permission prompt). With it too, a loop
  * held while a child agent of its own is at work (a background subagent's
  * foreground Agent call) is `running`: busy, nothing waits on you.
  */
 export function statusOf(agent: DeckAgent, data?: DeckData): DeckShownStatus {
   if (agent.kind === 'you' || agent.kind === 'peer') return 'idle'
   if (data) {
-    const needs = agentOf(data, MAIN)?.needs
-    if (needs && (needs.agent ?? MAIN) === agent.id) return 'waiting'
+    // a question or permission prompt of its call held on you, or the needs-you note naming it
+    if (waitsOnYou(data, agent.id)) return 'waiting'
   } else if (agent.needs) {
     return 'waiting'
   }
@@ -1151,6 +1264,161 @@ export function clearNeeds(data: DeckData, move: NeedsMove): boolean {
   return isMoved
 }
 
+// Held on you: the calls the engine holds on the person, a question (AskUserQuestion) or a permission prompt.
+
+/** The calls held on the person for agent `id` (every agent's when none is named), oldest first. */
+export function pendingOf(data: DeckData, id?: string): DeckPending[] {
+  return id === undefined ? data.pending : data.pending.filter(item => item.agentId === id)
+}
+
+/** Notes a call held on the person, once per call (a newer note of it replaces the older); the newest 20 are kept. */
+export function notePending(data: DeckData, item: DeckPending): DeckPending {
+  data.pending = [...data.pending.filter(one => one.id !== item.id), item]
+  if (data.pending.length > LIMITS.pending) data.pending.splice(0, data.pending.length - LIMITS.pending)
+  return item
+}
+
+/** Takes down held call `id` (it ended, was denied, or was answered); answers it, or undefined when none was held. */
+export function dropPending(data: DeckData, id: string): DeckPending | undefined {
+  const found = data.pending.find(item => item.id === id)
+  if (found) data.pending = data.pending.filter(item => item !== found)
+  return found
+}
+
+/**
+ * Agent `id`'s loop moved on (another step, another call, its turn's end):
+ * every call of its noted as held on you has ended, save those in `open`,
+ * whose ends are still to come (the calls in flight the deck saw start). A
+ * reload leaves the others behind with no end to see. Answers whether any went.
+ */
+export function dropStale(data: DeckData, id: string, open: ReadonlySet<string>): boolean {
+  const kept = data.pending.filter(item => item.agentId !== id || open.has(item.id))
+  const isDropped = kept.length !== data.pending.length
+  data.pending = kept
+  return isDropped
+}
+
+/**
+ * A permission prompt held on the person for a call: its shell command
+ * whole (at most 2000 characters), else the file it touches (relative to
+ * `root` when inside it), and what the call says it does (a shell call's
+ * description) or, for any other tool, what it is aimed at.
+ */
+export function permissionOf(call: { id: string; tool: string; input: unknown; agentId: string; at: number }, root: string | null): DeckPending {
+  const input = isRecord(call.input) ? call.input : {}
+  const item: DeckPending = { id: call.id, agentId: call.agentId, kind: 'permission', tool: call.tool, at: call.at }
+  const isShell = SHELL_TOOLS.includes(call.tool)
+  const command = isShell ? str(input.command) : undefined
+  const file = str(input.file_path) ?? str(input.notebook_path)
+  if (command) item.command = trunc(command.trim(), 2000)
+  else if (file) item.path = relOf(file, root)
+  const described = str(input.description) ?? (!isShell && !file ? targetOf(call.tool, input, root) : '')
+  if (described && described !== toolNameOf(call.tool)) item.description = trunc(oneLine(described), 200)
+  return item
+}
+
+/** The tools whose permission prompt names the file they touch, by what they do to it. */
+const PATH_VERBS: Readonly<Record<string, string>> = { Edit: 'edit', MultiEdit: 'edit', NotebookEdit: 'edit', Write: 'write', Read: 'read' }
+
+/** A tool's name as a person reads it: an MCP tool's server and tool (`github / create_issue`). */
+function toolNameOf(tool: string): string {
+  return tool.startsWith('mcp__') ? tool.split('__').slice(1).join(' / ') : tool
+}
+
+/**
+ * A permission prompt in words, after the agent's label: `needs your OK to
+ * run \`npm test\`` (a shell command), `…to edit \`src/a.ts\`` (a file), or
+ * `…to use WebFetch`.
+ */
+export function permissionPhraseOf(tool: string, command?: string, path?: string): string {
+  if (command) return `needs your OK to run \`${trunc(oneLine(command), 60)}\``
+  if (path) return `needs your OK to ${PATH_VERBS[tool] ?? `use ${toolNameOf(tool)} on`} \`${truncStart(path, 60)}\``
+  return `needs your OK to use ${toolNameOf(tool)}`
+}
+
+/** A question in words, after the agent's label: `asks: Which library should we use?`, or `asks 3 questions`. */
+export function questionPhraseOf(questions: readonly { question: string }[]): string {
+  if (questions.length > 1) return `asks ${questions.length} questions`
+  const first = oneLine(questions[0]?.question ?? '')
+  return first ? `asks: ${trunc(first, 100)}` : 'asks you a question'
+}
+
+/** A call held on the person in words, after its agent's label. */
+export function pendingPhraseOf(item: DeckPending): string {
+  return item.kind === 'question' ? questionPhraseOf(item.questions ?? []) : permissionPhraseOf(item.tool, item.command, item.path)
+}
+
+/**
+ * What agent `id` waits on the person for, as the words after its label
+ * (`asks: Which library?`, `needs your OK to run \`npm test\``); '' while it
+ * waits on nothing. A call held on you speaks before the engine's notification.
+ */
+export function waitPhraseOf(data: DeckData, id: string): string {
+  const held = pendingOf(data, id)[0]
+  if (held) return pendingPhraseOf(held)
+  const needs = agentOf(data, MAIN)?.needs
+  return needs && (needs.agent ?? MAIN) === id ? waitingOnOf(data, needs) : ''
+}
+
+/** Those words standing alone, as a line of their own: "Asks: Which library?", "Needs your OK to run `npm test`". */
+export function waitLineOf(phrase: string): string {
+  return phrase === '' ? '' : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}`
+}
+
+/**
+ * Whether the engine waits on the person for agent `id`: a call of its is
+ * held on them, or the needs-you note names it; with `isIdleCounted` false,
+ * a note that only says Claude is idle (an idle prompt) does not count.
+ */
+export function waitsOnYou(data: DeckData, id: string, isIdleCounted = true): boolean {
+  if (data.pending.some(item => item.agentId === id)) return true
+  const needs = agentOf(data, MAIN)?.needs
+  return needs !== undefined && (needs.agent ?? MAIN) === id && (isIdleCounted || needs.kind !== 'idle_prompt')
+}
+
+/** An AskUserQuestion call's questions as one message: each its own paragraph. */
+export function questionsTextOf(questions: readonly DeckQuestion[]): string {
+  return questions
+    .map(one => one.question.trim())
+    .filter(text => text !== '')
+    .join('\n\n')
+}
+
+/**
+ * How a question call was answered, in words: the one answer to its one
+ * question; with several, each answered one's chip (its question when it has
+ * none) and answer, joined with " · ".
+ */
+export function answeredOf(questions: readonly DeckQuestion[], answers: Readonly<Record<string, string>>): string {
+  const said = questions.flatMap(one => {
+    const answer = oneLine(answers[one.question] ?? '')
+    return answer ? [{ one, answer }] : []
+  })
+  if (said.length === 0) return Object.values(answers).map(oneLine).filter(answer => answer !== '').join(' · ')
+  if (questions.length === 1) return said[0]?.answer ?? ''
+  return said.map(({ one, answer }) => `${oneLine(one.header) || trunc(oneLine(one.question), 40)}: ${answer}`).join(' · ')
+}
+
+/**
+ * What an AskUserQuestion call's result says of how it was answered: its
+ * answers by question (strings only), the words typed in place of picking,
+ * and whether its dialog answered itself after the person was idle
+ * (`afkTimeoutMs`). Undefined for a result of no such shape (a refusal, an error).
+ */
+export function questionResultOf(result: unknown): { answers: Record<string, string>; response: string; isIdle: boolean } | undefined {
+  if (!isRecord(result)) return undefined
+  const answers: Record<string, string> = {}
+  if (isRecord(result.answers)) for (const [question, answer] of Object.entries(result.answers)) if (typeof answer === 'string') answers[question] = answer
+  return { answers, response: typeof result.response === 'string' ? result.response : '', isIdle: typeof result.afkTimeoutMs === 'number' }
+}
+
+/** What came of a web deck command (by its own `id`): a later word on it replaces the earlier; the newest 50 are kept. */
+export function noteAck(data: DeckData, ack: DeckAck): DeckAck {
+  data.acks = [...data.acks.filter(one => one.id !== ack.id), ack]
+  if (data.acks.length > LIMITS.acks) data.acks.splice(0, data.acks.length - LIMITS.acks)
+  return ack
+}
+
 // The banner: the one thing to notice now.
 
 export type BannerTone = 'alert' | 'attention' | 'busy' | 'quiet'
@@ -1213,6 +1481,12 @@ export function bannerOf(data: DeckData, git: Pick<GitState, 'isRepo' | 'files'>
     return banner('alert', lead, failureOf(lastFailed), lastFailed.id)
   }
 
+  // a call held on you (the oldest first), else the engine's notification
+  const held = data.pending[0]
+  if (held) {
+    const agent = agentOf(data, held.agentId)
+    return banner('attention', `${agent ? labelOf(agent) : ORCHESTRATOR} ${pendingPhraseOf(held)}`, '', agent ? held.agentId : MAIN)
+  }
   const needs = workers.find(agent => agent.needs)?.needs
   if (needs) return banner('attention', needs.text, '', needs.agent ?? MAIN)
 
@@ -1416,7 +1690,8 @@ export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: n
     agent.resultVia = via
     const shown = lastResultOf(data, agent.id)
     if (shown) {
-      shown.text = trunc(body, LIMITS.messageChars)
+      setMessageText(shown, body)
+      pruneFull(data)
       return true
     }
   } else if (agent.answer !== undefined && isSameReport(agent.answer, body)) {
@@ -1425,7 +1700,8 @@ export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: n
     if (shown) {
       agent.answer = trunc(body, LIMITS.answerChars)
       agent.resultVia = via
-      shown.text = trunc(body, LIMITS.messageChars)
+      setMessageText(shown, body)
+      pruneFull(data)
       return true
     }
   }
@@ -1674,6 +1950,7 @@ function renameAgent(data: DeckData, from: string, to: string): void {
   for (const [commit, by] of Object.entries(data.commitsBy)) if (by === from) data.commitsBy[commit] = to
   const needs = agentOf(data, MAIN)?.needs
   if (needs?.agent === from) needs.agent = to
+  for (const item of data.pending) if (item.agentId === from) item.agentId = to
 }
 
 /**
@@ -2918,17 +3195,22 @@ export type DeckNeedsLine = {
   path?: string
 }
 
-/** What a needs-you note waits on, in words: `allow Bash "npm test"` for a permission prompt, else the notification's own words. */
+/**
+ * What a needs-you note waits on, as the words after the agent's label: a
+ * question's dialog says what it asks (`asks: Which library?`), a permission
+ * prompt what it would let run (`needs your OK to run \`npm test\``, `…to
+ * edit \`src/a.ts\``, `…to use WebFetch`), anything else the notification's
+ * own words (`waits on you: …`). Never "allow AskUserQuestion".
+ */
 export function waitingOnOf(data: DeckData, needs: DeckNeeds): string {
   const agent = agentOf(data, needs.agent ?? MAIN)
   const call = needs.call !== undefined && agent ? agent.recent.find(one => one.id === needs.call) : undefined
+  if (call?.tool === 'AskUserQuestion') return call.target ? `asks: ${call.target}` : 'asks you a question'
   const isPermission = needs.kind === 'permission_prompt' || /permission/i.test(needs.text)
-  if (isPermission && call) {
-    const what = call.command ?? call.target
-    return what ? `allow ${call.tool} "${trunc(oneLine(what), 60)}"` : `allow ${call.tool}`
-  }
+  if (isPermission && call) return permissionPhraseOf(call.tool, call.command, PATH_VERBS[call.tool] !== undefined && call.target ? call.target : undefined)
   const tool = isPermission ? /permission to use (.+)$/i.exec(needs.text.trim())?.[1]?.trim() : undefined
-  return tool ? `allow ${tool}` : needs.text
+  if (tool === 'AskUserQuestion') return 'asks you a question'
+  return tool ? permissionPhraseOf(tool) : `waits on you: ${needs.text}`
 }
 
 /** How many files the work changed: git's uncommitted files once read, else the files agents edited. */
@@ -2937,20 +3219,26 @@ function changedCountOf(data: DeckData, git: GitFacts): number {
 }
 
 /**
- * The single most urgent thing, for the needs-you line: a prompt blocked on
- * you (`<label> waits on you: allow Bash "npm test"`), then a failure of this
- * goal's, then a file two running agents both edit. Otherwise "All done · N
- * files to review" once nothing is at work, else "Nothing needs you". `now`
- * is accepted and unused: the line holds no time.
+ * The single most urgent thing, for the needs-you line: a call held on you,
+ * the oldest first (`Orchestrator asks: Which library?`, `Tests needs your OK
+ * to run \`npm test\``), else a prompt the engine's notification says waits
+ * on you; then a failure of this goal's, then a file two running agents both
+ * edit. Otherwise "All done · N files to review" once nothing is at work,
+ * else "Nothing needs you". `now` is accepted and unused: the line holds no time.
  */
 export function needsOf(data: DeckData, git: GitFacts, now?: number): DeckNeedsLine {
   void now
   const main = agentOf(data, MAIN)
+  const held = data.pending[0]
+  if (held) {
+    const agent = agentOf(data, held.agentId)
+    return { tone: 'attention', kind: 'blocked', text: `${agent ? labelOf(agent) : ORCHESTRATOR} ${pendingPhraseOf(held)}`, agentId: agent ? held.agentId : MAIN }
+  }
   const needs = main?.needs
   if (needs && needs.kind !== 'idle_prompt') {
     const id = needs.agent ?? MAIN
     const agent = agentOf(data, id)
-    return { tone: 'attention', kind: 'blocked', text: `${agent ? labelOf(agent) : ORCHESTRATOR} waits on you: ${waitingOnOf(data, needs)}`, agentId: agent ? id : MAIN }
+    return { tone: 'attention', kind: 'blocked', text: `${agent ? labelOf(agent) : ORCHESTRATOR} ${waitingOnOf(data, needs)}`, agentId: agent ? id : MAIN }
   }
   const goal = goalOf(data)
   const failed = data.agents
@@ -3014,7 +3302,7 @@ function summaryWith(data: DeckData, git: GitFacts, now: number | undefined, pla
     else if (agent.status === 'failed') failed += 1
   }
   const main = agentOf(data, MAIN)
-  if (main?.needs && main.needs.kind !== 'idle_prompt' && (main.needs.agent ?? MAIN) === MAIN) waiting += 1
+  if (waitsOnYou(data, MAIN, false)) waiting += 1
 
   let files: number
   let added: number

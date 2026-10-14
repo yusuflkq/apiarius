@@ -238,6 +238,28 @@ const NEEDS: { name: string; data: () => DeckData; isLoud: boolean }[] = [
     },
     isLoud: true,
   },
+  {
+    name: 'a question held on you ("fixer asks: …"), on the bar',
+    data: () => {
+      const data = busyData()
+      const options = [
+        { label: 'Keep', description: 'Old clients go on working' },
+        { label: 'Drop', description: 'Simpler code' },
+      ]
+      M.notePending(data, { id: 'toolu_q', agentId: 'agent-fixer', kind: 'question', tool: 'AskUserQuestion', at: NOW - 5_000, questions: [{ question: 'Keep the old token format?', header: 'Format', multiSelect: false, options }] })
+      return data
+    },
+    isLoud: true,
+  },
+  {
+    name: 'a permission prompt held on you ("fixer needs your OK to run `npm test`"), on the bar',
+    data: () => {
+      const data = busyData()
+      M.notePending(data, M.permissionOf({ id: 'toolu_p', tool: 'Bash', input: { command: 'npm test' }, agentId: 'agent-fixer', at: NOW - 5_000 }, '/repo'))
+      return data
+    },
+    isLoud: true,
+  },
 ]
 
 for (const needs of NEEDS) {
@@ -292,6 +314,48 @@ test('the outline: who started whom, and where each agent is, in native rows on 
     expect(await ui.find({ type: 'Text', text: 'Run the unit tests' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Find the auth module' })).toBeDefined()
     expect((await ui.find({ key: 'agent:agent-helper' }))?.props.label).toBe('helper')
+    await ui.unmount()
+  }
+})
+
+test('the summary says what each agent waits on you for, in its own row, in ochre: what it asks, or what it needs your OK for; never "allow AskUserQuestion"', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const data = busyData()
+  const options = [
+    { label: 'Yes', description: '' },
+    { label: 'No', description: '' },
+  ]
+  M.notePending(data, {
+    id: 'toolu_q',
+    agentId: 'agent-helper',
+    kind: 'question',
+    tool: 'AskUserQuestion',
+    at: NOW - 5_000,
+    questions: [
+      { question: 'Is src/auth.ts the module?', header: 'Module', multiSelect: false, options },
+      { question: 'Keep its tests?', header: 'Tests', multiSelect: false, options },
+    ],
+  })
+  M.notePending(data, M.permissionOf({ id: 'toolu_p', tool: 'Edit', input: { file_path: '/repo/src/auth.ts', old_string: 'a', new_string: 'b' }, agentId: 'agent-fixer', at: NOW - 4_000 }, '/repo'))
+  world(on, { restored: snapshot(data) })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+  await $.command.run(deck(''))
+  await clock.advance(1000)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    // the line leads with the one asked first; the summary counts both
+    expect((await copperBars(ui)).some(bar => bar.text.includes('helper asks 2 questions'))).toBe(true)
+    expect((await ui.find({ key: 'slim:step' }))?.text).toMatch(/2 waits on you/)
+    for (const [id, line] of [
+      ['agent-helper', 'Asks 2 questions'],
+      ['agent-fixer', 'Needs your OK to edit `src/auth.ts`'],
+    ] as const) {
+      const row = await ui.find({ key: `slim:${id}` })
+      expect(row?.text).toContain(line)
+      expect((await ui.findAll({ type: 'Text', text: line })).some(text => text.props.color === T.warn)).toBe(true)
+    }
+    expect(await ui.find({ type: 'Text', text: /allow / })).toBeUndefined()
     await ui.unmount()
   }
 })
@@ -506,12 +570,12 @@ test('the band puts the agent that waits on you first, saying for what; the othe
     const ui = await $.ui.mount(band(surface))
     const labels = (await ui.findAll({ type: 'Text' })).filter(text => text.props.bold === true).map(text => text.text)
     expect(labels).toEqual([' helper', ' fixer'])
-    const waits = (await ui.findAll({ type: 'Text', text: ' waits on you: allow Bash "npm run lint"' })).filter(text => text.children.every(child => typeof child === 'string'))
+    const waits = (await ui.findAll({ type: 'Text', text: ' needs your OK to run `npm run lint`' })).filter(text => text.children.every(child => typeof child === 'string'))
     expect(waits.map(text => text.props.color)).toEqual([T.warn])
     const squares = (await ui.findAll({ type: 'Text', text: '■' })).filter(text => text.children.every(child => typeof child === 'string'))
     expect(squares.map(square => square.props.color)).toEqual([T.warn, T.ok])
     // the line reads in that order
-    const line = (await ui.findAll({ type: 'Text' })).find(text => text.text.includes(' waits on you'))
+    const line = (await ui.findAll({ type: 'Text' })).find(text => text.text.includes(' needs your OK'))
     expect(line?.text.indexOf(' helper')).toBeLessThan(line?.text.indexOf(' fixer') ?? -1)
     await ui.unmount()
   }

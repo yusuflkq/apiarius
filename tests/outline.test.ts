@@ -307,7 +307,7 @@ test('the outline nests the Orchestrator, its plan steps, the agents under their
     for (const [i, text] of STEPS.entries()) expect((await shown(ui, { key: `step:${steps[i]}` })).props.label).toBe(text)
     expect((await shown(ui, { key: 'fold:main' })).props.label).toBe(FOLD_LABEL.open)
     // line two: where each agent is
-    await shown(ui, { type: 'Text', text: exactly('Waits on you: allow Bash "npm test"') })
+    await shown(ui, { type: 'Text', text: exactly('Needs your OK to run `npm test`') })
     await shown(ui, { type: 'Text', text: exactly('Done: Files section flags shared files') })
     expect((await shown(ui, { key: 'agent:main' })).props).toMatchObject({ label: 'Orchestrator', hotkey: 'o', plain: true })
     await ui.unmount()
@@ -631,7 +631,7 @@ test('an agent the engine holds with no prompt for you is busy: "Waiting on back
   M.agentOf(data, 'agent-a')!.status = 'waiting'
   const rows = outlineOf(data, M.defaultView(), NOW).rows
   expect(rows.find(row => row.id === 'agent-a')).toMatchObject({ status: 'running', note: 'Waiting on background work', noteTone: 'dim' })
-  expect(rows.find(row => row.id === 'agent-t')).toMatchObject({ status: 'waiting', note: 'Waits on you: allow Bash "npm test"', noteTone: 'waiting' })
+  expect(rows.find(row => row.id === 'agent-t')).toMatchObject({ status: 'waiting', note: 'Needs your OK to run `npm test`', noteTone: 'waiting' })
   expect(headerOf(data, emptyGit(), NOW).summary.lead).toMatch(/^2 running · 1 waits on you · 1 done/)
   // nothing is selected in a fresh view
   expect(rows.filter(row => row.isSelected)).toEqual([])

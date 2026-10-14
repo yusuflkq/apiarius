@@ -138,6 +138,8 @@ test('Live QA 3: a hand-back that starts the Orchestrator`s next turn is the age
   expect(data.messages.map(message => [message.from, message.to, message.kind])).toEqual([
     [M.YOU, M.MAIN, 'prompt'],
     [M.MAIN, 'agent-scout', 'spawn'],
+    // the Orchestrator's answer is its reply to you
+    [M.MAIN, M.YOU, 'answer'],
     ['agent-scout', M.MAIN, 'result'],
   ])
   // a prompt in your own words still is yours

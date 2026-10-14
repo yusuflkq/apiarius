@@ -276,6 +276,8 @@ const ROUTES = [
   'fixer → reviewer',
   'fixer → Orchestrator',
   'reviewer → Orchestrator',
+  // its answer to you
+  'Orchestrator → You',
 ]
 
 test('a live run, replayed: three named agents and a nested helper, their edits, their messages and answers, on each surface', { timeoutMs: 30_000 }, async ($, on) => {

@@ -671,13 +671,13 @@ test('an agent that waits on you says on what, in ochre, and where to answer; on
     model.view.agent = blocked.id
     model.view.agentPane = 'edits'
     const blockedUi = await $.ui.mount(mountOn(surface))
-    expect((await shown(blockedUi, { type: 'Text', text: exactly('Waits on you: allow Bash "npm test"') })).props.color).toBe(T.warn)
+    expect((await shown(blockedUi, { type: 'Text', text: exactly('Needs your OK to run `npm test`') })).props.color).toBe(T.warn)
     expect((await shown(blockedUi, { type: 'Text', text: exactly('■') })).props.color).toBe(T.warn)
     // and where to answer it
     expect((await shown(blockedUi, { type: 'Text', text: exactly('Answer the prompt in the conversation.') })).props.dimColor).toBe(true)
     await blockedUi.unmount()
 
-    // one the engine lists as waiting with no prompt for you is busy on its own work: no ochre, no "Waits on you"
+    // one the engine lists as waiting with no prompt for you is busy on its own work: no ochre, nothing asked of you
     model.view.agent = held.id
     const heldUi = await $.ui.mount(mountOn(surface))
     expect(await heldUi.find({ type: 'Text', text: /Waits on you/ })).toBeUndefined()

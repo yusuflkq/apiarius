@@ -153,16 +153,75 @@ export type DeckAgent = {
   workflow?: string
 }
 
-export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat'
+/**
+ * Who said what to whom: `prompt` your prompt to the Orchestrator, `spawn` a
+ * task handed down, `result` a report handed back, `message` a SendMessage
+ * between agents, `chat` yours from the deck (or an agent's reply to it),
+ * `answer` the Orchestrator's reply to you, `question` an agent's question to
+ * you (AskUserQuestion), `choice` how it was answered.
+ */
+export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice'
 
 export type DeckMessage = {
+  /** `[A-Za-z0-9_]` and `-` only: the web deck serves it as a file name. */
   id: string
   from: string
   to: string
   kind: DeckMessageKind
+  /** At most 700 characters (`LIMITS.messageChars`). */
   text: string
   at: number
   isDelivered?: boolean
+  /** The whole text (at most 20,000 characters) of one cut at 700, until the web deck wrote it to its file; kept on the newest 20. */
+  full?: string
+  /** The web deck wrote its whole text to `messages/<id>.md`: never again. */
+  isSaved?: true
+  /** The id of the web deck's command that sent it: that command's outcome is its ack. */
+  ackId?: string
+  /** A question's or a choice's call (the AskUserQuestion tool_use_id). */
+  callId?: string
+}
+
+/** One question of an AskUserQuestion call, as its dialog draws it. */
+export type DeckQuestion = {
+  question: string
+  /** Its chip ("Library"); '' when the call gave none. */
+  header: string
+  multiSelect: boolean
+  options: { label: string; description: string }[]
+}
+
+/**
+ * A call the engine holds on the person: a question (AskUserQuestion) or a
+ * permission prompt (a `tool.check` ask the engine put to its dialog), until
+ * the call ends.
+ */
+export type DeckPending = {
+  /** The call's tool_use_id. */
+  id: string
+  /** The loop whose call it is: 'main' for the Orchestrator. */
+  agentId: string
+  kind: 'question' | 'permission'
+  tool: string
+  at: number
+  /** A question's questions, as the call gave them. */
+  questions?: DeckQuestion[]
+  /** A permission's shell command. */
+  command?: string
+  /** A permission's file, relative to the repository shown when it lies in it. */
+  path?: string
+  /** What the call says it does (a shell call's description), else what it is aimed at. */
+  description?: string
+}
+
+/** What came of a command from the web deck's page, by its `id`. */
+export type DeckAck = {
+  id: string
+  ok: boolean
+  status: 'queued' | 'delivered' | 'answered' | 'failed'
+  /** In words: "It reads it at its next step", "Already answered in Claude Code", the reason it failed. */
+  text: string
+  at: number
 }
 
 export type DeckEdit = {
@@ -271,6 +330,10 @@ export type DeckData = {
   workflows: DeckWorkflow[]
   /** The next prompt in the person's words starts a new goal, whatever is still live. */
   isNewGoalNext?: boolean
+  /** The calls the engine holds on the person now (questions, permission prompts), oldest first (at most 20). */
+  pending: DeckPending[]
+  /** What came of the web deck's commands, newest last (at most 50). */
+  acks: DeckAck[]
 }
 
 /** The pane's tabs. Older builds' names (overview, diffs, commits, graph, flow) are read as these by `tabNamed`. */

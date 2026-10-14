@@ -13,6 +13,7 @@ import type {
   CommandRunResult,
   Elements,
   EngineInterface,
+  Events,
   Register,
   RenderElement,
   RenderInput,
@@ -22,7 +23,7 @@ import type {
   ToolCallResult,
 } from 'claude-code'
 
-import type { DeckActivity, DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
+import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
 import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
@@ -369,6 +370,9 @@ function debugStateOf(now: number) {
       hidden: outline.hidden,
     },
     web: { isOn: web.isOn, status: web.status, port: web.port, dir: web.dir, opened: web.opened, note: web.note, patches: web.written.size, hasParent: web.pid !== '' },
+    // what waits on you, and whether the page may answer it; what came of the page's latest commands
+    pending: data.pending.map(item => ({ ...item, isAnswerable: askers.has(item.id) })),
+    acks: data.acks.slice(-10),
   }
 }
 
@@ -463,9 +467,10 @@ function scheduleWeb($: EngineInterface) {
 
 /**
  * Writes what the page reads: each edit's patch not written yet
- * (`patches/<id>.diff`, once), then `state.json`, unless it says what the
- * last write said (its time aside). One write at a time: a change during one
- * writes again after it.
+ * (`patches/<id>.diff`, once), each cut message's whole text not written yet
+ * (`messages/<id>.md`, once: it is then marked saved and its whole text let
+ * go), then `state.json`, unless it says what the last write said (its time
+ * aside). One write at a time: a change during one writes again after it.
  */
 async function writeWeb($: EngineInterface): Promise<void> {
   if (!web.isOn || web.dir === '') return
@@ -479,8 +484,14 @@ async function writeWeb($: EngineInterface): Promise<void> {
       await $.fs.write(`${web.dir}/patches/${patch.id}.diff`, patch.text)
       web.written.add(patch.id)
     }
+    for (const file of W.newMessageFilesOf(data)) {
+      await $.fs.write(`${web.dir}/messages/${file.id}.md`, file.text)
+      file.message.isSaved = true
+      delete file.message.full
+    }
     const now = await $.clock.now()
-    const text = JSON.stringify(W.webStateOf(data, view, git, usage, now, sessionId, cwd))
+    // a question the page may answer is one whose race runs in this module: none after a reload
+    const text = JSON.stringify(W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())))
     const key = text.replace(/^\{"v":1,"now":\d+,/, '')
     if (key !== web.lastKey) {
       await $.fs.write(`${web.dir}/state.json`, text)
@@ -650,8 +661,10 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
 /**
  * A whole line from the server: its ready line (the port it listens on), or
  * a command from the page, checked against the model (`W.routeOf`) and acted
- * on: `chat` through `sendChat`, `review` into the prompt box. Anything else
- * is ignored. Answers whether it was the ready line.
+ * on: `chat` through `sendChat`, `review` through `sendReview`, `answer` to
+ * the question it names (`answerQuestion`). A command with an `id` gets an
+ * ack, the page's word on what came of it; one refused gets why. Anything
+ * else is ignored. Answers whether it was the ready line.
  */
 function onWebLine($: EngineInterface, line: string): boolean {
   const said = W.parseLine(line)
@@ -669,10 +682,25 @@ function onWebLine($: EngineInterface, line: string): boolean {
     redraw($)
     return true
   }
+  const ackId = W.cmdIdOf(said.cmd)
   const route = W.routeOf(said.cmd, data)
-  if (route?.kind === 'chat') void sendChat($, route.agentId, route.text)
-  else if (route?.kind === 'review') fillReview($, route.text)
+  if (route === null) void ack($, ackId, 'failed', W.refusalOf(said.cmd, data))
+  else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
+  else if (route.kind === 'review') void sendReview($, route.text, ackId)
+  else if (route.kind === 'answer') answerQuestion($, route.callId, route.answers, ackId)
   return false
+}
+
+/** Says what came of the page's command `id` in the state it reads (`acks`); a command with no id is told nothing. */
+async function ack($: EngineInterface, id: string, status: DeckAck['status'], text: string): Promise<void> {
+  if (id === '') return
+  try {
+    const now = await $.clock.now()
+    M.noteAck(data, { id, ok: status !== 'failed', status, text, at: now })
+    touched($, now)
+  } catch {
+    // the page goes on without the word
+  }
 }
 
 /** Starts the web deck when it is not running, and waits (10 s at most) for its server to be up. */
@@ -770,12 +798,98 @@ function stopWeb($: EngineInterface): boolean {
   return wasOn
 }
 
-/** Puts a review request in the prompt box, for the person to send. */
+/** Puts a review request in the prompt box, for the person to send (the pane's Review). */
 function fillReview($: EngineInterface, text: string) {
   void $.prompt
     .fill({ text, mode: 'replace' })
     .then(filled => $.ui.toast(filled.isFilled ? 'The review request is in your prompt; press Enter to send it.' : 'Could not fill the prompt.'))
     .catch(() => $.ui.toast('Could not fill the prompt.'))
+}
+
+/**
+ * The page's Review, which it asked you to confirm: the request goes in the
+ * prompt box where there is one (the terminal), for you to send. Where the
+ * surface draws its own composer (the Desktop app: `no_composer`) it goes to
+ * the Orchestrator as your next prompt, which runs once Claude is free.
+ */
+async function sendReview($: EngineInterface, text: string, ackId: string): Promise<void> {
+  let filled: Awaited<ReturnType<EngineInterface['prompt']['fill']>> | undefined
+  try {
+    filled = await $.prompt.fill({ text, mode: 'replace' })
+  } catch {
+    filled = undefined
+  }
+  const said = W.reviewStepOf(filled)
+  if (said.kind === 'filled') {
+    $.ui.toast('The review request is in your prompt; press Enter to send it.')
+    await ack($, ackId, 'delivered', 'In your prompt box: press Enter to send it')
+  } else if (said.kind === 'queue') {
+    const isBusy = M.agentOf(data, M.MAIN)?.status === 'running'
+    await queueForMain($, text, ackId, isBusy ? 'Claude reviews it when it finishes its current turn' : 'Claude reviews it now')
+    $.ui.toast(isBusy ? 'Review queued: Claude reviews the changes when it finishes its current turn.' : 'Review sent: Claude reviews the changes now.')
+  } else {
+    $.ui.toast('Could not fill the prompt.')
+    await ack($, ackId, 'failed', said.why)
+  }
+}
+
+/**
+ * What the deck submitted to the Orchestrator as your words, logged as your
+ * message when it was sent: the turn it starts logs it no second time. Each
+ * is marked once its `prompt.submit` passes with the deck's own origin.
+ */
+const deckPrompts: { text: string; isSubmitted: boolean }[] = []
+
+/**
+ * Your words to the Orchestrator from the deck: logged at once as your
+ * message (its ack `queued`: `queued` says when Claude reads it), then
+ * submitted as your next prompt (`asUser`: the model reads them bare), which
+ * runs once the session is idle. A prompt a hook drops, or one that cannot
+ * be queued, fails its ack.
+ */
+async function queueForMain($: EngineInterface, text: string, ackId: string, queued: string): Promise<void> {
+  const said = text.trim()
+  const now = await $.clock.now()
+  M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'chat', text: said, at: now, ...(ackId ? { ackId } : {}) })
+  const entry = { text: said, isSubmitted: false }
+  deckPrompts.push(entry)
+  if (deckPrompts.length > 20) deckPrompts.splice(0, deckPrompts.length - 20)
+  await ack($, ackId, 'queued', queued)
+  touched($, now)
+  const forget = () => {
+    const at = deckPrompts.indexOf(entry)
+    if (at >= 0) deckPrompts.splice(at, 1)
+  }
+  void $.prompt.submit({ text: said, asUser: true }).then(
+    result => {
+      if (result.drop === undefined) return
+      forget()
+      void ack($, ackId, 'failed', `Not sent: ${F.trunc(F.oneLine(result.drop), 200)}`)
+    },
+    error => {
+      forget()
+      const why = error instanceof Error ? error.message : String(error)
+      $.ui.toast(`Could not queue the prompt: ${why}`)
+      void ack($, ackId, 'failed', `Could not queue it: ${F.trunc(F.oneLine(why), 200)}`)
+    },
+  )
+}
+
+/** The deck's prompt that `prompt.submit` passed with the deck's own origin and these words: marked, for its turn to know it. */
+function markDeckPrompt(text: string) {
+  const entry = deckPrompts.find(one => !one.isSubmitted && one.text === text.trim())
+  if (entry) entry.isSubmitted = true
+}
+
+/** Whether a turn starts with the deck's own prompt (one marked submitted first, else one of the same words): it is let go, logged already. */
+function takeDeckPrompt(text: string): boolean {
+  const said = text.trim()
+  if (said === '') return false
+  const marked = deckPrompts.findIndex(one => one.isSubmitted && one.text === said)
+  const at = marked >= 0 ? marked : deckPrompts.findIndex(one => one.text === said)
+  if (at < 0) return false
+  deckPrompts.splice(at, 1)
+  return true
 }
 
 async function restore($: EngineInterface, now: number): Promise<boolean> {
@@ -1145,27 +1259,50 @@ async function loadChat($: EngineInterface, agentId: string): Promise<void> {
   if (!isSame) redraw($)
 }
 
-async function sendChat($: EngineInterface, agentId: string, text: string): Promise<void> {
+/**
+ * The agents you messaged from the deck and await a reply from, by id: when
+ * the message went (`since`), and whether a step of theirs has started since
+ * (`isRead`: they had the chance to read it). Their first step started after
+ * the message that says anything is the reply; a run that read it and ended
+ * without a word for you lets it go. A reload forgets them.
+ */
+const replies = new Map<string, { since: number; isRead: boolean }>()
+
+/**
+ * Your message to an agent, from the pane's Talk or the page's: to the
+ * Orchestrator, logged and queued as your next prompt (`queueForMain`); to a
+ * subagent or teammate, delivered to its inbox (`$.session.send`): it reads
+ * it at its next step, and a finished one is woken by it. Its ack says which;
+ * the agent's reply, its next words, is logged when it comes (`turn.step`).
+ */
+async function sendChat($: EngineInterface, agentId: string, text: string, ackId = ''): Promise<void> {
   const agent = M.agentOf(data, agentId)
   const now = await $.clock.now()
-  if (!agent) return
+  if (!agent) {
+    await ack($, ackId, 'failed', 'No such agent in this session')
+    return
+  }
 
   if (agent.kind === 'main') {
-    $.ui.toast('Queued for the main loop; it runs when the current turn ends.')
-    void $.prompt.submit({ text, asUser: true }).catch(error => $.ui.toast(`Could not queue the prompt: ${String(error)}`))
+    const isBusy = agent.status === 'running'
+    await queueForMain($, text, ackId, isBusy ? 'Claude reads it when it finishes its current turn' : 'Claude reads it now')
+    $.ui.toast(isBusy ? 'Queued for the Orchestrator: it reads it when its current turn ends.' : 'Sent to the Orchestrator.')
     chat?.lines.push({ role: 'parent', who: 'You', text })
     redraw($)
     return
   }
 
   const sent = await $.session.send({ to: { agentId }, text }).catch(error => ({ isDelivered: false as const, reason: String(error) }))
-  M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered })
+  M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered, ...(ackId ? { ackId } : {}) })
   if (chat?.agent === agentId) chat.lines.push({ role: 'parent', who: 'You (deck)', text })
   if (sent.isDelivered) {
     $.ui.toast(`Sent to ${M.labelOf(agent)}`)
     if (M.isEnded(agent.status)) M.reopen(agent)
+    replies.set(agentId, { since: now, isRead: false })
+    await ack($, ackId, 'delivered', 'It reads it at its next step')
   } else {
     $.ui.toast(`Not delivered: ${sent.reason}`)
+    await ack($, ackId, 'failed', sent.reason || 'Not delivered')
   }
   save($)
   redraw($)
@@ -1619,6 +1756,205 @@ async function recordShellEdits($: EngineInterface, agent: DeckAgent, tool: stri
   return count
 }
 
+// Held on you: the questions the deck may answer, and the permission prompts it shows.
+
+/** The `tool.call` hook's own argument and chain, as `raceDeck` takes them. */
+type ToolCallEvent = Parameters<Events['tool.call']>[1]
+type ToolCallNext = Parameters<Events['tool.call']>[2]
+
+/** The deck's answer to a question: the answers by question, as the dialog gives them, and the id of the page's command for its ack. */
+type DeckAnswer = { answers: Record<string, string>; ackId: string }
+
+/**
+ * The questions the deck may answer, by the AskUserQuestion call's
+ * tool_use_id: what settles that call's race with the deck's answer
+ * (`raceDeck`). Like `web.waiters`, it lives in this module alone: a reload
+ * drops every one, so a question restored from the snapshot is shown, never
+ * answered from the page (`isAnswerable`).
+ */
+const askers = new Map<string, (answer: DeckAnswer) => void>()
+
+/** How a question's race ended: the deck answered, Claude Code did (its dialog, or its idle timer), or the call went unanswered (dismissed, failed, abandoned). */
+type QuestionEnd = 'deck' | 'engine' | 'idle' | 'gone'
+
+/** How the latest questions ended, by call id: what an answer from the page that comes too late is told. */
+const questionEnds = new Map<string, QuestionEnd>()
+
+/** The tool calls in flight whose start this module saw: their ends are still to come, so a note of one held on you is never stale. */
+const openCalls = new Set<string>()
+
+/**
+ * The calls `tool.check` put to the mode's decider (an `ask`), by
+ * tool_use_id, until their end: one becomes a permission prompt held on you
+ * when the dialog for it shows (`classic.PermissionRequest`). An ask alone
+ * proves nothing: the auto-mode classifier and a headless host get it too.
+ */
+const asks = new Map<string, { tool: string; input: unknown; agentId: string }>()
+
+/** The tools whose dialog is the person's own say (a question, a plan to approve): never a permission prompt. */
+const PERSON_TOOLS: readonly string[] = ['AskUserQuestion', 'ExitPlanMode']
+
+/** The most asks and question ends kept: beyond, the oldest go. */
+const MOST_KEPT = 100
+
+function keepAtMost<K, V>(map: Map<K, V>, most: number) {
+  for (const key of map.keys()) {
+    if (map.size <= most) return
+    map.delete(key)
+  }
+}
+
+/** Plain data in one spelling whatever its keys' order: how a permission dialog's input is matched to its call's. */
+function sameValue(a: unknown, b: unknown): boolean {
+  const spell = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(spell)
+      : value !== null && typeof value === 'object'
+        ? Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+              .filter(([, one]) => one !== undefined)
+              .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+              .map(([key, one]) => [key, spell(one)]),
+          )
+        : value
+  return JSON.stringify(spell(a)) === JSON.stringify(spell(b))
+}
+
+/**
+ * The call a permission dialog is for: the ask whose tool, input and loop
+ * match the dialog's (`tool_name`, `tool_input`, `agent_id`), the oldest
+ * first; with none exact, the one ask of that tool in that loop. Undefined
+ * when none can be told, or the call is noted held already.
+ */
+function askFor(tool: string, input: unknown, agentId: string): string | undefined {
+  const free = [...asks.entries()].filter(([id, one]) => one.tool === tool && one.agentId === agentId && !data.pending.some(item => item.id === id))
+  const exact = free.find(([, one]) => sameValue(one.input, input))
+  if (exact) return exact[0]
+  return free.length === 1 ? free[0]?.[0] : undefined
+}
+
+/**
+ * An AskUserQuestion call, raced. Its question is held on you (`pending`,
+ * its questions as the call gave them) and said in the asking agent's Talk;
+ * the dialog gets a line saying the deck answers too (where it takes one).
+ * Then the dialog runs beneath (`next`, called once: each call would open it
+ * again) while the page may answer: the deck's answer returns `{ result }`
+ * with the call's own `questions` passed through unchanged (the tool's
+ * output schema checks it), which cancels the dialog beneath; Claude Code's
+ * answer, or its idle timer's, returns what the dialog gave. An abandoned
+ * call (`next.signal`: an interrupt, a hook above settling first) ends the
+ * race with nothing answered. However it ends, the question is taken down,
+ * Talk says how it was answered, and the page's command, if one came, is
+ * told what came of it.
+ */
+async function raceDeck($: EngineInterface, e: ToolCallEvent, next: ToolCallNext, agentId: string, at: number): Promise<ToolCallResult> {
+  const id = e.tool_use_id
+  const input = e as unknown as Record<string, unknown>
+  const questions = M.questionsOf(input.questions)
+  // nothing the deck could show: the dialog alone
+  if (!id || questions.length === 0) return next(e)
+
+  try {
+    M.notePending(data, { id, agentId, kind: 'question', tool: 'AskUserQuestion', at, questions })
+    M.addMessage(data, { from: agentId, to: M.YOU, kind: 'question', text: M.questionsTextOf(questions), at, callId: id })
+    touched($, at)
+  } catch {
+    // the dialog asks whatever the deck makes of it
+  }
+  if (web.isOn) {
+    try {
+      $.ui.notice(id, 'Also answerable in Agent Deck')
+    } catch {
+      // a dialog that takes no line: the page answers all the same
+    }
+  }
+
+  type Won = { by: 'deck'; answer: DeckAnswer } | { by: 'engine'; ran: ToolCallResult } | { by: 'failed'; error: unknown } | { by: 'abort' }
+  // an answer from the page that lands while Claude Code's is settling loses, and is told so
+  const late: { answer?: DeckAnswer } = {}
+  let settle: ((won: Won) => void) | undefined
+  const onAbort = () => settle?.({ by: 'abort' })
+  const below = next(e)
+  // when the deck answers first the dialog's own end is abandoned, its rejection too
+  below.catch(() => undefined)
+  const won = await new Promise<Won>(resolve => {
+    settle = resolve
+    askers.set(id, answer => {
+      late.answer = answer
+      resolve({ by: 'deck', answer })
+    })
+    below.then(
+      ran => resolve({ by: 'engine', ran }),
+      error => resolve({ by: 'failed', error }),
+    )
+    if (next.signal.aborted) resolve({ by: 'abort' })
+    else next.signal.addEventListener('abort', onAbort, { once: true })
+  })
+  askers.delete(id)
+  next.signal.removeEventListener('abort', onAbort)
+
+  const answered = won.by === 'deck' ? won.answer : undefined
+  const ran: ToolCallResult = answered
+    ? ({ result: { questions: input.questions, answers: answered.answers } } as ToolCallResult)
+    : won.by === 'engine'
+      ? won.ran
+      : { deny: 'The question was left unanswered' }
+  const said = won.by === 'engine' && won.ran.deny === undefined && won.ran.isError !== true ? M.questionResultOf(won.ran.result) : undefined
+  const end: QuestionEnd = answered ? 'deck' : said ? (said.isIdle ? 'idle' : 'engine') : 'gone'
+  questionEnds.set(id, end)
+  keepAtMost(questionEnds, MOST_KEPT)
+  try {
+    const now = await $.clock.now()
+    M.dropPending(data, id)
+    if (answered) {
+      M.addMessage(data, { from: M.YOU, to: agentId, kind: 'choice', text: `You answered: ${M.answeredOf(questions, answered.answers)}`, at: now, callId: id, ...(answered.ackId ? { ackId: answered.ackId } : {}) })
+      await ack($, answered.ackId, 'answered', 'Claude carries on')
+    } else if (said) {
+      const words = M.answeredOf(questions, said.answers) || F.oneLine(said.response)
+      const how = said.isIdle ? 'Auto-answered after idle' : 'Answered in Claude Code'
+      M.addMessage(data, { from: M.YOU, to: agentId, kind: 'choice', text: words ? `${how}: ${words}` : how, at: now, callId: id })
+    }
+    if (!answered && late.answer) await ack($, late.answer.ackId, 'failed', end === 'idle' ? 'Auto-answered after idle' : end === 'engine' ? 'Already answered in Claude Code' : 'No longer pending')
+    touched($, now)
+  } catch {
+    // the answer stands whatever the deck makes of it
+  }
+  if (won.by === 'failed') throw won.error
+  return ran
+}
+
+/**
+ * The page's answer to the question held on call `callId`: it settles that
+ * call's race (`raceDeck`), which says what came of it. Refused, with why,
+ * when nothing races there any more (answered in Claude Code, by its idle
+ * timer, or gone; or restored by a reload, which the page may not answer),
+ * or when an answer is to no question that call asked.
+ */
+function answerQuestion($: EngineInterface, callId: string, answers: Record<string, string>, ackId: string) {
+  const item = M.pendingOf(data).find(one => one.id === callId)
+  const asker = askers.get(callId)
+  if (!asker) {
+    const end = questionEnds.get(callId)
+    const why =
+      end === 'engine'
+        ? 'Already answered in Claude Code'
+        : end === 'idle'
+          ? 'Auto-answered after idle'
+          : item && end === undefined
+            ? 'The deck cannot answer this one since it reloaded: answer it in Claude Code'
+            : 'No longer pending'
+    void ack($, ackId, 'failed', why)
+    return
+  }
+  const problem = W.answerProblemOf(item, answers)
+  if (problem || !item) {
+    void ack($, ackId, 'failed', problem || 'No longer pending')
+    return
+  }
+  askers.delete(callId)
+  asker({ answers: W.answersFor(item, answers), ackId })
+}
+
 /** Marks the commits a shell command made as that agent's. */
 async function attributeCommits($: EngineInterface, agentId: string, before: string): Promise<void> {
   const ran = await runGit($, before ? G.argv.newSince(before) : G.argv.recentHashes)
@@ -1903,8 +2239,10 @@ export const register: Register = on => {
       // a call is work: an ended agent (a message woke it) or an idle teammate runs again
       if (M.isEnded(agent.status) || agent.status === 'idle') M.reopen(agent)
       delete agent.endedAt
-      // the agent the engine waited on for the person moved on
+      // the agent the engine waited on for the person moved on; a call of its a reload left noted as held on you has ended
       M.clearNeeds(data, { kind: 'start', agent: agentId })
+      M.dropStale(data, agentId, openCalls)
+      if (e.tool_use_id) openCalls.add(e.tool_use_id)
       const file = typeof input.file_path === 'string' ? input.file_path : ''
       const said = file ? { ...input, file_path: knownRealOf(file) } : input
       const activity = M.activityOf(e.tool_use_id, tool, said, git.root || null, start, data.board)
@@ -1938,7 +2276,16 @@ export const register: Register = on => {
     }
 
     const before = isShell && git.isRepo && G.mayCommit(command) ? await runGit($, G.argv.head).then(ran => (ran.ok ? ran.out.trim() : '')) : ''
-    const ran = await next(e)
+    let ran: ToolCallResult
+    try {
+      // a question the deck may answer too: raced with its dialog beneath
+      ran = tool === 'AskUserQuestion' ? await raceDeck($, e, next, agentId, start) : await next(e)
+    } finally {
+      // the call ended (answered, run, refused or failed): nothing of it is held on you any more
+      openCalls.delete(e.tool_use_id)
+      asks.delete(e.tool_use_id)
+      M.dropPending(data, e.tool_use_id)
+    }
 
     let end = start
     let ok = false
@@ -2101,6 +2448,8 @@ export const register: Register = on => {
       const now = await $.clock.now()
       let isChanged = false
       if (result.drop === undefined) {
+        // the deck's own prompt, logged as your message when it was sent: the turn it starts logs it no second time
+        if (e.origin.kind === 'plugin' && e.origin.name === $.plugin.name) markDeckPrompt(e.text)
         // the turn it starts logs it as yours only when it is in your words: an agent's hand-back or a notification is not
         isNextTurnTheirs = M.isUsersWords(e.origin)
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
@@ -2150,7 +2499,11 @@ export const register: Register = on => {
       // opens with a notice: a background agent's <task-notification> can start a turn with no prompt.submit before it
       const isTheirs = (isNextTurnTheirs ?? true) && !M.isNoticeText(e.text)
       isNextTurnTheirs = null
-      if (e.text.trim() && isTheirs) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      // your words from the deck were logged when you sent them
+      const isDecks = takeDeckPrompt(e.text)
+      if (e.text.trim() && isTheirs && !isDecks) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      // a new turn: no call of the Orchestrator's last one is held on you any more
+      M.dropStale(data, M.MAIN, openCalls)
       touched($, now)
     } catch {
       // a turn starts whatever the deck makes of it
@@ -2159,10 +2512,32 @@ export const register: Register = on => {
   })
 
   on('turn.step', async function* ($, e, next) {
+    const id = e.agentId ?? M.MAIN
+    // its loop takes another step: every call of its last one has ended, so none a reload left noted is held on you
+    const isStale = data.pending.length > 0 && M.dropStale(data, id, openCalls)
+    // you messaged it from the deck: a step it starts now may read your words, and answer them
+    const awaited = e.agentId !== undefined ? replies.get(e.agentId) : undefined
+    const startedAt = awaited || isStale ? await $.clock.now() : 0
+    if (isStale) touched($, startedAt)
     const result = yield* next(e)
     try {
+      if (awaited && e.agentId !== undefined && replies.get(e.agentId) === awaited && startedAt > awaited.since) {
+        // its first words since your message are its reply
+        if (result.answer.trim() !== '') {
+          replies.delete(e.agentId)
+          const now = await $.clock.now()
+          M.addMessage(data, { from: e.agentId, to: M.YOU, kind: 'chat', text: result.answer, at: now })
+          touched($, now)
+        } else {
+          awaited.isRead = true
+        }
+      }
+    } catch {
+      // the reply stands in the agent's own transcript
+    }
+    try {
       const usageOfStep = result.usage
-      const agent = M.agentOf(data, e.agentId ?? M.MAIN)
+      const agent = M.agentOf(data, id)
       if (usageOfStep && agent) {
         const now = await $.clock.now()
         agent.tokensIn += usageOfStep.input_tokens + usageOfStep.cache_creation_input_tokens
@@ -2186,6 +2561,8 @@ export const register: Register = on => {
     const result = await next(e)
     try {
       const now = await $.clock.now()
+      // its run ended: no call of it is held on you any more
+      M.dropStale(data, e.agentId ?? M.MAIN, openCalls)
       if (e.agentId) {
         const agent = M.agentOf(data, e.agentId)
         if (agent) {
@@ -2196,6 +2573,8 @@ export const register: Register = on => {
           // its answer is its result unless it handed a report back (whose turn answers "")
           if (e.answer.trim()) M.noteResult(data, agent, e.answer, now, 'answer')
         }
+        // a run that read your message and ended without a word for you: no reply is coming
+        if (replies.get(e.agentId)?.isRead) replies.delete(e.agentId)
       } else {
         const main = M.agentOf(data, M.MAIN)
         if (main) {
@@ -2203,8 +2582,9 @@ export const register: Register = on => {
           delete main.current
           main.lastAt = now
           delete main.todo
-          // its answer to you is its latest report: the web deck's Orchestrator shows it
+          // its answer to you is its latest report (the web deck's Orchestrator shows it), and its reply in your Talk
           M.noteMainAnswer(main, e.answer)
+          if (e.answer.trim()) M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'answer', text: e.answer, at: now })
         }
         data.turns += 1
         data.turnMs += e.durationMs
@@ -2337,6 +2717,55 @@ export const register: Register = on => {
       }
     } catch {
       // the delivery stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  // A call the engine puts to the mode's decider: a permission prompt, if its dialog shows (classic.PermissionRequest). Observe only.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    try {
+      // the deck's own calls, a query (no call), and the tools whose dialog is the person's own answer (a question, a plan) are no permission prompt
+      const isPrompt = verdict.decision === 'ask' && e.tool_use_id !== undefined && e.tool_use_id !== '' && !PERSON_TOOLS.includes(e.tool) && next.origin.plugin !== $.plugin.name
+      if (isPrompt && e.tool_use_id) {
+        asks.set(e.tool_use_id, { tool: e.tool, input: e.input, agentId: e.agentId ?? M.MAIN })
+        keepAtMost(asks, MOST_KEPT)
+      }
+    } catch {
+      // the verdict stands whatever the deck makes of it
+    }
+    return verdict
+  })
+
+  // The permission dialog shows for a call the engine asked about: it is held on you until the call ends or is denied. Observe only.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      // a settings hook that decided spares you the dialog
+      if (result.decision === undefined && result.block === undefined) {
+        const agentId = e.agent_id ?? M.MAIN
+        const id = askFor(e.tool_name, e.tool_input, agentId)
+        const asked = id !== undefined ? asks.get(id) : undefined
+        if (id !== undefined && asked && openCalls.has(id)) {
+          const now = await $.clock.now()
+          M.notePending(data, M.permissionOf({ id, tool: asked.tool, input: asked.input, agentId, at: now }, git.root || null))
+          touched($, now)
+        }
+      }
+    } catch {
+      // the dialog shows whatever the deck makes of it
+    }
+    return result
+  })
+
+  // The permission was refused (the auto-mode classifier): nothing waits on you for it.
+  on('classic.PermissionDenied', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      asks.delete(e.tool_use_id)
+      if (M.dropPending(data, e.tool_use_id)) touched($, await $.clock.now())
+    } catch {
+      // the refusal stands whatever the deck makes of it
     }
     return result
   })

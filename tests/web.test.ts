@@ -90,7 +90,7 @@ const GIT: GitState = {
 
 const USAGE = { startedAt: NOW - 600_000, contextPercent: 38, costUsd: 6.42, limits: [] }
 
-const STATE_KEYS = ['v', 'now', 'session', 'repo', 'goal', 'needs', 'summary', 'plan', 'agents', 'messages', 'activity', 'files', 'edits', 'changes', 'commits']
+const STATE_KEYS = ['v', 'now', 'session', 'repo', 'goal', 'needs', 'summary', 'plan', 'agents', 'messages', 'activity', 'files', 'edits', 'changes', 'commits', 'pending', 'acks']
 const AGENT_KEYS = ['id', 'label', 'scope', 'type', 'model', 'kind', 'parent', 'status', 'needsYou', 'startedAt', 'endedAt', 'now', 'task', 'result', 'checklist', 'lastAction', 'tools', 'errors', 'tokens', 'added', 'removed', 'files', 'avatar']
 const SUMMARY_KEYS = ['step', 'stepText', 'running', 'waiting', 'done', 'failed', 'files', 'added', 'removed', 'minutes', 'tokens', 'costUsd', 'contextPercent']
 
@@ -102,7 +102,7 @@ test('webStateOf: the v1 schema, field by field, as plain JSON', () => {
   expect(state).toMatchObject({ v: 1, now: NOW, session: { id: 'session-1', cwd: '/repo', startedAt: NOW - 600_000, model: 'opus-5.5' } })
   expect(state.repo).toEqual({ name: 'repo', root: '/repo', branch: 'main', ahead: 2, behind: 1, head: commit(1).hash })
   expect(state.goal).toEqual({ headline: 'Fix the login bug in src/auth.ts', text: 'Fix the login bug in src/auth.ts', at: NOW - 500_000, followUps: [] })
-  expect(state.needs).toEqual({ tone: 'attention', kind: 'blocked', text: 'fixer waits on you: allow Bash "npm test"', agentId: 'agent-fixer' })
+  expect(state.needs).toEqual({ tone: 'attention', kind: 'blocked', text: 'fixer needs your OK to run `npm test`', agentId: 'agent-fixer' })
   expect(Object.keys(state.summary)).toEqual(SUMMARY_KEYS)
   expect(state.summary).toMatchObject({ files: 2, costUsd: 6.42, contextPercent: 38, waiting: 1 })
   const tokens = data.agents.reduce((sum, one) => sum + one.tokensIn + one.tokensOut + one.cacheRead, 0)
@@ -119,8 +119,8 @@ test('webStateOf: the v1 schema, field by field, as plain JSON', () => {
     kind: 'agent',
     parent: M.MAIN,
     status: 'waiting',
-    needsYou: 'allow Bash "npm test"',
-    now: 'Waits on you: allow Bash "npm test"',
+    needsYou: 'needs your OK to run `npm test`',
+    now: 'Needs your OK to run `npm test`',
     model: 'haiku-4.5',
     lastAction: { tool: 'Bash', text: 'Run the unit tests', isLive: true },
     tokens: { in: 10, out: 20, cacheRead: 30 },

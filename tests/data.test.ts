@@ -729,7 +729,7 @@ test('the needs-you line: a prompt blocked on you, then a failure, then a file t
   M.noteNeeds(data, { kind: 'permission_prompt', text: 'Claude needs your permission to use Bash', at: NOW - 5_000 })
   const git = repoOf([fileRow('src/token.js')])
 
-  expect(M.needsOf(data, git)).toEqual({ tone: 'attention', kind: 'blocked', text: 'fixer waits on you: allow Bash "npm test"', agentId: 'n-fixer' })
+  expect(M.needsOf(data, git)).toEqual({ tone: 'attention', kind: 'blocked', text: 'fixer needs your OK to run `npm test`', agentId: 'n-fixer' })
   expect(M.statusOf(fixer, data)).toBe('waiting')
   expect(M.statusOf(M.agentOf(data, M.MAIN)!, data)).toBe('idle')
   expect(M.summaryOf(data, git, NOW)).toEqual({ step: '1 of 3', running: 1, waiting: 1, done: 0, failed: 1, files: 1, added: 3, removed: 1, minutes: 10 })
