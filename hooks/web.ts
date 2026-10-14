@@ -134,6 +134,23 @@ export function webIdOf(id: string): string {
   return id.replace(/[^A-Za-z0-9_]/g, ch => `-${ch.charCodeAt(0).toString(16)}`)
 }
 
+/**
+ * `text` cut to `max` characters for the page, which reads it as markdown:
+ * a cut inside an inline code span drops that span's start, so no lone
+ * backtick shows ("A `ge…" reads "A…"). A cut fenced block is left to the
+ * page, which closes it.
+ */
+export function cutMarkdown(text: string, max: number): string {
+  const cut = F.trunc(text, max)
+  if (cut === text) return cut
+  const body = cut.slice(0, -1)
+  const inline = body.replace(/```[\s\S]*?(?:```|$)/g, '')
+  if ((inline.match(/`/g) ?? []).length % 2 === 0) return cut
+  const at = body.lastIndexOf('`')
+  if (at < 0 || body.slice(at).includes('\n') || body.slice(Math.max(0, at - 2), at + 1) === '```') return cut
+  return `${body.slice(0, at).trimEnd()}…`
+}
+
 /** An agent's persona, 0 to 9: the same id, the same avatar, in every write and session. */
 export function avatarOf(id: string): number {
   return F.hash(id) % 10
@@ -255,7 +272,7 @@ function webAgentOf(data: DeckData, agent: DeckAgent, root: string, plan: M.Deck
     endedAt: agent.endedAt ?? null,
     now: nowLineOf(data, agent, status, needsYou, root),
     task: F.trunc(task, WEB_CAPS.task),
-    result: F.trunc(agent.answer ?? '', WEB_CAPS.result),
+    result: cutMarkdown(agent.answer ?? '', WEB_CAPS.result),
     checklist: {
       items: list.items.map(item => ({ text: item.text, status: item.status === 'failed' ? 'pending' : item.status, ...(item.doing ? { doing: item.doing } : {}) })),
       done: list.done,
@@ -335,7 +352,7 @@ export function webStateOf(data: DeckData, view: DeckView, git: GitState, usage:
       from: message.from,
       to: message.to,
       kind: message.kind,
-      text: F.trunc(message.text, WEB_CAPS.messageChars),
+      text: cutMarkdown(message.text, WEB_CAPS.messageChars),
     })),
     activity,
     files: M.filesOf(data).map(file => ({ path: file.path, editors: file.editors, live: file.live, isShared: file.isShared, added: file.added, removed: file.removed, lastAt: file.lastAt })),

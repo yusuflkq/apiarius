@@ -239,6 +239,21 @@ test('webStateOf on a live run`s shape: the step only while one is in progress, 
   expect(M.targetOf('ToolSearch', { query: 'slack send' }, '/repo')).toBe('slack send')
 })
 
+test('a message or report cut for the page never leaves a lone backtick, which its markdown would show', () => {
+  // the live run's helper report, cut at 600 inside "`general-purpose`"
+  expect(W.cutMarkdown('Done. A `general-purpose` agent', 12)).toBe('Done. A…')
+  expect(W.cutMarkdown('Use `a` and `b` here', 10)).toBe('Use `a` a…')
+  // a fenced block cut open is the page's to close
+  expect(W.cutMarkdown('```js\nconst a = 1\nconst b = 2\n```', 15)).toBe('```js\nconst a …')
+  expect(W.cutMarkdown('short `code`', 600)).toBe('short `code`')
+  const data = M.emptyData(NOW - 60_000)
+  const report = `Source change (done): ${'x'.repeat(540)} Test helper (running): A \`general-purpose\` agent is adding one test.`
+  M.addMessage(data, { from: 'agent-x', to: M.MAIN, kind: 'result', text: report, at: NOW })
+  const [message] = W.webStateOf(data, M.defaultView(), GIT, USAGE, NOW, 's', '/repo').messages
+  expect(message?.text.endsWith('A…')).toBe(true)
+  expect((message?.text.match(/`/g) ?? []).length % 2).toBe(0)
+})
+
 test('avatars are 0 to 9 and stable per agent id; ids, models and lines read as the page takes them', () => {
   const first = W.webStateOf(richData(), M.defaultView(), GIT, USAGE, NOW, 's', '/repo')
   const again = W.webStateOf(richData(), M.defaultView(), GIT, USAGE, NOW + 60_000, 's', '/repo')
