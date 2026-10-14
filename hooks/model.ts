@@ -100,6 +100,8 @@ export const LIMITS = {
   steps: 30,
   /** An agent's label, in characters. */
   label: 18,
+  /** A label's characters when the cut at `label` keeps fewer than two words or very little (`cutAtWord`). */
+  labelStretch: 24,
 } as const
 
 export const EDIT_TOOLS: readonly string[] = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit']
@@ -273,21 +275,76 @@ function isMadeUpName(agent: DeckAgent): boolean {
   return agent.name === `agent-${agent.id.slice(0, 6)}`
 }
 
+/** Words a cut never ends on: there they leave the phrase hanging ("Recover goal and"). */
+const HANGING_WORDS: ReadonlySet<string> = new Set(['and', 'or', 'the', 'a', 'an', 'of', 'to', 'for', 'with', 'in', 'on', 'from', 'into', 'by', 'as'])
+/** A cut shorter than this keeps very little, and may run on to its stretch. */
+const SCANT_CHARS = 10
+
+/** The whole words of `line` (one line) that fit in `max` characters, less the punctuation and the hanging words they end on; '' when none fits. */
+function wordsWithin(line: string, max: number): string {
+  const words: string[] = []
+  let length = -1
+  for (const word of line.split(' ')) {
+    length += 1 + Array.from(word).length
+    if (length > max) break
+    words.push(word)
+  }
+  for (let last = words.pop(); last !== undefined; last = words.pop()) {
+    const bare = last.replace(/[,;:.(\-–—]+$/, '')
+    if (bare !== '' && !HANGING_WORDS.has(bare.toLowerCase())) return [...words, bare].join(' ')
+  }
+  return ''
+}
+
+/** Whether a cut keeps very little: fewer than two words, or under SCANT_CHARS characters. */
+function isScant(cut: string): boolean {
+  return cut.split(' ').length < 2 || Array.from(cut).length < SCANT_CHARS
+}
+
 /**
- * `text` on one line, cut to `max` characters after a whole word (trailing
- * punctuation dropped); a first word longer than that is cut with an ellipsis.
+ * `text` on one line in at most `max` characters, cut after a whole word:
+ * never on punctuation, nor on a word that leaves the phrase hanging (and,
+ * or, the, a, an, of, to, for, with, in, on, from, into, by, as). When that
+ * keeps fewer than two words or under ten characters, the cut may run on to
+ * `stretch` characters. Text within `max` is kept whole; a first word too
+ * long for either is cut at `max` with an ellipsis.
  */
-export function cutAtWord(text: string, max: number): string {
+export function cutAtWord(text: string, max: number, stretch = max): string {
   const line = oneLine(text)
   if (Array.from(line).length <= max) return line
+  const cut = wordsWithin(line, max)
+  const kept = stretch > max && isScant(cut) ? wordsWithin(line, stretch) : cut
+  return kept !== '' ? kept : trunc(line, max)
+}
+
+/** `words` cut as a label: LIMITS.label characters, LIMITS.labelStretch when that keeps very little; `less` held back for a sibling's " 2". */
+function labelCut(words: string, less = 0): string {
+  return cutAtWord(words, LIMITS.label - less, LIMITS.labelStretch - less)
+}
+
+/**
+ * How labels were cut before they kept phrases whole: whole words up to 18
+ * characters, whatever word came last. Kept only to know such a label again
+ * in a restored snapshot (`isOldCut`).
+ */
+function oldCut(words: string): string {
+  const line = oneLine(words)
+  if (Array.from(line).length <= LIMITS.label) return line
   let out = ''
   for (const word of line.split(' ')) {
     const next = out === '' ? word : `${out} ${word}`
-    if (Array.from(next).length > max) break
+    if (Array.from(next).length > LIMITS.label) break
     out = next
   }
   out = out.replace(/[\s,;:.(\-–—]+$/, '')
-  return out !== '' ? out : trunc(line, max)
+  return out !== '' ? out : trunc(line, LIMITS.label)
+}
+
+/** A label fitted to `room` characters (a drawing's column): cut after a whole word as labels are, a sibling's " 2" kept. */
+export function fitLabel(label: string, room: number): string {
+  if (Array.from(label).length <= room) return label
+  const suffix = / \d+$/.exec(label)?.[0] ?? ''
+  return `${cutAtWord(label.slice(0, label.length - suffix.length), Math.max(1, room - suffix.length))}${suffix}`
 }
 
 /**
@@ -304,20 +361,24 @@ export function splitMarker(description: string): { marker: string; scope: strin
   return { marker, scope }
 }
 
-/** The label an agent's own words give it, and the scope beside it; undefined while it has none. */
-function labelParts(agent: DeckAgent): { label: string; scope: string } | undefined {
+/**
+ * The label an agent's own words give it, cut by `cut`; the words it is cut
+ * from (its name, else its description's leading marker, else its
+ * description); and the scope beside it. Undefined while it has no words.
+ */
+function labelParts(agent: DeckAgent, cut: (words: string) => string = labelCut): { label: string; words: string; scope: string } | undefined {
   const name = agent.name.trim()
   const named = name !== '' && !isMadeUpName(agent) ? name : ''
   const description = oneLine(agent.description)
   const marked = splitMarker(description)
   if (named !== '') {
     const scope = marked ? marked.scope : description
-    return { label: cutAtWord(named, LIMITS.label), scope: scope === named ? '' : scope }
+    return { label: cut(named), words: named, scope: scope === named ? '' : scope }
   }
-  if (marked) return { label: cutAtWord(marked.marker, LIMITS.label), scope: marked.scope }
+  if (marked) return { label: cut(marked.marker), words: marked.marker, scope: marked.scope }
   if (description !== '') {
-    const label = cutAtWord(description, LIMITS.label)
-    return { label, scope: label === description ? '' : description }
+    const label = cut(description)
+    return { label, words: description, scope: label === description ? '' : description }
   }
   return undefined
 }
@@ -327,15 +388,17 @@ function fallbackLabel(agent: DeckAgent): string {
   if (agent.origin === 'workflow') return 'Workflow agent'
   if (agent.origin === 'engine') return 'Housekeeping'
   const type = agent.type.trim()
-  if (type !== '' && type !== 'subagent' && type !== agent.id) return cutAtWord(type, LIMITS.label)
+  if (type !== '' && type !== 'subagent' && type !== agent.id) return labelCut(type)
   return agent.kind === 'teammate' ? 'Teammate' : 'Agent'
 }
 
 /**
  * Fixes the agent's label once it has words to make one from (its name, else
- * its description's leading marker, else its description cut at a word):
- * at most 18 characters, never changed after. A sibling (same parent)
- * already labelled the same makes it "Phase A 2", then "Phase A 3".
+ * its description's leading marker, else its description), cut after a whole
+ * word that leaves no phrase hanging (`cutAtWord`): at most 18 characters, up
+ * to 24 when that keeps fewer than two words or very little. Never changed
+ * after. A sibling (same parent) already labelled the same makes it "Phase A
+ * 2", then "Phase A 3".
  */
 export function fixLabel(data: DeckData, agent: DeckAgent): void {
   if (agent.label !== undefined || (agent.kind !== 'agent' && agent.kind !== 'teammate')) return
@@ -349,21 +412,37 @@ export function fixLabel(data: DeckData, agent: DeckAgent): void {
   let label = parts.label
   for (let n = 2; taken.has(label.toLowerCase()) && n < 1000; n++) {
     const suffix = ` ${n}`
-    label = `${Array.from(parts.label).slice(0, LIMITS.label - suffix.length).join('').trimEnd()}${suffix}`
+    label = `${labelCut(parts.words, suffix.length)}${suffix}`
   }
   agent.label = label
   if (parts.scope !== '') agent.scope = trunc(parts.scope, 200)
 }
 
 /**
- * The agent's label, at most 18 characters and never an id: the one fixed
- * at its spawn (`fixLabel`), else what its words give, else its type; the
- * main loop is the Orchestrator.
+ * Whether the agent's label is the one an earlier build's cut (`oldCut`) made
+ * of its words as they stand now, a sibling's " 2" after it, where today's cut
+ * makes another. Such a label is made again on restore (`healData`); one whose
+ * words changed since it was fixed stays as it is.
+ */
+function isOldCut(agent: DeckAgent): boolean {
+  const label = agent.label
+  if (label === undefined) return false
+  const old = labelParts(agent, oldCut)?.label
+  if (old === undefined || old === labelParts(agent)?.label) return false
+  if (label === old) return true
+  const suffix = / \d+$/.exec(label)?.[0]
+  return suffix !== undefined && label === `${Array.from(old).slice(0, LIMITS.label - suffix.length).join('').trimEnd()}${suffix}`
+}
+
+/**
+ * The agent's label, never an id: the one fixed at its spawn (`fixLabel`),
+ * else what its words give, else its type; the main loop is the Orchestrator.
+ * At most 18 characters, 24 when the cut at 18 keeps very little.
  */
 export function labelOf(agent: DeckAgent): string {
   if (agent.kind === 'main') return ORCHESTRATOR
   if (agent.kind === 'you') return agent.name
-  if (agent.kind === 'peer') return cutAtWord(agent.name, LIMITS.label)
+  if (agent.kind === 'peer') return labelCut(agent.name)
   return agent.label ?? labelParts(agent)?.label ?? fallbackLabel(agent)
 }
 
@@ -678,7 +757,9 @@ export function copyOf<T>(value: T): T {
 /**
  * Fills, field by field, what a snapshot from an older shape lacks, drops
  * what it holds of the wrong shape, and cuts each list to its cap (goals 20,
- * board 200, 50 todos per agent, files 500). Agents without a label get one.
+ * board 200, 50 todos per agent, files 500). Agents without a label get one,
+ * and so do agents whose label an earlier build cut from the words they still
+ * have (`isOldCut`): it is made again, in spawn order, the way labels are cut now.
  */
 export function healData(value: DeckData, now: number): DeckData {
   const base = emptyData(now)
@@ -696,6 +777,11 @@ export function healData(value: DeckData, now: number): DeckData {
   data.files = healFiles(value.files)
   data.workflows = healWorkflows(value.workflows)
   if (value.isNewGoalNext !== true) delete data.isNewGoalNext
+  for (const agent of data.agents) {
+    if (!isOldCut(agent)) continue
+    delete agent.label
+    delete agent.scope
+  }
   for (const agent of data.agents) fixLabel(data, agent)
   return data
 }
@@ -710,8 +796,10 @@ function num(value: unknown): number | undefined {
 /** One restored agent's newer fields, each kept only in its own shape. */
 function healAgent(agent: DeckAgent): DeckAgent {
   const loose = agent as unknown as Record<string, unknown>
-  if (typeof loose.label !== 'string' || loose.label === '') delete agent.label
-  else agent.label = cutAtWord(loose.label, LIMITS.label)
+  // a label is kept as it was fixed: one line, cut again only past the longest a label may be
+  const label = typeof loose.label === 'string' ? oneLine(loose.label) : ''
+  if (label === '') delete agent.label
+  else agent.label = Array.from(label).length > LIMITS.labelStretch ? labelCut(label) : label
   if (typeof loose.scope !== 'string') delete agent.scope
   if (!ORIGINS.includes(loose.origin as DeckOrigin)) delete agent.origin
   for (const field of ['toolUseId', 'goal', 'workflow'] as const) if (typeof loose[field] !== 'string') delete agent[field]
@@ -1320,6 +1408,88 @@ export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: n
   agent.resultVia = via
   addMessage(data, { from: agent.id, to: agent.parentId ?? MAIN, kind: 'result', text: body, at })
   return true
+}
+
+/** Words that only announce a report ("Done", "Summary", "Verdict"): the row says "Done:" itself. */
+const REPORT_WORDS = 'done|all done|finished|complete|completed|summary|results?|report|verdict|outcome|status|answer|conclusion|findings|tl;?\\s?dr|bottom line|overall'
+
+/**
+ * A line's opening of `words` ("Done:", "Final report:", "Summary of changes:",
+ * "Done —"): an adjective may lead them and an "of …" follow, then a colon, a
+ * dash or a stop, or nothing more on the line.
+ */
+function leadOf(words: string): RegExp {
+  return new RegExp(String.raw`^(?:(?:final|short|brief|quick|overall)\s+)?(?:${words})(?:\s+of(?:\s+[\w-]+){1,3})?(?:(?:\s*[:.!](?=\s|$)|\s*[—–]|\s+-(?=\s))\s*|\s*$)`, 'i')
+}
+
+const REPORT_LEAD = leadOf(REPORT_WORDS)
+/** On a failed row, its own "Failed:" goes too. */
+const FAILURE_LEAD = leadOf(`${REPORT_WORDS}|failed|failure`)
+/** Abbreviations whose stop ends no sentence. */
+const ABBREVIATION = /\b(?:e\.g|i\.e|etc|vs|cf|approx|incl|esp)\.$/i
+
+/** `line`'s first sentence: up to its first stop (. ! ?) that more words follow, an abbreviation's aside; the whole line with none. */
+export function firstSentenceOf(line: string): string {
+  const stops = /[.!?](?=\s+\S)/g
+  for (let found = stops.exec(line); found; found = stops.exec(line)) {
+    const head = line.slice(0, found.index + 1)
+    if (!ABBREVIATION.test(head)) return head
+  }
+  return line
+}
+
+/**
+ * An absolute path inside a line of text: a drive's (C:\… or C:/…), or a
+ * POSIX one of two parts or more, never a URL's; it runs to a space, a quote,
+ * a bracket, a comma or a semicolon.
+ */
+const ABS_PATH = /(?<![\w.~:/\\-])(?:[A-Za-z]:[\\/]|\/(?=[^\s/]+\/))[^\s"'`<>|,;()[\]{}]*/g
+
+/** One absolute path made short: relative under `root`, else its file and the two folders above it after "…/"; one that short already stays. */
+function shortPathOf(path: string, root: string): string {
+  const norm = normPath(path)
+  if (root !== '') {
+    const rel = relOf(norm, root)
+    if (rel !== norm && rel !== '.') return rel
+  }
+  const parts = norm.split('/').filter(part => part !== '')
+  const below = /^[A-Za-z]:$/.test(parts[0] ?? '') ? parts.slice(1) : parts
+  return below.length > 3 ? `…/${below.slice(-3).join('/')}` : path
+}
+
+/**
+ * `text` with each absolute path in it made short: relative to `root` (the
+ * repository shown) when it lies under it, else its file and the two folders
+ * above it ("…/demo-repo/src/token.js"). A stop or colon after a path stays.
+ */
+export function shortPathsIn(text: string, root = ''): string {
+  return text.replace(ABS_PATH, found => {
+    const path = found.replace(/[.:!?]+$/, '')
+    return `${shortPathOf(path, root)}${found.slice(path.length)}`
+  })
+}
+
+/**
+ * The line an ended agent's outline row shows of its result: the first
+ * sentence of its report's first line that says something, with the words
+ * that only announce a report dropped ("Done:", "Finished:", "Summary:",
+ * "Result:", "Report:", "Verdict:" and the like; on a failed row its own
+ * "Failed:" too) and its absolute paths made short (`shortPathsIn`, `root`
+ * the repository shown). '' when the report says nothing more. The detail's
+ * Result keeps the whole text.
+ */
+export function resultLineOf(text: string, root = '', isFailure = false): string {
+  const lead = isFailure ? FAILURE_LEAD : REPORT_LEAD
+  for (const raw of text.split('\n')) {
+    let line = firstLine(raw)
+    for (let pass = 0; pass < 3; pass++) {
+      const rest = line.replace(lead, '')
+      if (rest === line) break
+      line = rest
+    }
+    if (line !== '') return shortPathsIn(firstSentenceOf(line), root)
+  }
+  return ''
 }
 
 /** Ends a live agent's row now: a teammate goes idle, any other completes. */

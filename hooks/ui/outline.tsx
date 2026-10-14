@@ -28,6 +28,7 @@
 import type { RenderElement } from 'claude-code'
 
 import * as F from '../format'
+import { fitLabel } from '../model'
 import { delta, emptyLine, rail, square, stepMark } from './common'
 import type { Crumb, HeaderVM, NeedsVM, OutlineVM, RowVM, SummaryVM } from './outlineModel'
 import { T } from './theme'
@@ -238,16 +239,18 @@ function noteProps(row: RowVM): { color?: string; dimColor?: boolean } {
 }
 
 /**
- * A row's label: a plain Button that selects it, cut to `room` characters.
+ * A row's label: a plain Button that selects it, cut to `room` characters (an
+ * agent's after a whole word, as its label was cut, a step's with an ellipsis).
  * The selected one is the primary plate, and a press on it again does
  * nothing (Zoom and Fold are the detail's, z and f); the Orchestrator's answers o.
  */
 function labelButton(kit: Kit, row: RowVM, room: number, actions: Actions): RenderElement {
   const { Button } = kit
+  const most = Math.max(4, room)
   return (
     <Button
       key={labelKey(row)}
-      label={F.trunc(row.label, Math.max(4, room))}
+      label={row.kind === 'agent' ? fitLabel(row.label, most) : F.trunc(row.label, most)}
       {...(row.isSelected ? { variant: 'primary' as const } : { plain: true as const })}
       {...(row.kind === 'orchestrator' ? { hotkey: 'o' } : {})}
       onPress={() => {

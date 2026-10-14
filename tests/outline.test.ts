@@ -3,6 +3,7 @@ import { expect, mock, test, type ElementQuery, type Engine, type FoundElement }
 
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
+import { detailVM } from '../hooks/ui/detail'
 import { FOLD_LABEL } from '../hooks/ui/outline'
 import { UNTOUCHED, headerOf, outlineOf } from '../hooks/ui/outlineModel'
 import { T } from '../hooks/ui/theme'
@@ -634,6 +635,39 @@ test('an agent the engine holds with no prompt for you is busy: "Waiting on back
   expect(headerOf(data, emptyGit(), NOW).summary.lead).toMatch(/^2 running · 1 waits on you · 1 done/)
   // nothing is selected in a fresh view
   expect(rows.filter(row => row.isSelected)).toEqual([])
+})
+
+test('a finished agent`s line two is its result`s first sentence, its own "Finished:" or "Verdict:" dropped and its paths made short; the detail`s Result keeps the whole text', () => {
+  const data = runData()
+  const report = 'Finished: the data layer and its query functions are in, and all checks are green. `tsc -p` is clean and nothing is committed.'
+  const found = '**Where the bug is:** C:\\Users\\me\\AppData\\Local\\Temp\\scratchpad\\demo-repo\\src\\token.js, line 12, in `needsRefresh`. The fix is one sign.'
+  const review = '## Summary\n\nVerdict: approved, the edits to /repo/hooks/model.ts and /repo/hooks/ui/outline.tsx hold. Two nits below.'
+  const ended = { status: 'completed' as const, endedAt: NOW - 60_000 }
+  worker(data, 'agent-d', 'v3 data', { ...ended, answer: report })
+  worker(data, 'agent-s', 'scout', { ...ended, answer: found })
+  worker(data, 'agent-r', 'reviewer', { ...ended, answer: review })
+  worker(data, 'agent-f', 'fixer', { status: 'failed', endedAt: NOW - 60_000, answer: 'Failed: /work/app/deep/dir/build.log shows 3 errors. Retried twice.' })
+  // the repository shown is /repo: a path under it reads relative, one elsewhere as its file and two folders
+  const rows = outlineOf(data, M.defaultView(), NOW, undefined, '/repo').rows
+  const note = (id: string) => rows.find(row => row.id === id)?.note
+  expect(note('agent-d')).toBe('Done: the data layer and its query functions are in, and all checks are green.')
+  expect(note('agent-s')).toBe('Done: Where the bug is: …/demo-repo/src/token.js, line 12, in needsRefresh.')
+  expect(note('agent-r')).toBe('Done: approved, the edits to hooks/model.ts and hooks/ui/outline.tsx hold.')
+  expect(note('agent-f')).toBe('Failed: …/deep/dir/build.log shows 3 errors.')
+  expect(note('agent-c')).toBe('Done: Files section flags shared files')
+  // the detail's Result is the report as the agent wrote it
+  const detail = detailVM(data, { ...M.defaultView(), agent: 'agent-d' }, emptyGit(), null, null, NOW)
+  expect(detail.kind === 'agent' ? detail.result?.text : undefined).toBe(report)
+})
+
+test('resultLineOf: the words that only announce a report go, wherever they lead; the rest of a sentence, a URL and a short path stay as written', () => {
+  expect(M.resultLineOf('Done.\n\nThe fix is in. Tests pass.')).toBe('The fix is in.')
+  expect(M.resultLineOf('**Report:** Summary: shipped it, e.g. the parser. Next up.')).toBe('shipped it, e.g. the parser.')
+  expect(M.resultLineOf('Done with the parser; tests pass.')).toBe('Done with the parser; tests pass.')
+  expect(M.resultLineOf('Results show the cache holds.')).toBe('Results show the cache holds.')
+  expect(M.resultLineOf('See https://example.com/a/b/c/d and C:\\a\\b.ts.')).toBe('See https://example.com/a/b/c/d and C:\\a\\b.ts.')
+  expect(M.resultLineOf('Done.')).toBe('')
+  expect(M.shortPathsIn('Wrote /home/me/work/demo-repo/src/token.js: 2 lines.')).toBe('Wrote …/demo-repo/src/token.js: 2 lines.')
 })
 
 test('before the first prompt the whole tab is one quiet line', async ($, on) => {

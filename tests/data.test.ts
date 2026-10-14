@@ -354,14 +354,15 @@ test('an Agent call shows its agent at once, keyed by the call and labelled from
   expect([stopped.status, stopped.answer]).toEqual(['killed', 'Not started: The person declined to start it'])
 })
 
-test('labels: the name, else the description`s marker (its scope after), else the description cut at a word; at most 18 characters, fixed at spawn, never an id', () => {
+test('labels: the name, else the description`s marker (its scope after), else the description cut at a word; at most 18 characters (24 when that keeps little), fixed at spawn, never an id', () => {
   const data = M.emptyData(NOW)
   const scout = spawnInto(data, NOW, { id: 'a1', name: 'scout', description: 'Find the token bug' })
   expect([M.labelOf(scout), M.scopeOf(scout)]).toEqual(['scout', 'Find the token bug'])
   const phaseA = spawnInto(data, NOW, { id: 'a2', description: 'Phase A: data, banner, redraw policy' })
   expect([M.labelOf(phaseA), M.scopeOf(phaseA)]).toEqual(['Phase A', 'data, banner, redraw policy'])
+  // the cut at 18, "Investigate the", would end on a hanging word, and "Investigate" alone is one word: it runs on to 24
   const long = spawnInto(data, NOW, { id: 'a3', description: 'Investigate the flaky refresh test suite' })
-  expect([M.labelOf(long), M.scopeOf(long)]).toEqual(['Investigate the', 'Investigate the flaky refresh test suite'])
+  expect([M.labelOf(long), M.scopeOf(long)]).toEqual(['Investigate the flaky', 'Investigate the flaky refresh test suite'])
   // siblings: " 2", " 3"; a sub-agent of Phase A is no sibling of it
   expect(M.labelOf(spawnInto(data, NOW, { id: 'a4', description: 'Phase A: tests' }))).toBe('Phase A 2')
   expect(M.labelOf(spawnInto(data, NOW, { id: 'a5', description: 'Phase A - docs' }))).toBe('Phase A 3')
@@ -369,7 +370,7 @@ test('labels: the name, else the description`s marker (its scope after), else th
   // one long word is cut with an ellipsis
   const word = spawnInto(data, NOW, { id: 'a7', name: 'a-very-long-agent-name-indeed', description: '' })
   expect(M.labelOf(word)).toBe('a-very-long-agent…')
-  for (const agent of data.agents) expect(Array.from(M.labelOf(agent)).length).toBeLessThanOrEqual(18)
+  for (const agent of data.agents) expect(Array.from(M.labelOf(agent)).length).toBeLessThanOrEqual(M.LIMITS.labelStretch)
   // fixed: a later description leaves it
   phaseA.description = 'Something else entirely'
   expect(M.labelOf(phaseA)).toBe('Phase A')
@@ -380,6 +381,35 @@ test('labels: the name, else the description`s marker (its scope after), else th
   expect(M.labelOf(M.agentOf(data, M.MAIN)!)).toBe('Orchestrator')
   expect(M.cutAtWord('Fix the token refresh bug', 18)).toBe('Fix the token')
   expect(M.splitMarker('Read https://example.com/a: b')).toBeUndefined()
+})
+
+test('a label never ends on a word that leaves its phrase hanging, runs on to 24 characters when 18 keep one word or very little, and a name that fits stays as it is', () => {
+  const data = M.emptyData(NOW)
+  const hanging = /\s(?:and|or|the|a|an|of|to|for|with|in|on|from|into|by|as)$/i
+  // the old cut made "Recover goal and": the hanging "and" goes, and two words of twelve characters are enough
+  const recover = spawnInto(data, NOW, { id: 'b1', description: 'Recover goal and results on startup' })
+  expect([M.labelOf(recover), M.scopeOf(recover)]).toEqual(['Recover goal', 'Recover goal and results on startup'])
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b2', description: 'Fix the bug in the parser module' }))).toBe('Fix the bug')
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b3', description: 'Polish labels, results, and docs' }))).toBe('Polish labels')
+  // one word, or under ten characters, at 18: the cut may run on to 24, still never on a hanging word
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b4', description: 'Investigate flakiness' }))).toBe('Investigate flakiness')
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b5', description: 'Review PR for security issues' }))).toBe('Review PR for security')
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b6', description: 'Fix CI in the monorepo build pipeline' }))).toBe('Fix CI in the monorepo')
+  // a sibling's " 2" fits inside the same 24
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b7', description: 'Review PR for security fixes' }))).toBe('Review PR for security 2')
+  for (const agent of data.agents.filter(one => one.kind === 'agent')) {
+    const label = M.labelOf(agent)
+    expect(hanging.test(label)).toBe(false)
+    expect(Array.from(label).length).toBeLessThanOrEqual(M.LIMITS.labelStretch)
+  }
+  // a name that fits is the label unchanged, whatever its last word; the description is its scope
+  const named = spawnInto(data, NOW, { id: 'b8', name: 'log in', description: 'Recover goal and results on startup' })
+  expect([M.labelOf(named), M.scopeOf(named)]).toEqual(['log in', 'Recover goal and results on startup'])
+  expect(M.labelOf(spawnInto(data, NOW, { id: 'b9', name: 'v3 design review', description: 'Review v3 against the system' }))).toBe('v3 design review')
+  // a drawing's narrower column cuts a label the same way, a sibling's number kept
+  expect(M.fitLabel('Recover goal and results', 20)).toBe('Recover goal')
+  expect(M.fitLabel('Review PR for security 2', 18)).toBe('Review PR 2')
+  expect(M.fitLabel('scout', 18)).toBe('scout')
 })
 
 // Loops that fold away.
@@ -744,6 +774,35 @@ test('an older snapshot heals field by field: new fields take their defaults, wr
   expect(bare.goals).toEqual([])
   expect(JSON.parse(JSON.stringify(bare))).toEqual(bare)
   expect(M.healView({ folded: ['a', 7, 'a', ''], zoom: 'step:todo:t1' })).toMatchObject({ folded: ['a'], zoom: 'step:todo:t1' })
+})
+
+test('a snapshot restored with the old cut gets those labels made again, siblings in spawn order; a label whose words changed since stays as it was fixed', () => {
+  const base = M.emptyData(NOW)
+  const row = (id: string, name: string, description: string, label: string, scope: string) => ({
+    ...M.newAgent(id, 'agent', name, NOW, { description, parentId: M.MAIN, status: 'completed', origin: 'agent' }),
+    label,
+    scope,
+  })
+  const older = {
+    ...base,
+    agents: [
+      ...base.agents,
+      // the old cut of the words each still has: a hanging last word, and a sibling's " 2" after one
+      row('r1', '', 'Recover goal and results on startup', 'Recover goal and', 'Recover goal and results on startup'),
+      row('r2', '', 'Investigate the flaky refresh test suite', 'Investigate the', 'Investigate the flaky refresh test suite'),
+      row('r3', '', 'Investigate the flaky refresh test suite', 'Investigate the 2', 'Investigate the flaky refresh test suite'),
+      // fixed from words it no longer has: it stays
+      row('r4', '', 'Something else entirely', 'Recover goal and', 'Recover goal and results on startup'),
+      // the same under either cut
+      row('r5', 'scout', 'Find the token bug', 'scout', 'Find the token bug'),
+    ],
+  }
+  const healed = M.healData(JSON.parse(JSON.stringify(older)) as DeckData, NOW)
+  const labels = (data: DeckData) => ['r1', 'r2', 'r3', 'r4', 'r5'].map(id => M.labelOf(agentIn(data, id)))
+  expect(labels(healed)).toEqual(['Recover goal', 'Investigate the flaky', 'Investigate the flaky 2', 'Recover goal and', 'scout'])
+  expect([M.scopeOf(agentIn(healed, 'r1')), M.scopeOf(agentIn(healed, 'r4'))]).toEqual(['Recover goal and results on startup', 'Recover goal and results on startup'])
+  // made again once, a label stays: the next restore changes nothing
+  expect(labels(M.healData(JSON.parse(JSON.stringify(healed)) as DeckData, NOW))).toEqual(labels(healed))
 })
 
 // The redraw policy.

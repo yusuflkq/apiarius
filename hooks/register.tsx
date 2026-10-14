@@ -264,7 +264,7 @@ async function writeDump($: EngineInterface): Promise<void> {
 function debugStateOf(now: number) {
   const plan = M.planOf(data)
   const goal = M.goalOf(data)
-  const outline = O.outlineOf(data, view, now)
+  const outline = O.outlineOf(data, view, now, O.MOST_ROWS, git.root)
   const nameOf = (id: string) => {
     const agent = M.agentOf(data, id)
     return agent ? M.labelOf(agent) : id

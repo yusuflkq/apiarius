@@ -395,9 +395,10 @@ function minutesOf(agent: DeckAgent, status: DeckShownStatus, now: number): stri
   return M.isLive(agent.status) || status === 'waiting' || agent.endedAt !== undefined ? M.elapsedOf(agent, now) : ''
 }
 
-/** Why an agent failed: its answer's first line, else its last failed call. */
-function failureOf(agent: DeckAgent): string {
-  if (agent.answer) return F.firstLine(agent.answer)
+/** Why an agent failed: its result's line (`resultLineOf`, its own "Failed:" dropped), else its last failed call. */
+function failureOf(agent: DeckAgent, root: string): string {
+  const said = agent.answer ? M.resultLineOf(agent.answer, root, true) : ''
+  if (said) return said
   for (let i = agent.recent.length - 1; i >= 0; i--) {
     const one = agent.recent[i]
     if (one?.ok === false) return `${one.tool} ${one.target} failed`.trim()
@@ -417,18 +418,23 @@ function heldNote(node: Node): { note: string; noteTone: NoteTone } {
   return { note: child ? `Waiting on ${labelTextOf(child)}` : 'Waiting on background work', noteTone: 'dim' }
 }
 
-/** An agent's line two: where it is, as its status says it. */
-function noteOf(data: DeckData, node: Node, agent: DeckAgent, status: DeckShownStatus): { note: string; noteTone: NoteTone } {
+/**
+ * An agent's line two: where it is, as its status says it. A finished one's
+ * result reads as `resultLineOf` gives it (its first sentence, no "Done:" or
+ * "Summary:" of its own, paths made short against `root`, the repository
+ * shown); the detail's Result keeps the whole text.
+ */
+function noteOf(data: DeckData, node: Node, agent: DeckAgent, status: DeckShownStatus, root: string): { note: string; noteTone: NoteTone } {
   switch (status) {
     case 'waiting':
       return waitsOnYou(data, agent.id) ? waitsNote(data) : heldNote(node)
     case 'failed': {
       if (agent.status === 'killed') return { note: 'Stopped', noteTone: 'dim' }
-      const why = failureOf(agent)
+      const why = failureOf(agent, root)
       return { note: why ? `Failed: ${why}` : 'Failed', noteTone: 'failed' }
     }
     case 'done': {
-      const result = agent.answer ? F.firstLine(agent.answer) : ''
+      const result = agent.answer ? M.resultLineOf(agent.answer, root) : ''
       return { note: result ? `Done: ${result}` : 'Done', noteTone: 'dim' }
     }
     case 'idle':
@@ -449,7 +455,7 @@ function orchestratorNoteOf(data: DeckData, node: Node, main: DeckAgent | undefi
 
 const STEP_STATUS: Record<DeckStepStatus, DeckShownStatus> = { done: 'done', active: 'running', pending: 'idle', failed: 'failed' }
 
-function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected: string, now: number): RowVM {
+function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected: string, now: number, root: string): RowVM {
   const closed = isClosed(node, shape)
   const fold: RowVM['fold'] = isZoomRoot(node, shape) || node.kids.length === 0 ? null : closed ? 'closed' : 'open'
   const base = { id: node.id, kind: node.kind, depth, fold, isSelected: node.id === selected, count: '', minutes: '', added: 0, removed: 0, note: '', noteTone: 'dim' as NoteTone }
@@ -479,7 +485,7 @@ function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected
     minutes: minutesOf(agent, status, now),
     added: agent.added,
     removed: agent.removed,
-    ...noteOf(data, node, agent, status),
+    ...noteOf(data, node, agent, status, root),
   }
 }
 
@@ -492,16 +498,17 @@ function crumbOf(node: Node): Crumb {
  * The outline as the view has it: rows in tree order from the zoomed branch
  * (else the Orchestrator), each folded branch one row; the crumbs while
  * zoomed; `view.agent`'s row selected (none while it is ''). At most `most`
- * rows; `hidden` counts the rest.
+ * rows; `hidden` counts the rest. `root` is the repository shown ('' for
+ * none): paths under it in a result's line read relative to it.
  */
-export function outlineOf(data: DeckData, view: DeckView, now: number, most = MOST_ROWS): OutlineVM {
+export function outlineOf(data: DeckData, view: DeckView, now: number, most = MOST_ROWS, root = ''): OutlineVM {
   const shape = shapeOf(data, view)
   const selected = view.agent
   const rows: RowVM[] = []
   let hidden = 0
 
   const walk = (node: Node, depth: number) => {
-    if (rows.length < most) rows.push(rowOf(data, shape, node, depth, selected, now))
+    if (rows.length < most) rows.push(rowOf(data, shape, node, depth, selected, now, root))
     else hidden += 1
     if (!isClosed(node, shape)) for (const kid of node.kids) walk(kid, depth + 1)
   }

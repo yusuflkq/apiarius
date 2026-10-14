@@ -34,7 +34,7 @@ export function agentsTab(kit: Kit, model: DeckModel, actions: Actions): RenderE
 function drawAgents(kit: Kit, model: DeckModel, actions: Actions, most: number): RenderElement {
   const { Box } = kit
   const { data, view, git, now } = model
-  const outline = outlineOf(data, view, now, most)
+  const outline = outlineOf(data, view, now, most, git.root)
   // before the first prompt: one line, not a page of placeholders
   if (outline.empty) return <Box paddingLeft={2}>{emptyLine(kit, outline.empty)}</Box>
   const files = filesVM(data, git, now, view.agent)
