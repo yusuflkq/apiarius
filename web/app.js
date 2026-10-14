@@ -1716,18 +1716,19 @@ function ReviewButton(scope, text, label = 'Ask for review') {
     setTimeout(tidy, 1000);
   };
   const note = st && st.status === 'sent' ? sendState(st, 'review') : null;
+  // the confirm, then in its place what came of it: a box under the button, so nothing around it moves
   return h('span', { class: 'review' },
-    note && StatusNote(note, 'review-note'),
-    h('span', { class: 'review-anchor' },
-      h('button', {
-        class: 'btn btn-sm', type: 'button', 'aria-expanded': confirming ? 'true' : 'false', 'aria-haspopup': 'dialog',
-        disabled: !!(note && note.busy), onClick: () => (confirming ? close() : (ui.review.set(scope, { status: 'confirm' }), renderNow())),
-      }, icon('eye'), label),
-      confirming && h('div', { class: 'confirm', role: 'dialog', 'aria-label': 'Ask Claude for a review', onKeyDown: e => { if (e.key === 'Escape') { e.preventDefault(); close(); } } },
+    h('button', {
+      class: 'btn btn-sm', type: 'button', 'aria-expanded': confirming ? 'true' : 'false', 'aria-haspopup': 'dialog',
+      disabled: !!(note && note.busy), onClick: () => (confirming ? close() : (ui.review.set(scope, { status: 'confirm' }), renderNow())),
+    }, icon('eye'), label),
+    confirming
+      ? h('div', { key: 'ask', class: 'confirm', role: 'dialog', 'aria-label': 'Ask Claude for a review', onKeyDown: e => { if (e.key === 'Escape') { e.preventDefault(); close(); } } },
         h('p', { class: 'confirm-text' }, 'Ask Claude to review these changes? It runs when Claude is free.'),
         h('div', { class: 'confirm-actions' },
           h('button', { class: 'btn btn-xs', type: 'button', onClick: close }, 'Cancel'),
-          h('button', { class: 'btn btn-xs btn-primary', type: 'button', ref: el => requestAnimationFrame(() => el.focus()), onClick: go }, 'Ask Claude')))));
+          h('button', { class: 'btn btn-xs btn-primary', type: 'button', ref: el => requestAnimationFrame(() => el.focus()), onClick: go }, 'Ask Claude')))
+      : note ? h('div', { key: 'note', class: 'confirm confirm-note' }, StatusNote(note, 'review-note')) : null);
 }
 
 function AgentHeader(a) {

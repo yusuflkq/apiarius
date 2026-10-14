@@ -600,7 +600,10 @@ test('Review asks first ("It runs when Claude is free"), then shows what came of
   await settle()
   const [cmd] = p.commands()
   assert.deepEqual(cmd, { cmd: 'review', id: cmd.id, text: 'Review the diff' })
-  assert.match(textOf(review()), /^Sending…/)
-  p.load(runState({ acks: [{ id: cmd.id, ok: true, status: 'queued', text: 'Claude reviews them when it is free', at: NOW }] }))
-  assert.match(textOf(review()), /^Queued: Claude reviews them when it is free/)
+  // what came of it shows where the confirm was, under the button: nothing beside it moves
+  const note = () => textOf(find(review(), 'confirm-note')[0])
+  assert.equal(note(), 'Sending…')
+  p.load(runState({ acks: [{ id: cmd.id, ok: true, status: 'queued', text: 'It runs when Claude is free', at: NOW }] }))
+  assert.equal(note(), 'Queued: it runs when Claude is free')
+  assert.equal(find(review(), 'confirm').length, 1)
 })
