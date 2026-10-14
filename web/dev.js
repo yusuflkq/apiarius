@@ -91,7 +91,8 @@ function play(cmd) {
       if (!item) return ack(cmd.id, false, 'failed', 'No longer pending')
       state.pending = state.pending.filter(one => one !== item)
       const asked = (item.questions || []).map(one => one.question)
-      messageOf(item.agentId, 'you', 'question', asked.join('\n\n'), { callId: item.id })
+      // the mod says the question in Talk as it is asked; a fixture without it gets it now
+      if (!state.messages.some(m => m.kind === 'question' && m.callId === item.id)) messageOf(item.agentId, 'you', 'question', asked.join('\n\n'), { callId: item.id })
       messageOf('you', item.agentId, 'choice', `You answered: ${asked.map(q => cmd.answers[q]).filter(Boolean).join('; ')}`, { callId: item.id, ...(cmd.id ? { ackId: cmd.id } : {}) })
       ack(cmd.id, true, 'answered', 'Claude carries on')
       const agent = agentOf(item.agentId)
@@ -103,7 +104,11 @@ function play(cmd) {
         : { tone: 'quiet', kind: 'busy', text: 'Nothing needs you' }
     })
   } else if (cmd.cmd === 'review') {
-    later(500, () => ack(cmd.id, true, 'queued', 'It runs when Claude is free'))
+    // as on Desktop: the review goes to the Orchestrator as your next prompt, logged like a chat
+    later(500, () => {
+      messageOf('you', 'main', 'chat', cmd.text, cmd.id ? { ackId: cmd.id } : {})
+      ack(cmd.id, true, 'queued', 'Claude reviews it when it finishes its current turn')
+    })
   }
 }
 

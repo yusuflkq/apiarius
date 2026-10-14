@@ -241,6 +241,7 @@ const IC = {
   chevronRight: '<path d="m9 18 6-6-6-6"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
   arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
   cornerDownRight: '<polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   minus: '<path d="M5 12h14"/>',
@@ -384,6 +385,8 @@ function buildIndex(s) {
     actBy: group(s.activity, x => x.agent),
     talk,
     pendingBy: group(s.pending, p => p.agentId),
+    pendingById: new Map(s.pending.map(p => [p.id, p])),
+    // a later word on the same id replaces the earlier one: the last wins
     acks: new Map(s.acks.map(k => [k.id, k])),
   };
 }
@@ -539,7 +542,7 @@ const ACK_WAIT = 20000;
 const KEEP = 12000;
 
 /** "It reads it…" reads "it reads it…" after a colon; a name ("Claude reads it…") keeps its capital. */
-const softText = t => String(t || '').trim().replace(/^(It|Its|The|This|That|They|There|A|An|No|Not|Nothing)\b/, w => w.toLowerCase());
+const softText = t => String(t || '').trim().replace(/^(It|Its|The|This|That|They|There|A|An|No|Not|Nothing|Only|Too|Could|Already)\b/, w => w.toLowerCase());
 /** `word: text`, unless the text starts with that word already ("Answered in Claude Code"). */
 const lead = (word, text) => (text.toLowerCase().startsWith(word.toLowerCase()) ? text[0].toUpperCase() + text.slice(1) : `${word}: ${text}`);
 
@@ -556,6 +559,8 @@ function ackState(ack, what = 'chat') {
     return { tone: 'fail', icon: 'x', text: lead(what === 'answer' ? 'Not answered' : 'Not delivered', text || 'Claude Code refused it') };
   }
   if (ack.status === 'answered') return { tone: 'done', icon: 'check', text: lead('Answered', text || 'Claude carries on') };
+  // a review put in the prompt box: "In your prompt box: press Enter to send it"
+  if (ack.status === 'delivered' && what === 'review') return { tone: 'done', icon: 'check', text: ack.text || 'In your prompt box' };
   if (ack.status === 'delivered') return { tone: 'done', icon: 'check', text: lead('Delivered', text || 'it reads it at its next step') };
   return { tone: 'wait', icon: 'clock', text: lead('Queued', text || (what === 'review' ? 'it runs when Claude is free' : 'Claude reads it when it finishes its current turn')) };
 }
@@ -911,7 +916,7 @@ function pendingText(p) {
   const name = nameOf(p.agentId);
   if (p.kind === 'question') {
     const qs = p.questions;
-    return qs.length > 1 ? `${name} asks you ${qs.length} questions` : `${name} asks: ${qs.length ? qs[0].question : 'a question'}`;
+    return qs.length > 1 ? `${name} asks ${qs.length} questions` : `${name} asks: ${qs.length ? qs[0].question : 'a question'}`;
   }
   const { verb, what } = permitOf(p);
   const shown = firstLine(what, 90);
@@ -1077,7 +1082,7 @@ function PendingCard(p, where) {
   const question = p.kind === 'question';
   const name = nameOf(p.agentId);
   const title = question
-    ? p.questions.length > 1 ? `${name} asks you ${p.questions.length} questions` : `${name} asks you`
+    ? p.questions.length > 1 ? `${name} asks ${p.questions.length} questions` : `${name} asks you`
     : `${name} needs your OK to ${permitOf(p).verb}`;
   const open = () => scrollSoon(`pending-${p.id}`, `agent:${p.agentId}`);
   return h('section', { key: `pend:${p.id}`, id: `pending-${p.id}`, class: `needs needs-${p.kind}`, 'aria-label': title },
@@ -1913,15 +1918,23 @@ function Message(m, a, sent) {
       note ? StatusNote(note, 'msg-status') : null);
   }
   const sender = IX.byId.get(m.from);
-  const label = KIND_LABEL[m.kind] || m.kind;
-  return h('div', { key, class: `msg theirs kind-${m.kind}`, enter: true },
+  // a question still held on you is answered on its card, pinned above the tabs: the thread points there
+  const held = m.kind === 'question' && m.callId ? IX.pendingById.get(m.callId) : null;
+  const label = held ? 'asks you' : KIND_LABEL[m.kind] || m.kind;
+  return h('div', { key, class: `msg theirs kind-${m.kind}${held ? ' is-held' : ''}`, enter: true },
     h('div', { class: 'msg-meta' },
       whoAvatar(m.from, 20),
       h('span', { class: 'msg-who' }, sender ? sender.label : nameOf(m.from)),
       h('span', { class: 'msg-kind' }, dir && m.kind !== 'answer' && m.kind !== 'question' ? `${label} ${dir}` : label),
       h('span', { class: 'msg-time' }, ago(m.at))),
     m.kind === 'question'
-      ? h('div', { class: 'msg-card msg-question' }, icon('help', 'msg-q-ic'), h('div', { class: 'msg-q-text' }, MessageText(m)))
+      ? h('div', { class: 'msg-card msg-question' },
+        icon('help', 'msg-q-ic'),
+        h('div', { class: 'msg-q-body' },
+          h('div', { class: 'msg-q-text' }, MessageText(m)),
+          held && (held.isAnswerable
+            ? h('button', { class: 'more more-start msg-q-go', type: 'button', onClick: () => scrollSoon(`pending-${held.id}`) }, 'Answer it above', icon('arrowUp'))
+            : h('p', { class: 'msg-q-where' }, 'Answer it in Claude Code.'))))
       : MARKDOWN_KINDS.has(m.kind) ? h('div', { class: 'msg-card' }, MessageText(m)) : h('div', { class: 'msg-text' }, MessageText(m)));
 }
 

@@ -1103,7 +1103,14 @@ button.q-opt:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.26); bac
 .bubble-choice .ic { width: 15px; height: 15px; margin-top: 2px; color: var(--done-text); }
 .msg-question { display: flex; align-items: flex-start; gap: 10px; }
 .msg-q-ic { width: 16px; height: 16px; margin-top: 2px; color: var(--muted); }
+.msg-q-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .msg-q-text { min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 1.5; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-q-go { margin-left: -8px; color: #fde68a; }
+.msg-q-go:hover { color: #fef3c7; }
+.msg-q-where { font-size: 12px; color: rgba(253, 230, 138, 0.68); }
+/* held on you: amber, like its card */
+.is-held .msg-question { border-color: rgba(245, 158, 11, 0.3); background: color-mix(in srgb, var(--wait) 6%, #1d1d1d); }
+.is-held .msg-q-ic { color: var(--wait-text); }
 .msg-more { margin-top: 2px; }
 .msg-text .msg-more { margin-left: -8px; }
 .msg-plain { white-space: pre-wrap; }

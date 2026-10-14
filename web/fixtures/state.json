@@ -610,6 +610,15 @@
       "kind": "answer",
       "text": "Here is where things stand.\n\n**Done**\n- Explore routes mapped all 14 public routes under `/v1` and the middleware chain in `src/app.ts`.\n- The limit settings are in `src/config.ts`, committed as \"Add rate limit settings to config\".\n\n**In progress**\n- **Limiter** has the sliding-window middleware working on the memory store and is adding the `skip` option for `/health` and `/metrics`.\n- **Redis store** wrote `src/middleware/stores/redisStore.ts` on ioredis and is type-checking it.\n- **Tests** wrote four cases in `test/rateLimit.test.ts`…",
       "isCut": true
+    },
+    {
+      "id": "1791970890000-20-main-you",
+      "at": 1791970890000,
+      "from": "main",
+      "to": "you",
+      "kind": "question",
+      "text": "Where should the rate limit entry go in CHANGELOG.md?\n\nWhich environments should use the Redis store?",
+      "callId": "toolu_01Rv8NqT3mKc6YwB2xPzL9hF"
     }
   ],
   "activity": [

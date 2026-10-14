@@ -353,7 +353,7 @@ test('a question waits on you: the Dashboard card shows each question`s header, 
   const dash = p.view('Dashboard()')
   const card = find(dash, 'needs')[0]
   const text = textOf(card)
-  assert.match(text, /^Orchestrator asks you 2 questions/)
+  assert.match(text, /^Orchestrator asks 2 questions/)
   for (const words of ['Store', 'Which store should the limiter use?', 'Redis (Recommended)', 'Shared across instances.', 'In-memory', 'Per process.', 'Which environments use Redis?', 'pick any', 'Production', 'Behind the load balancer.']) assert.ok(text.includes(words), words)
   // one card: the mod's banner about the same agent would say it again
   assert.equal(find(dash, 'banner').length, 0)
@@ -361,7 +361,7 @@ test('a question waits on you: the Dashboard card shows each question`s header, 
   assert.deepEqual(find(card, 'q-opt').map(o => [o.t, o.p.role]), [['button', 'radio'], ['button', 'radio'], ['button', 'checkbox'], ['button', 'checkbox'], ['button', 'checkbox']])
   assert.deepEqual(find(card, 'q-other-input').map(i => i.p.placeholder), ['Other…', 'Other…'])
   assert.equal(byText(card, 'btn', 'Submit answers').p.disabled, true, 'nothing picked yet')
-  assert.match(textOf(find(dash, 'kpi')[3]), /Orchestrator asks you 2 questions/)
+  assert.match(textOf(find(dash, 'kpi')[3]), /Orchestrator asks 2 questions/)
   // Open: the agent page, brought to its card
   const open = byText(card, 'banner-btn', 'Open')
   assert.equal(open.p.href, '#/agent/main')
@@ -374,7 +374,7 @@ test('a question waits on you: the Dashboard card shows each question`s header, 
     const at = kids.findIndex(k => k.p.class === 'needs-stack')
     assert.ok(at > 0 && kids[at + 1].p.class === 'tabs-wrap', `the card sits right above the tabs (${tab})`)
     assert.equal(kids[at].c.filter(Boolean)[0].p.id, `pending-${CALL}`)
-    assert.match(textOf(find(kids, 'needs-jump')[0]), /Orchestrator asks you 2 questions Answer/)
+    assert.match(textOf(find(kids, 'needs-jump')[0]), /Orchestrator asks 2 questions Answer/)
   }
 })
 
