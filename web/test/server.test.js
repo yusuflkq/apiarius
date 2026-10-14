@@ -131,12 +131,17 @@ let dir = ''
 let main = null
 const writeState = value => fs.writeFileSync(path.join(dir, 'state.json'), typeof value === 'string' ? value : JSON.stringify(value, null, 2))
 
+const ANSWER = '**Done.** The limiter is in `src/middleware/rateLimit.ts`.\n\n- 100 requests a minute\n- 429 with Retry-After\n'
+
 before(async () => {
   const root = tempDir()
   dir = path.join(root, 'session')
   fs.mkdirSync(path.join(dir, 'patches'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'messages'), { recursive: true })
   fs.writeFileSync(path.join(root, 'secret.diff'), 'SECRET')
+  fs.writeFileSync(path.join(root, 'secret.md'), 'SECRET')
   fs.writeFileSync(path.join(dir, 'patches', 'toolu_01Abc-d_9.diff'), '@@ -1,1 +1,1 @@\n-old\n+new\n')
+  fs.writeFileSync(path.join(dir, 'messages', '1791970900000-14-main-you.md'), ANSWER)
   writeState(STATE)
   main = await start({ dir })
 })
@@ -269,6 +274,90 @@ test('/patch serves a patch by id and refuses anything else', async () => {
     assert.ok([400, 404].includes(refused.status), `${target} -> ${refused.status}`)
     assert.doesNotMatch(refused.body, /SECRET/)
   }
+})
+
+test('/message serves a cut message`s whole text by id, with the token only, and refuses anything else', async () => {
+  const auth = { 'X-Deck-Token': TOKEN }
+  assert.equal((await request(main.port, { path: '/message/1791970900000-14-main-you' })).status, 403)
+  const res = await request(main.port, { path: '/message/1791970900000-14-main-you', headers: auth })
+  assert.equal(res.status, 200)
+  assert.equal(res.headers['content-type'], 'text/plain; charset=utf-8')
+  assert.equal(res.headers['x-content-type-options'], 'nosniff')
+  assert.equal(res.body, ANSWER)
+  assert.equal((await request(main.port, { path: '/message/1791970900001-15-main-you', headers: auth })).status, 404)
+  for (const target of ['/message/..%2Fsecret', '/message/..%5Csecret', '/message/%2e%2e%2fsecret', '/message/..\\secret', '/message/a.b', '/message/', '/message/NUL', '/message/../../secret', `/message/${'a'.repeat(129)}`]) {
+    const refused = await request(main.port, { path: target, headers: auth })
+    assert.ok([400, 404].includes(refused.status), `${target} -> ${refused.status}`)
+    assert.doesNotMatch(refused.body, /SECRET/)
+  }
+})
+
+test('POST /cmd: every command may carry the page`s id, which is printed with it; a bad id is refused', async () => {
+  const count = main.lines.length
+  const sent = [
+    { cmd: 'chat', id: 'c-lz4k2-1ab9', agentId: 'main', text: 'And the changelog?' },
+    { id: 'r_7', cmd: 'review', text: 'Review the diff' },
+    { cmd: 'ping', id: 'p' },
+    { cmd: 'chat', agentId: 'main', text: 'no id is fine too' },
+  ]
+  for (const body of sent) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const bad = [
+    { cmd: 'ping', id: '' },
+    { cmd: 'ping', id: 'x'.repeat(41) },
+    { cmd: 'ping', id: 'has space' },
+    { cmd: 'ping', id: 'a/b' },
+    { cmd: 'ping', id: 7 },
+    { cmd: 'ping', id: null },
+    { cmd: 'chat', id: 'ok', agentId: 'main', text: 'hi', extra: true },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body))
+  await waitFor(main.on, () => (main.lines.length >= count + 4 ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), [
+    '{"cmd":"chat","id":"c-lz4k2-1ab9","agentId":"main","text":"And the changelog?"}',
+    '{"cmd":"review","id":"r_7","text":"Review the diff"}',
+    '{"cmd":"ping","id":"p"}',
+    '{"cmd":"chat","agentId":"main","text":"no id is fine too"}',
+  ])
+})
+
+test('POST /cmd checks an answer: a call id, 1 to 4 answers, each question and answer a string of at most 2000 characters', async () => {
+  const count = main.lines.length
+  const callId = 'toolu_01QmX7cR4vTn2LpB8sWkJ3hD'
+  const good = [
+    { cmd: 'answer', id: 'a-1', callId, answers: { 'Which store should the limiter use?': 'Redis' } },
+    { cmd: 'answer', callId, answers: { 'Which routes skip it?': '/health, /metrics', 'Default limit?': 'Keep 100 a minute, but\nlet ops change it' } },
+    { cmd: 'answer', id: 'a-3', callId, answers: { a: '1', b: '2', c: '3', d: 'x'.repeat(2000) } },
+  ]
+  for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body).slice(0, 80))
+  const bad = [
+    { cmd: 'answer', answers: { q: 'a' } },
+    { cmd: 'answer', callId: '', answers: { q: 'a' } },
+    { cmd: 'answer', callId: 'toolu 01', answers: { q: 'a' } },
+    { cmd: 'answer', callId: '../x', answers: { q: 'a' } },
+    { cmd: 'answer', callId: 'x'.repeat(101), answers: { q: 'a' } },
+    { cmd: 'answer', callId: 42, answers: { q: 'a' } },
+    { cmd: 'answer', callId },
+    { cmd: 'answer', callId, answers: {} },
+    { cmd: 'answer', callId, answers: null },
+    { cmd: 'answer', callId, answers: ['Redis'] },
+    { cmd: 'answer', callId, answers: 'Redis' },
+    { cmd: 'answer', callId, answers: { a: '1', b: '2', c: '3', d: '4', e: '5' } },
+    { cmd: 'answer', callId, answers: { q: 'x'.repeat(2001) } },
+    { cmd: 'answer', callId, answers: { ['q'.repeat(2001)]: 'a' } },
+    { cmd: 'answer', callId, answers: { q: '   ' } },
+    { cmd: 'answer', callId, answers: { ' ': 'a' } },
+    { cmd: 'answer', callId, answers: { q: 2 } },
+    { cmd: 'answer', callId, answers: { q: ['a', 'b'] } },
+    { cmd: 'answer', callId, answers: { q: 'a' }, text: 'extra' },
+    { cmd: 'answer', id: 'bad id', callId, answers: { q: 'a' } },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
+  await waitFor(main.on, () => (main.lines.length >= count + 3 ? true : undefined), 2000, 'command lines')
+  const printed = main.lines.slice(count)
+  assert.equal(printed.length, 3, 'only the good ones were printed')
+  assert.deepEqual(printed.map(line => JSON.parse(line)), good)
+  assert.equal(printed[0], `{"cmd":"answer","id":"a-1","callId":"${callId}","answers":{"Which store should the limiter use?":"Redis"}}`)
+  assert.ok(printed.every(line => !line.includes('\n')))
 })
 
 test('POST /cmd refuses another origin and a missing token header', async () => {

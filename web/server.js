@@ -1,7 +1,8 @@
 /**
- * The Agent Deck web server: serves the dashboard page, the session's state
- * and patches, live updates over SSE, and turns the page's commands into
- * stdout lines for the mod. web/CONTRACT.md is the spec.
+ * The Agent Deck web server: serves the dashboard page, the session's state,
+ * its patches and the whole text of messages cut for the state, live updates
+ * over SSE, and turns the page's commands into stdout lines for the mod.
+ * web/CONTRACT.md is the spec.
  *
  *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid>
  *
@@ -20,7 +21,11 @@ const net = require('net')
 const EMPTY = '{"v":1,"empty":true}'
 const MAX_BODY = 16 * 1024
 const MAX_TEXT = 4000
-const PATCH_ID = /^[A-Za-z0-9_-]{1,128}$/
+const MAX_ANSWERS = 4 // AskUserQuestion asks 1 to 4 questions at once
+const MAX_ANSWER = 2000 // a question's text, and an answer's
+const FILE_ID = /^[A-Za-z0-9_-]{1,128}$/ // a patch's or a message's file name: never a path
+const CMD_ID = /^[A-Za-z0-9_-]{1,40}$/ // the page's id for a command, which the mod's ack names again
+const CALL_ID = /^[A-Za-z0-9_-]{1,100}$/ // a tool call's tool_use_id
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never open them as files
 const JSON_TYPE = 'application/json; charset=utf-8'
 const TEXT_TYPE = 'text/plain; charset=utf-8'
@@ -154,20 +159,47 @@ function events(req, res) {
   req.on('close', () => clients.delete(res))
 }
 
-function patch(res, id) {
-  if (!PATCH_ID.test(id) || DEVICE.test(id)) return send(res, 400, 'bad patch id\n')
-  fs.readFile(path.join(dir, 'patches', `${id}.diff`), 'utf8', (err, text) => (err ? send(res, 404, 'no such patch\n') : send(res, 200, text)))
+/**
+ * A file the mod wrote once beside the state, by id: `patches/<id>.diff` for
+ * /patch/<id>, `messages/<id>.md` (a cut message's whole text) for
+ * /message/<id>. Ids are [A-Za-z0-9_-] only, so a request never names a path.
+ */
+function written(res, id, folder, ext, what) {
+  if (!FILE_ID.test(id) || DEVICE.test(id)) return send(res, 400, `bad ${what} id\n`)
+  fs.readFile(path.join(dir, folder, `${id}${ext}`), 'utf8', (err, text) => (err ? send(res, 404, `no such ${what}\n`) : send(res, 200, text)))
 }
 
-/** The command a body holds, rebuilt from exactly its known keys; null for any other shape. */
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+/** An answer command's answers: 1 to 4 of question text → answer, each a string that is not blank and at most 2000 characters. */
+function answersOf(value) {
+  if (!isRecord(value)) return null
+  const entries = Object.entries(value)
+  const isText = text => typeof text === 'string' && text.trim() !== '' && text.length <= MAX_ANSWER
+  if (entries.length < 1 || entries.length > MAX_ANSWERS || !entries.every(([question, answer]) => isText(question) && isText(answer))) return null
+  return Object.fromEntries(entries) // own keys only, even one named __proto__
+}
+
+/**
+ * The command a body holds, rebuilt from exactly its known keys; null for any
+ * other shape. Every command may carry the page's `id`, which the mod's ack
+ * names again; it stays optional.
+ */
 function commandOf(value) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const keys = Object.keys(value).sort().join(',')
+  if (!isRecord(value)) return null
+  const hasId = Object.prototype.hasOwnProperty.call(value, 'id')
+  if (hasId && !(typeof value.id === 'string' && CMD_ID.test(value.id))) return null
+  const id = hasId ? { id: value.id } : {}
+  const keys = Object.keys(value).filter(key => key !== 'id').sort().join(',')
   const isText = text => typeof text === 'string' && text.trim() !== '' && text.length <= MAX_TEXT
-  const isId = id => typeof id === 'string' && /^[^\u0000-\u001f\u007f]{1,200}$/.test(id)
-  if (value.cmd === 'ping' && keys === 'cmd') return { cmd: 'ping' }
-  if (value.cmd === 'review' && keys === 'cmd,text' && isText(value.text)) return { cmd: 'review', text: value.text }
-  if (value.cmd === 'chat' && keys === 'agentId,cmd,text' && isId(value.agentId) && isText(value.text)) return { cmd: 'chat', agentId: value.agentId, text: value.text }
+  const isAgent = agent => typeof agent === 'string' && /^[^\u0000-\u001f\u007f]{1,200}$/.test(agent)
+  if (value.cmd === 'ping' && keys === 'cmd') return { cmd: 'ping', ...id }
+  if (value.cmd === 'review' && keys === 'cmd,text' && isText(value.text)) return { cmd: 'review', ...id, text: value.text }
+  if (value.cmd === 'chat' && keys === 'agentId,cmd,text' && isAgent(value.agentId) && isText(value.text)) return { cmd: 'chat', ...id, agentId: value.agentId, text: value.text }
+  if (value.cmd === 'answer' && keys === 'answers,callId,cmd' && typeof value.callId === 'string' && CALL_ID.test(value.callId)) {
+    const answers = answersOf(value.answers)
+    if (answers) return { cmd: 'answer', ...id, callId: value.callId, answers }
+  }
   return null
 }
 
@@ -218,7 +250,8 @@ function handle(req, res) {
   if (PAGE[route]) return page(res, PAGE[route])
   if (route === '/state') return send(res, 200, state, JSON_TYPE)
   if (route === '/events') return events(req, res)
-  if (route.startsWith('/patch/')) return patch(res, route.slice('/patch/'.length))
+  if (route.startsWith('/patch/')) return written(res, route.slice('/patch/'.length), 'patches', '.diff', 'patch')
+  if (route.startsWith('/message/')) return written(res, route.slice('/message/'.length), 'messages', '.md', 'message')
   if (route === '/favicon.ico') return res.writeHead(204).end()
   send(res, 404, 'not found\n')
 }
