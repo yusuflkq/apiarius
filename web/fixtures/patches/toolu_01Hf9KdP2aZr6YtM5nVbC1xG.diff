@@ -1,0 +1,19 @@
+@@ -0,0 +1,18 @@
++import type { RateLimitStore } from '../rateLimit';
++
++/** Hit times per key, kept in process memory (tests and single-node dev). */
++export class MemoryStore implements RateLimitStore {
++  private hits = new Map<string, number[]>();
++
++  async hit(key: string, now: number, windowMs: number) {
++    const since = now - windowMs;
++    const kept = (this.hits.get(key) ?? []).filter(at => at > since);
++    kept.push(now);
++    this.hits.set(key, kept);
++    return { count: kept.length, oldest: kept[0] };
++  }
++
++  async reset(key: string) {
++    this.hits.delete(key);
++  }
++}

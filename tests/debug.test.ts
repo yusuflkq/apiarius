@@ -3,8 +3,9 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 
 /**
  * The debug dump: while `<mod>/.debug/` exists the deck writes what it
- * believes to `.debug/state.json`, about 2 s after the data changes; while it
- * is absent the deck writes nothing at all. The file system is stubbed here.
+ * believes to `.debug/<sessionId>.json` (each session its own file), about
+ * 2 s after the data changes; while it is absent the deck writes nothing at
+ * all. The file system is stubbed here.
  */
 
 const NOW = 1_700_000_100_000
@@ -74,7 +75,7 @@ test('with no .debug folder the deck never writes its state, however long it run
   expect(disk.writes).toEqual([])
 })
 
-test('with the .debug folder the deck writes .debug/state.json about 2 s after the data changes, and stops once the folder goes', async ($, on) => {
+test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s after the data changes, and stops once the folder goes', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const disk: Disk = { isDebug: true, looks: [], writes: [] }
   world(on, disk)
@@ -85,7 +86,8 @@ test('with the .debug folder the deck writes .debug/state.json about 2 s after t
 
   expect(disk.writes).toHaveLength(1)
   const [first] = disk.writes
-  expect(first?.path).toMatch(/[\\/]\.debug[\\/]state\.json$/)
+  // the session's own file: two sessions loading the mod never overwrite each other's dump
+  expect(first?.path).toMatch(/[\\/]\.debug[\\/]session-1\.json$/)
   const state = JSON.parse(first?.text ?? '{}')
   expect(state.meta).toMatchObject({ loadedAt: NOW, writes: 1 })
   expect(state.counts).toMatchObject({ agents: 3, shownAgents: 1, goals: 1 })

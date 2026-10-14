@@ -188,6 +188,7 @@ export function defaultView(): DeckView {
     message: '',
     folded: [],
     zoom: '',
+    isDetailsOpen: false,
   }
 }
 
@@ -226,6 +227,7 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     // the outline's folds: strings only, each once, the newest kept
     folded: Array.isArray(v.folded) ? [...new Set(v.folded.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-FOLDS_KEPT) : base.folded,
     zoom: text(v.zoom, base.zoom),
+    isDetailsOpen: flag(v.isDetailsOpen, base.isDetailsOpen),
   }
   if (data) {
     const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)

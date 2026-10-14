@@ -212,7 +212,7 @@ test('the default tab is Agents: the tab row, then, before the first prompt, one
     for (const text of [M.needsOf(M.emptyData(NOW), GIT).text, 'Goal', /files?$/, 'No agents yet']) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
     expect(await copperBars(ui)).toEqual([])
     expect(await rowsOf(ui)).toEqual([])
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats'])
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats', 'web:open'])
     await ui.unmount()
   }
 })
@@ -277,7 +277,7 @@ test('the outline: who started whom, and where each agent is, in native rows on 
   const clock = mock.clock(on, { now: NOW })
   world(on, { restored: snapshot(busyData()) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck('agents'))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
@@ -296,11 +296,62 @@ test('the outline: who started whom, and where each agent is, in native rows on 
   }
 })
 
+/** The summary's rows, top to bottom, by the agent each stands for. */
+async function slimRowsOf(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => /^slim:(?!agent:|step$)/.test(key)).map(key => key.slice('slim:'.length))
+}
+
+test('the Agents tab is a summary: the needs-you line, the goal and its step, one row per agent at work, Open dashboard; Details shows the full outline', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const data = busyData()
+  M.noteGoal(data, 'goal', { text: 'Fix the login bug', origin: 'composer', at: NOW - 300_000 })
+  M.agentOf(data, 'agent-fixer')!.goal = data.goals[0]?.id
+  M.agentOf(data, 'agent-helper')!.goal = data.goals[0]?.id
+  world(on, { restored: snapshot(data) })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+  await $.command.run(deck(''))
+  await clock.advance(1000)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    // no outline, no Files, no detail: the summary
+    expect(await rowsOf(ui)).toEqual([])
+    expect(await ui.find({ type: 'Text', text: 'Nothing needs you' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: 'Fix the login bug' }))?.props.bold).toBe(true)
+    expect((await ui.find({ key: 'slim:step' }))?.text).toBe('2 running · 2 files')
+    // the agents at work, each with its status, label and one line
+    expect(await slimRowsOf(ui)).toEqual(['main', 'agent-fixer', 'agent-helper'])
+    expect((await ui.find({ key: 'slim:agent-fixer' }))?.text).toContain('Run the unit tests')
+    expect((await ui.find({ key: 'slim:agent-helper' }))?.text).toContain('Find the auth module')
+    expect((await ui.find({ key: 'slim:main' }))?.text).toContain('Waiting on 1 agent')
+    expect((await ui.find({ key: 'slim:agent:agent-helper' }))?.props).toMatchObject({ label: 'helper', plain: true })
+    // the dashboard's button, the one primary, and Details beside it
+    expect((await ui.find({ key: 'web:open' }))?.props).toMatchObject({ label: 'Open dashboard', variant: 'primary', hotkey: 'w' })
+    expect((await ui.find({ key: 'agents:details' }))?.props).toMatchObject({ label: 'Details', hotkey: 'e' })
+    expect((await ui.findAll({ type: 'Button' })).filter(button => button.props.variant === 'primary').map(button => button.key)).toEqual(['web:open'])
+
+    // Details: the full outline as before, the summary's rows gone; again: the summary
+    await ui.press({ key: 'agents:details' })
+    expect(await rowsOf(ui)).toEqual(['main', 'agent-fixer', 'agent-helper'])
+    expect(await slimRowsOf(ui)).toEqual([])
+    expect((await ui.find({ key: 'agents:details' }))?.props.label).toBe('Hide details')
+    expect(await ui.find({ key: 'web:open' })).toBeDefined()
+    await ui.press({ key: 'agents:details' })
+    expect(await rowsOf(ui)).toEqual([])
+
+    // a row's label opens the full outline on that agent
+    await ui.press({ key: 'slim:agent:agent-fixer' })
+    expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
+    await ui.press({ key: 'agents:details' })
+    await ui.unmount()
+  }
+})
+
 test('pressing an agent in the outline opens its detail, and Diffs shows its exact patch', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on, { restored: snapshot(busyData()) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
@@ -346,7 +397,7 @@ test('Talk: the Orchestrator`s is the whole log, who handed what to whom in orde
   const data = busyData()
   world(on, { restored: snapshot(data) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   const [prompt, toFixer, toHelper, result] = data.messages
@@ -381,7 +432,7 @@ test('Talk sends to the agent from its field', async ($, on) => {
   const sent: Sent[] = []
   world(on, { restored: snapshot(busyData()), sent })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
@@ -521,7 +572,7 @@ test('the Agents tab stays inside the host bounds with eighty agents, two hundre
   for (let i = 0; i < 160; i++) M.addEdit(data, fixer, { id: `e${i}`, agent: fixer.id, tool: 'Edit', path: `src/deep/folder/file${i % 30}.ts`, abs: `/repo/src/deep/folder/file${i % 30}.ts`, at: NOW - 90_000 + i, added: 0, removed: 60, patch: long, isNew: false })
   world(on, { restored: snapshot(data, { agent: fixer.id }) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
@@ -544,7 +595,7 @@ test('outside a repository the summary counts the agents` own edits, and the Orc
   const clock = mock.clock(on, { now: NOW })
   world(on, { isRepo: false })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/notes' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await $.turn.start({ text: 'fix app.ts', turnId: 't1' })
   await $.tool.call({ tool: 'Edit', file_path: '/repo/src/app.ts', old_string: 'const b = 2', new_string: 'const b = 3' })
   await $.turn.complete({ turnId: 't1', answer: 'Fixed.', durationMs: 1000, isAborted: false, reason: 'answer' })

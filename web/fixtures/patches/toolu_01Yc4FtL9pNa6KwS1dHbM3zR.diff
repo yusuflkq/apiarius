@@ -1,0 +1,24 @@
+@@ -17,5 +17,7 @@
+   /** The key a request counts against: the user id, else the client IP. */
+   keyOf?: (req: Request) => string;
++  /** Requests that never count, such as health checks. */
++  skip?: (req: Request) => boolean;
+ };
+ 
+ const defaultKey = (req: Request) => req.user?.id ?? req.ip ?? 'anonymous';
+@@ -29,6 +31,7 @@
+   const keyOf = options.keyOf ?? defaultKey;
+ 
+   return async (req: Request, res: Response, next: NextFunction) => {
++    if (options.skip?.(req)) return next();
+     const key = keyOf(req);
+     const now = Date.now();
+     try {
+@@ -38,5 +41,6 @@
+       if (count > options.limit) {
+         const retryMs = oldest + options.windowMs - now;
+-        res.setHeader('Retry-After', String(Math.ceil(retryMs / 1000)));
++        // round up and never below 1 s, so a client never retries early
++        res.setHeader('Retry-After', String(Math.max(1, Math.ceil(retryMs / 1000))));
+         return res.status(429).json({ error: 'rate_limited', retryAfterMs: retryMs });
+       }

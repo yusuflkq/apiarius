@@ -1,0 +1,20 @@
+@@ -41,4 +41,19 @@
+ | 404 | `not_found` | The resource does not exist. |
+ | 422 | `invalid_body` | The body failed validation; `details` lists each field. |
++| 429 | `rate_limited` | Too many requests; wait `Retry-After` seconds. |
+ 
++## Rate limits
++
++Every `/v1` route allows **100 requests per minute per user** (per client IP
++for anonymous calls), counted over a sliding window. Each response carries:
++
++| Header | Meaning |
++| :- | :- |
++| `RateLimit-Limit` | Requests allowed per window |
++| `RateLimit-Remaining` | Requests left in the current window |
++| `Retry-After` | On a 429 only: seconds until the next request is allowed |
++
++`/v1/health` and `/v1/metrics` are not limited. Operators can change the
++limit with `RATE_LIMIT` and the window with `RATE_LIMIT_WINDOW_MS`.
++
+ ## Pagination

@@ -283,7 +283,7 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   const { disk } = world(on)
 
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   // you ask; the Orchestrator delegates to three named agents

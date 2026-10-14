@@ -308,6 +308,8 @@ export type DeckView = {
   folded: string[]
   /** The branch the outline is zoomed on (an agent id or a step key); '' for all. */
   zoom: string
+  /** The Agents tab shows the full outline (Details) instead of its summary. */
+  isDetailsOpen: boolean
 }
 
 export type DeckSnapshot = {
@@ -316,12 +318,25 @@ export type DeckSnapshot = {
   view: DeckView
 }
 
+/** What `$.state` keeps of the web deck (`/deck web`). */
+export type DeckWebSaved = {
+  isOn: boolean
+  /** The server's access token (the page's `t`). */
+  token: string
+  /** The port it listened on, taken again after a reload; 0 for none yet. */
+  port: number
+  /** The folder it serves, `<mod>/.web/<sessionId>`. */
+  dir: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'agent-deck': {
       snapshot: DeckSnapshot
       /** The repository root the person pinned the deck to; '' while it follows the work. */
       repo: string
+      /** The web deck: on for the session after /deck web, its server's token, port and folder, so a reload starts it again where it was. */
+      web: DeckWebSaved
     }
   }
 }

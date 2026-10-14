@@ -953,7 +953,7 @@ test('through the deck pane: the outline picks fixer and the detail follows, Tal
   const sent: Sent[] = []
   world(on, sent)
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 
   // you ask; the Orchestrator hands the fix to fixer, which lists its steps and edits src/token.js

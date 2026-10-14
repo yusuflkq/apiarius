@@ -104,6 +104,9 @@ function recorder(current: () => DeckModel): { actions: Actions; calls: string[]
     review: note('review'),
     open: note('open'),
     selectRepo: note('selectRepo'),
+    openWeb: note('openWeb'),
+    toggleDetails: note('toggleDetails'),
+    showDetails: note('showDetails'),
   }
   return { actions, calls }
 }

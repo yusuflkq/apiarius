@@ -42,6 +42,18 @@ export type DayRow = {
   activeMs: number
 }
 
+/** The web deck (`/deck web`) as the pane shows it under its Open dashboard button. */
+export type WebPane = {
+  /** `off` until it is asked for, `starting` until the server says it is ready, `failed` when it could not start or stopped by itself. */
+  status: 'off' | 'starting' | 'running' | 'failed'
+  /** The page's address while the server runs; '' otherwise. */
+  url: string
+  /** How the last try to open it in the Browser pane went; '' before the first. */
+  opened: '' | 'opened' | 'failed'
+  /** Why it is not running, in a sentence; '' when it is. */
+  note: string
+}
+
 export type DeckModel = {
   data: DeckData
   view: DeckView
@@ -59,6 +71,8 @@ export type DeckModel = {
    */
   now: number
   cwd: string
+  /** The web deck; absent reads as off. */
+  web?: WebPane
 }
 
 export type Actions = {
@@ -87,4 +101,10 @@ export type Actions = {
   open: (tab: DeckTab) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
   selectRepo: (root: string) => void
+  /** What `/deck web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
+  openWeb: () => void
+  /** Shows the Agents tab's full outline (Details), or its summary again. */
+  toggleDetails: () => void
+  /** Shows the full outline with row `id` selected (as `select`); '' only opens it. */
+  showDetails: (id: string) => void
 }

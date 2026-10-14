@@ -4,7 +4,9 @@
  *
  * The hooks here record what the engine reports (tool calls, spawns, turns,
  * messages between agents) into one live model, run git in the background,
- * and draw the views from `./views`. Every `$` call lives in this file.
+ * and draw the views from `./views`. `/deck web` serves the same model as a
+ * live dashboard in the Desktop's Browser pane (`./web`, web/CONTRACT.md).
+ * Every `$` call lives in this file.
  */
 import type {
   AgentInfo,
@@ -29,8 +31,9 @@ import * as R from './repos'
 import { bandView } from './ui/band'
 import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
-import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo } from './ui/types'
+import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { deckView } from './views'
+import * as W from './web'
 
 const PANE = 'agent-deck'
 const SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
@@ -57,7 +60,7 @@ let isGitQueued = false
 let isHeavyQueued = false
 let lastGitAt = 0
 let lastHeavyAt = 0
-const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer; dump?: Timer } = {}
+const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer; dump?: Timer; web?: Timer } = {}
 /** The screen key the last drawing showed (or the last timed redraw asked for); see `screenKey`. */
 let shownKey = ''
 let gitKeyMemo: { of: G.GitState; key: string } | null = null
@@ -113,18 +116,22 @@ function screenKey(now: number): string {
   const minute = isStats ? M.minuteOf(now) : ''
   const totals = isStats ? JSON.stringify([M.totalsOf(data), data.minutes[data.minutes.length - 1] ?? null]) : ''
   const edits = `${data.edits.length}:${data.edits[data.edits.length - 1]?.id ?? ''}`
-  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits].join('\n\u0001')
+  const shown = webPaneOf()
+  const webKey = `${shown.status}\t${shown.url}\t${shown.opened}\t${shown.note}`
+  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits, webKey].join('\n\u0001')
 }
 
 /**
  * Redraws only when the screen would change: how events, the timer and the
  * background reads draw, so nothing moves while nothing changes. (A press
- * that changes the view draws unasked, through `changed`.)
+ * that changes the view draws unasked, through `changed`.) A change is the
+ * web deck's signal too: its state is written again.
  */
 function redrawIfChanged($: EngineInterface, now: number) {
   const key = screenKey(now)
   if (key === shownKey) return
   shownKey = key
+  scheduleWeb($)
   redraw($)
 }
 
@@ -185,9 +192,10 @@ function renameInView(from: string, to: string) {
   view.folded = view.folded.map(swap)
 }
 
-/** Keeps the model in `$.state`, so a reload of this module picks it up again; while the debug folder is there, dumps it too. */
+/** Keeps the model in `$.state`, so a reload of this module picks it up again; while the debug folder is there, dumps it too, and while the web deck is on, writes its state. */
 function save($: EngineInterface) {
   scheduleDump($)
+  scheduleWeb($)
   if (timers.save) return
   timers.save = $.clock.after(1500, () => {
     timers.save = undefined
@@ -197,10 +205,11 @@ function save($: EngineInterface) {
 
 /**
  * The debug dump: while `<mod>/.debug/` exists, what the live deck believes
- * goes to `.debug/state.json` about 2 s after the data changes, for a person
- * or an agent to read without a screenshot. The folder is looked for at
- * session.start and on each tick, and again right before each write: with it
- * absent nothing is written (`$.fs.write` would make it).
+ * goes to `.debug/<sessionId>.json` about 2 s after the data changes, for a
+ * person or an agent to read without a screenshot, each session to its own
+ * file. The folder is looked for at session.start and on each tick, and
+ * again right before each write: with it absent nothing is written
+ * (`$.fs.write` would make it).
  */
 const DEBUG_DIR = '.debug'
 const DUMP_MS = 2000
@@ -249,7 +258,7 @@ async function writeDump($: EngineInterface): Promise<void> {
     const now = await $.clock.now()
     debug.writes += 1
     const state = { meta: { at: now, loadedAt: debug.loadedAt, writes: debug.writes }, ...debugStateOf(now) }
-    await $.fs.write(`${debugDirOf($)}/state.json`, `${JSON.stringify(state, null, 2)}\n`)
+    await $.fs.write(`${debugDirOf($)}/${W.fileNameOf(sessionId || 'state')}.json`, `${JSON.stringify(state, null, 2)}\n`)
   } catch {
     // a dump that could not be written waits for the next change
   }
@@ -259,7 +268,8 @@ async function writeDump($: EngineInterface): Promise<void> {
  * What the deck believes now, as plain data: the raw counts; the goal, the
  * plan (steps and links), the summary, the needs-you line and the fold; per
  * agent its label, scope, origin, status, parent, step link, checklist, step,
- * last action and result; the files; the last 20 messages; the outline's rows.
+ * last action and result; the files; the last 20 messages; the outline's
+ * rows; and how the web deck stands (never its token).
  */
 function debugStateOf(now: number) {
   const plan = M.planOf(data)
@@ -334,7 +344,414 @@ function debugStateOf(now: number) {
       empty: outline.empty,
       hidden: outline.hidden,
     },
+    web: { isOn: web.isOn, status: web.status, port: web.port, dir: web.dir, opened: web.opened, note: web.note, patches: web.written.size, hasParent: web.pid !== '' },
   }
+}
+
+/**
+ * The web deck (web/CONTRACT.md). `/deck web`, or the pane's Open dashboard,
+ * starts `web/server.js` for the session, answers with the page's link and
+ * tries to open it in the Desktop's Browser pane. While it is on, what the
+ * deck holds goes to `.web/<sessionId>/state.json` at most every 300 ms after
+ * a change (`W.webStateOf`), each edit's patch once beside it, and the page's
+ * commands come back as lines on the server's stdout.
+ *
+ * The child is the session's: `superviseWeb` runs from session.start, whose
+ * `$` outlives every hook, and spawns it each time it is asked. Leaving its
+ * loop (`/deck web stop`) or a reload of this module kills it, and its
+ * `--parent` check ends it with the session's process (its stdin is closed
+ * from the start, so stdin cannot tell it). A reload starts it again with
+ * the token and port `$.state` kept: the open page reconnects by itself.
+ */
+const WEB_STATE = { plugin: 'agent-deck', key: 'web' } as const
+/** How long a start waits for the server's ready line. */
+const WEB_START_MS = 10_000
+
+const web: {
+  /** On for this session, from the first /deck web until /deck web stop, as `$.state` keeps it. */
+  isOn: boolean
+  /** The server's access token, the page's `t`. */
+  token: string
+  /** The port the server listens on, taken again after a reload; 0 before it is known. */
+  port: number
+  /** The port a restart asked for again, until its ready line says which it got. */
+  keptPort: number
+  /** The folder it serves (`<mod>/.web/<sessionId>`), fixed for the server's life. */
+  dir: string
+  status: WebPane['status']
+  /** Why it is not running, as the pane and `/deck web` say it; '' while it runs. */
+  note: string
+  /** How the last try to open it in the Browser pane went. */
+  opened: WebPane['opened']
+  /** The session's own process (claude.exe), the server's `--parent`; '' when it could not be read. */
+  pid: string
+  /** The session.start the supervisor in charge belongs to. */
+  epoch: number
+  /** A start asked of the supervisor, and the wake of its wait. */
+  isAsked: boolean
+  wake?: () => void
+  /** Ends the child's loop, and with it the child. */
+  stop?: () => void
+  /** The starts waiting for the ready line. */
+  waiters: ((isUp: boolean) => void)[]
+  /** The patches written, by their web id. */
+  written: Set<string>
+  /** The state last written, its time left out. */
+  lastKey: string
+  isWriting: boolean
+  isWriteQueued: boolean
+} = { isOn: false, token: '', port: 0, keptPort: 0, dir: '', status: 'off', note: '', opened: '', pid: '', epoch: 0, isAsked: false, waiters: [], written: new Set(), lastKey: '', isWriting: false, isWriteQueued: false }
+
+/** The web deck as the pane draws it. */
+function webPaneOf(): WebPane {
+  const isUp = web.status === 'running' && web.port > 0
+  return { status: web.status, url: isUp ? W.webUrlOf(web.port, web.token) : '', opened: web.opened, note: web.note }
+}
+
+/** Keeps the web deck's switch, token, port and folder in `$.state`, so a reload starts it again where it was. */
+function saveWeb($: EngineInterface) {
+  void $.state.set(WEB_STATE, { isOn: web.isOn, token: web.token, port: web.port, dir: web.dir }).catch(() => undefined)
+}
+
+/** Settles every start waiting for the server: up, or not. */
+function settleWeb(isUp: boolean) {
+  const waiters = web.waiters
+  web.waiters = []
+  for (const waiter of waiters) waiter(isUp)
+}
+
+/** Asks the supervisor for a server. */
+function askWeb() {
+  web.isAsked = true
+  const wake = web.wake
+  web.wake = undefined
+  wake?.()
+}
+
+/** The data changed: the web deck's state is written within 300 ms while it is on; changes meanwhile ride along. */
+function scheduleWeb($: EngineInterface) {
+  if (!web.isOn || web.dir === '' || timers.web) return
+  timers.web = $.clock.after(W.WEB_WRITE_MS, () => {
+    timers.web = undefined
+    void writeWeb($)
+  })
+}
+
+/**
+ * Writes what the page reads: each edit's patch not written yet
+ * (`patches/<id>.diff`, once), then `state.json`, unless it says what the
+ * last write said (its time aside). One write at a time: a change during one
+ * writes again after it.
+ */
+async function writeWeb($: EngineInterface): Promise<void> {
+  if (!web.isOn || web.dir === '') return
+  if (web.isWriting) {
+    web.isWriteQueued = true
+    return
+  }
+  web.isWriting = true
+  try {
+    for (const patch of W.newPatchesOf(data, web.written)) {
+      await $.fs.write(`${web.dir}/patches/${patch.id}.diff`, patch.text)
+      web.written.add(patch.id)
+    }
+    const now = await $.clock.now()
+    const text = JSON.stringify(W.webStateOf(data, view, git, usage, now, sessionId, cwd))
+    const key = text.replace(/^\{"v":1,"now":\d+,/, '')
+    if (key !== web.lastKey) {
+      await $.fs.write(`${web.dir}/state.json`, text)
+      web.lastKey = key
+    }
+  } catch {
+    // a write that failed waits for the next change
+  } finally {
+    web.isWriting = false
+    if (web.isWriteQueued) {
+      web.isWriteQueued = false
+      scheduleWeb($)
+    }
+  }
+}
+
+/** The session's own process id, read as the parent of a node it starts (no shell between); '' when node cannot say. */
+async function enginePidOf($: EngineInterface): Promise<string> {
+  try {
+    const ran = await $.process.run(['node', '-p', 'process.ppid'], { timeoutMs: 10_000 })
+    const pid = ran.stdout.trim()
+    return ran.exitCode === 0 && /^\d+$/.test(pid) ? pid : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The session's web deck, for as long as this session.start is the latest:
+ * picks up what `$.state` kept (a reload while it was on asks for the server
+ * again, with its token and port), then runs the server each time it is asked.
+ */
+async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
+  try {
+    const { value } = await $.state.get(WEB_STATE)
+    if (value && value.isOn === true && typeof value.token === 'string' && value.token !== '' && epoch === web.epoch) {
+      web.isOn = true
+      web.token = value.token
+      web.port = typeof value.port === 'number' && value.port > 0 ? value.port : 0
+      if (typeof value.dir === 'string' && value.dir !== '') web.dir = value.dir
+      web.status = 'starting'
+      web.isAsked = true
+    }
+  } catch {
+    // nothing kept: the web deck waits for /deck web
+  }
+  while (epoch === web.epoch) {
+    if (!web.isAsked) {
+      await new Promise<void>(resolve => {
+        web.wake = resolve
+      })
+      continue
+    }
+    web.isAsked = false
+    await runWeb($, epoch)
+  }
+}
+
+/** How one run of the server went: whether it said it was ready, whether node was missing, and the last thing it said of why it ended. */
+type WebRun = { isReady: boolean; isMissing: boolean; why: string }
+
+/**
+ * Runs the server until it ends: the state is written first (the page's
+ * first load finds it), the session's pid read for `--parent`, then `node
+ * web/server.js` starts with the token in its environment. A restart on a
+ * kept port that never comes up is tried once more on a port the OS picks.
+ */
+async function runWeb($: EngineInterface, epoch: number): Promise<void> {
+  const root = $.plugin.root.replace(/[\\/]+$/, '')
+  const script = `${root}/web/server.js`
+  web.status = 'starting'
+  web.note = ''
+  if (web.dir === '') web.dir = W.webDirOf(root, sessionId)
+  if (web.token === '') web.token = crypto.randomUUID()
+  saveWeb($)
+  redraw($)
+  web.lastKey = ''
+  await writeWeb($)
+  if (web.pid === '') web.pid = await enginePidOf($)
+  // a newer session.start took over: the web deck is its supervisor's now
+  if (epoch !== web.epoch) return
+  // stopped while it was being readied: nothing to start
+  if (!web.isOn) {
+    web.status = 'off'
+    settleWeb(false)
+    redraw($)
+    return
+  }
+  web.keptPort = web.port
+  let ran = await spawnWeb($, W.serverArgvOf(script, web.dir, web.pid, web.port))
+  if (!ran.isReady && !ran.isMissing && web.port > 0 && web.isOn && epoch === web.epoch) {
+    web.port = 0
+    ran = await spawnWeb($, W.serverArgvOf(script, web.dir, web.pid, 0))
+  }
+  web.keptPort = 0
+  if (epoch !== web.epoch) return
+  if (!web.isOn) {
+    web.status = 'off'
+  } else if (ran.isMissing) {
+    // no node: the deck stays native
+    web.isOn = false
+    web.status = 'failed'
+    web.note = 'Node.js was not found on PATH, so the dashboard cannot start.'
+    saveWeb($)
+    $.ui.toast('Agent Deck web needs Node.js on PATH; the deck stays in its pane.')
+  } else {
+    web.status = 'failed'
+    web.note = ran.isReady
+      ? `The dashboard's server stopped${ran.why ? ` (${ran.why})` : ''}; Open dashboard starts it again.`
+      : `The dashboard's server did not start${ran.why ? ` (${ran.why})` : ''}.`
+  }
+  settleWeb(false)
+  redraw($)
+}
+
+/** The last line a stream said, on one row. */
+function lastLineOf(text: string): string {
+  const lines = text
+    .split('\n')
+    .map(line => F.oneLine(line))
+    .filter(line => line !== '')
+  return F.trunc(lines[lines.length - 1] ?? '', 200)
+}
+
+/**
+ * One run of the server: its stdout read line by line as it comes (a chunk
+ * may cut a line or hold several; `W.splitLines` holds the rest), its stderr
+ * kept for why it ended, until the child ends or `web.stop` ends the loop.
+ * Rejects never: a start that fails (no node) is a run that says so.
+ */
+async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<WebRun> {
+  let rest = ''
+  let isReady = false
+  let errors = ''
+  let stop: (() => void) | undefined
+  try {
+    const child = $.process.spawn({ argv, env: { AGENT_DECK_TOKEN: web.token } })
+    stop = () => {
+      void child.return({ code: null, signal: null }).catch(() => undefined)
+    }
+    web.stop = stop
+    for await (const chunk of child) {
+      if (chunk.stream === 'stderr') {
+        errors = `${errors}${chunk.text}`.slice(-2000)
+        continue
+      }
+      const cut = W.splitLines(rest, chunk.text)
+      rest = cut.rest
+      for (const line of cut.lines) {
+        try {
+          if (onWebLine($, line)) isReady = true
+        } catch {
+          // a line the deck could not act on is let go: the loop reads on
+        }
+      }
+    }
+    return { isReady, isMissing: false, why: lastLineOf(errors) }
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error)
+    return { isReady, isMissing: !isReady && /ENOENT|not found|failed to start/i.test(said), why: F.trunc(F.oneLine(said), 200) }
+  } finally {
+    // a newer run's handle stays
+    if (web.stop === stop) web.stop = undefined
+  }
+}
+
+/**
+ * A whole line from the server: its ready line (the port it listens on), or
+ * a command from the page, checked against the model (`W.routeOf`) and acted
+ * on: `chat` through `sendChat`, `review` into the prompt box. Anything else
+ * is ignored. Answers whether it was the ready line.
+ */
+function onWebLine($: EngineInterface, line: string): boolean {
+  const said = W.parseLine(line)
+  if (said === null) return false
+  if (said.kind === 'ready') {
+    const kept = web.keptPort
+    web.keptPort = 0
+    web.port = said.port
+    web.status = 'running'
+    web.note = ''
+    saveWeb($)
+    settleWeb(true)
+    // the page open before a reload knows the old port only
+    if (kept > 0 && kept !== said.port) $.ui.toast('Agent Deck web started again on another port: /deck web gives its new link.')
+    redraw($)
+    return true
+  }
+  const route = W.routeOf(said.cmd, data)
+  if (route?.kind === 'chat') void sendChat($, route.agentId, route.text)
+  else if (route?.kind === 'review') fillReview($, route.text)
+  return false
+}
+
+/** Starts the web deck when it is not running, and waits (10 s at most) for its server to be up. */
+async function ensureWeb($: EngineInterface): Promise<boolean> {
+  if (web.status === 'running' && web.port > 0) return true
+  const isStarting = web.isOn && web.status === 'starting'
+  web.isOn = true
+  if (!isStarting) {
+    web.status = 'starting'
+    web.note = ''
+    web.opened = ''
+    redraw($)
+    askWeb()
+  }
+  return new Promise<boolean>(resolve => {
+    let isDone = false
+    const finish = (isUp: boolean) => {
+      if (isDone) return
+      isDone = true
+      timer.cancel()
+      resolve(isUp)
+    }
+    const timer = $.clock.after(WEB_START_MS, () => finish(false))
+    web.waiters.push(finish)
+  })
+}
+
+/** Opens `url` in the Desktop's Browser pane: its server's preview_start over MCP (by either spelling of its name), else as a tool call; false when none takes it. */
+async function openInBrowser($: EngineInterface, url: string): Promise<boolean> {
+  try {
+    const opened = await $.mcp.call('Claude_Browser', 'preview_start', { url })
+    if (opened.isError !== true) return true
+  } catch {
+    // not by that name
+  }
+  try {
+    const opened = await $.mcp.call('Claude Browser', 'preview_start', { url })
+    if (opened.isError !== true) return true
+  } catch {
+    // no Browser pane over MCP (a terminal, a headless run)
+  }
+  try {
+    const called = await $.tool.call({ tool: 'mcp__Claude_Browser__preview_start', url } as unknown as Parameters<EngineInterface['tool']['call']>[0])
+    return called.deny === undefined && called.isError !== true
+  } catch {
+    return false
+  }
+}
+
+/** Tries the Browser pane with the page; the pane shows the link when that fails. */
+async function showWeb($: EngineInterface, url: string): Promise<void> {
+  const isOpened = await openInBrowser($, url)
+  web.opened = isOpened ? 'opened' : 'failed'
+  redraw($)
+}
+
+/**
+ * `/deck web` and the pane's Open dashboard: starts the web deck if it is
+ * not running, then tries to open the page in the Browser pane (left to run:
+ * the answer carries the link either way, and the model's context too, so
+ * Claude can open it when asked). Without node the deck stays native.
+ */
+async function openWeb($: EngineInterface): Promise<CommandRunResult> {
+  const isUp = await ensureWeb($)
+  if (!isUp) {
+    const why = web.status === 'starting' ? "The dashboard's server did not answer within 10 s." : web.note || "The dashboard's server did not start."
+    $.ui.toast(`Agent Deck web: ${why}`)
+    return { text: `${why} The deck stays in its pane: /deck.` }
+  }
+  const url = W.webUrlOf(web.port, web.token)
+  void showWeb($, url)
+  return {
+    text: `[Open Agent Deck](${url}) in the Browser pane`,
+    context: [`The Agent Deck dashboard of this session runs at ${url} (on this machine only; t is its access token). When the user asks to see it, open that URL in the Browser pane (preview_start with url).`],
+  }
+}
+
+/** `/deck web stop`: the server ends, the state is no longer written, and the next start makes a new link. Answers whether it was on. */
+function stopWeb($: EngineInterface): boolean {
+  const wasOn = web.isOn || web.status === 'running' || web.status === 'starting'
+  web.isOn = false
+  web.isAsked = false
+  web.token = ''
+  web.port = 0
+  web.keptPort = 0
+  web.status = 'off'
+  web.note = ''
+  web.opened = ''
+  timers.web?.cancel()
+  timers.web = undefined
+  saveWeb($)
+  web.stop?.()
+  settleWeb(false)
+  redraw($)
+  return wasOn
+}
+
+/** Puts a review request in the prompt box, for the person to send. */
+function fillReview($: EngineInterface, text: string) {
+  void $.prompt
+    .fill({ text, mode: 'replace' })
+    .then(filled => $.ui.toast(filled.isFilled ? 'The review request is in your prompt; press Enter to send it.' : 'Could not fill the prompt.'))
+    .catch(() => $.ui.toast('Could not fill the prompt.'))
 }
 
 async function restore($: EngineInterface, now: number): Promise<boolean> {
@@ -906,18 +1323,21 @@ async function recoverLost($: EngineInterface): Promise<void> {
 
 /**
  * Every 2.5 seconds: folds in the agents' statuses and, while the pane is
- * open, re-reads git, usage and history in the background. It draws only
- * when the screen would change (`redrawIfChanged`); events draw for themselves.
+ * open or the web deck is on, re-reads git and usage in the background (the
+ * pane's history too). It draws only when the screen would change
+ * (`redrawIfChanged`, the web deck's signal as well); events draw for themselves.
  */
 async function tick($: EngineInterface): Promise<void> {
   await checkDebug($)
   const now = await $.clock.now()
   // workflow agents and housekeeping loops fold away: they keep nothing on screen live
   const isAnyLive = M.hasLiveAgents(data)
-  if (isAnyLive || isPaneOpen) await syncAgents($)
-  if (isPaneOpen) {
+  if (isAnyLive || isPaneOpen || web.isOn) await syncAgents($)
+  if (isPaneOpen || web.isOn) {
     if (now - lastGitAt > 6000) void refreshGit($)
     if (now - usageAt > 10_000) void loadUsage($)
+  }
+  if (isPaneOpen) {
     if (now - daysAt > 120_000) void loadDays($)
     if (view.tab === 'agents' && view.agentPane === 'chat' && now - (chat?.at ?? 0) > 6000) void loadChat($, view.agent)
   }
@@ -928,8 +1348,8 @@ async function tick($: EngineInterface): Promise<void> {
     recovery.isPaneSeen = true
     void recoverLost($)
   }
-  // with the pane shut and no agent at work nothing of the deck's is on screen: the next event draws
-  if (isPaneOpen || isAnyLive) redrawIfChanged($, now)
+  // with the pane shut, no agent at work and no web deck nothing of the deck's is on screen: the next event draws
+  if (isPaneOpen || isAnyLive || web.isOn) redrawIfChanged($, now)
 }
 
 async function openPane($: EngineInterface): Promise<boolean> {
@@ -1025,16 +1445,26 @@ function actionsFor($: EngineInterface): Actions {
       $.ui.toast('Agent Deck refreshed')
     },
     sendChat: (agentId, text) => void sendChat($, agentId, text),
-    review: text => {
-      void $.prompt
-        .fill({ text, mode: 'replace' })
-        .then(filled => $.ui.toast(filled.isFilled ? 'The review request is in your prompt; press Enter to send it.' : 'Could not fill the prompt.'))
-        .catch(() => $.ui.toast('Could not fill the prompt.'))
-    },
+    review: text => fillReview($, text),
     open: tab => {
       view.tab = tab
       changed($)
       void openPane($)
+    },
+    openWeb: () => void openWeb($),
+    toggleDetails: () => {
+      view.isDetailsOpen = !view.isDetailsOpen
+      changed($)
+    },
+    showDetails: id => {
+      view.isDetailsOpen = true
+      if (id !== '') {
+        pickAgent($, id)
+        const shown = O.revealed(data, view, id)
+        view.folded = shown.folded
+        view.zoom = shown.zoom
+      }
+      changed($)
     },
   }
 }
@@ -1068,6 +1498,7 @@ function modelOf(now: number): DeckModel {
     days,
     now,
     cwd,
+    web: webPaneOf(),
   }
 }
 
@@ -1327,6 +1758,14 @@ export const register: Register = on => {
       sessionId = ''
     }
 
+    // the web deck's supervisor, this session.start's: on again at once when a reload found it on
+    web.epoch += 1
+    const wake = web.wake
+    web.wake = undefined
+    wake?.()
+    web.stop?.()
+    void superviseWeb($, web.epoch)
+
     try {
       const raw = await $.session.usage()
       usage = usageOf(raw)
@@ -1353,8 +1792,8 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: who each agent is, what it is doing, how they talk, and the diffs they make',
-        argumentHint: '[agents|changes|stats|band|close|probe]',
+        description: 'Open Agent Deck: who each agent is, what it is doing, how they talk, and the diffs they make (/deck web: the live dashboard in the Browser pane)',
+        argumentHint: '[agents|changes|stats|details|web|web stop|band|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -1389,8 +1828,19 @@ export const register: Register = on => {
       return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /deck band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
     }
     if (arg === 'probe') return toggleProbe($)
+    // the live dashboard: started if need be, its link answered, opened in the Browser pane when it can be
+    const words = arg.split(/\s+/)
+    if (words[0] === 'web') {
+      if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Agent Deck web stopped.' : 'Agent Deck web was not running.' }
+      return openWeb($)
+    }
+    // the Agents tab's full outline
+    if (arg === 'details') {
+      view.tab = 'agents'
+      view.isDetailsOpen = true
+    }
     // a tab's name or its start; an earlier build's name (overview, diffs, commits, graph) lands on the tab that replaced it
-    const tab = M.tabFor(arg)
+    const tab = arg === 'details' ? undefined : M.tabFor(arg)
     if (tab) view.tab = tab
     const isPlaced = await openPane($)
     changed($)

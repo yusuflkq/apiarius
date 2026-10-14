@@ -159,7 +159,7 @@ test('a subagent shows in the outline with its task, the Orchestrator`s edit sho
   world(on, sent)
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck('agents'))
+  await $.command.run(deck('details'))
   await $.turn.start({ text: 'fix the bug in app.ts', turnId: 't1' })
   await $.agent.spawn(spawn('scout', 'hunt the bug', 'Find the bug in src/app.ts'))
   await $.tool.call({ tool: 'Edit', file_path: '/repo/src/app.ts', old_string: 'const b = 2', new_string: 'const b = 3' })

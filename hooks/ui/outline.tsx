@@ -82,7 +82,7 @@ export function headerBlock(kit: Kit, vm: HeaderVM, actions: Actions): RenderEle
 }
 
 /** Always one row. Loud (a blocked prompt, a failure, a shared file): the copper rail, the square, the subject bold, and Open. */
-function needsLine(kit: Kit, needs: NeedsVM, actions: Actions): RenderElement {
+export function needsLine(kit: Kit, needs: NeedsVM, actions: Actions): RenderElement {
   const { Box, Text, Button } = kit
   const target = needs.open
   const button = target ? (

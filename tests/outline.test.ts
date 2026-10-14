@@ -206,7 +206,7 @@ async function opened(on: On, $: Engine, data: DeckData, view: Partial<DeckSnaps
   const clock = mock.clock(on, { now: NOW })
   world(on, snapshot(data, view))
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck('agents'))
+  await $.command.run(deck('details'))
   await clock.advance(1000)
 }
 
@@ -680,7 +680,7 @@ test('before the first prompt the whole tab is one quiet line', async ($, on) =>
     // nothing else of the tab: no needs-you line, no goal, no Files, no detail; the tab row stays
     for (const text of ['Nothing needs you', 'Goal', 'Files', 'No agents yet']) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
     expect((await ui.findAll({ type: 'Text' })).filter(one => one.props.italic === true).length).toBe(1)
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats'])
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats', 'web:open'])
     expect((await ui.findAll({ type: 'Box' })).some(hasRail)).toBe(false)
     await ui.unmount()
   }

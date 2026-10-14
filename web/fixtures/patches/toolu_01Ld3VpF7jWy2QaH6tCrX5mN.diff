@@ -1,0 +1,32 @@
+@@ -0,0 +1,31 @@
++import type Redis from 'ioredis';
++import type { RateLimitStore } from '../rateLimit';
++
++/**
++ * Hit times in a Redis sorted set per key, so every API node shares one
++ * window. One MULTI per hit: trim, add, count, read the oldest, expire.
++ */
++export class RedisStore implements RateLimitStore {
++  constructor(private redis: Redis, private prefix = 'rl:') {}
++
++  async hit(key: string, now: number, windowMs: number) {
++    const k = this.prefix + key;
++    const member = `${now}-${Math.random().toString(36).slice(2, 8)}`;
++    const results = await this.redis
++      .multi()
++      .zremrangebyscore(k, 0, now - windowMs)
++      .zadd(k, now, member)
++      .zcard(k)
++      .zrange(k, 0, 0, 'WITHSCORES')
++      .pexpire(k, windowMs)
++      .exec();
++    if (!results) throw new Error('rate limit transaction aborted');
++    const count = Number(results[2][1]);
++    const oldest = Number((results[3][1] as string[])[1] ?? now);
++    return { count, oldest };
++  }
++
++  async reset(key: string) {
++    await this.redis.del(this.prefix + key);
++  }
++}
