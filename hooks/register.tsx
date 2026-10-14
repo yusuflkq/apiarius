@@ -22,7 +22,7 @@ import type {
   ToolCallResult,
 } from 'claude-code'
 
-import type { DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
+import type { DeckActivity, DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
 import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
@@ -172,6 +172,30 @@ function knownRealOf(abs: string): string {
   const path = R.cleanPath(abs)
   const real = R.isAbsolute(path) ? realDirs.get(R.keyOf(R.dirOf(path))) : undefined
   return real === undefined ? path : R.childOf(real, F.baseName(path))
+}
+
+/** Whether `knownRealOf` can spell `abs` as the file system does already: a relative path, or one whose directory was resolved. */
+function isSpelledOf(abs: string): boolean {
+  const path = R.cleanPath(abs)
+  return !R.isAbsolute(path) || realDirs.has(R.keyOf(R.dirOf(path)))
+}
+
+/**
+ * A call that started in a directory not resolved yet (an 8.3 short name,
+ * `C:\Users\DEVELO~1\…`, which git never prints) gets its target written
+ * again once the file system spells the path: relative to the repository
+ * like every later call there, never an absolute path cut from the left.
+ */
+async function respell($: EngineInterface, activity: DeckActivity, tool: string, input: Record<string, unknown>, file: string): Promise<void> {
+  try {
+    const real = await realPathOf($, file)
+    const target = M.targetOf(tool, { ...input, file_path: real }, git.root || null, data.board)
+    if (target === activity.target) return
+    activity.target = target
+    touched($, await $.clock.now())
+  } catch {
+    // the target keeps the spelling the call gave
+  }
 }
 
 /** A slash command's expansion (classic UserPromptExpansion), held for the prompt it becomes: its headline. */
@@ -1883,7 +1907,10 @@ export const register: Register = on => {
       M.clearNeeds(data, { kind: 'start', agent: agentId })
       const file = typeof input.file_path === 'string' ? input.file_path : ''
       const said = file ? { ...input, file_path: knownRealOf(file) } : input
-      M.beginTool(data, agent, M.activityOf(e.tool_use_id, tool, said, git.root || null, start))
+      const activity = M.activityOf(e.tool_use_id, tool, said, git.root || null, start, data.board)
+      M.beginTool(data, agent, activity)
+      // the call goes on at once; its target follows when the file system spells a new directory
+      if (file && !isSpelledOf(file)) void respell($, activity, tool, input, file)
     } catch {
       agent = undefined
     }
@@ -2119,8 +2146,9 @@ export const register: Register = on => {
         main.status = 'running'
         main.lastAt = now
       }
-      // a turn whose prompt came from elsewhere (an agent's hand-back, already its result) is no prompt of yours; none seen counts as yours
-      const isTheirs = isNextTurnTheirs ?? true
+      // a turn whose prompt came from elsewhere (an agent's hand-back, already its result) is no prompt of yours, nor one that
+      // opens with a notice: a background agent's <task-notification> can start a turn with no prompt.submit before it
+      const isTheirs = (isNextTurnTheirs ?? true) && !M.isNoticeText(e.text)
       isNextTurnTheirs = null
       if (e.text.trim() && isTheirs) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
       touched($, now)
@@ -2175,6 +2203,8 @@ export const register: Register = on => {
           delete main.current
           main.lastAt = now
           delete main.todo
+          // its answer to you is its latest report: the web deck's Orchestrator shows it
+          M.noteMainAnswer(main, e.answer)
         }
         data.turns += 1
         data.turnMs += e.durationMs

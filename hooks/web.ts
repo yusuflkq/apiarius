@@ -43,8 +43,9 @@ export type WebAgent = {
   now: string
   /** The prompt it was given (the Orchestrator's: the goal), at most 2000 characters. */
   task: string
-  /** Its final report, at most 4000 characters; '' until done. */
+  /** Its final report, at most 4000 characters; '' until done. The Orchestrator's: its latest answer to you. */
   result: string
+  /** Its todo list or board tasks; the Orchestrator's, with no list of its own: the plan's steps. */
   checklist: { items: { text: string; status: WebItemStatus; doing?: string }[]; done: number; total: number }
   lastAction: { tool: string; text: string; at: number; isLive: boolean } | null
   tools: number
@@ -191,13 +192,17 @@ export function agentLineOf(data: DeckData, agent: DeckAgent, root: string): str
 }
 
 function nowLineOf(data: DeckData, agent: DeckAgent, status: WebStatus, needsYou: string | null, root: string): string {
-  const action = M.lastActionOf(agent)?.text ?? ''
+  const last = M.lastActionOf(agent)
+  const action = last?.text ?? ''
   if (needsYou !== null) return `Waits on you: ${needsYou}`
   if (agent.kind === 'main') {
+    // between turns: what it last answered you; at work: its call in flight, the agents it waits on, its step. An earlier
+    // turn's last call is no news (a background agent's notification starts a turn long after it), so it is never shown.
+    if (status === 'idle') return (agent.answer ? M.resultLineOf(agent.answer, root) : '') || 'Idle'
+    if (last?.isLive) return F.oneLine(action)
     const live = data.agents.filter(one => M.isShownAgent(one) && M.isLive(one.status) && M.parentIdOf(data, one) === M.MAIN).length
-    if (status === 'idle') return 'Idle'
-    if (live > 0 && !agent.current) return `Waiting on ${F.plural(live, 'agent')}`
-    return F.oneLine(M.stepOf(agent) || action || 'Working')
+    if (live > 0) return `Waiting on ${F.plural(live, 'agent')}`
+    return F.oneLine(M.stepOf(agent)) || 'Working'
   }
   switch (status) {
     case 'failed': {
@@ -216,10 +221,22 @@ function nowLineOf(data: DeckData, agent: DeckAgent, status: WebStatus, needsYou
   }
 }
 
-function webAgentOf(data: DeckData, agent: DeckAgent, root: string): WebAgent {
+/**
+ * The agent's checklist: its own todo list or board tasks; the Orchestrator
+ * with none of its own has the plan's steps, which it wrote (a board's tasks)
+ * or works through (`plan`, the goal's).
+ */
+function checklistOf(data: DeckData, agent: DeckAgent, plan: M.DeckPlan): M.DeckChecklist {
+  const own = M.checklistOf(agent, data)
+  if (agent.kind !== 'main' || own.total > 0 || plan.steps.length === 0) return own
+  const items = plan.steps.map(step => ({ key: step.key, text: step.text, status: step.status }))
+  return { items, done: items.filter(item => item.status === 'done').length, total: items.length }
+}
+
+function webAgentOf(data: DeckData, agent: DeckAgent, root: string, plan: M.DeckPlan): WebAgent {
   const status = statusOf(agent, data)
   const needsYou = needsYouOf(data, agent)
-  const list = M.checklistOf(agent, data)
+  const list = checklistOf(data, agent, plan)
   const action = M.lastActionOf(agent)
   const parent = agent.kind === 'main' ? null : (M.parentIdOf(data, agent) ?? null)
   const goal = M.goalOf(data)
@@ -295,7 +312,8 @@ export function webStateOf(data: DeckData, view: DeckView, git: GitState, usage:
     goal: goal ? { headline: goal.headline, text: goal.text, at: goal.at, followUps: goal.followUps.map(one => ({ text: one.text, at: one.at })) } : null,
     needs: { tone: needs.tone, kind: needs.kind, text: needs.text, ...(needs.agentId ? { agentId: needs.agentId } : {}), ...(needs.path ? { path: needs.path } : {}) },
     summary: {
-      step: sum.step || null,
+      // "2 of 4" names the step in progress; with none, the page counts the steps done itself (never "Step 0 of 5")
+      step: active ? sum.step || null : null,
       stepText: active?.text ?? null,
       running: sum.running,
       waiting: sum.waiting,
@@ -310,7 +328,7 @@ export function webStateOf(data: DeckData, view: DeckView, git: GitState, usage:
       contextPercent: usage?.contextPercent ?? null,
     },
     plan: { source: plan.source, steps: plan.steps.map(step => ({ key: step.key, text: step.text, status: step.status, agents: [...step.agents] })) },
-    agents: agents.map(agent => webAgentOf(data, agent, root)),
+    agents: agents.map(agent => webAgentOf(data, agent, root, plan)),
     messages: data.messages.slice(-WEB_CAPS.messages).map(message => ({
       id: message.id,
       at: message.at,

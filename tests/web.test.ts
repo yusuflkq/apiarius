@@ -171,6 +171,74 @@ test('webStateOf: the caps, 200 messages of 600 characters, 150 tool calls, 300 
   expect(W.webStateOf(data, M.defaultView(), GIT, USAGE, NOW, 's', '/repo').messages).toEqual([{ id: expect.any(String), at: NOW, from: 'you', to: 'main', kind: 'prompt', text: 'Fix it' }])
 })
 
+test('webStateOf on a live run`s shape: the step only while one is in progress, the Orchestrator`s plan as its checklist and its answer as its report, lines that never show a stale call, board calls in words, tasks and reports whole', () => {
+  const data = M.emptyData(NOW - 600_000)
+  const main = M.agentOf(data, M.MAIN)!
+  main.status = 'running'
+  M.noteGoal(data, 'goal', { text: 'Make a small change', origin: 'composer', at: NOW - 500_000 })
+  const subjects = ['Map the repository', 'Add jitter to backoffDelays', 'Summarise the changes']
+  subjects.forEach((subject, i) => M.noteBoard(data, main, 'TaskCreate', { subject }, { task: { id: String(i + 1), subject } }, NOW - 400_000))
+  const at = (state: W.WebState, id: string) => state.agents.find(one => one.id === id)
+  const stateOf = () => W.webStateOf(data, M.defaultView(), GIT, USAGE, NOW, 's', '/repo')
+
+  // no step in progress: no "0 of 3" (the page would say "Step 0 of 3")
+  let state = stateOf()
+  expect(state.summary).toMatchObject({ step: null, stepText: null })
+  // the Orchestrator wrote the plan: its steps are its checklist
+  expect(at(state, M.MAIN)?.checklist).toEqual({ items: subjects.map(text => ({ text, status: 'pending' })), done: 0, total: 3 })
+  M.noteBoard(data, main, 'TaskUpdate', { taskId: '1', status: 'completed' }, { success: true, taskId: '1', updatedFields: ['status'] }, NOW - 300_000)
+  M.noteBoard(data, main, 'TaskUpdate', { taskId: '2', status: 'in_progress' }, { success: true, taskId: '2', updatedFields: ['status'] }, NOW - 300_000)
+  state = stateOf()
+  expect(state.summary).toMatchObject({ step: '2 of 3', stepText: 'Add jitter to backoffDelays' })
+  expect(at(state, M.MAIN)?.checklist).toMatchObject({ done: 1, total: 3, items: [{ status: 'done' }, { status: 'active' }, { status: 'pending' }] })
+  M.noteBoard(data, main, 'TaskUpdate', { taskId: '2', status: 'completed' }, { success: true, taskId: '2', updatedFields: ['status'] }, NOW - 200_000)
+  M.noteBoard(data, main, 'TaskUpdate', { taskId: '3', status: 'completed' }, { success: true, taskId: '3', updatedFields: ['status'] }, NOW - 200_000)
+  // all done: still no step "3 of 3"; the page says "3 of 3 done"
+  expect(stateOf().summary).toMatchObject({ step: null, stepText: null })
+
+  // the Orchestrator's line: its call in flight, the agents it waits on, else "Working"; an earlier call is never "now"
+  M.beginTool(data, main, M.activityOf('t-spawn', 'Agent', { description: 'Add jitter to backoffDelays' }, '/repo', NOW - 190_000))
+  M.endTool(main, 't-spawn', true, NOW - 189_000)
+  expect(at(stateOf(), M.MAIN)?.now).toBe('Working')
+  const jitter = M.noteSpawn(data, {
+    toolUseId: 'toolu_jitter',
+    agentId: 'agent-jitter',
+    parentId: M.MAIN,
+    description: 'Add jitter to backoffDelays',
+    prompt: `Add jitter. ${'p'.repeat(1500)}`,
+    type: 'general-purpose',
+    isTeammate: false,
+    at: NOW - 180_000,
+  }).agent
+  jitter.status = 'running'
+  expect(at(stateOf(), M.MAIN)?.now).toBe('Waiting on 1 agent')
+  M.beginTool(data, main, M.activityOf('t-read', 'Read', { file_path: '/repo/src/a.ts' }, '/repo', NOW - 1000))
+  expect(at(stateOf(), M.MAIN)?.now).toBe('Read src/a.ts')
+  M.endTool(main, 't-read', true, NOW - 900)
+  jitter.status = 'completed'
+  jitter.endedAt = NOW - 500
+  // a long task and report stay whole up to the contract's caps (not cut at 700 and 1400 characters)
+  M.noteResult(data, jitter, `Added the jitter option. ${'r'.repeat(2500)}`, NOW - 500)
+  state = stateOf()
+  expect(at(state, 'agent-jitter')?.task.length).toBe(1512)
+  expect(at(state, 'agent-jitter')?.result.length).toBe(2525)
+  // between turns: its latest answer to you is its report and its line
+  main.status = 'idle'
+  expect(at(stateOf(), M.MAIN)).toMatchObject({ now: 'Idle', result: '' })
+  M.noteMainAnswer(main, 'Summary: all three agents finished.\n\n- jitter: src/retry/backoff-delays.js')
+  expect(at(stateOf(), M.MAIN)).toMatchObject({ now: 'all three agents finished.', result: 'Summary: all three agents finished.\n\n- jitter: src/retry/backoff-delays.js' })
+
+  // board calls read as their tasks, not ids; a tool search as the tools it loads
+  const board = data.board
+  expect(M.targetOf('TaskUpdate', { taskId: '2', status: 'completed' }, '/repo', board)).toBe('Add jitter to backoffDelays → done')
+  expect(M.targetOf('TaskUpdate', { taskId: '3', status: 'in_progress' }, '/repo', board)).toBe('Summarise the changes → in progress')
+  expect(M.targetOf('TaskUpdate', { taskId: '9', owner: 'fixer' }, '/repo', board)).toBe('task 9')
+  expect(M.targetOf('TaskCreate', { subject: 'Test the jitter option', description: 'one test' }, '/repo', board)).toBe('Test the jitter option')
+  expect(M.targetOf('TaskList', {}, '/repo', board)).toBe('the task list')
+  expect(M.targetOf('ToolSearch', { query: 'select:TaskCreate,TaskUpdate', max_results: 2 }, '/repo')).toBe('TaskCreate, TaskUpdate')
+  expect(M.targetOf('ToolSearch', { query: 'slack send' }, '/repo')).toBe('slack send')
+})
+
 test('avatars are 0 to 9 and stable per agent id; ids, models and lines read as the page takes them', () => {
   const first = W.webStateOf(richData(), M.defaultView(), GIT, USAGE, NOW, 's', '/repo')
   const again = W.webStateOf(richData(), M.defaultView(), GIT, USAGE, NOW + 60_000, 's', '/repo')

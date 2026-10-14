@@ -241,6 +241,31 @@ function repoOf(files: FileRow[]): GitState {
 
 // Goals.
 
+test('a turn a background agent`s notification starts is no prompt of yours, with or without a prompt.submit before it; the Orchestrator`s answer is kept as its report', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  world(on, clock, saved)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+
+  await $.prompt.submit(typed('Map the repository'))
+  await $.turn.start({ text: 'Map the repository', turnId: 't1' })
+  await $.turn.complete({ turnId: 't1', answer: 'The three agents are running in the background.', durationMs: 1000, isAborted: false, reason: 'answer' })
+  // an agent finished while the session was idle: the engine starts the next turn with its notification, no prompt.submit first
+  const notice = '<task-notification>\n<task-id>a13532ad0f987a4dc</task-id>\n<tool-use-id>toolu_01Y1</tool-use-id>\n<status>completed</status>\n</task-notification>'
+  await $.turn.start({ text: notice, turnId: 't2' })
+  await $.turn.complete({ turnId: 't2', answer: 'Summary: the map is done.\n\n- 7 files, tests run with node --test', durationMs: 1000, isAborted: false, reason: 'answer' })
+  // and one queued while it was busy, which comes through prompt.submit
+  await $.prompt.submit({ text: notice, origin: { kind: 'task-notification' }, wait: false })
+  await $.turn.start({ text: notice, turnId: 't3' })
+  // your own words that quote a notification further in stay yours
+  await $.turn.start({ text: 'Why did I get this? <task-notification>x</task-notification>', turnId: 't4' })
+  await clock.advance(2000)
+
+  const data = lastOf(saved)
+  expect(data.messages.filter(message => message.kind === 'prompt').map(message => message.text)).toEqual(['Map the repository', 'Why did I get this? <task-notification>x</task-notification>'])
+  expect(agentIn(data, M.MAIN).answer).toBe('Summary: the map is done.\n\n- 7 files, tests run with node --test')
+})
+
 test('goals: the person`s own words start a goal while the session is idle with nothing live; typed mid-turn or while an agent runs they follow it up; the rest are events', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []

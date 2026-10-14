@@ -80,8 +80,9 @@ export const LIMITS = {
   messages: 200,
   minutes: 240,
   patchChars: 3200,
-  promptChars: 700,
-  answerChars: 1400,
+  /** An agent's task and its result, in characters: whole up to what the web deck shows (web/CONTRACT.md: task 2000, result 4000). */
+  promptChars: 2000,
+  answerChars: 4000,
   messageChars: 700,
   agents: 80,
   /** The goals a snapshot keeps, and each one's follow-ups. */
@@ -521,10 +522,26 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
 }
 
-/** What a tool call is aimed at, in a few words: the file, command, pattern or query. */
-export function targetOf(tool: string, input: Record<string, unknown>, root: string | null): string {
+/** A task-board call in words: the task's subject (the board's, by its id, when the call names none), and the state an update moves it to. */
+function taskTargetOf(tool: string, input: Record<string, unknown>, board: Readonly<Record<string, DeckTask>> | undefined): string {
+  if (tool === 'TaskList') return 'the task list'
+  const id = taskIdOf(input.taskId)
+  const subject = str(input.subject) ?? (id !== undefined ? (board?.[id]?.subject ?? `task ${id}`) : '')
+  if (tool !== 'TaskUpdate') return trunc(oneLine(subject), 60)
+  const state = taskStateOf(input.status)
+  const word = state === 'active' ? 'in progress' : state
+  return trunc(word ? `${oneLine(subject)} → ${word}` : oneLine(subject), 60)
+}
+
+/**
+ * What a tool call is aimed at, in a few words: the file, command, pattern or
+ * query; a task-board call's task by its subject (`board`, the deck's, names
+ * the task an update gives by id only).
+ */
+export function targetOf(tool: string, input: Record<string, unknown>, root: string | null, board?: Readonly<Record<string, DeckTask>>): string {
   const file = str(input.file_path) ?? str(input.notebook_path)
   if (file) return truncStart(relOf(file, root), 60)
+  if (TASK_TOOLS.includes(tool)) return taskTargetOf(tool, input, board)
 
   switch (tool) {
     case 'Bash':
@@ -547,6 +564,12 @@ export function targetOf(tool: string, input: Record<string, unknown>, root: str
       return trunc(str(input.skill) ?? '', 60)
     case 'TodoWrite':
       return 'update todos'
+    case 'ToolSearch': {
+      // "select:TaskCreate,TaskUpdate" loads tools by name: their names are what it is aimed at
+      const query = oneLine(str(input.query) ?? '')
+      const names = query.startsWith('select:') ? query.slice('select:'.length).split(',').map(name => name.trim()).filter(name => name !== '') : []
+      return trunc(names.length > 0 ? names.join(', ') : query, 60)
+    }
     default: {
       if (tool.startsWith('mcp__')) return trunc(tool.split('__').slice(1).join(' / '), 60)
       const first = Object.values(input).find(value => typeof value === 'string')
@@ -555,14 +578,14 @@ export function targetOf(tool: string, input: Record<string, unknown>, root: str
   }
 }
 
-/** One tool call as the deck keeps it: what it is aimed at, and a shell call's own description of itself and its command. */
-export function activityOf(id: string, tool: string, input: Record<string, unknown>, root: string | null, at: number): DeckActivity {
+/** One tool call as the deck keeps it: what it is aimed at (`board` names a task-board call's task), and a shell call's own description of itself and its command. */
+export function activityOf(id: string, tool: string, input: Record<string, unknown>, root: string | null, at: number, board?: Readonly<Record<string, DeckTask>>): DeckActivity {
   const isShell = SHELL_TOOLS.includes(tool)
   const described = isShell ? str(input.description) : undefined
   const description = described ? trunc(oneLine(described), 80) : ''
   const said = isShell ? str(input.command) : undefined
   const command = said ? trunc(oneLine(said), 120) : ''
-  return { id, tool, target: targetOf(tool, input, root), at, ...(description ? { description } : {}), ...(command ? { command } : {}) }
+  return { id, tool, target: targetOf(tool, input, root, board), at, ...(description ? { description } : {}), ...(command ? { command } : {}) }
 }
 
 export function beginTool(data: DeckData, agent: DeckAgent, activity: DeckActivity) {
@@ -1412,6 +1435,19 @@ export function noteResult(data: DeckData, agent: DeckAgent, text: string, at: n
   return true
 }
 
+/**
+ * The Orchestrator's latest answer to the person (its turn's last words),
+ * kept as its result: what the web deck shows as its report. No message is
+ * added: it answers you, and your Claude Code conversation holds it already.
+ * Answers whether it changed.
+ */
+export function noteMainAnswer(agent: DeckAgent, text: string): boolean {
+  const body = trunc(typeof text === 'string' ? text.trim() : '', LIMITS.answerChars)
+  if (body === '' || agent.answer === body) return false
+  agent.answer = body
+  return true
+}
+
 /** Words that only announce a report ("Done", "Summary", "Verdict"): the row says "Done:" itself. */
 const REPORT_WORDS = 'done|all done|finished|complete|completed|summary|results?|report|verdict|outcome|status|answer|conclusion|findings|tl;?\\s?dr|bottom line|overall'
 
@@ -1881,6 +1917,19 @@ export function isOwnWords(text: string): boolean {
   const lead = text.trimStart()
   if (ENGINE_OPENINGS.some(opening => lead.startsWith(opening))) return false
   return text.replace(IMAGE_MARK, '').trim() !== ''
+}
+
+/** How a message the engine or another agent sends the main loop opens: a background task's notification, an agent's, a teammate's or another session's message. */
+const NOTICE_OPENINGS: readonly string[] = ['<task-notification', '[SYSTEM NOTIFICATION', '<agent-message', '<teammate-message', '<cross-session-message']
+
+/**
+ * Whether a turn's text is a notice to the main loop rather than a prompt:
+ * it opens with a notification or another agent's message. The person's
+ * own prompt that only quotes one further in stays theirs.
+ */
+export function isNoticeText(text: string): boolean {
+  const lead = text.trimStart()
+  return NOTICE_OPENINGS.some(opening => lead.startsWith(opening))
 }
 
 const PASTE_OPEN = /^<pasted_content(?:\s[^>]*)?>/

@@ -570,6 +570,24 @@ test('QA 3: an edit spelled with an 8.3 short path (DEVELO~1) reads as git spell
   expect(M.editorsOf(data, 'src/token.js').map(M.labelOf)).toEqual(['fixer'])
 })
 
+test('QA 5: a read in a directory spelled with an 8.3 short name (DEVELO~1) shows its file relative to the repository, never an absolute path cut from the left', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  qaWorld(on, saved, { root: 'C:/Users/developer/demo', short: 'C:/Users/DEVELO~1/demo' })
+
+  // the session's cwd itself is the short spelling, as a temp folder's often is
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\DEVELO~1\\demo' })
+  await clock.advance(1000)
+  await $.agent.spawn(named('mapper'))
+  await $.tool.call(inLoop('agent-mapper', { tool: 'Read' as const, file_path: 'C:\\Users\\DEVELO~1\\demo\\src\\token.js' }))
+  await $.tool.call(inLoop('agent-mapper', { tool: 'Read' as const, file_path: 'C:\\Users\\DEVELO~1\\demo\\test\\token.test.js' }))
+  await clock.advance(5000)
+
+  const mapper = M.agentOf(lastOf(saved).data, 'agent-mapper')
+  expect(mapper?.recent.map(one => one.target)).toEqual(['src/token.js', 'test/token.test.js'])
+  expect(M.lastActionOf(mapper!)?.text).toBe('Read test/token.test.js')
+})
+
 test('QA 4: a name two agents carried (a reviewer finished, another spawned) resolves to the newest live one', async () => {
   const data = M.emptyData(NOW)
   data.agents.push(
