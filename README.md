@@ -1,44 +1,80 @@
 # Agent Deck
 
-A Claude Code mod: one pane that shows your git changes, every agent's live work and exact edits, lets you chat with subagents, tracks productivity, and draws an Obsidian-style graph of which agents talk to each other.
+Agent Deck is a Claude Code mod (a plugin of function hooks) that shows what a session's agents are doing. Its main view, `/deck web`, is a Paperclip-style dashboard in the Desktop app's Browser pane that updates live: the goal and plan, every agent and what it is doing now, the exact diffs each one made, and a box to message an agent. `/deck` opens a side pane in the Code tab with a short summary of the agents, a git checker and session stats.
 
-Built and tested against Claude Code 2.1.289 (the Desktop app's bundled copy). Works in the Desktop Code tab and the terminal; the graph and charts are SVG on the desktop and text in the terminal.
+## Install
+
+To load it in every session, put the folder's absolute path in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. With `CLAUDE_CODE_PLUGIN_DIR_WATCH` set to `1`, saving a file reloads the mod.
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_PLUGIN_DIRS": "<absolute path to agent-deck>",
+    "CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"
+  }
+}
+```
+
+To load it for one terminal session only: `claude --plugin-dir <path>`.
+
+- It needs a Claude Code new enough to run mods. It was built and tested on 2.1.295, the Desktop app's bundled copy. The `claude` on your PATH is a separate install and may be a different version.
+- `/deck web` needs Node 18 or later on PATH. Without Node, the side pane still works.
 
 ## Use
 
 | Command | What it does |
 | :- | :- |
-| `/deck` | Opens the pane (works while Claude is mid-turn) |
-| `/deck agents` · `/deck diffs` · `/deck commits` · `/deck graph` | Opens on that tab (prefixes work: `/deck g`) |
-| `/deck close` | Closes it |
+| `/deck web` | Starts the dashboard, opens it in the Browser pane and answers with its link (click it if the pane did not open; any browser on this machine works) |
+| `/deck web stop` | Stops the dashboard. The next `/deck web` gives a new link |
+| `/deck` | Opens the side pane (works while Claude is mid-turn) |
+| `/deck agents` · `/deck changes` · `/deck stats` | Opens the pane on that tab (a prefix works: `/deck c`) |
+| `/deck details` | Opens the Agents tab with the full outline |
+| `/deck band` | Hides or shows the agents band above the prompt |
+| `/deck close` | Closes the pane |
 
-Keys while the pane has focus: `1`–`5` switch tabs, `r` refreshes, `a` / `e` / `c` switch an agent's Activity / Diffs / Chat, `f` toggles file nodes on the graph.
+Keys while the pane has focus: `1`–`3` switch tabs, `w` opens the dashboard, `e` toggles Details, `n` opens what needs you. In Details: `o` selects the Orchestrator, `f` / `z` fold or zoom the selected row, `u` goes back up a zoom level, `d` / `t` / `c` show its Diffs, Talk or Tool calls.
 
-## Tabs
+## The dashboard
 
-- **Overview**: session time and time Claude spent working, tool calls and failure rate, lines added/removed by agents, uncommitted files, commits this session and today, agents live/done, tokens and cache share, cost and context fill. Activity chart for the last 30 minutes, who is working right now, top tools, hot files (with which agent touched them), and lines changed per day over the last week (kept across sessions).
-- **Agents**: you, the main loop, every subagent and teammate: status, type, model, elapsed time, tool calls, lines changed, what each is doing right now. Per agent:
-  - **Activity**: the current tool call and the last 14, with timings and failures, plus the final answer.
-  - **Diffs**: exactly what that agent changed, taken from its own Edit and Write patches (not a guess from git).
-  - **Chat**: its conversation as bubbles, and a field to message it. Subagents get the message through SendMessage (a finished one resumes to answer); for the main loop it is queued as your prompt.
-  - **Ask main to review**: puts a review request in your prompt (you press Enter).
-- **Diffs**: branch, upstream ahead/behind, every uncommitted file (staged, unstaged, untracked, renames) with +/− counts and which agent edited it. Press a file for its hunks. The **Show** picker switches to one agent's exact edits. Outside a git repo it lists the edits agents made.
-- **Commits**: the last 25 commits with stats, the ones from this session starred, and the agent that made each one when it came from a shell command Claude ran. Press one for its message, files and patch.
-- **Graph**: a force-directed map of you → main → subagents (and outside peers). Node color is status (green running, amber waiting, blue done, red failed), size is activity. Links show who spawned whom; purple curved links are messages, and packets flow along links that carried a message in the last 30 seconds. Hover a node to light up who it talks to; hover nodes and links for details. File nodes show which files each agent edited. Below it, a "Who's talking" feed.
+A sidebar lists the pages and every agent, with live and waiting dots.
 
-While subagents run, a one-line band above the prompt lists them and what each is doing, with **Open deck**, **Graph** and **Hide** buttons (show it again from the Overview tab).
+- **Dashboard:** what needs you (with Open), the goal and plan progress, a card per agent, KPIs (agents running, plan steps done, session spend, waiting on you), recent activity, and the files the agents edited.
+- **Org chart:** the Orchestrator at the top and the agents it started below it. Drag, scroll or use the arrow keys to pan; pinch, Ctrl+scroll or `+` / `−` to zoom; `0` fits it. **List** shows the same tree as indented rows. Click a card to open that agent.
+- **Plan:** the goal, a progress bar, and each step with its status and who works on it.
+- **Changes:** git's uncommitted files with `+/−` and who edited each; open a file for its agents' patches. Below, other agent edits and recent commits.
+- **Agent page:** its task, checklist and result, with its model, tokens, lines changed and tool calls. Then three tabs:
+  - **Diffs:** the patches from its own Edit and Write calls.
+  - **Activity:** its tool calls.
+  - **Talk:** its messages, and a box to message it. A subagent gets the message at once (a finished one resumes to answer); for the Orchestrator it becomes your next prompt.
+- **Review** (on an agent page and on Changes) puts a review request in your Claude Code prompt box; you press Enter to send it.
+
+## The side pane
+
+- **Agents:** a short summary: what needs you, the goal and "Step n of m", the agents at work and what each is doing, then **Open dashboard** and **Details**.
+- **Details:** the full outline. The Orchestrator, its plan steps, the agents under the step they serve (sub-agents under their parent), then the files they are changing. Click a row for its detail: an agent's task, checklist and result, then Diffs (its exact patches), Talk (with a box to message it) and Tool calls.
+- **Changes:** the git checker: branch and upstream, uncommitted files with who edited each, and recent commits with the agent that made each. Press a file for its hunks or a commit for its patch. Outside a git repo, it lists the agents' edits by file.
+- **Stats:** session time, tool calls, lines changed by agents, uncommitted files, tokens and cost; activity over the last 30 minutes; lines changed per day over the last 7 days.
+- **Band:** while subagents run, one line above the prompt says who is working on what, with **Open**.
+
+The pane also works in a terminal session, where Stats draws its charts as text.
 
 ## How it works
 
-- Hooks on `tool.call`, `agent.spawn`, `turn.start`, `turn.step`, `turn.complete`, `session.send` and `session.receive` feed one live model; `$.agent.list()` fills in agents the deck did not see start.
-- Git runs in the background (`--no-optional-locks`, no external diff drivers), after edits and shell commands, at turn ends, and every few seconds while the pane is open.
-- The session's model is kept in `$.state`, so it survives a reload of the mod; per-day totals and the band preference are kept in `$.store`.
+- Hooks on tool calls, agent spawns, turns, messages and notifications feed one live model of the session. It is kept in `$.state`, so it survives a reload of the mod; daily totals and the band setting are kept in `$.store`.
+- Git runs in the background (`--no-optional-locks`, no external diff tools) after edits and shell commands, and every few seconds while the pane or the dashboard is open.
+- `/deck web` starts `web/server.js`, a plain Node server with no dependencies. It listens on 127.0.0.1 only, every request needs a token made for the session, and the page loads nothing from the internet, so nothing leaves the machine.
+- While it runs, the mod writes `.web/<sessionId>/state.json` (at most every 300 ms) and one patch file per edit. The server streams each new state to the page over SSE, and the page updates in place without losing your view, scroll or draft.
+- Messages and review requests from the page come back to the mod on the server's stdout. The mod checks each one against the session before it acts on it.
+- The server stops with the session or on `/deck web stop`, and the page keeps showing the last state. A reload of the mod restarts it on the same link. `web/CONTRACT.md` is the spec for the state file, the routes and the commands.
 
 ## Develop
 
 ```bash
-claude plugin validate ./agent-deck
-claude plugin test ./agent-deck
+claude plugin validate .
+claude plugin test .     # 128 tests
+node --test web/test/    # 26 server and page tests
+node web/dev.js          # serves the dashboard on the sample data in web/fixtures and prints the URL
 ```
 
-To load it in a terminal session: `claude --plugin-dir ./agent-deck`. To load it in every Desktop session, add the folder's absolute path to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`.
+- Make a `.debug/` folder in the mod and it dumps its live state to `.debug/<sessionId>.json` about 2 s after each change.
+- `/deck probe` toggles a diagnostic pane that shows how the current surface draws native text, a Client canvas and an Svg. The deck's own views don't use it.
