@@ -1,7 +1,7 @@
 {
   "name": "agent-deck",
   "version": "0.1.0",
-  "description": "Agent Deck: a god's-eye pane for your agents — who delegated what to whom, what each is doing now, the exact diffs each one makes, chat with subagents, git changes and commits, and session stats",
+  "description": "Agent Deck: a god's-eye view of your agents (the goal and plan, who delegated what to whom, what each is doing now, the exact diffs each one makes, chat with subagents, git changes and stats) in a side pane and in a live dashboard in the Browser pane (/deck web)",
   "author": { "name": "Yusuf" },
   "types": "./types/index.d.ts"
 }
