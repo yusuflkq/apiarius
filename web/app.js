@@ -63,6 +63,10 @@ function msText(ms) {
   return span(ms);
 }
 const tokensOf = a => (a.tokens ? (a.tokens.in || 0) + (a.tokens.out || 0) + (a.tokens.cacheRead || 0) : 0);
+/** "haiku-4.5 · 48k": the model and the tokens spent, these left out until there are some (no "· 0"). */
+const modelLine = a => [a.model || '—', tokensOf(a) > 0 ? num(tokensOf(a)) : ''].filter(Boolean).join(' · ');
+/** The time a duration runs to: now while the session is live, its last state's time once it ended (a run's length stops growing). */
+const liveNow = () => (conn.status === 'ended' && S && S.now ? S.now : clock());
 function splitPath(p) {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   return i < 0 ? ['', p] : [p.slice(0, i + 1), p.slice(i + 1)];
@@ -281,8 +285,9 @@ function icon(name, cls) {
   return h('svg', { class: cls ? `ic ${cls}` : 'ic', viewBox: '0 0 24 24', 'aria-hidden': 'true', html: IC[name] || IC.circle });
 }
 
-const TOOL_ICON = { Read: 'eye', Edit: 'pencil', MultiEdit: 'pencil', NotebookEdit: 'pencil', Write: 'filePlus', Bash: 'terminal', PowerShell: 'terminal', Grep: 'search', Glob: 'folder', WebFetch: 'globe', WebSearch: 'globe', Agent: 'bot', Task: 'bot', SendMessage: 'message', TodoWrite: 'listChecks', Skill: 'sparkles' };
-const TOOL_VERB = { Read: 'read', Edit: 'edited', MultiEdit: 'edited', NotebookEdit: 'edited', Write: 'wrote', Bash: 'ran', PowerShell: 'ran', Grep: 'searched', Glob: 'listed', WebFetch: 'fetched', WebSearch: 'searched the web for', Agent: 'started', Task: 'started', SendMessage: 'messaged', TodoWrite: 'updated its checklist', Skill: 'used' };
+const TOOL_ICON = { Read: 'eye', Edit: 'pencil', MultiEdit: 'pencil', NotebookEdit: 'pencil', Write: 'filePlus', Bash: 'terminal', PowerShell: 'terminal', Grep: 'search', Glob: 'folder', WebFetch: 'globe', WebSearch: 'globe', Agent: 'bot', Task: 'bot', SendMessage: 'message', TodoWrite: 'listChecks', TaskCreate: 'listChecks', TaskUpdate: 'listChecks', TaskGet: 'listChecks', TaskList: 'listChecks', ToolSearch: 'search', Skill: 'sparkles' };
+// A task-board call's target is its task's subject ("Add jitter → done" for an update), a tool search's the tools it loads.
+const TOOL_VERB = { Read: 'read', Edit: 'edited', MultiEdit: 'edited', NotebookEdit: 'edited', Write: 'wrote', Bash: 'ran', PowerShell: 'ran', Grep: 'searched', Glob: 'listed', WebFetch: 'fetched', WebSearch: 'searched the web for', Agent: 'started', Task: 'started', SendMessage: 'messaged', TodoWrite: 'updated its checklist', TaskCreate: 'added the step', TaskUpdate: 'updated', TaskGet: 'read', TaskList: 'read', ToolSearch: 'loaded', Skill: 'used' };
 const PATHY = new Set(['Read', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write', 'Glob', 'Grep', 'Bash', 'PowerShell']);
 
 // ==================================================================== avatars
@@ -649,7 +654,8 @@ function inline(text) {
   while ((m = re.exec(text))) {
     if (m.index > at) out.push(text.slice(at, m.index));
     if (m[2] != null) out.push(h('code', { class: 'code' }, m[2]));
-    else if (m[3] != null) out.push(h('strong', null, m[3]));
+    // bold may hold code spans ("**What changed in `src/a.js`:**"): its own words are read the same way
+    else if (m[3] != null) out.push(h('strong', null, inline(m[3])));
     else out.push(h('a', { class: 'mdlink', href: m[4], target: '_blank', rel: 'noopener noreferrer' }, m[4]));
     at = m.index + m[0].length;
   }
@@ -768,11 +774,34 @@ function NeedsBanner() {
     target && h('a', { class: 'btn btn-sm banner-btn', href: target }, 'Open', icon('arrowRight')));
 }
 
+/** Where `lead` ends in `text`, a run of white space in either matching any in the other; -1 when the text does not start with it. */
+function endOfLead(text, lead) {
+  let i = 0;
+  for (let j = 0; j < lead.length; j++) {
+    if (/\s/.test(lead[j])) {
+      if (!/\s/.test(text[i] || '')) return -1;
+      while (i < text.length && /\s/.test(text[i])) i++;
+      while (j + 1 < lead.length && /\s/.test(lead[j + 1])) j++;
+    } else if (text[i++] !== lead[j]) return -1;
+  }
+  return i;
+}
+
+/**
+ * The goal's words after its headline, so nothing reads twice. The headline
+ * is the text's first line, or its first 80 characters cut with "…": then
+ * the rest starts at the word the cut fell in. A headline of other words
+ * (a slash command's) leaves the text whole.
+ */
 function goalRest(g) {
-  let rest = String(g.text || '').trim();
+  const text = String(g.text || '').trim();
   const head = String(g.headline || '').trim();
-  if (head && rest.startsWith(head)) rest = rest.slice(head.length).replace(/^[\s.:;,!?-]+/, '');
-  return rest;
+  if (!head) return text;
+  const isCut = head.endsWith('…');
+  let at = endOfLead(text, isCut ? head.slice(0, -1).trimEnd() : head);
+  if (at < 0) return text;
+  if (isCut) while (at > 0 && /\S/.test(text[at - 1]) && /\S/.test(text[at] || '')) at--;
+  return text.slice(at).replace(/^[\s.:;,!?-]+/, '');
 }
 
 function GoalCard() {
@@ -804,27 +833,45 @@ function GoalCard() {
 function runTime(a) {
   if (a.status === 'done') return `Finished ${agoText(a.endedAt || a.startedAt)}`;
   if (a.status === 'failed') return `Failed ${agoText(a.endedAt || a.startedAt)}`;
-  if (a.status === 'idle') return `Idle · ran ${span((a.endedAt || clock()) - a.startedAt)}`;
-  if (a.status === 'waiting') return `Waiting · ${span(clock() - a.startedAt)}`;
+  if (a.status === 'waiting') return `Waiting · ${span(liveNow() - a.startedAt)}`;
   return `Started ${agoText(a.startedAt)}`;
 }
 
-function RunCard(a) {
+/**
+ * What a run card's chip says: an agent's scope or task; the Orchestrator's
+ * place in the plan (the goal it would repeat stands right above it), with
+ * the steps done beside it.
+ */
+function chipOf(a) {
+  const steps = S.plan.steps;
+  if (a.kind === 'orchestrator' && steps.length) {
+    const done = steps.filter(x => x.status === 'done').length;
+    const isAllDone = done === steps.length;
+    const text = S.summary.stepText || (isAllDone ? `All ${plural(steps.length, 'step')} done` : `${done} of ${steps.length} steps done`);
+    const glyph = isAllDone ? 'done' : S.agents.some(x => isRunning(x.status)) ? 'active' : 'idle';
+    return { text, glyph, n: `${done}/${steps.length}` };
+  }
   const cl = a.checklist;
-  const chip = a.scope || firstLine(a.task) || a.type;
   const glyph = a.status === 'waiting' ? 'waiting' : a.status === 'failed' ? 'failed' : a.status === 'done' ? 'done' : a.status === 'idle' ? 'idle' : 'active';
+  return { text: a.scope || firstLine(a.task) || a.type, glyph, n: cl.total > 0 ? `${cl.done}/${cl.total}` : '' };
+}
+
+function RunCard(a) {
+  const chip = chipOf(a);
+  // the line under the chip never repeats it (an agent that just started says its scope in both)
+  const now = a.now && a.now !== chip.text ? a.now : isRunning(a.status) ? 'Working' : a.now;
   return h('a', { key: a.id, class: `run-card is-${a.status}`, href: agentHref(a.id), enter: true, 'aria-label': `${a.label}, ${statusOf(a.status).label}` },
     h('div', { class: 'run-head' },
       AvatarDot(a, 24),
       h('span', { class: 'run-name', title: `${a.label} · ${a.type}` }, a.label),
       Pill(a.status, 'pill-fixed')),
     h('div', { class: 'run-chip' },
-      Glyph(glyph, 15),
-      h('span', { class: 'run-chip-text' }, chip),
-      cl.total > 0 && h('span', { class: 'run-chip-n' }, `${cl.done}/${cl.total}`)),
-    h('p', { class: 'run-now' }, a.lastAction && a.lastAction.isLive && isRunning(a.status) ? h('span', { class: 'run-now-live' }, Dot('run', true)) : null, a.now || ' '),
+      Glyph(chip.glyph, 15),
+      h('span', { class: 'run-chip-text', title: chip.text }, chip.text),
+      chip.n && h('span', { class: 'run-chip-n' }, chip.n)),
+    h('p', { class: 'run-now', title: now || '' }, a.lastAction && a.lastAction.isLive && isRunning(a.status) ? h('span', { class: 'run-now-live' }, Dot('run', true)) : null, now || ' '),
     h('div', { class: 'run-foot' },
-      h('span', { class: 'run-model' }, `${a.model || '—'} · ${num(tokensOf(a))}`),
+      h('span', { class: 'run-model' }, modelLine(a)),
       h('span', { class: 'run-time' }, runTime(a))));
 }
 
@@ -847,17 +894,29 @@ function Kpi(ic, value, label, desc, href) {
   return href ? h('a', { class: 'kpi', href }, inner) : h('div', { class: 'kpi' }, inner);
 }
 
+/** How many of `list` are in each state, as their cards and pills show it: the same numbers on every page. */
+function countsOf(list) {
+  const c = { running: 0, waiting: 0, done: 0, failed: 0, idle: 0 };
+  for (const a of list) {
+    if (isRunning(a.status)) c.running++;
+    else if (a.status in c) c[a.status]++;
+  }
+  return c;
+}
+
 function Kpis() {
   const s = S.summary, steps = S.plan.steps;
   const done = steps.filter(x => x.status === 'done').length;
+  const c = countsOf(S.agents);
   const waiter = S.agents.find(a => a.needsYou) || S.agents.find(a => a.status === 'waiting');
   const parts = [];
-  if (s.tokens != null) parts.push(`${num(s.tokens)} tokens`);
-  if (s.minutes != null) parts.push(`${s.minutes} min`);
+  if (s.tokens) parts.push(`${num(s.tokens)} tokens`);
+  if (s.minutes != null) parts.push(s.minutes < 1 ? '<1 min' : `${s.minutes} min`);
   if (s.contextPercent != null) parts.push(`context ${Math.round(s.contextPercent)}%`);
+  const stepLine = !steps.length ? 'No plan yet' : s.stepText ? `Now: ${s.stepText}` : done === steps.length ? 'All steps done' : 'No step in progress';
   return h('div', { class: 'kpis' },
-    Kpi('bot', s.running || 0, 'Agents running', `${s.waiting || 0} waiting · ${s.done || 0} done · ${s.failed || 0} failed`, '#/org'),
-    Kpi('listChecks', steps.length ? `${done}/${steps.length}` : '—', 'Plan steps done', steps.length ? (s.stepText ? `Now: ${s.stepText}` : 'No step in progress') : 'No plan yet', '#/plan'),
+    Kpi('bot', c.running, 'Agents running', `${c.waiting} waiting · ${c.done} done · ${c.failed} failed`, '#/org'),
+    Kpi('listChecks', steps.length ? `${done}/${steps.length}` : '—', 'Plan steps done', stepLine, '#/plan'),
     Kpi('dollar', usd(s.costUsd), 'Session spend', parts.join(' · ') || '—'),
     Kpi('hand', s.waiting || 0, 'Waiting on you', waiter ? `${waiter.label}: ${waiter.needsYou || waiter.now || 'waiting'}` : 'Nothing waits on you', waiter ? agentHref(waiter.id) : null));
 }
@@ -895,7 +954,8 @@ function ActivityRow(x) {
 }
 
 function FileRow(f) {
-  return h('a', { key: f.path, class: 'file-row', href: '#/changes', onClick: () => ui.open.set(`chg|${f.path}`, true) },
+  // opens on the Changes page whichever list holds it: the uncommitted files, or the other edits
+  return h('a', { key: f.path, class: 'file-row', href: '#/changes', onClick: () => { ui.open.set(`chg|${f.path}`, true); ui.open.set(`byfile|${f.path}`, true); } },
     icon('file', 'fic'),
     PathText(f.path, 'grow'),
     f.live && Dot('run', true),
@@ -941,7 +1001,9 @@ function Dashboard() {
 // ----------------------------------------------------------------- org chart
 
 const CW = 208, CH = 104, GX = 24, GY = 64, PAD = 48;
-const org = { x: 0, y: 0, k: 1, touched: false, sig: '', view: null, world: null, label: null, size: '' };
+const org = { x: 0, y: 0, k: 1, touched: false, fit: 'open', sig: '', view: null, world: null, label: null, size: '' };
+/** The chart's margin from the canvas's edges when it fits itself, and the smallest zoom it opens at: cards stay readable. */
+const FIT_MARGIN = 16, OPEN_ZOOM = 0.85;
 let drag = null, suppressClick = false;
 
 /** How many cards a wrapped level holds: what the viewport fits, 2 to 4 (an even 2 or 4 keeps the trunk in a gap). */
@@ -1028,16 +1090,38 @@ function applyOrg() {
   if (org.label) org.label.textContent = `${Math.round(org.k * 100)}%`;
 }
 
+/** The zoom and offset that fit layout `L` into a `vw` × `vh` canvas; `fit` is 'open' or 'all' (see fitOrg). */
+function fitOf(L, vw, vh, fit) {
+  if (fit === 'all') {
+    const k = clamp(Math.min((vw - 32) / L.w, (vh - 32) / L.h, 1), 0.25, 1);
+    return { k, x: Math.round((vw - L.w * k) / 2), y: Math.round(Math.max(0, (vh - L.h * k) * 0.42)) };
+  }
+  // the cards' own width, the world's padding left out; the Orchestrator's top FIT_MARGIN + 8 below the canvas's
+  const cw = L.w - 2 * PAD;
+  const k = clamp((vw - 2 * FIT_MARGIN) / cw, OPEN_ZOOM, 1);
+  return { k, x: Math.round((vw - cw * k) / 2 - PAD * k), y: Math.round(FIT_MARGIN + 8 - PAD * k) };
+}
+
+/**
+ * Fits the chart to its canvas. It opens (and follows each new agent, until
+ * you pan or zoom) as wide as the canvas allows, never under 85% nor over
+ * 100%, the Orchestrator at the top and centred across: a wide or tall tree
+ * goes on past the edges, a drag or a scroll away. The fit button (and 0)
+ * shows the whole chart instead, as small as that takes, and new agents keep
+ * it whole.
+ */
 function fitOrg(L) {
   const v = org.view;
   if (!v || !L) return;
   const vw = v.clientWidth, vh = v.clientHeight;
   if (!vw || !vh) return;
-  const k = clamp(Math.min((vw - 32) / L.w, (vh - 32) / L.h, 1), 0.25, 1);
-  org.k = k;
-  org.x = Math.round((vw - L.w * k) / 2);
-  org.y = Math.round(Math.max(0, (vh - L.h * k) * 0.42));
+  Object.assign(org, fitOf(L, vw, vh, org.fit));
   applyOrg();
+}
+function fitAll() {
+  org.touched = false;
+  org.fit = 'all';
+  fitOrg(lastLayout);
 }
 
 function zoomAt(k, mx, my) {
@@ -1075,10 +1159,20 @@ function orgUp(e) {
   drag = null;
   delete e.currentTarget.dataset.dragging;
 }
+/** A scroll (two fingers, a wheel; Shift for across) pans the chart, so the rest of a tall tree is a scroll away; a pinch or Ctrl+wheel zooms at the pointer. */
 function orgWheel(e) {
   e.preventDefault();
-  const r = e.currentTarget.getBoundingClientRect();
-  zoomAt(org.k * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX - r.left, e.clientY - r.top);
+  if (e.ctrlKey || e.metaKey) {
+    const r = e.currentTarget.getBoundingClientRect();
+    zoomAt(org.k * Math.exp(-clamp(e.deltaY, -20, 20) * 0.01), e.clientX - r.left, e.clientY - r.top);
+    return;
+  }
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? e.currentTarget.clientHeight : 1;
+  const across = e.shiftKey && !e.deltaX;
+  org.x -= (across ? e.deltaY : e.deltaX) * unit;
+  org.y -= (across ? 0 : e.deltaY) * unit;
+  org.touched = true;
+  applyOrg();
 }
 function orgKeys(e) {
   if (e.target !== e.currentTarget) return;
@@ -1087,7 +1181,7 @@ function orgKeys(e) {
   if (moves[e.key]) { org.x += moves[e.key][0]; org.y += moves[e.key][1]; org.touched = true; applyOrg(); e.preventDefault(); return; }
   if (e.key === '+' || e.key === '=') { zoomBy(1.2); e.preventDefault(); }
   else if (e.key === '-' || e.key === '_') { zoomBy(1 / 1.2); e.preventDefault(); }
-  else if (e.key === '0') { org.touched = false; fitOrg(lastLayout); e.preventDefault(); }
+  else if (e.key === '0') { fitAll(); e.preventDefault(); }
 }
 
 let lastLayout = null;
@@ -1103,7 +1197,7 @@ function OrgCard(n) {
   h('span', { class: 'org-text' },
     h('span', { class: 'org-name' }, a.label),
     h('span', { class: 'org-type' }, a.type),
-    h('span', { class: 'org-meta' }, `${a.model || '—'} · ${num(tokensOf(a))}`),
+    h('span', { class: 'org-meta' }, modelLine(a)),
     h('span', { class: 'org-now' }, a.now || st.label)));
 }
 
@@ -1111,7 +1205,7 @@ function OrgChart() {
   const L = (lastLayout = layoutOrg());
   return h('div', {
     key: 'chart', class: 'org-view', tabindex: '0', role: 'group',
-    'aria-label': 'Org chart. Drag to pan, scroll or press plus and minus to zoom, 0 to fit.',
+    'aria-label': 'Org chart. Drag or scroll to pan; pinch, Ctrl+scroll or plus and minus to zoom; 0 shows it all.',
     ref: el => { org.view = el; },
     onPointerDown: orgDown, onPointerMove: orgMove, onPointerUp: orgUp, onPointerCancel: orgUp, onWheel: orgWheel, onKeyDown: orgKeys,
   },
@@ -1122,7 +1216,7 @@ function OrgChart() {
   h('div', { class: 'org-zoom' },
     h('button', { class: 'zbtn', type: 'button', title: 'Zoom in', 'aria-label': 'Zoom in', onClick: () => zoomBy(1.2) }, icon('plus')),
     h('button', { class: 'zbtn', type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out', onClick: () => zoomBy(1 / 1.2) }, icon('minus')),
-    h('button', { class: 'zbtn', type: 'button', title: 'Fit to screen', 'aria-label': 'Fit chart to screen', onClick: () => { org.touched = false; fitOrg(lastLayout); } }, icon('maximize'))),
+    h('button', { class: 'zbtn', type: 'button', title: 'Show the whole chart', 'aria-label': 'Show the whole chart', onClick: fitAll }, icon('maximize'))),
   // Its text is written by applyOrg only: a vnode child here would fight it.
   h('span', { class: 'org-pct', 'aria-hidden': 'true', ref: el => { org.label = el; applyOrg(); } }));
 }
@@ -1150,16 +1244,17 @@ function TreeRow(a) {
         h('span', { class: 'tree-name' }, a.label),
         h('span', { class: 'tree-sub' }, a.scope ? `${a.type} · ${a.scope}` : a.type))),
     h('span', { class: 'tree-now' }, a.now || ''),
-    h('span', { class: 'tree-meta' }, `${a.model || '—'} · ${num(tokensOf(a))}`),
+    h('span', { class: 'tree-meta' }, modelLine(a)),
     h('span', { class: 'tree-status' }, Pill(a.status, 'pill-fixed')));
 }
 
 function OrgPage() {
-  const s = S.summary;
+  // what its cards show, counted as the dashboard and the sidebar count it
+  const c = countsOf(S.agents);
   const counts = [plural(S.agents.length, 'agent')];
-  if (s.running) counts.push(`${s.running} running`);
-  if (s.waiting) counts.push(`${s.waiting} waiting`);
-  if (s.failed) counts.push(`${s.failed} failed`);
+  if (c.running) counts.push(`${c.running} running`);
+  if (c.waiting) counts.push(`${c.waiting} waiting`);
+  if (c.failed) counts.push(`${c.failed} failed`);
   const view = ui.orgView === 'list' ? 'list' : 'chart';
   const setView = v => { ui.orgView = v; store.set('orgView', v); renderNow(); };
   return h('div', { key: 'org', class: `page page-org view-${view}` },
@@ -1205,7 +1300,7 @@ function ReviewButton(scope, text, label = 'Ask for review') {
 function AgentHeader(a) {
   const parent = a.parent && IX.byId.get(a.parent);
   const live = isLive(a.status);
-  const ran = (a.endedAt || clock()) - a.startedAt;
+  const ran = (a.endedAt || liveNow()) - a.startedAt;
   return h('header', { class: 'agent-head' },
     h('span', { class: 'agent-av' }, Avatar(a, 40)),
     h('div', { class: 'agent-id' },
@@ -1281,8 +1376,10 @@ function ChecklistCard(a) {
 
 function ResultCard(a) {
   if (!a.result) return null;
+  // the Orchestrator's is its latest answer to you, one per turn
+  const title = a.kind === 'orchestrator' ? 'Latest answer' : a.status === 'failed' ? 'Result · failed' : 'Result';
   return h('section', { class: `card panel result${a.status === 'failed' ? ' is-failed' : ''}` },
-    h('div', { class: 'panel-head' }, h('h3', { class: 'panel-title' }, a.status === 'failed' ? 'Result · failed' : 'Result'), a.endedAt && h('span', { class: 'panel-note mono' }, agoText(a.endedAt))),
+    h('div', { class: 'panel-head' }, h('h3', { class: 'panel-title' }, title), a.endedAt && h('span', { class: 'panel-note mono' }, agoText(a.endedAt))),
     Markdown(a.result));
 }
 
@@ -1312,7 +1409,7 @@ function Tabs(a, tab) {
 
 function DiffsTab(a) {
   const edits = IX.editsBy.get(a.id) || [];
-  if (!edits.length) return h('div', { class: 'card' }, Empty('changes', 'No edits yet', isLive(a.status) ? 'Its Edit and Write patches show here the moment it makes them.' : 'This agent did not edit any files.'));
+  if (!edits.length) return h('div', { class: 'card' }, isLive(a.status) ? Empty('changes', 'No edits yet', 'Its Edit and Write patches show here the moment it makes them.') : Empty('changes', 'No edits', 'This agent did not edit any files.'));
   const byPath = new Map();
   for (const e of edits) (byPath.get(e.path) || byPath.set(e.path, []).get(e.path)).push(e);
   const live = new Set(S.files.filter(f => f.live).map(f => f.path));
@@ -1425,7 +1522,8 @@ function AgentPage() {
         h('p', { class: 'banner-text' }, 'Answer it in the Claude Code conversation; the agent carries on once you do.'))),
     NowStrip(a),
     AgentStats(a),
-    h('div', { class: 'agent-cols' }, TaskCard(a), ChecklistCard(a)),
+    // an agent with no checklist (most never write one) gives its task the whole row, rather than an empty card
+    h('div', { class: a.checklist.items.length ? 'agent-cols' : 'agent-cols single' }, TaskCard(a), a.checklist.items.length ? ChecklistCard(a) : null),
     ResultCard(a),
     h('div', { class: 'tabs-wrap' },
       Tabs(a, tab),
@@ -1438,6 +1536,18 @@ function AgentPage() {
 const SOURCE = { board: 'from the task board', todo: 'from the todo list', plan: 'from the plan', workflow: 'from the workflow', implicit: 'inferred from the agents', none: '' };
 const STEP_LABEL = { done: 'Done', active: 'In progress', pending: 'Pending', failed: 'Failed' };
 
+/** The goal's words under its headline on the Plan page: its own lines, a long prompt folded to five of them until asked. */
+function GoalText(g) {
+  const rest = goalRest(g);
+  if (!rest) return null;
+  const long = rest.length > 420 || rest.split('\n').length > 5;
+  const key = 'plan-goal', open = isOpen(key, false);
+  return [
+    h('p', { key: 'goal-text', class: `plan-text${long && !open ? ' clamped' : ''}` }, rest),
+    long && h('button', { key: 'goal-more', class: 'more more-start', type: 'button', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) }, open ? 'Show less' : 'Show the whole goal', icon('chevronDown', open ? 'flip' : '')),
+  ];
+}
+
 function PlanPage() {
   const steps = S.plan.steps, g = S.goal;
   const n = st => steps.filter(s => s.status === st).length;
@@ -1447,7 +1557,7 @@ function PlanPage() {
     g && h('div', { class: 'plan-goal' },
       h('p', { class: 'eyebrow' }, 'Goal'),
       h('h2', { class: 'plan-title' }, g.headline || firstLine(g.text)),
-      goalRest(g) && h('p', { class: 'plan-text' }, goalRest(g)),
+      GoalText(g),
       g.followUps && g.followUps.length > 0 && h('ul', { class: 'follows' }, g.followUps.map((f, i) => h('li', { key: `${i}:${f.at}` }, icon('cornerDownRight'), h('span', null, f.text), h('span', { class: 'mono muted' }, ago(f.at)))))),
     !steps.length
       ? h('div', { class: 'card' }, Empty('listChecks', 'No plan yet', 'When the Orchestrator writes a todo list or a plan, its steps show here with who works on each.'))
@@ -1514,7 +1624,10 @@ function CommitRow(c) {
 function ChangesPage() {
   const ch = S.changes, repo = S.repo;
   const add = total(ch, c => c.added), rem = total(ch, c => c.removed);
-  const editedPaths = [...IX.editsByPath.keys()];
+  // in a repository each uncommitted file opens on its agents' edits already: the edits listed again are the rest
+  // (committed since, undone, or outside the repository); outside one, every file the agents edited
+  const uncommitted = new Set(ch.map(c => c.path));
+  const editedPaths = [...IX.editsByPath.keys()].filter(p => !repo || !uncommitted.has(p));
   const live = new Set(S.files.filter(f => f.live).map(f => f.path));
   const editorsOf = new Map(S.files.map(f => [f.path, f.editors]));
   const scope = 'changes';
@@ -1530,8 +1643,8 @@ function ChangesPage() {
     repo && h('section', { class: 'sec' },
       SecHead('Uncommitted', ch.length),
       ch.length ? h('div', { class: 'card list chgs' }, ch.map(ChangeRow)) : h('div', { class: 'card' }, Empty('check', 'Working tree clean', 'Nothing to commit.'))),
-    h('section', { class: 'sec' },
-      SecHead('Edits by file', editedPaths.length),
+    (!repo || editedPaths.length > 0) && h('section', { class: 'sec' },
+      SecHead(repo ? 'Other agent edits' : 'Edits by file', editedPaths.length),
       editedPaths.length
         ? h('div', { class: 'fgroups' }, editedPaths.map((p, i) => FileGroup(p, IX.editsByPath.get(p), { scope: 'byfile', open: false, showAgent: true, live: live.has(p), editors: editorsOf.get(p) || [...new Set(IX.editsByPath.get(p).map(e => e.agent))] })))
         : h('div', { class: 'card' }, Empty('pencil', 'No agent edits yet', 'Each Edit and Write an agent makes shows here, grouped by file.'))),
@@ -1733,16 +1846,21 @@ function afterRender() {
   document.title = S ? `${s.waiting ? '● ' : ''}Agent Deck · ${S.repo ? S.repo.name : 'session'}` : 'Agent Deck';
 }
 
-window.addEventListener('hashchange', () => {
-  if (scroller) ui.scroll.set(shownKey, scroller.scrollTop);
-  route = parseRoute();
-  renderNow();
-});
-window.addEventListener('resize', () => invalidate());
-// Coarse times ("2m") move on their own; the retry countdown ticks every second while it shows.
-setInterval(invalidate, 15000);
-setInterval(() => { if (conn.status === 'reconnecting') invalidate(); }, 1000);
+function boot() {
+  window.addEventListener('hashchange', () => {
+    if (scroller) ui.scroll.set(shownKey, scroller.scrollTop);
+    route = parseRoute();
+    renderNow();
+  });
+  window.addEventListener('resize', () => invalidate());
+  // Coarse times ("2m") move on their own; the retry countdown ticks every second while it shows.
+  setInterval(invalidate, 15000);
+  setInterval(() => { if (conn.status === 'reconnecting') invalidate(); }, 1000);
 
-installDefs();
-renderNow();
-connect();
+  installDefs();
+  renderNow();
+  connect();
+}
+
+// web/test/page.test.js reads this file without a browser and drives its views itself: it boots nothing then.
+if (!globalThis.__deckTest) boot();
