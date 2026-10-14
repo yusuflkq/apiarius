@@ -847,7 +847,7 @@ function chipOf(a) {
   if (a.kind === 'orchestrator' && steps.length) {
     const done = steps.filter(x => x.status === 'done').length;
     const isAllDone = done === steps.length;
-    const text = S.summary.stepText || (isAllDone ? `All ${plural(steps.length, 'step')} done` : `${done} of ${steps.length} steps done`);
+    const text = S.summary.stepText || (isAllDone ? 'Plan done' : `${done} of ${steps.length} steps done`);
     const glyph = isAllDone ? 'done' : S.agents.some(x => isRunning(x.status)) ? 'active' : 'idle';
     return { text, glyph, n: `${done}/${steps.length}` };
   }

@@ -180,6 +180,7 @@ test('no junk numbers: no "Step 0 of 5", no "0 min", no "· 0" tokens; with no s
   p.load(done)
   assert.match(p.text('Kpis()'), /All steps done/)
   assert.match(p.text('GoalCard()'), /5 of 5 done/)
+  assert.equal(textOf(find(p.view('RunCard(IX.byId.get("main"))'), 'run-chip')[0]), 'Plan done 5/5')
 })
 
 test('a run card never says the same thing twice: the Orchestrator`s chip is its place in the plan, an agent`s line is not its chip again', () => {
