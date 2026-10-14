@@ -17,9 +17,23 @@ const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8')
 const NOW = 1_791_977_500_000
 const MIN = 60_000
 
-/** A fresh page at `hash`, its clock at `now`: app.js in a context of its own. */
-function page({ hash = '', now = NOW } = {}) {
+/**
+ * A fresh page at `hash`, its clock at `now`: app.js in a context of its own.
+ * Its fetch answers POST /cmd with {"ok":true} and GET /message/<id> from
+ * `messages`; every call is kept in `calls` (a command's body parsed).
+ * Rendering is a no-op: the views are read, not drawn.
+ */
+function page({ hash = '', now = NOW, messages = {} } = {}) {
   const noop = () => {}
+  const calls = []
+  const reply = (status, body) => ({ ok: status < 300, status, json: async () => JSON.parse(body), text: async () => body })
+  const fetch = async (url, init = {}) => {
+    calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
+    if (url === '/cmd') return reply(200, '{"ok":true}')
+    const message = /^\/message\/([^?]+)/.exec(url)
+    if (message) return messages[decodeURIComponent(message[1])] !== undefined ? reply(200, messages[decodeURIComponent(message[1])]) : reply(404, 'no such message\n')
+    return new Promise(noop)
+  }
   const context = vm.createContext({
     __deckTest: true,
     location: { search: '?t=test-token', hash },
@@ -32,14 +46,17 @@ function page({ hash = '', now = NOW } = {}) {
     clearTimeout: noop,
     setInterval: () => 1,
     performance: { now: () => 0 },
-    fetch: () => new Promise(noop),
+    fetch,
     URLSearchParams,
   })
   vm.runInContext(SOURCE, context, { filename: 'app.js' })
-  vm.runInContext(`Date.now = () => ${now}`, context)
+  vm.runInContext(`Date.now = () => ${now}; renderNow = () => {}`, context)
   const run = js => vm.runInContext(js, context)
   return {
     run,
+    calls,
+    /** The commands the page posted, oldest first. */
+    commands: () => calls.filter(one => one.url === '/cmd').map(one => one.body),
     load(state) {
       context.__state = JSON.parse(JSON.stringify(state))
       run('apply(__state)')
@@ -51,6 +68,34 @@ function page({ hash = '', now = NOW } = {}) {
     setNow: t => run(`Date.now = () => ${t}`),
   }
 }
+
+/** Lets the page's fetches and their promise chains settle. */
+const settle = () => new Promise(resolve => setImmediate(resolve))
+
+/** Every vnode under `v` that `test` accepts. */
+function findAll(v, test, out = []) {
+  if (!v || typeof v !== 'object') return out
+  if (Array.isArray(v)) {
+    for (const one of v) findAll(one, test, out)
+    return out
+  }
+  if (v.t !== '#' && test(v)) out.push(v)
+  for (const child of v.c || []) findAll(child, test, out)
+  return out
+}
+
+/** The first element under `v` of class `cls` whose text holds `text`. */
+function byText(v, cls, text) {
+  const found = find(v, cls).find(one => textOf(one).includes(text))
+  assert.ok(found, `no .${cls} with "${text}"`)
+  return found
+}
+
+/** Text with each run of white space as one space. */
+const flat = text => text.replace(/\s+/g, ' ')
+
+/** Clicks a vnode: runs its onClick as the browser would. */
+const click = v => v.p.onClick({ preventDefault() {}, target: {} })
 
 /** A vnode's text, its children's joined by spaces; icons' markup left out. */
 function textOf(v) {
@@ -292,4 +337,270 @@ test('the org chart opens readable: as wide as the canvas allows, never under 85
   assert.ok(all.k < 0.85 && 1600 * all.k <= 637 - 32 + 1 && 900 * all.k <= 760 - 32 + 1)
   // a small chart never grows past 100%
   assert.equal(fit(400, 300, 1100, 760, 'open').k, 1)
+})
+
+// ---- what waits on you, Talk's statuses, the Plan's steps (the contract's pending, acks, answer/question/choice messages)
+
+const CALL = 'toolu_01Rv8NqT3mKc6YwB2xPzL9hF'
+const Q_STORE = { question: 'Which store should the limiter use?', header: 'Store', multiSelect: false, options: [{ label: 'Redis (Recommended)', description: 'Shared across instances.' }, { label: 'In-memory', description: 'Per process.' }] }
+const Q_ENVS = { question: 'Which environments use Redis?', header: 'Redis', multiSelect: true, options: [{ label: 'Production', description: 'Behind the load balancer.' }, { label: 'Staging', description: 'Mirrors production.' }, { label: 'Preview', description: 'Short-lived.' }] }
+const question = (questions, extra = {}) => ({ id: CALL, agentId: 'main', kind: 'question', tool: 'AskUserQuestion', at: NOW - 30_000, questions, isAnswerable: true, ...extra })
+const permission = (extra = {}) => ({ id: 'toolu_perm1', agentId: 'ac1c53e313ef213a1', kind: 'permission', tool: 'Bash', at: NOW - 60_000, command: 'npm test -- rateLimit', description: 'Run the rate limiter tests', isAnswerable: false, ...extra })
+
+test('a question waits on you: the Dashboard card shows each question`s header, text and options with their descriptions, a pick for one answer, checkboxes for several, Other… for each; Open goes to the card, pinned above the agent`s tabs', () => {
+  const p = page()
+  p.load(runState({ pending: [question([Q_STORE, Q_ENVS])], needs: { tone: 'attention', kind: 'blocked', text: 'Orchestrator asks 2 questions', agentId: 'main' } }))
+  const dash = p.view('Dashboard()')
+  const card = find(dash, 'needs')[0]
+  const text = textOf(card)
+  assert.match(text, /^Orchestrator asks you 2 questions/)
+  for (const words of ['Store', 'Which store should the limiter use?', 'Redis (Recommended)', 'Shared across instances.', 'In-memory', 'Per process.', 'Which environments use Redis?', 'pick any', 'Production', 'Behind the load balancer.']) assert.ok(text.includes(words), words)
+  // one card: the mod's banner about the same agent would say it again
+  assert.equal(find(dash, 'banner').length, 0)
+  assert.doesNotMatch(textOf(dash), /AskUserQuestion/)
+  assert.deepEqual(find(card, 'q-opt').map(o => [o.t, o.p.role]), [['button', 'radio'], ['button', 'radio'], ['button', 'checkbox'], ['button', 'checkbox'], ['button', 'checkbox']])
+  assert.deepEqual(find(card, 'q-other-input').map(i => i.p.placeholder), ['Other…', 'Other…'])
+  assert.equal(byText(card, 'btn', 'Submit answers').p.disabled, true, 'nothing picked yet')
+  assert.match(textOf(find(dash, 'kpi')[3]), /Orchestrator asks you 2 questions/)
+  // Open: the agent page, brought to its card
+  const open = byText(card, 'banner-btn', 'Open')
+  assert.equal(open.p.href, '#/agent/main')
+  click(open)
+  assert.deepEqual({ ...p.run('ui.scrollTo') }, { id: `pending-${CALL}`, on: 'agent:main', until: NOW + 4000 })
+  p.run('route = { name: "agent", id: "main", key: "agent:main" }')
+  for (const tab of ['diffs', 'talk']) {
+    p.run(`ui.tabs.set("main", "${tab}")`)
+    const kids = p.view('AgentPage()').c.filter(Boolean)
+    const at = kids.findIndex(k => k.p.class === 'needs-stack')
+    assert.ok(at > 0 && kids[at + 1].p.class === 'tabs-wrap', `the card sits right above the tabs (${tab})`)
+    assert.equal(kids[at].c.filter(Boolean)[0].p.id, `pending-${CALL}`)
+    assert.match(textOf(find(kids, 'needs-jump')[0]), /Orchestrator asks you 2 questions Answer/)
+  }
+})
+
+test('one question with one answer sends on a click: the answer names the page`s id and the call; the ack`s outcome shows, and stays a few seconds once the question resolved', async () => {
+  const p = page()
+  p.load(runState({ pending: [question([Q_STORE])] }))
+  const card = () => find(p.view('NeedsYou()'), 'needs')[0]
+  assert.ok(find(card(), 'q-opt').every(o => o.t === 'button' && o.p.role == null), 'plain buttons: a click answers')
+  click(find(card(), 'q-opt')[0])
+  await settle()
+  const [cmd] = p.commands()
+  assert.match(cmd.id, /^[A-Za-z0-9_-]{1,40}$/)
+  assert.deepEqual(cmd, { cmd: 'answer', id: cmd.id, callId: CALL, answers: { 'Which store should the limiter use?': 'Redis (Recommended)' } })
+  // waiting on the ack: the pick shows, nothing more can be sent
+  assert.match(textOf(card()), /Sending your answer…/)
+  assert.ok(find(card(), 'q-opt').every(o => o.p.disabled === true))
+  assert.ok(find(card(), 'q-opt')[0].p.class.includes('on'))
+  // the mod answered the call: the item left the state, its ack and the thread say how
+  const resolved = runState({
+    acks: [{ id: cmd.id, ok: true, status: 'answered', text: 'Claude carries on', at: NOW }],
+    messages: [
+      { id: 'm1', at: NOW, from: 'main', to: 'you', kind: 'question', text: 'Which store should the limiter use?', callId: CALL },
+      { id: 'm2', at: NOW, from: 'you', to: 'main', kind: 'choice', text: 'You answered: Redis (Recommended)', callId: CALL, ackId: cmd.id },
+    ],
+  })
+  p.load(resolved)
+  assert.match(textOf(p.view('NeedsYou()')), /^Answered: Claude carries on now Orchestrator asked: Which store should the limiter use\?\s+→\s+Redis \(Recommended\)$/)
+  p.setNow(NOW + 13_000)
+  p.load(resolved)
+  assert.equal(find(p.view('NeedsYou()'), 'needs').length, 0, 'gone after a few seconds')
+})
+
+test('several questions take a Submit: checked labels join with ", " in their order, Other text last; Other replaces a pick; a refused answer says why and can go again', async () => {
+  const p = page()
+  p.load(runState({ pending: [question([Q_STORE, Q_ENVS])] }))
+  const card = () => find(p.view('NeedsYou()'), 'needs')[0]
+  click(byText(card(), 'q-opt', 'In-memory'))
+  click(byText(card(), 'q-opt', 'Staging'))
+  click(byText(card(), 'q-opt', 'Production'))
+  find(card(), 'q-other-input')[1].p.onInput({ target: { value: 'Canary' } })
+  assert.equal(byText(card(), 'btn', 'Submit answers').p.disabled, false)
+  // words of your own for the first question: its pick lets go
+  find(card(), 'q-other-input')[0].p.onInput({ target: { value: 'Postgres' } })
+  assert.equal(find(card(), 'q-opt').filter(o => o.p.class.includes('on')).length, 2)
+  click(byText(card(), 'btn', 'Submit answers'))
+  await settle()
+  const [cmd] = p.commands()
+  assert.deepEqual(cmd.answers, { 'Which store should the limiter use?': 'Postgres', 'Which environments use Redis?': 'Production, Staging, Canary' })
+  // refused while the question still waits: the card says why and takes an answer again
+  p.load(runState({ pending: [question([Q_STORE, Q_ENVS])], acks: [{ id: cmd.id, ok: false, status: 'failed', text: 'Not a question it asked: Which', at: NOW }] }))
+  assert.match(textOf(card()), /Not answered: not a question it asked: Which/)
+  assert.equal(byText(card(), 'btn', 'Submit answers').p.disabled, false)
+  // too late: Claude Code had the answer first, which is no failure of yours
+  p.load(runState({ pending: [question([Q_STORE, Q_ENVS])], acks: [{ id: cmd.id, ok: false, status: 'failed', text: 'Already answered in Claude Code', at: NOW }] }))
+  assert.match(textOf(card()), /Already answered in Claude Code/)
+  assert.doesNotMatch(textOf(card()), /Not answered/)
+})
+
+test('a permission shows its exact command or path and description, answered in Claude Code; a question the mod cannot take shows its options read-only', () => {
+  const p = page()
+  p.load(runState({ pending: [permission(), permission({ id: 'toolu_perm2', agentId: 'a84fbb5d74d874189', tool: 'Edit', command: '', path: 'src/retry/backoff-delays.js', description: '', at: NOW - 10_000 })] }))
+  const run = textOf(p.view(`PendingCard(S.pending[0], 'agent')`))
+  assert.match(run, /^Map the repository needs your OK to run/)
+  assert.match(run, /npm test -- rateLimit Run the rate limiter tests Allow or deny it in Claude Code\.$/)
+  const edit = textOf(p.view(`PendingCard(S.pending[1], 'agent')`))
+  assert.match(edit, /^Add jitter needs your OK to edit/)
+  assert.match(edit, /src\/retry\/ backoff-delays\.js/)
+  assert.doesNotMatch(run + edit, /AskUserQuestion/)
+  // the Dashboard: the oldest as its card, the next as a row
+  const dash = p.view('NeedsYou()')
+  assert.equal(find(dash, 'needs').length, 1)
+  assert.match(flat(textOf(find(dash, 'needs-row')[0])), /^Add jitter needs your OK to edit src\/retry\/backoff-delays\.js/)
+  // after a reload of the mod a question cannot be answered here: shown, read-only
+  p.load(runState({ pending: [question([Q_STORE], { isAnswerable: false })] }))
+  const ro = p.view(`PendingCard(S.pending[0], 'dash')`)
+  assert.equal(findAll(ro, v => v.t === 'button' || v.t === 'input').length, 0)
+  assert.deepEqual(find(ro, 'q-opt').map(o => o.t), ['div', 'div'])
+  assert.match(textOf(ro), /Redis \(Recommended\) Shared across instances\. In-memory Per process\. Answer it in Claude Code\.$/)
+})
+
+test('Talk: the Orchestrator`s answers read as Markdown; a cut one gets Show more, which fetches /message/<id> once; questions and choices read in the thread', async () => {
+  const p = page({ messages: { 'm-cut': '**Done.** Here is all of it.\n\n- one\n- two\n- three' } })
+  p.load(runState({
+    messages: [
+      { id: 'm-q', at: NOW - 5 * MIN, from: 'main', to: 'you', kind: 'question', text: 'Per user or per key?', callId: 'toolu_x' },
+      { id: 'm-c', at: NOW - 4 * MIN, from: 'you', to: 'main', kind: 'choice', text: 'You answered: Per user', callId: 'toolu_x' },
+      { id: 'm-a', at: NOW - 3 * MIN, from: 'main', to: 'you', kind: 'answer', text: 'Done: **/health** skips the limiter.' },
+      { id: 'm-cut', at: NOW - MIN, from: 'main', to: 'you', kind: 'answer', text: '**Done.** Here is…', isCut: true },
+    ],
+  }))
+  const talk = () => p.view('TalkTab(IX.byId.get("main"))')
+  assert.match(textOf(byText(talk(), 'msg', 'Per user or per key?')), /^Orchestrator asked you 5m Per user or per key\?$/)
+  assert.match(textOf(find(talk(), 'kind-choice')[0]), /^You 4m YO You answered: Per user$/)
+  const answer = byText(talk(), 'msg', 'skips the limiter')
+  assert.match(textOf(answer), /^Orchestrator replied 3m/)
+  assert.equal(find(answer, 'md').length, 1)
+  assert.equal(findAll(answer, v => v.t === 'strong').length, 1)
+  assert.equal(find(answer, 'msg-more').length, 0)
+  // the cut one: Show more fetches the rest (when the page draws it open), the thread stays where it is
+  click(byText(talk(), 'msg-more', 'Show more'))
+  assert.equal(p.run('ui.holdThread'), true)
+  assert.match(textOf(byText(talk(), 'msg', 'Here is')), /Loading the rest…$/)
+  await settle()
+  const fetched = () => p.calls.filter(c => c.url.startsWith('/message/')).map(c => c.url)
+  assert.deepEqual(fetched(), ['/message/m-cut?t=test-token'])
+  const opened = byText(talk(), 'msg', 'Here is all of it')
+  assert.match(textOf(opened), /one two three Show less$/)
+  // closed and opened again: from the cache
+  click(byText(talk(), 'msg-more', 'Show less'))
+  click(byText(talk(), 'msg-more', 'Show more'))
+  await settle()
+  assert.equal(fetched().length, 1)
+})
+
+test('each message you send shows what came of it, by the ack of the id it went with: Sending…, Queued, Delivered, Not delivered, or a word when none comes', async () => {
+  const p = page()
+  p.load(runState())
+  const send = async (id, text) => {
+    p.run(`ui.drafts.set(${JSON.stringify(id)}, ${JSON.stringify(text)})`)
+    await p.run(`sendChat(IX.byId.get(${JSON.stringify(id)}))`)
+    return p.commands().pop()
+  }
+  const notes = id => find(p.view(`TalkTab(IX.byId.get(${JSON.stringify(id)}))`), 'msg-status').map(textOf)
+  const toMain = await send('main', 'And the changelog?')
+  assert.match(toMain.id, /^[A-Za-z0-9_-]{1,40}$/)
+  assert.deepEqual(toMain, { cmd: 'chat', id: toMain.id, agentId: 'main', text: 'And the changelog?' })
+  assert.deepEqual(notes('main'), ['Sending…'])
+  assert.equal(p.run('ui.drafts.has("main")'), false, 'the box is cleared')
+  // queued for the Orchestrator, and recorded under the command's id: one bubble, its status under it
+  const mine = { id: 'm1', at: NOW, from: 'you', to: 'main', kind: 'chat', text: 'And the changelog?', ackId: toMain.id }
+  const queued = { id: toMain.id, ok: true, status: 'queued', text: 'Claude reads it when it finishes its current turn', at: NOW }
+  p.load(runState({ messages: [mine], acks: [queued] }))
+  assert.deepEqual(notes('main'), ['Queued: Claude reads it when it finishes its current turn'])
+  assert.equal(find(p.view('TalkTab(IX.byId.get("main"))'), 'bubble').length, 1)
+  // once it answered, "Queued" is old news
+  p.load(runState({ messages: [mine, { id: 'm2', at: NOW + 1000, from: 'main', to: 'you', kind: 'answer', text: 'In 2.4.0.' }], acks: [queued] }))
+  assert.deepEqual(notes('main'), [])
+  // an agent at work reads it at its next step
+  const toAgent = await send('a84fbb5d74d874189', 'Keep it synchronous.')
+  p.load(runState({ messages: [{ id: 'm3', at: NOW, from: 'you', to: 'a84fbb5d74d874189', kind: 'chat', text: 'Keep it synchronous.', ackId: toAgent.id }], acks: [{ id: toAgent.id, ok: true, status: 'delivered', text: 'It reads it at its next step', at: NOW }] }))
+  assert.deepEqual(notes('a84fbb5d74d874189'), ['Delivered: it reads it at its next step'])
+  // refused: never in the thread; the send says why
+  const refused = await send('ac1c53e313ef213a1', 'Hello?')
+  p.load(runState({ acks: [{ id: refused.id, ok: false, status: 'failed', text: 'Map the repository takes no messages from here', at: NOW }] }))
+  assert.deepEqual(notes('ac1c53e313ef213a1'), ['Not delivered: Map the repository takes no messages from here'])
+  // no ack at all: after a while the page says so
+  await send('ac1c53e313ef213a1', 'Anyone there?')
+  assert.deepEqual(notes('ac1c53e313ef213a1').slice(-1), ['Sending…'])
+  p.setNow(NOW + 21_000)
+  assert.deepEqual(notes('ac1c53e313ef213a1').slice(-1), ['Sent, but Claude Code hasn\'t confirmed it'])
+})
+
+test('activity reads "asked you: <question>" for a question, never "used AskUserQuestion"', () => {
+  const p = page()
+  p.load(runState({ activity: [{ at: NOW - MIN, agent: 'main', tool: 'AskUserQuestion', target: 'Which store should the limiter use?', ok: null, ms: null }] }))
+  const row = flat(p.text('ActivityRow(S.activity[0])'))
+  assert.match(row, /^Orchestrator asked you: Which store should the limiter use\?/)
+  assert.doesNotMatch(row, /AskUserQuestion|used/)
+})
+
+test('Plan: a step opens on its agents and the ones they started, each with its line, checklist, last three calls, files, folded result, a question to answer right there, and links', () => {
+  const p = page()
+  const state = runState()
+  Object.assign(state.plan.steps[1], { status: 'active', agents: ['a84fbb5d74d874189'] })
+  Object.assign(state.agents[2], {
+    status: 'done', endedAt: NOW - MIN, now: 'Edit src/retry/backoff-delays.js',
+    checklist: { items: [{ text: 'Add the option', status: 'done' }, { text: 'Test it', status: 'active' }], done: 1, total: 2 },
+    files: ['src/retry/backoff-delays.js', 'test/backoff.test.js'],
+    result: `${'A long report line.\n'.repeat(8)}The end.`,
+  })
+  state.agents.push(agent('a5', 'Jitter helper', { parent: 'a84fbb5d74d874189', type: 'Explore', now: 'Read src/retry/index.js' }))
+  state.activity = [1, 2, 3, 4].map(i => ({ at: NOW - (10 - i) * MIN, agent: 'a84fbb5d74d874189', tool: 'Edit', target: `src/file${i}.js`, ok: true, ms: 12 }))
+  state.pending = [question([Q_STORE], { agentId: 'a5' })]
+  p.load(state)
+  const rows = () => findAll(p.view('PlanPage()'), v => v.t === 'button' && /^step /.test(v.p.class || ''))
+  assert.equal(rows().length, 5)
+  assert.equal(rows()[1].p['aria-expanded'], 'false')
+  assert.match(textOf(rows()[1]), /needs you/)
+  click(rows()[1])
+  assert.equal(rows()[1].p['aria-expanded'], 'true')
+  const [lead, helper] = find(find(p.view('PlanPage()'), 'step-body')[0], 'sa')
+  assert.match(textOf(lead), /^Add jitter general-purpose done Edit src\/retry\/backoff-delays\.js 1\/2/)
+  assert.deepEqual(find(lead, 'act-line').map(r => /file\d/.exec(textOf(r))[0]), ['file4', 'file3', 'file2'])
+  assert.match(textOf(lead), /backoff-delays\.js backoff\.test\.js/)
+  assert.ok(find(lead, 'sa-md')[0].p.class.includes('clamped'))
+  assert.match(textOf(lead), /Show the whole result/)
+  assert.deepEqual(find(lead, 'sec-link').map(a => [textOf(a), a.p.href]), [['Open agent', '#/agent/a84fbb5d74d874189'], ['Talk', '#/agent/a84fbb5d74d874189']])
+  assert.match(textOf(helper), /^Jitter helper Explore · started by Add jitter running Read src\/retry\/index\.js/)
+  assert.ok(helper.p.class.includes('sub'))
+  assert.ok(find(find(helper, 'needs')[0], 'q-opt').every(o => o.t === 'button'), 'answerable right there')
+  // Talk →: the agent page at Talk
+  click(find(helper, 'sec-link')[1])
+  assert.equal(p.run('ui.tabs.get("a5")'), 'talk')
+  assert.deepEqual({ ...p.run('ui.scrollTo') }, { id: 'agent-tabs', on: 'agent:a5', until: NOW + 4000 })
+})
+
+test('a step the Orchestrator does itself shows its checklist item and what it just did; #/plan/<key> opens a step and scrolls to it; the goal bar`s segments open their steps', () => {
+  const p = page({ hash: '#/plan/task%3A4' })
+  const state = runState()
+  state.plan.steps[3].status = 'active'
+  state.agents[0].checklist.items[3] = { text: 'Test the jitter option', status: 'active', doing: 'Running the tests' }
+  state.activity = [{ at: NOW - MIN, agent: 'main', tool: 'Bash', target: 'npm test', ok: null, ms: null }]
+  p.load(state)
+  p.run('followRoute()')
+  assert.equal(p.run('ui.open.get("step|task:4")'), true)
+  assert.equal(p.run('ui.scrollTo.id'), 'step-task:4')
+  const step = byText(p.view('PlanPage()'), 'step-item', 'Test the jitter option')
+  assert.equal(step.p.id, 'step-task:4')
+  assert.match(textOf(find(step, 'sa')[0]), /^Orchestrator does this step itself running Test the jitter option Running the tests Bash npm test/)
+  const segs = find(p.view('GoalCard()'), 'seg')
+  assert.ok(segs.every(s => s.t === 'a'))
+  assert.deepEqual(segs.map(s => s.p.href), ['#/plan/task%3A1', '#/plan/task%3A2', '#/plan/task%3A3', '#/plan/task%3A4', '#/plan/task%3A5'])
+})
+
+test('Review asks first ("It runs when Claude is free"), then shows what came of it', async () => {
+  const p = page()
+  p.load(runState())
+  const review = () => p.view(`ReviewButton('changes', 'Review the diff')`)
+  click(byText(review(), 'btn', 'Ask for review'))
+  assert.equal(p.commands().length, 0, 'nothing is sent before you say yes')
+  assert.equal(textOf(find(review(), 'confirm')[0]), 'Ask Claude to review these changes? It runs when Claude is free. Cancel Ask Claude')
+  click(byText(review(), 'btn', 'Ask Claude'))
+  await settle()
+  const [cmd] = p.commands()
+  assert.deepEqual(cmd, { cmd: 'review', id: cmd.id, text: 'Review the diff' })
+  assert.match(textOf(review()), /^Sending…/)
+  p.load(runState({ acks: [{ id: cmd.id, ok: true, status: 'queued', text: 'Claude reviews them when it is free', at: NOW }] }))
+  assert.match(textOf(review()), /^Queued: Claude reviews them when it is free/)
 })

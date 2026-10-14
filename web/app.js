@@ -279,15 +279,17 @@ const IC = {
   listChecks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
   sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
 };
 
 function icon(name, cls) {
   return h('svg', { class: cls ? `ic ${cls}` : 'ic', viewBox: '0 0 24 24', 'aria-hidden': 'true', html: IC[name] || IC.circle });
 }
 
-const TOOL_ICON = { Read: 'eye', Edit: 'pencil', MultiEdit: 'pencil', NotebookEdit: 'pencil', Write: 'filePlus', Bash: 'terminal', PowerShell: 'terminal', Grep: 'search', Glob: 'folder', WebFetch: 'globe', WebSearch: 'globe', Agent: 'bot', Task: 'bot', SendMessage: 'message', TodoWrite: 'listChecks', TaskCreate: 'listChecks', TaskUpdate: 'listChecks', TaskGet: 'listChecks', TaskList: 'listChecks', ToolSearch: 'search', Skill: 'sparkles' };
-// A task-board call's target is its task's subject ("Add jitter → done" for an update), a tool search's the tools it loads.
-const TOOL_VERB = { Read: 'read', Edit: 'edited', MultiEdit: 'edited', NotebookEdit: 'edited', Write: 'wrote', Bash: 'ran', PowerShell: 'ran', Grep: 'searched', Glob: 'listed', WebFetch: 'fetched', WebSearch: 'searched the web for', Agent: 'started', Task: 'started', SendMessage: 'messaged', TodoWrite: 'updated its checklist', TaskCreate: 'added the step', TaskUpdate: 'updated', TaskGet: 'read', TaskList: 'read', ToolSearch: 'loaded', Skill: 'used' };
+const TOOL_ICON = { Read: 'eye', Edit: 'pencil', MultiEdit: 'pencil', NotebookEdit: 'pencil', Write: 'filePlus', Bash: 'terminal', PowerShell: 'terminal', Grep: 'search', Glob: 'folder', WebFetch: 'globe', WebSearch: 'globe', Agent: 'bot', Task: 'bot', SendMessage: 'message', TodoWrite: 'listChecks', TaskCreate: 'listChecks', TaskUpdate: 'listChecks', TaskGet: 'listChecks', TaskList: 'listChecks', ToolSearch: 'search', Skill: 'sparkles', AskUserQuestion: 'help' };
+// A task-board call's target is its task's subject ("Add jitter → done" for an update), a tool search's the tools it loads, a question's its first question.
+const TOOL_VERB = { Read: 'read', Edit: 'edited', MultiEdit: 'edited', NotebookEdit: 'edited', Write: 'wrote', Bash: 'ran', PowerShell: 'ran', Grep: 'searched', Glob: 'listed', WebFetch: 'fetched', WebSearch: 'searched the web for', Agent: 'started', Task: 'started', SendMessage: 'messaged', TodoWrite: 'updated its checklist', TaskCreate: 'added the step', TaskUpdate: 'updated', TaskGet: 'read', TaskList: 'read', ToolSearch: 'loaded', Skill: 'used', AskUserQuestion: 'asked you:' };
 const PATHY = new Set(['Read', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write', 'Glob', 'Grep', 'Bash', 'PowerShell']);
 
 // ==================================================================== avatars
@@ -381,6 +383,32 @@ function buildIndex(s) {
     editsByPath: group(s.edits, e => e.path),
     actBy: group(s.activity, x => x.agent),
     talk,
+    pendingBy: group(s.pending, p => p.agentId),
+    acks: new Map(s.acks.map(k => [k.id, k])),
+  };
+}
+
+/** Questions first (the deck can answer them), then permissions; the oldest first in each. */
+const byUrgency = (x, y) => (x.kind === 'question' ? 0 : 1) - (y.kind === 'question' ? 0 : 1) || (x.at || 0) - (y.at || 0);
+
+/** A pending item as the page reads it: a question's questions and options always lists, an answer offered only when the mod says it can take one. */
+function normalizePending(p) {
+  const arr = v => (Array.isArray(v) ? v : []);
+  const str = v => (typeof v === 'string' ? v : '');
+  const questions = arr(p.questions).filter(q => q && typeof q.question === 'string').map(q => ({
+    question: q.question,
+    header: str(q.header),
+    multiSelect: q.multiSelect === true,
+    options: arr(q.options).filter(o => o && typeof o.label === 'string' && o.label.trim()).map(o => ({ label: o.label, description: str(o.description) })),
+  }));
+  return {
+    ...p,
+    kind: p.kind === 'permission' ? 'permission' : 'question',
+    tool: str(p.tool),
+    at: typeof p.at === 'number' ? p.at : 0,
+    questions,
+    command: str(p.command), path: str(p.path), description: str(p.description),
+    isAnswerable: p.isAnswerable === true && p.kind !== 'permission' && questions.length > 0,
   };
 }
 
@@ -399,6 +427,8 @@ function normalize(s) {
   }
   s.messages = arr(s.messages); s.activity = arr(s.activity); s.files = arr(s.files);
   s.edits = arr(s.edits); s.changes = arr(s.changes); s.commits = arr(s.commits);
+  s.pending = arr(s.pending).filter(p => p && typeof p.id === 'string' && p.id && typeof p.agentId === 'string').map(normalizePending).sort(byUrgency);
+  s.acks = arr(s.acks).filter(k => k && typeof k.id === 'string' && k.id);
   s.plan = s.plan && Array.isArray(s.plan.steps) ? s.plan : { source: 'none', steps: [] };
   s.summary = s.summary || {};
   s.needs = s.needs || { tone: 'quiet', kind: 'quiet', text: '' };
@@ -411,6 +441,7 @@ function apply(next) {
   if (S && S.session && next.session && S.session.id && next.session.id === S.session.id && next.now < S.now) return;
   S = normalize(next);
   IX = buildIndex(S);
+  noteResolved();
   invalidate();
 }
 
@@ -495,6 +526,75 @@ async function command(body) {
   return data;
 }
 
+// ======================================================================= acks
+// Each command carries an id of the page's own; the mod writes what came of
+// it to the state's `acks` under that id. A send shows "Sending…" until then.
+
+let cmdSeq = 0;
+/** A fresh command id: [A-Za-z0-9_-], under 40 characters. */
+const newCmdId = kind => `${kind}-${Date.now().toString(36)}-${(++cmdSeq).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+/** How long a send waits for its ack before saying none came. */
+const ACK_WAIT = 20000;
+/** How long a question the deck answered (or saw answered) stays on show once it resolved. */
+const KEEP = 12000;
+
+/** "It reads it…" reads "it reads it…" after a colon; a name ("Claude reads it…") keeps its capital. */
+const softText = t => String(t || '').trim().replace(/^(It|Its|The|This|That|They|There|A|An|No|Not|Nothing)\b/, w => w.toLowerCase());
+/** `word: text`, unless the text starts with that word already ("Answered in Claude Code"). */
+const lead = (word, text) => (text.toLowerCase().startsWith(word.toLowerCase()) ? text[0].toUpperCase() + text.slice(1) : `${word}: ${text}`);
+
+/**
+ * What an ack says, as a status line: its tone (a status hue), an icon and
+ * the words. `what` is the command's kind: a refused answer reads "Not
+ * answered", a refused message "Not delivered".
+ */
+function ackState(ack, what = 'chat') {
+  const text = softText(ack.text);
+  if (!ack.ok || ack.status === 'failed') {
+    // an answer that came too late: the question was answered all the same ("Already answered in Claude Code")
+    if (what === 'answer' && /answered/i.test(text)) return { tone: 'idle', icon: 'check', text: text[0].toUpperCase() + text.slice(1) };
+    return { tone: 'fail', icon: 'x', text: lead(what === 'answer' ? 'Not answered' : 'Not delivered', text || 'Claude Code refused it') };
+  }
+  if (ack.status === 'answered') return { tone: 'done', icon: 'check', text: lead('Answered', text || 'Claude carries on') };
+  if (ack.status === 'delivered') return { tone: 'done', icon: 'check', text: lead('Delivered', text || 'it reads it at its next step') };
+  return { tone: 'wait', icon: 'clock', text: lead('Queued', text || (what === 'review' ? 'it runs when Claude is free' : 'Claude reads it when it finishes its current turn')) };
+}
+
+/** A send's status line, from its ack, its own error, or the time it has waited. */
+function sendState(sent, what) {
+  const ack = IX && IX.acks.get(sent.id);
+  if (ack) return { ...ackState(ack, what), ack };
+  if (sent.state === 'error') return { tone: 'fail', icon: 'x', text: sent.error || 'Could not send it.' };
+  if (Date.now() - sent.at < ACK_WAIT) return { tone: 'run', glyph: 'active', text: what === 'answer' ? 'Sending your answer…' : 'Sending…', busy: true };
+  return { tone: 'idle', icon: 'clock', text: 'Sent, but Claude Code hasn\'t confirmed it', late: true };
+}
+
+function StatusNote(st, cls) {
+  return h('span', { class: `status-note is-${st.tone}${cls ? ` ${cls}` : ''}`, role: 'status' },
+    st.glyph ? Glyph(st.glyph, 13) : h('span', { class: `status-ic hue-${st.tone}` }, icon(st.icon)),
+    h('span', { class: 'status-text' }, st.text));
+}
+
+// ============================================================ whole messages
+// A message the state cut short ("isCut") is whole at /message/<id>, fetched
+// the first time someone asks for the rest; cached.
+
+const fullTexts = new Map();
+
+function fullTextOf(id) {
+  let t = fullTexts.get(id);
+  if (t) return t;
+  t = { status: 'loading', text: '', error: '' };
+  fullTexts.set(id, t);
+  fetch(`/message/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
+    .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'The rest is not on disk yet.' : `The server answered ${r.status}.`))))
+    .then(text => { t.status = 'ok'; t.text = text; })
+    .catch(e => { t.status = 'error'; t.error = e.message || 'Could not load the rest.'; })
+    // the thread keeps its place: the reader goes on from where the cut was
+    .finally(() => { ui.holdThread = true; invalidate(); });
+  return t;
+}
+
 // ==================================================================== patches
 // Fetched lazily from /patch/<id> the first time a view shows them; cached.
 
@@ -544,13 +644,15 @@ function parsePatch(text) {
 function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } });
   if (parts[0] === 'org') return { name: 'org', key: 'org' };
-  if (parts[0] === 'plan') return { name: 'plan', key: 'plan' };
+  // #/plan/<key> opens the Plan with that step open, scrolled into view
+  if (parts[0] === 'plan') return { name: 'plan', key: 'plan', step: parts[1] || null };
   if (parts[0] === 'changes') return { name: 'changes', key: 'changes' };
   if (parts[0] === 'agent' && parts[1]) return { name: 'agent', id: parts[1], key: `agent:${parts[1]}` };
   return { name: 'dash', key: 'dash' };
 }
 let route = parseRoute();
 const agentHref = id => `#/agent/${encodeURIComponent(id)}`;
+const stepHref = key => `#/plan/${encodeURIComponent(key)}`;
 
 // ================================================================== UI state
 // Lives across renders and routes; never reset by a state update.
@@ -561,11 +663,34 @@ const ui = {
   open: new Map(),         // disclosure key -> open
   drafts: new Map(),       // agent id -> half-typed message
   inputs: new Map(),       // agent id -> its textarea
-  sends: new Map(),        // agent id -> { status, text, at }
-  review: new Map(),       // scope -> { status, text, at }
+  sends: new Map(),        // agent id -> { status, text, at }: the POST in flight, or its error
+  outbox: new Map(),       // agent id -> [{ id, text, at }]: what you sent it from here, matched to acks by id
+  calls: new Map(),        // pending call id -> { item, sel, other, touched, sent, gone }: a question being answered here
+  review: new Map(),       // scope -> { status, id, text, at }
   scroll: new Map(),       // route key -> scrollTop
+  scrollTo: null,          // { id, on, until }: an element to bring into view once route `on` shows it (Open, #/plan/<key>)
+  holdThread: false,       // the next render leaves the chat thread where it is ("Show more")
+  pinThread: false,        // the next render takes the chat thread to its newest message (a send)
   focusTab: null,
 };
+
+/**
+ * Brings element `id` into view once the page shows route `on` (a link's
+ * click runs before its hashchange) and the element has rendered (the state
+ * may still be on its way).
+ */
+function scrollSoon(id, on = route.key) {
+  ui.scrollTo = { id, on, until: Date.now() + 4000 };
+  invalidate();
+}
+
+/** What a route asks of the page beyond showing it: #/plan/<key> opens that step and scrolls to it. */
+function followRoute() {
+  if (route.name === 'plan' && route.step) {
+    ui.open.set(`step|${route.step}`, true);
+    scrollSoon(`step-${route.step}`);
+  }
+}
 
 /** A disclosure's state; its default is fixed the first time it is seen so live updates never flip it. */
 function isOpen(key, byDefault) {
@@ -638,9 +763,14 @@ function AgentLink(id, size = 16) {
   return h('a', { class: 'who who-link', href: agentHref(id) }, Avatar(a, size), a.label);
 }
 
+/** The plan's steps as one bar, a segment each; a segment opens its step on the Plan page. */
 function ProgressBar(steps) {
-  return h('div', { class: 'segbar', role: 'img', 'aria-label': `${steps.filter(s => s.status === 'done').length} of ${steps.length} done` },
-    steps.map((s, i) => h('span', { key: s.key || i, class: `seg seg-${s.status}` })));
+  return h('nav', { class: 'segbar', 'aria-label': `Plan: ${steps.filter(s => s.status === 'done').length} of ${steps.length} steps done` },
+    steps.map((s, i) => h('a', {
+      key: stepKeyOf(s, i), class: `seg seg-${s.status}`, href: stepHref(stepKeyOf(s, i)),
+      title: `Step ${i + 1}: ${s.text} (${(STEP_LABEL[s.status] || s.status).toLowerCase()})`,
+      'aria-label': `Step ${i + 1}, ${(STEP_LABEL[s.status] || s.status).toLowerCase()}: ${s.text}`,
+    })));
 }
 
 // ----------------------------------------------------------------- markdown
@@ -662,6 +792,16 @@ function inline(text) {
   if (at < text.length) out.push(text.slice(at));
   return out;
 }
+
+/** One line with `code` spans, as the mod words a wait ("Needs your OK to run `npm test`"): the spans read as code. */
+function Ticks(text) {
+  const parts = String(text || '').split(/`([^`\n]+)`/);
+  return parts.length === 1 ? parts[0] : parts.map((p, i) => (i % 2 ? h('code', { key: `t${i}`, class: 'code' }, p) : p));
+}
+const plainTicks = text => String(text || '').replace(/`([^`\n]+)`/g, '$1');
+
+/** What an agent waits on you for, after its name: the mod's words ("asks: …", "needs your OK to …"), or an older mod's ("allow Bash …"). */
+const waitWords = a => (/^(asks|needs|waits)\b/.test(a.needsYou || '') ? `${a.label} ${a.needsYou}` : `${a.label} waits on you: ${a.needsYou}`);
 
 function Markdown(text) {
   const blocks = [];
@@ -749,9 +889,270 @@ function FileGroup(path, edits, opts) {
         PatchView(e.id, opts.scope)))));
 }
 
+// ================================================================== needs you
+// What waits on you, from the state's `pending`: a question (AskUserQuestion)
+// you can answer right here when the mod can take the answer, or a permission
+// prompt, shown in full and answered in Claude Code. The same card shows on
+// the Dashboard, above the agent page's tabs and in its Plan step. Once its
+// call resolves the item leaves the state; a card you answered (or began to)
+// stays a few seconds more to say how it ended.
+
+const EDITS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
+
+/** What a permission is for: "run" a command, "edit" a path, "use WebFetch". */
+function permitOf(p) {
+  if (p.command) return { verb: 'run', what: p.command };
+  if (p.path) return { verb: EDITS.has(p.tool) ? 'edit' : p.tool === 'Write' ? 'write' : p.tool === 'Read' ? 'read' : `use ${p.tool || 'a tool'} on`, what: p.path };
+  return { verb: `use ${p.tool || 'a tool'}`, what: '' };
+}
+
+/** One line for a pending item: "Orchestrator asks: Which store?", "Tests needs your OK to run npm test". */
+function pendingText(p) {
+  const name = nameOf(p.agentId);
+  if (p.kind === 'question') {
+    const qs = p.questions;
+    return qs.length > 1 ? `${name} asks you ${qs.length} questions` : `${name} asks: ${qs.length ? qs[0].question : 'a question'}`;
+  }
+  const { verb, what } = permitOf(p);
+  const shown = firstLine(what, 90);
+  // the command or path as code (one with backticks of its own stays as it is)
+  return `${name} needs your OK to ${verb}${shown ? ` ${shown.includes('`') ? shown : `\`${shown}\``}` : ''}`;
+}
+
+/** The answering state of a question call: per question the option chosen (one) or the ones checked (many) and the Other text, and what was sent. */
+function callOf(p) {
+  let c = ui.calls.get(p.id);
+  if (!c || c.sel.length !== p.questions.length) {
+    c = { item: p, sel: p.questions.map(q => (q.multiSelect ? [] : null)), other: p.questions.map(() => ''), touched: false, sent: null, gone: 0 };
+    ui.calls.set(p.id, c);
+  }
+  c.item = p;
+  return c;
+}
+
+/** A question's answer as picked so far: the option, the options checked joined by ", " (in their order) with any Other text last, or the Other text; '' for none. */
+function answerOf(q, qi, c) {
+  const other = String(c.other[qi] || '').trim();
+  if (q.multiSelect) {
+    const labels = q.options.map(o => o.label).filter(l => c.sel[qi].includes(l));
+    if (other) labels.push(other);
+    return labels.join(', ');
+  }
+  return c.sel[qi] != null ? c.sel[qi] : other;
+}
+
+/** Notes each call that left the state, so a card answered here can say how it ended for a few seconds; forgets the rest. */
+function noteResolved() {
+  const live = new Set(S.pending.map(p => p.id));
+  const now = Date.now();
+  for (const [id, c] of ui.calls) {
+    if (live.has(id)) { c.gone = 0; continue; }
+    if (!c.touched && !c.sent) { ui.calls.delete(id); continue; }
+    if (!c.gone) { c.gone = now; setTimeout(invalidate, KEEP + 50); }
+    else if (now - c.gone > KEEP) ui.calls.delete(id);
+  }
+}
+
+/** The calls that resolved a moment ago after you answered or began to (for `agentId`, or all). */
+function resolvedCalls(agentId) {
+  const now = Date.now();
+  return [...ui.calls.values()].filter(c => c.gone && now - c.gone < KEEP && (c.touched || c.sent) && (!agentId || c.item.agentId === agentId));
+}
+
+async function sendAnswers(p, answers) {
+  const c = callOf(p);
+  const id = newCmdId('a');
+  c.touched = true;
+  c.sent = { id, state: 'sending', at: Date.now(), answers };
+  renderNow();
+  try {
+    await command({ cmd: 'answer', id, callId: p.id, answers });
+    if (c.sent && c.sent.id === id) c.sent.state = 'sent';
+    setTimeout(invalidate, ACK_WAIT + 50);
+  } catch (e) {
+    if (c.sent && c.sent.id === id) Object.assign(c.sent, { state: 'error', error: e.message });
+  }
+  renderNow();
+}
+
+/** Where a sent answer stands: null before any; busy while it waits on its ack; done once answered; else it can be tried again. */
+function answerState(c) {
+  if (!c.sent) return null;
+  const st = sendState(c.sent, 'answer');
+  return { ...st, done: !!(st.ack && st.tone === 'done') };
+}
+
+function Option(p, q, qi, o, oi, c, mode) {
+  const multi = q.multiSelect;
+  const on = multi ? c.sel[qi].includes(o.label) : c.sel[qi] === o.label;
+  const body = [
+    h('span', { class: multi ? 'q-box' : 'q-dot', 'aria-hidden': 'true' }, multi && on ? icon('check') : null),
+    h('span', { class: 'q-opt-body' },
+      h('span', { class: 'q-opt-label' }, o.label),
+      o.description && h('span', { class: 'q-opt-desc' }, o.description)),
+  ];
+  if (mode.readOnly) return h('div', { key: `o${oi}:${o.label}`, class: 'q-opt ro' }, body);
+  const pick = () => {
+    c.touched = true;
+    if (multi) c.sel[qi] = on ? c.sel[qi].filter(l => l !== o.label) : c.sel[qi].concat(o.label);
+    else c.sel[qi] = o.label;
+    if (mode.instant) sendAnswers(p, { [q.question]: o.label });
+    else renderNow();
+  };
+  return h('button', {
+    key: `o${oi}:${o.label}`, type: 'button', class: `q-opt${on ? ' on' : ''}`, disabled: mode.locked,
+    role: mode.instant ? null : multi ? 'checkbox' : 'radio', 'aria-checked': mode.instant ? null : on ? 'true' : 'false',
+    onClick: pick,
+  }, body);
+}
+
+function OtherField(p, q, qi, c, mode) {
+  const text = String(c.other[qi] || '');
+  const chosen = text.trim() && (q.multiSelect || c.sel[qi] == null);
+  const sendOther = () => { if (text.trim()) sendAnswers(p, { [q.question]: text.trim().slice(0, 2000) }); };
+  return h('div', { class: `q-other${chosen ? ' on' : ''}` },
+    h('input', {
+      key: `other:${p.id}:${qi}`, class: 'q-other-input', type: 'text', maxlength: '2000', disabled: mode.locked,
+      placeholder: q.options.length ? 'Other…' : 'Your answer…', 'aria-label': `Your own answer to: ${q.question}`,
+      ref: el => { el.value = c.other[qi] || ''; },
+      onInput: e => {
+        c.touched = true;
+        c.other[qi] = e.target.value;
+        if (!q.multiSelect && e.target.value.trim()) c.sel[qi] = null;
+        renderNow();
+      },
+      onKeyDown: e => {
+        if (e.key !== 'Enter' || e.isComposing) return;
+        e.preventDefault();
+        if (mode.instant) sendOther();
+        else if (mode.submit) mode.submit();
+      },
+    }),
+    mode.instant && h('button', { class: 'btn btn-sm', type: 'button', disabled: mode.locked || !text.trim(), onClick: sendOther }, 'Send'));
+}
+
+function QuestionBlock(p, q, qi, c, mode) {
+  return h('div', { key: `q${qi}`, class: 'q', role: 'group', 'aria-label': q.question },
+    h('p', { class: 'q-head' },
+      q.header && h('span', { class: 'q-chip' }, q.header),
+      h('span', { class: 'q-text' }, q.question),
+      q.multiSelect && h('span', { class: 'q-hint' }, mode.readOnly ? 'several allowed' : 'pick any')),
+    q.options.length > 0 && h('div', { class: 'q-opts', role: mode.instant || mode.readOnly ? null : q.multiSelect ? 'group' : 'radiogroup', 'aria-label': q.question },
+      q.options.map((o, oi) => Option(p, q, qi, o, oi, c, mode))),
+    !mode.readOnly && OtherField(p, q, qi, c, mode));
+}
+
+/** A question card's form: one question with one answer sends on a click; several, or checkboxes, take a Submit. */
+function QuestionForm(p) {
+  const c = callOf(p);
+  const qs = p.questions;
+  const st = answerState(c);
+  const readOnly = !p.isAnswerable;
+  const instant = qs.length === 1 && !qs[0].multiSelect;
+  const locked = readOnly || !!(st && (st.busy || st.done));
+  const answers = {};
+  qs.forEach((q, qi) => { const v = answerOf(q, qi, c); if (v) answers[q.question] = v.slice(0, 2000); });
+  const ready = Object.keys(answers).length === qs.length;
+  const submit = () => { if (ready && !locked) sendAnswers(p, answers); };
+  const mode = { readOnly, instant, locked, submit };
+  return h('div', { class: 'qform' },
+    h('div', { class: `qform-qs${qs.length > 1 ? ' several' : ''}` }, qs.map((q, qi) => QuestionBlock(p, q, qi, c, mode))),
+    h('div', { class: 'qform-foot' },
+      st ? StatusNote(st) : h('span', { class: 'needs-where' }, readOnly ? 'Answer it in Claude Code.' : 'Or answer it in Claude Code.'),
+      !readOnly && !instant && h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: !ready || locked, onClick: submit }, qs.length > 1 ? 'Submit answers' : 'Submit')));
+}
+
+function PermissionBody(p) {
+  const { what } = permitOf(p);
+  return h('div', { class: 'permit' },
+    what && (p.command
+      ? h('pre', { class: 'permit-cmd' }, h('code', null, what))
+      : h('p', { class: 'permit-path' }, icon('file', 'fic'), PathText(what, 'grow'))),
+    p.description && h('p', { class: 'permit-desc' }, p.description),
+    h('p', { class: 'needs-where' }, 'Allow or deny it in Claude Code.'));
+}
+
+/** The card for one pending item; `where` is 'dash' (it gets Open), 'agent' or 'plan'. */
+function PendingCard(p, where) {
+  const question = p.kind === 'question';
+  const name = nameOf(p.agentId);
+  const title = question
+    ? p.questions.length > 1 ? `${name} asks you ${p.questions.length} questions` : `${name} asks you`
+    : `${name} needs your OK to ${permitOf(p).verb}`;
+  const open = () => scrollSoon(`pending-${p.id}`, `agent:${p.agentId}`);
+  return h('section', { key: `pend:${p.id}`, id: `pending-${p.id}`, class: `needs needs-${p.kind}`, 'aria-label': title },
+    h('div', { class: 'needs-head' },
+      icon(question ? 'help' : 'shield', 'needs-ic'),
+      h('p', { class: 'needs-title' }, title),
+      h('span', { class: 'needs-time', title: p.at ? new Date(p.at).toLocaleString() : '' }, ago(p.at)),
+      where === 'dash' && IX.byId.has(p.agentId) && h('a', { class: 'btn btn-sm banner-btn', href: agentHref(p.agentId), onClick: open }, 'Open', icon('arrowRight'))),
+    question ? QuestionForm(p) : PermissionBody(p));
+}
+
+/** A question's card once its call resolved: how it ended, and what was picked. */
+function ResolvedCard(c) {
+  const p = c.item;
+  const st = c.sent ? sendState(c.sent, 'answer') : null;
+  // the thread's word on it: "You answered: …", "Answered in Claude Code: …", "Auto-answered after idle: …"
+  const choice = (IX.talk.get(p.agentId) || []).filter(m => m.kind === 'choice' && (m.callId ? m.callId === p.id : m.at >= (p.at || 0) - 1000)).pop();
+  let line;
+  if (st && st.ack) line = st;
+  else if (choice) line = { tone: /^you answered/i.test(choice.text) ? 'done' : 'idle', icon: 'check', text: choice.text };
+  else if (st && st.busy) line = st;
+  else line = { tone: 'idle', icon: 'check', text: c.sent ? 'Answered' : 'Answered in Claude Code' };
+  // each question, with the answer sent from here when there was one
+  const said = c.sent ? c.sent.answers : {};
+  return h('section', { key: `pend:${p.id}`, id: `pending-${p.id}`, class: `needs needs-resolved tone-${line.tone}`, role: 'status' },
+    h('div', { class: 'needs-head' },
+      line.glyph ? Glyph(line.glyph, 16) : h('span', { class: `needs-ic hue-${line.tone}` }, icon(line.icon === 'x' ? 'circleX' : line.icon === 'clock' ? 'clock' : 'circleCheck')),
+      h('p', { class: 'needs-title' }, line.text),
+      h('span', { class: 'needs-time' }, ago(c.gone))),
+    p.questions.map((q, i) => h('p', { key: `r${i}`, class: 'needs-recap' },
+      h('span', { class: 'needs-recap-q' }, i === 0 ? `${nameOf(p.agentId)} asked: ${q.question}` : q.question),
+      said[q.question] && [h('span', { key: 'arrow', class: 'needs-recap-arrow', 'aria-hidden': 'true' }, ' → '), h('span', { key: 'a', class: 'needs-recap-a' }, said[q.question])])));
+}
+
+/** A pending item as one row: the Dashboard's "also waiting on you". */
+function PendingRow(p) {
+  const a = IX.byId.get(p.agentId);
+  return h('a', { key: `row:${p.id}`, class: 'needs-row', href: agentHref(p.agentId), onClick: () => scrollSoon(`pending-${p.id}`, `agent:${p.agentId}`) },
+    a ? Avatar(a, 20) : icon(p.kind === 'question' ? 'help' : 'shield'),
+    h('span', { class: 'needs-row-text', title: plainTicks(pendingText(p)) }, Ticks(pendingText(p))),
+    h('span', { class: 'needs-row-time' }, ago(p.at)),
+    icon('arrowRight', 'needs-row-go'));
+}
+
+/** An agent's pending cards (and the ones that just resolved), for its page and its Plan step. */
+function AgentNeeds(a, where) {
+  const list = IX.pendingBy.get(a.id) || [];
+  const done = resolvedCalls(a.id);
+  if (!list.length && !done.length) return null;
+  return h('div', { class: 'needs-stack', key: `needs:${a.id}` }, done.map(ResolvedCard), list.map(p => PendingCard(p, where)));
+}
+
 // ========================================================================= pages
 
 // ----------------------------------------------------------------- dashboard
+
+/**
+ * The top of the Dashboard: the first pending item as a card (questions
+ * first: you can answer them here), the others as rows, and the cards that
+ * just resolved; or, with nothing pending, the mod's one-line banner.
+ */
+function NeedsYou() {
+  const list = S.pending;
+  const done = resolvedCalls();
+  const n = S.needs;
+  // the banner says the same as a card about the same agent: leave it out then
+  const covered = n && n.agentId && list.some(p => p.agentId === n.agentId);
+  if (!list.length && !done.length) return NeedsBanner();
+  const [first, ...rest] = list;
+  return h('div', { class: 'needs-stack' },
+    done.map(ResolvedCard),
+    first && PendingCard(first, 'dash'),
+    rest.length > 0 && h('div', { key: 'more', class: 'card list needs-more', 'aria-label': 'Also waiting on you' }, rest.map(PendingRow)),
+    covered ? null : NeedsBanner());
+}
 
 function NeedsBanner() {
   const n = S.needs;
@@ -769,7 +1170,7 @@ function NeedsBanner() {
   return h('div', { class: `banner banner-${alert ? 'fail' : 'wait'}`, role: 'status' },
     icon(alert ? 'octagon' : 'hand', 'banner-ic'),
     h('div', { class: 'banner-body' },
-      h('p', { class: 'banner-title' }, n.text),
+      h('p', { class: 'banner-title' }, Ticks(n.text)),
       h('p', { class: 'banner-text' }, alert ? 'Open the agent to see what went wrong, then tell Claude how to go on.' : 'Answer it in the Claude Code conversation; the agent carries on once you do.')),
     target && h('a', { class: 'btn btn-sm banner-btn', href: target }, 'Open', icon('arrowRight')));
 }
@@ -869,7 +1270,7 @@ function RunCard(a) {
       Glyph(chip.glyph, 15),
       h('span', { class: 'run-chip-text', title: chip.text }, chip.text),
       chip.n && h('span', { class: 'run-chip-n' }, chip.n)),
-    h('p', { class: 'run-now', title: now || '' }, a.lastAction && a.lastAction.isLive && isRunning(a.status) ? h('span', { class: 'run-now-live' }, Dot('run', true)) : null, now || ' '),
+    h('p', { class: 'run-now', title: plainTicks(now) }, a.lastAction && a.lastAction.isLive && isRunning(a.status) ? h('span', { class: 'run-now-live' }, Dot('run', true)) : null, now ? Ticks(now) : ' '),
     h('div', { class: 'run-foot' },
       h('span', { class: 'run-model' }, modelLine(a)),
       h('span', { class: 'run-time' }, runTime(a))));
@@ -883,15 +1284,15 @@ function dashAgents() {
   return { shown: [list[0], ...list.slice(list.length - (cap - 1))], hidden: list.length - cap };
 }
 
-function Kpi(ic, value, label, desc, href) {
+function Kpi(ic, value, label, desc, href, onClick) {
   const inner = [
     h('div', { class: 'kpi-main' },
       h('p', { class: 'kpi-value' }, String(value)),
       h('p', { class: 'kpi-label' }, label),
-      h('p', { class: 'kpi-desc', title: desc }, desc)),
+      h('p', { class: 'kpi-desc', title: plainTicks(desc) }, Ticks(desc))),
     icon(ic, 'kpi-ic'),
   ];
-  return href ? h('a', { class: 'kpi', href }, inner) : h('div', { class: 'kpi' }, inner);
+  return href ? h('a', { class: 'kpi', href, onClick: onClick || null }, inner) : h('div', { class: 'kpi' }, inner);
 }
 
 /** How many of `list` are in each state, as their cards and pills show it: the same numbers on every page. */
@@ -908,17 +1309,22 @@ function Kpis() {
   const s = S.summary, steps = S.plan.steps;
   const done = steps.filter(x => x.status === 'done').length;
   const c = countsOf(S.agents);
-  const waiter = S.agents.find(a => a.needsYou) || S.agents.find(a => a.status === 'waiting');
+  // the agents that wait on you: an item pending (the Orchestrator's question too), or a wait the mod saw some other way
+  const waiting = new Set([...S.pending.map(p => p.agentId), ...S.agents.filter(a => a.status === 'waiting').map(a => a.id)]);
+  const first = S.pending[0];
+  const waiter = first ? null : S.agents.find(a => a.needsYou) || S.agents.find(a => a.status === 'waiting');
   const parts = [];
   if (s.tokens) parts.push(`${num(s.tokens)} tokens`);
   if (s.minutes != null) parts.push(s.minutes < 1 ? '<1 min' : `${s.minutes} min`);
   if (s.contextPercent != null) parts.push(`context ${Math.round(s.contextPercent)}%`);
   const stepLine = !steps.length ? 'No plan yet' : s.stepText ? `Now: ${s.stepText}` : done === steps.length ? 'All steps done' : 'No step in progress';
+  const waitLine = first ? pendingText(first) : waiter ? (waiter.needsYou ? waitWords(waiter) : `${waiter.label}: ${waiter.now || 'waiting'}`) : 'Nothing waits on you';
+  const waitHref = first ? agentHref(first.agentId) : waiter ? agentHref(waiter.id) : null;
   return h('div', { class: 'kpis' },
     Kpi('bot', c.running, 'Agents running', `${c.waiting} waiting · ${c.done} done · ${c.failed} failed`, '#/org'),
     Kpi('listChecks', steps.length ? `${done}/${steps.length}` : '—', 'Plan steps done', stepLine, '#/plan'),
     Kpi('dollar', usd(s.costUsd), 'Session spend', parts.join(' · ') || '—'),
-    Kpi('hand', s.waiting || 0, 'Waiting on you', waiter ? `${waiter.label}: ${waiter.needsYou || waiter.now || 'waiting'}` : 'Nothing waits on you', waiter ? agentHref(waiter.id) : null));
+    Kpi('hand', Math.max(waiting.size, s.waiting || 0), 'Waiting on you', waitLine, waitHref, first ? () => scrollSoon(`pending-${first.id}`, `agent:${first.agentId}`) : null));
 }
 
 function describe(x) {
@@ -981,7 +1387,7 @@ function Dashboard() {
   // The mod's order (first touched first), so a file never jumps when it is edited again; live ones pulse.
   const files = S.files.slice(-10);
   return h('div', { key: 'dash', class: 'page page-dash' },
-    NeedsBanner(),
+    NeedsYou(),
     GoalCard(),
     h('section', { class: 'sec' },
       SecHead('Agents', S.agents.length, h('a', { class: 'sec-link', href: '#/org' }, hidden ? `${hidden} more in the org chart` : 'Org chart', icon('arrowRight'))),
@@ -1198,7 +1604,7 @@ function OrgCard(n) {
     h('span', { class: 'org-name' }, a.label),
     h('span', { class: 'org-type' }, a.type),
     h('span', { class: 'org-meta' }, modelLine(a)),
-    h('span', { class: 'org-now' }, a.now || st.label)));
+    h('span', { class: 'org-now' }, a.now ? Ticks(a.now) : st.label)));
 }
 
 function OrgChart() {
@@ -1243,7 +1649,7 @@ function TreeRow(a) {
       h('span', { class: 'tree-id' },
         h('span', { class: 'tree-name' }, a.label),
         h('span', { class: 'tree-sub' }, a.scope ? `${a.type} · ${a.scope}` : a.type))),
-    h('span', { class: 'tree-now' }, a.now || ''),
+    h('span', { class: 'tree-now' }, Ticks(a.now)),
     h('span', { class: 'tree-meta' }, modelLine(a)),
     h('span', { class: 'tree-status' }, Pill(a.status, 'pill-fixed')));
 }
@@ -1282,19 +1688,46 @@ function reviewText(a) {
   return `Review what the ${a.label} agent did against its task.${files} Tell me what is wrong or missing before I commit.`;
 }
 
+/**
+ * Asks Claude for a review, after a confirm: in the Desktop app the mod
+ * queues the prompt for when Claude is free; where a prompt box exists it
+ * fills it. The ack says which, under the button, for a few seconds.
+ */
 function ReviewButton(scope, text, label = 'Ask for review') {
   const st = ui.review.get(scope);
-  const click = async () => {
-    ui.review.set(scope, { status: 'sending' }); renderNow();
-    try { await command({ cmd: 'review', text }); ui.review.set(scope, { status: 'sent', at: Date.now() }); }
-    catch (e) { ui.review.set(scope, { status: 'error', text: e.message, at: Date.now() }); }
+  const confirming = st && st.status === 'confirm';
+  const close = () => { ui.review.delete(scope); renderNow(); };
+  const go = async () => {
+    const id = newCmdId('r');
+    const sent = { status: 'sent', state: 'sending', id, at: Date.now() };
+    ui.review.set(scope, sent);
     renderNow();
-    setTimeout(() => { const cur = ui.review.get(scope); if (cur && cur.status !== 'sending' && Date.now() - cur.at >= 5900) { ui.review.delete(scope); invalidate(); } }, 6000);
+    try { await command({ cmd: 'review', id, text }); sent.state = 'sent'; }
+    catch (e) { Object.assign(sent, { state: 'error', error: e.message }); }
+    renderNow();
+    // the note stays until a while after its ack (or the wait for one) ends
+    const tidy = () => {
+      if (ui.review.get(scope) !== sent) return;
+      const now = sendState(sent, 'review');
+      if (now.busy) { setTimeout(tidy, 1000); return; }
+      if (!sent.settled) { sent.settled = Date.now(); invalidate(); }
+      if (Date.now() - sent.settled >= 8000) { ui.review.delete(scope); invalidate(); } else setTimeout(tidy, 1000);
+    };
+    setTimeout(tidy, 1000);
   };
+  const note = st && st.status === 'sent' ? sendState(st, 'review') : null;
   return h('span', { class: 'review' },
-    st && st.status === 'sent' && h('span', { class: 'note note-ok', role: 'status' }, icon('check'), 'In your prompt box'),
-    st && st.status === 'error' && h('span', { class: 'note note-err', role: 'alert' }, st.text),
-    h('button', { class: 'btn btn-sm', type: 'button', disabled: st && st.status === 'sending', onClick: click, title: 'Puts a review request in your Claude Code prompt box; you press Enter.' }, icon('eye'), label));
+    note && StatusNote(note, 'review-note'),
+    h('span', { class: 'review-anchor' },
+      h('button', {
+        class: 'btn btn-sm', type: 'button', 'aria-expanded': confirming ? 'true' : 'false', 'aria-haspopup': 'dialog',
+        disabled: !!(note && note.busy), onClick: () => (confirming ? close() : (ui.review.set(scope, { status: 'confirm' }), renderNow())),
+      }, icon('eye'), label),
+      confirming && h('div', { class: 'confirm', role: 'dialog', 'aria-label': 'Ask Claude for a review', onKeyDown: e => { if (e.key === 'Escape') { e.preventDefault(); close(); } } },
+        h('p', { class: 'confirm-text' }, 'Ask Claude to review these changes? It runs when Claude is free.'),
+        h('div', { class: 'confirm-actions' },
+          h('button', { class: 'btn btn-xs', type: 'button', onClick: close }, 'Cancel'),
+          h('button', { class: 'btn btn-xs btn-primary', type: 'button', ref: el => requestAnimationFrame(() => el.focus()), onClick: go }, 'Ask Claude')))));
 }
 
 function AgentHeader(a) {
@@ -1327,7 +1760,7 @@ function NowStrip(a) {
     Glyph('active', 16),
     h('span', { class: 'nowstrip-label' }, 'Now'),
     live ? ToolTag(la.tool) : null,
-    h('span', { class: live && PATHY.has(la.tool) ? 'nowstrip-text mono' : 'nowstrip-text', title: live ? la.text : a.now }, live ? la.text : a.now || 'Working'),
+    h('span', { class: live && PATHY.has(la.tool) ? 'nowstrip-text mono' : 'nowstrip-text', title: live ? la.text : plainTicks(a.now) }, live ? la.text : a.now ? Ticks(a.now) : 'Working'),
     h('span', { class: 'nowstrip-time' }, la ? ago(la.at) : ''));
 }
 
@@ -1429,49 +1862,142 @@ function ActivityTab(a) {
       h('span', { class: 'act-time' }, ago(x.at)))));
 }
 
-const KIND_LABEL = { prompt: 'prompt', spawn: 'delegated', result: 'reported back', message: 'message', chat: 'chat' };
+// The Orchestrator's answers are its replies to you; a question it asked you, and your choice, read in the thread too.
+const KIND_LABEL = { prompt: 'prompt', spawn: 'delegated', result: 'reported back', message: 'message', chat: 'chat', answer: 'replied', question: 'asked you' };
+const MARKDOWN_KINDS = new Set(['result', 'spawn', 'answer']);
 
-function Message(m, a) {
+/**
+ * A message's words: Markdown for a report, a brief or an answer, else as
+ * written. One the state cut short gets "Show more", which fetches the rest
+ * once and leaves the thread, the focus and the draft where they are.
+ */
+function MessageText(m) {
+  const md = MARKDOWN_KINDS.has(m.kind);
+  const key = `msg|${m.id}`;
+  const open = !!m.isCut && isOpen(key, false);
+  const full = open ? fullTextOf(m.id) : null;
+  const text = full && full.status === 'ok' ? full.text : m.text;
+  if (!m.isCut) return md ? Markdown(text) : text;
+  const body = md ? Markdown(text) : h('div', { class: 'msg-plain' }, text);
+  const flip = () => { ui.holdThread = true; toggle(key); };
+  return [
+    body,
+    open && full.status === 'error' && h('p', { key: 'err', class: 'msg-err' }, icon('alert'), h('span', null, full.error),
+      h('button', { class: 'btn btn-xs', type: 'button', onClick: () => { fullTexts.delete(m.id); ui.holdThread = true; renderNow(); } }, 'Retry')),
+    h('button', { key: 'more', class: 'more more-start msg-more', type: 'button', 'aria-expanded': open && full.status === 'ok' ? 'true' : 'false', disabled: open && full.status === 'loading', onClick: flip },
+      open ? (full.status === 'loading' ? 'Loading the rest…' : full.status === 'ok' ? 'Show less' : 'Show more') : 'Show more',
+      icon('chevronDown', open && full.status === 'ok' ? 'flip' : '')),
+  ];
+}
+
+/** A message in an agent's thread; `sent` is the send it came from here (its status shows under it). */
+function Message(m, a, sent) {
   const mine = m.from === 'you';
   const dir = m.from === a.id ? (m.to === 'you' ? 'to you' : `to ${nameOf(m.to)}`) : null;
+  // a message sent from here keeps the key of its "Sending…" bubble, so it never blinks when the mod records it
+  const key = sent ? `out:${sent.id}` : m.id;
   if (mine) {
-    return h('div', { key: m.id, class: 'msg mine', enter: true },
+    const choice = m.kind === 'choice';
+    const note = sendNoteOf(m, a, sent);
+    return h('div', { key, class: `msg mine${choice ? ' kind-choice' : ''}`, enter: true },
       h('div', { class: 'msg-meta' },
         h('span', { class: 'msg-who' }, 'You'),
         m.to !== a.id ? h('span', { class: 'msg-kind' }, `to ${nameOf(m.to)}`) : m.kind === 'prompt' ? h('span', { class: 'msg-kind' }, 'prompt') : null,
         h('span', { class: 'msg-time' }, ago(m.at)),
         YouAvatar(20)),
-      h('div', { class: 'bubble' }, m.text));
+      choice
+        ? h('div', { class: 'bubble bubble-choice' }, icon('circleCheck'), h('span', null, m.text))
+        // what you sent from here is whole on the page already, even where the state cut it
+        : h('div', { class: 'bubble' }, sent ? sent.text : m.isCut ? MessageText(m) : m.text),
+      note ? StatusNote(note, 'msg-status') : null);
   }
   const sender = IX.byId.get(m.from);
-  return h('div', { key: m.id, class: `msg theirs kind-${m.kind}`, enter: true },
+  const label = KIND_LABEL[m.kind] || m.kind;
+  return h('div', { key, class: `msg theirs kind-${m.kind}`, enter: true },
     h('div', { class: 'msg-meta' },
       whoAvatar(m.from, 20),
       h('span', { class: 'msg-who' }, sender ? sender.label : nameOf(m.from)),
-      h('span', { class: 'msg-kind' }, dir ? `${KIND_LABEL[m.kind] || m.kind} ${dir}` : KIND_LABEL[m.kind] || m.kind),
+      h('span', { class: 'msg-kind' }, dir && m.kind !== 'answer' && m.kind !== 'question' ? `${label} ${dir}` : label),
       h('span', { class: 'msg-time' }, ago(m.at))),
-    m.kind === 'result' || m.kind === 'spawn' ? h('div', { class: 'msg-card' }, Markdown(m.text)) : h('div', { class: 'msg-text' }, m.text));
+    m.kind === 'question'
+      ? h('div', { class: 'msg-card msg-question' }, icon('help', 'msg-q-ic'), h('div', { class: 'msg-q-text' }, MessageText(m)))
+      : MARKDOWN_KINDS.has(m.kind) ? h('div', { class: 'msg-card' }, MessageText(m)) : h('div', { class: 'msg-text' }, MessageText(m)));
+}
+
+/** A send from here not in the thread yet (or refused): built as the message it becomes, so it turns into it in place. */
+function OutboxMessage(sent, a) {
+  return Message({ id: sent.id, at: sent.at, from: 'you', to: a.id, kind: 'chat', text: sent.text }, a, sent);
+}
+
+/** "Hello…" as the state cut it, against what was sent: the same words, or the start of them. */
+function sameText(shown, sent) {
+  const a = String(shown || '').trim(), b = String(sent || '').trim();
+  if (a === b) return true;
+  const cut = a.replace(/…$/, '').trimEnd();
+  return a.endsWith('…') && cut.length >= 12 && b.startsWith(cut);
+}
+
+/**
+ * An agent's thread: its messages, each send from here paired with the
+ * message it became (the mod records it with the command's id as `ackId`;
+ * the same words sent then, for a mod that does not), and the sends not in
+ * it yet.
+ */
+function threadOf(a) {
+  const msgs = IX.talk.get(a.id) || [];
+  const box = ui.outbox.get(a.id) || [];
+  const sentBy = new Map(), loose = [];
+  for (const sent of box) {
+    const m = msgs.find(x => x.ackId === sent.id) ||
+      msgs.find(x => !x.ackId && !sentBy.has(x.id) && x.from === 'you' && x.to === a.id && x.kind !== 'choice' && x.at >= sent.at - 60000 && sameText(x.text, sent.text));
+    if (m && !sentBy.has(m.id)) sentBy.set(m.id, sent);
+    else loose.push(sent);
+  }
+  return { msgs, sentBy, loose };
+}
+
+/**
+ * The status line under a message of yours, or null: what its ack says
+ * while it matters (a failure, a send still waiting, or until the agent
+ * answers after it: then a "Queued" is old news). `sent` is its send from
+ * this page; a message sent before the page loaded has its ack by `ackId`.
+ */
+function sendNoteOf(m, a, sent) {
+  if (m.kind === 'choice') return null;
+  const send = sent || (m.ackId && IX.acks.has(m.ackId) ? { id: m.ackId, at: m.at, state: 'sent' } : null);
+  if (!send) return null;
+  const st = sendState(send, 'chat');
+  if (st.tone === 'fail' || st.busy) return st;
+  const replied = (IX.talk.get(a.id) || []).some(x => x.from === a.id && x.to === 'you' && x.at > m.at);
+  return replied ? null : st;
 }
 
 async function sendChat(a) {
   const el = ui.inputs.get(a.id);
   const text = (ui.drafts.get(a.id) || '').trim();
   if (!text || (ui.sends.get(a.id) || {}).status === 'sending') return;
-  ui.sends.set(a.id, { status: 'sending', at: Date.now() });
+  const id = newCmdId('c');
+  const at = Date.now();
+  ui.sends.set(a.id, { status: 'sending', at });
   renderNow();
   try {
-    await command({ cmd: 'chat', agentId: a.id, text: text.slice(0, 4000) });
+    await command({ cmd: 'chat', id, agentId: a.id, text: text.slice(0, 4000) });
     // Clear the box only if it still holds what was sent (typing during the send is kept).
     if ((ui.drafts.get(a.id) || '').trim() === text) {
       ui.drafts.delete(a.id);
       if (el) { el.value = ''; autosize(el); }
     }
-    ui.sends.set(a.id, { status: 'sent', at: Date.now() });
+    // it shows in the thread now, "Sending…" until the mod's ack says what became of it
+    const box = ui.outbox.get(a.id) || ui.outbox.set(a.id, []).get(a.id);
+    box.push({ id, text: text.slice(0, 4000), at, state: 'sent' });
+    if (box.length > 40) box.shift();
+    ui.sends.delete(a.id);
+    ui.pinThread = true;
+    setTimeout(invalidate, ACK_WAIT + 50);
   } catch (e) {
     ui.sends.set(a.id, { status: 'error', text: e.message, at: Date.now() });
   }
   renderNow();
-  setTimeout(() => { const s = ui.sends.get(a.id); if (s && s.status === 'sent' && Date.now() - s.at > 3900) { ui.sends.delete(a.id); invalidate(); } }, 4000);
 }
 
 function autosize(el) {
@@ -1481,7 +2007,10 @@ function autosize(el) {
 
 function Composer(a) {
   const st = ui.sends.get(a.id);
-  const hint = a.kind === 'orchestrator' ? 'Goes to Claude Code as your next prompt.' : isLive(a.status) ? 'Delivered to the agent while it works.' : 'Resumes the agent to answer.';
+  // how a message reaches it: the Orchestrator takes it as a prompt of its own once its turn ends; an agent reads it at its next step
+  const hint = a.kind === 'orchestrator'
+    ? isLive(a.status) ? 'Claude reads it when it finishes its current turn.' : 'Goes to Claude Code as your next prompt.'
+    : isLive(a.status) ? 'It reads it at its next step; nothing is interrupted.' : 'Resumes the agent to answer.';
   return h('div', { class: 'composer' },
     h('textarea', {
       key: `ta:${a.id}`, class: 'composer-input', rows: '2', maxlength: '4000', placeholder: `Message ${a.label}…`, 'aria-label': `Message ${a.label}`,
@@ -1491,18 +2020,20 @@ function Composer(a) {
     }),
     h('div', { class: 'composer-foot' },
       h('span', { class: 'composer-hint' }, hint, h('span', { class: 'kbd-hint' }, ' Enter sends, Shift+Enter adds a line.')),
+      // a send that reached the deck shows in the thread with its status; one that did not says why here, its words kept in the box
       h('span', { class: 'composer-status', role: 'status', 'aria-live': 'polite' },
-        st && st.status === 'sent' ? h('span', { class: 'note note-ok' }, icon('check'), 'Sent') : null,
         st && st.status === 'error' ? h('span', { class: 'note note-err' }, st.text) : null),
       h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: st && st.status === 'sending', onClick: () => sendChat(a) }, icon('send'), st && st.status === 'sending' ? 'Sending' : 'Send')));
 }
 
 function TalkTab(a) {
-  const msgs = IX.talk.get(a.id) || [];
+  const { msgs, sentBy, loose } = threadOf(a);
   return h('div', { class: 'talk card' },
-    msgs.length
-      ? h('div', { class: 'thread', ref: el => requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; }) }, msgs.map(m => Message(m, a)))
-      : h('div', { class: 'thread thread-empty' }, h('p', { class: 'muted' }, `No messages with ${a.label} yet.`)),
+    msgs.length || loose.length
+      ? h('div', { key: 'thread', class: 'thread', ref: el => requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; }) },
+        msgs.map(m => Message(m, a, sentBy.get(m.id))),
+        loose.map(sent => OutboxMessage(sent, a)))
+      : h('div', { key: 'empty', class: 'thread thread-empty' }, h('p', { class: 'muted' }, `No messages with ${a.label} yet.`)),
     Composer(a));
 }
 
@@ -1513,19 +2044,26 @@ function AgentPage() {
       h('div', { class: 'card' }, Empty('bot', 'This agent is not in the session', 'It may belong to an earlier session, or the link is old.', h('a', { class: 'btn btn-sm', href: '#/org' }, 'Open the org chart'))));
   }
   const tab = tabOf(a);
+  const pending = IX.pendingBy.get(a.id) || [];
   return h('div', { key: route.key, class: 'page page-agent narrow' },
     AgentHeader(a),
-    a.needsYou && h('div', { class: 'banner banner-wait', role: 'status' },
+    // what waits on you shows in full above the tabs; up here, only a wait the mod knows no more of (an idle prompt)
+    a.needsYou && !pending.length && h('div', { class: 'banner banner-wait', role: 'status' },
       icon('hand', 'banner-ic'),
       h('div', { class: 'banner-body' },
-        h('p', { class: 'banner-title' }, `Waits on you: ${a.needsYou}`),
+        h('p', { class: 'banner-title' }, Ticks(waitWords(a))),
         h('p', { class: 'banner-text' }, 'Answer it in the Claude Code conversation; the agent carries on once you do.'))),
+    pending.length > 0 && h('a', { class: 'needs-jump', href: `#pending-${pending[0].id}`, onClick: e => { e.preventDefault(); scrollSoon(`pending-${pending[0].id}`); } },
+      icon(pending[0].kind === 'question' ? 'help' : 'shield'),
+      h('span', { class: 'needs-jump-text' }, Ticks(pendingText(pending[0]))),
+      h('span', { class: 'needs-jump-go' }, pending[0].kind === 'question' && pending[0].isAnswerable ? 'Answer' : 'See it', icon('chevronDown'))),
     NowStrip(a),
     AgentStats(a),
     // an agent with no checklist (most never write one) gives its task the whole row, rather than an empty card
     h('div', { class: a.checklist.items.length ? 'agent-cols' : 'agent-cols single' }, TaskCard(a), a.checklist.items.length ? ChecklistCard(a) : null),
     ResultCard(a),
-    h('div', { class: 'tabs-wrap' },
+    AgentNeeds(a, 'agent'),
+    h('div', { class: 'tabs-wrap', id: 'agent-tabs' },
       Tabs(a, tab),
       h('div', { key: tab, class: 'tabpanel', role: 'tabpanel', id: 'tabpanel', 'aria-labelledby': `tab-${tab}` },
         tab === 'diffs' ? DiffsTab(a) : tab === 'activity' ? ActivityTab(a) : TalkTab(a))));
@@ -1572,14 +2110,117 @@ function PlanPage() {
           h('div', { class: 'bar big', role: 'img', 'aria-label': `${pct}% done` },
             h('span', { class: `bar-fill${done === steps.length ? ' full' : ''}`, style: { width: `${pct}%` } }),
             h('span', { class: 'bar-active', style: { left: `${pct}%`, width: `${steps.length ? Math.round((active / steps.length) * 100) : 0}%` } }))),
-        h('div', { key: 'steps', class: 'card list steps' },
-          steps.map((st, i) => h('div', { key: st.key || i, class: `step is-${st.status}` },
-            Glyph(st.status, 18),
-            h('span', { class: 'step-n' }, String(i + 1).padStart(2, '0')),
-            h('span', { class: 'step-text' }, st.text),
-            h('span', { class: 'step-who' }, st.agents.length ? st.agents.map(id => h('a', { key: id, class: 'step-av', href: agentHref(id), title: nameOf(id) }, whoAvatar(id, 22))) : h('span', { class: 'muted' }, '—')),
-            h('span', { class: `step-st st-${st.status}` }, STEP_LABEL[st.status] || st.status)))),
+        h('div', { key: 'steps', class: 'card list steps' }, steps.map(StepRow)),
       ]);
+}
+
+/** A step's key: the plan's own, or its place when it has none. */
+const stepKeyOf = (st, i) => String(st.key || i + 1);
+
+/** The agents on a step, each followed by the ones it started (deepest last), each once; the Orchestrator's own helpers are other steps'. */
+function stepAgents(st) {
+  const rows = [], seen = new Set();
+  const walk = (a, d) => {
+    if (!a || seen.has(a.id)) return;
+    seen.add(a.id);
+    rows.push({ a, d });
+    if (a.kind !== 'orchestrator') for (const k of IX.kids.get(a.id) || []) walk(k, d + 1);
+  };
+  for (const id of st.agents) walk(IX.byId.get(id), 0);
+  return rows;
+}
+
+/** A step's row, a button that opens it (#/plan/<key> opens it too): who is on it, what they do, and anything of theirs that waits on you. */
+function StepRow(st, i) {
+  const key = stepKeyOf(st, i);
+  const open = isOpen(`step|${key}`, false);
+  const rows = stepAgents(st);
+  const waits = rows.some(r => (IX.pendingBy.get(r.a.id) || []).length) || (!rows.length && (IX.pendingBy.get('main') || []).length > 0 && st.status === 'active');
+  return h('div', { key, id: `step-${key}`, class: `step-item${open ? ' open' : ''}` },
+    h('button', { class: `step is-${st.status}`, type: 'button', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(`step|${key}`) },
+      icon('chevronRight', 'chev'),
+      Glyph(st.status, 18),
+      h('span', { class: 'step-n' }, String(i + 1).padStart(2, '0')),
+      h('span', { class: 'step-text' }, st.text),
+      h('span', { class: 'step-who' },
+        waits && h('span', { class: 'tag tag-wait step-wait' }, 'needs you'),
+        st.agents.length ? AvatarStack(st.agents, 22, 4) : h('span', { class: 'muted' }, '—')),
+      h('span', { class: `step-st st-${st.status}` }, STEP_LABEL[st.status] || st.status)),
+    open && h('div', { class: 'step-body' },
+      rows.length ? rows.map(r => StepAgent(r.a, r.d))
+        : st.agents.length ? h('p', { class: 'sa-none' }, 'The agents on this step are no longer in the session.')
+          : SelfStep(st)));
+}
+
+function MiniAct(x) {
+  return h('div', { key: actKey(x), class: `act-line mini${x.ok === false ? ' is-fail' : ''}` },
+    ToolTag(x.tool),
+    h('span', { class: PATHY.has(x.tool) ? 'act-line-target mono' : 'act-line-target', title: x.target }, x.target || ''),
+    Outcome(x),
+    h('span', { class: 'act-time' }, ago(x.at)));
+}
+
+/** "Open agent →" and "Talk →": its page, and its page at Talk. */
+function AgentLinks(a) {
+  return h('p', { class: 'sa-links' },
+    h('a', { class: 'sec-link', href: agentHref(a.id) }, 'Open agent', icon('arrowRight')),
+    h('a', { class: 'sec-link', href: agentHref(a.id), onClick: () => { ui.tabs.set(a.id, 'talk'); scrollSoon('agent-tabs', `agent:${a.id}`); } }, 'Talk', icon('arrowRight')));
+}
+
+/** One agent on an open step: who, its line and checklist, its last three tool calls, its files, its report folded, what waits on you. */
+function StepAgent(a, d) {
+  const cl = a.checklist;
+  const acts = (IX.actBy.get(a.id) || []).slice(-3).reverse();
+  const files = a.files.slice(0, 5);
+  const resKey = `sres|${a.id}`, resOpen = isOpen(resKey, false);
+  const long = a.result.length > 280 || a.result.split('\n').length > 4;
+  return h('div', { key: a.id, class: `sa is-${a.status}${d ? ' sub' : ''}`, style: { '--d': String(Math.min(d, 3)) } },
+    h('div', { class: 'sa-head' },
+      AvatarDot(a, 24),
+      h('a', { class: 'sa-name', href: agentHref(a.id) }, a.label),
+      h('span', { class: 'sa-type' }, d ? `${a.type} · started by ${nameOf(a.parent)}` : a.type),
+      Pill(a.status, 'pill-fixed')),
+    h('div', { class: 'sa-now' },
+      isRunning(a.status) && a.lastAction && a.lastAction.isLive ? Dot('run', true) : null,
+      h('span', { class: 'sa-now-text', title: plainTicks(a.now) }, a.now ? Ticks(a.now) : statusOf(a.status).label),
+      cl.total > 0 && h('span', { class: 'sa-check', title: `Checklist: ${cl.done} of ${cl.total} done` },
+        h('span', { class: 'bar sa-bar' }, h('span', { class: `bar-fill${cl.done === cl.total ? ' full' : ''}`, style: { width: `${Math.round((cl.done / cl.total) * 100)}%` } })),
+        h('span', { class: 'sa-check-n' }, `${cl.done}/${cl.total}`))),
+    acts.length > 0 && h('div', { class: 'sa-acts' }, acts.map(MiniAct)),
+    files.length > 0 && h('p', { class: 'sa-files' },
+      icon('file', 'fic'),
+      files.map(f => h('span', { key: f, class: 'sa-file', title: f }, splitPath(f)[1] || f)),
+      a.files.length > files.length && h('span', { class: 'sa-more' }, `+${a.files.length - files.length} more`)),
+    a.result && h('div', { class: `sa-result${a.status === 'failed' ? ' is-failed' : ''}` },
+      h('p', { class: 'sa-label' }, a.status === 'failed' ? 'Result · failed' : 'Result'),
+      h('div', { class: long && !resOpen ? 'sa-md clamped' : 'sa-md' }, Markdown(a.result)),
+      long && h('button', { class: 'more more-start', type: 'button', 'aria-expanded': resOpen ? 'true' : 'false', onClick: () => toggle(resKey) }, resOpen ? 'Show less' : 'Show the whole result', icon('chevronDown', resOpen ? 'flip' : ''))),
+    AgentNeeds(a, 'plan'),
+    AgentLinks(a));
+}
+
+/** A step the Orchestrator does itself: its checklist item for it, and while it is on it, what it just did. */
+function SelfStep(st) {
+  const main = IX.byId.get('main') || S.agents.find(a => a.kind === 'orchestrator');
+  if (!main) return h('p', { class: 'sa-none' }, 'No agent is on this step.');
+  const norm = t => String(t || '').trim().toLowerCase();
+  const item = main.checklist.items.find(it => norm(it.text) === norm(st.text));
+  const acts = st.status === 'active' ? (IX.actBy.get(main.id) || []).slice(-3).reverse() : [];
+  const glyph = item ? (item.status === 'active' && !isRunning(main.status) ? (main.status === 'waiting' ? 'waiting' : 'active') : item.status) : st.status;
+  return h('div', { key: 'self', class: `sa is-${main.status}` },
+    h('div', { class: 'sa-head' },
+      AvatarDot(main, 24),
+      h('a', { class: 'sa-name', href: agentHref(main.id) }, main.label),
+      h('span', { class: 'sa-type' }, st.status === 'pending' ? 'takes this step itself' : st.status === 'done' ? 'did this step itself' : 'does this step itself'),
+      Pill(main.status, 'pill-fixed')),
+    h('div', { class: 'sa-item' },
+      Glyph(glyph, 16),
+      h('span', { class: 'check-body' },
+        h('span', { class: 'check-text' }, item ? item.text : st.text),
+        item && item.status === 'active' && item.doing && h('span', { class: 'check-doing' }, item.doing))),
+    acts.length > 0 ? h('div', { class: 'sa-acts' }, acts.map(MiniAct)) : st.status === 'pending' ? h('p', { class: 'sa-none' }, 'Not started yet.') : null,
+    st.status === 'active' ? AgentNeeds(main, 'plan') : null,
+    AgentLinks(main));
 }
 
 // -------------------------------------------------------------------- changes
@@ -1815,9 +2456,12 @@ function renderNow() {
   if (frame) { cancelAnimationFrame(frame); frame = 0; }
   if (frameTimer) { clearTimeout(frameTimer); frameTimer = 0; }
   const t0 = performance.now();
-  // Keep a chat thread pinned to its newest message when the reader is already there.
+  // Keep a chat thread pinned to its newest message when the reader is already there (a send takes it there;
+  // "Show more" leaves it where it is, so the reader goes on from the cut).
   const thread = document.querySelector('.thread');
-  const pinned = thread && thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24;
+  const pinned = ui.pinThread || (!ui.holdThread && thread && thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24);
+  ui.pinThread = false;
+  ui.holdThread = false;
   const v = App();
   if (!vroot) document.getElementById('app').replaceWith(create(v, false));
   else patch(vroot, v, false);
@@ -1836,6 +2480,16 @@ function afterRender() {
     shownKey = route.key;
   }
   if (ui.focusTab) { const t = document.getElementById(`tab-${ui.focusTab}`); if (t) t.focus(); ui.focusTab = null; }
+  // Open and #/plan/<key> bring their card or step into view, once it has rendered.
+  if (ui.scrollTo) {
+    const want = ui.scrollTo;
+    const el = scroller && want.on === route.key ? document.getElementById(want.id) : null;
+    if (el) {
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 16;
+      scroller.scrollTop = Math.max(0, top);
+      ui.scrollTo = null;
+    } else if (Date.now() > want.until) ui.scrollTo = null;
+  }
   // The org chart fits itself until the reader pans or zooms it.
   if (route.name === 'org' && ui.orgView !== 'list' && org.view && org.view.isConnected && lastLayout) {
     const size = `${org.view.clientWidth}x${org.view.clientHeight}`;
@@ -1843,13 +2497,14 @@ function afterRender() {
     org.sig = lastLayout.sig; org.size = size;
   }
   const s = S && S.summary;
-  document.title = S ? `${s.waiting ? '● ' : ''}Agent Deck · ${S.repo ? S.repo.name : 'session'}` : 'Agent Deck';
+  document.title = S ? `${s.waiting || S.pending.length ? '● ' : ''}Agent Deck · ${S.repo ? S.repo.name : 'session'}` : 'Agent Deck';
 }
 
 function boot() {
   window.addEventListener('hashchange', () => {
     if (scroller) ui.scroll.set(shownKey, scroller.scrollTop);
     route = parseRoute();
+    followRoute();
     renderNow();
   });
   window.addEventListener('resize', () => invalidate());
@@ -1858,6 +2513,7 @@ function boot() {
   setInterval(() => { if (conn.status === 'reconnecting') invalidate(); }, 1000);
 
   installDefs();
+  followRoute();
   renderNow();
   connect();
 }
