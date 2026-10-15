@@ -539,11 +539,11 @@ test('an agent`s page: its header, who it reports to, its Now line, task and che
     expect(await ui.find({ key: 'needs:toolu_p' })).toBeDefined()
     expect(await ui.find({ key: 'needs:open:toolu_p' })).toBeUndefined()
     expect(await ui.find({ key: 'needs:toolu_q' })).toBeUndefined()
-    // the page's panes: Diffs first, its exact patch; Activity, its calls worded as the dashboard words them (its shell call, held on you)
+    // the page's panes: Diffs first, its exact patch; Activity, its calls as the web's tab rows them (its shell call in its own words, held on you)
     expect((await ui.find({ key: 'detail:edits' }))?.props.dimColor).toBe(false)
     expect((await ui.find({ type: 'Code' }))?.text).toContain('+const b = 3')
     await press(ui, 'detail:activity')
-    expect((await ui.find({ key: 'call:t1' }))?.text).toBe('ran npm test' + 'waiting' + 'now')
+    expect((await ui.find({ key: `call:${NOW - 20_000}:Bash` }))?.text).toBe(' Bash ' + 'Run the unit tests' + '◐ waiting' + 'now')
     await press(ui, 'detail:edits')
 
     // who it reports to: a press opens the Orchestrator's page, its checklist the plan's steps

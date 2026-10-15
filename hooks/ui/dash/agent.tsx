@@ -16,19 +16,25 @@
  *   below that;
  * - what it waits on you for, answerable here (./needs);
  * - its result once it ended (the Orchestrator's: its latest answer to you);
- * - its Diffs · Activity · Talk, a count after each (detail.tsx
- *   `agentPanesBlock`), from the deck model of this session or the sample's.
+ * - its Diffs · Activity · Talk in the web deck's names and order, a count
+ *   after each as the web counts them (the files it edited, its calls and
+ *   its messages the state holds), the one open the view's: Diffs, its exact
+ *   patches from the deck model of this session or the sample's (detail.tsx
+ *   `agentDiffsBlock`); Activity, its calls as the web's tab rows them
+ *   (./activity); Talk, its messages and the field that sends (detail.tsx
+ *   `agentTalkBlock`).
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks
  * module. The texts opened with Show more are this module's own.
  */
 import type { BoxProps, RenderElement } from 'claude-code'
 
-import type { DeckData, DeckTab, DeckView } from '../../../types'
+import type { DeckAgentPane, DeckData, DeckTab, DeckView } from '../../../types'
 import { clean } from '../../format'
 import type { WebAgent, WebState } from '../../web'
-import { agentPanesBlock } from '../detail'
+import { agentDiffsBlock, agentTalkBlock } from '../detail'
 import type { DashActions, Kit } from '../types'
+import { activityTab } from './activity'
 import { agentOf, ago, agoText, cut, flat, foldText, isLive, isRunning, nowLine, num, plural, reportsTo, span, tokensOf } from './dashModel'
 import { needsCards } from './needs'
 import { P, barSvg, mix, toneOf, type IconName } from './palette'
@@ -73,7 +79,63 @@ export function agentPage(kit: Kit, state: WebState, data: DeckData, view: DeckV
       {workBlock(kit, agent, actions)}
       {needsCards(kit, state, actions, now, 'agent', agent.id)}
       {resultBlock(kit, agent, actions, now)}
-      {agentPanesBlock(kit, data, view, agent.id, actions, { now, onPick: pane => notePagePane(agent.id, pane) })}
+      {panesBlock(kit, state, data, view, agent, actions, now)}
+    </Box>
+  )
+}
+
+/** The page's tabs, in the web deck's order, with the hotkeys that press them. */
+const PAGE_TABS: readonly { id: DeckAgentPane; name: string; hotkey: string }[] = [
+  { id: 'edits', name: 'Diffs', hotkey: 'd' },
+  { id: 'activity', name: 'Activity', hotkey: 'a' },
+  { id: 'chat', name: 'Talk', hotkey: 't' },
+]
+
+/** The count after each tab, as the web's: the files the agent edited, its calls and the messages to and from it, of those the state holds. */
+export function paneCountsOf(state: WebState, id: string): Record<DeckAgentPane, number> {
+  return {
+    edits: new Set(state.edits.filter(edit => edit.agent === id).map(edit => edit.path)).size,
+    activity: state.activity.filter(call => call.agent === id).length,
+    chat: state.messages.filter(message => message.from === id || message.to === id).length,
+  }
+}
+
+/**
+ * Diffs · Activity · Talk, a count after each, then the pane open (the
+ * view's; a press on a tab opens it, and its page opens on it next time).
+ */
+function panesBlock(kit: Kit, state: WebState, data: DeckData, view: DeckView, agent: WebAgent, actions: DashActions, now: number): RenderElement {
+  const { Box, Text, Button } = kit
+  const open: DeckAgentPane = view.agentPane === 'activity' || view.agentPane === 'chat' ? view.agentPane : 'edits'
+  // Talk is the detail's still: the Orchestrator's, the whole log
+  const counts = { ...paneCountsOf(state, agent.id), ...(agent.kind === 'orchestrator' ? { chat: data.messages.length } : {}) }
+  const pick = (pane: DeckAgentPane) => {
+    notePagePane(agent.id, pane)
+    actions.setAgentPane(pane)
+  }
+  const body =
+    open === 'activity'
+      ? activityTab(kit, state, agent, now)
+      : open === 'chat'
+        ? (agentTalkBlock(kit, data, view, agent.id, actions) ?? quiet(kit, `No messages with ${agent.label} yet.`))
+        : (agentDiffsBlock(kit, data, agent.id) ?? quiet(kit, `${agent.label} did not edit any files.`))
+  return (
+    <Box key="page:panes" flexDirection="column" gap={1}>
+      <Box flexDirection="row" columnGap={3}>
+        {PAGE_TABS.map(tab => {
+          const isOn = tab.id === open
+          const n = num(counts[tab.id])
+          return (
+            <Button key={`detail:${tab.id}`} label={`${tab.name} ${n}`} plain dimColor={!isOn} hotkey={tab.hotkey} onPress={() => pick(tab.id)}>
+              <Text bold={isOn} underline={isOn}>
+                {tab.name}
+              </Text>
+              <Text color={P.muted2}>{` ${n}`}</Text>
+            </Button>
+          )
+        })}
+      </Box>
+      {body}
     </Box>
   )
 }

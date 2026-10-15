@@ -497,13 +497,13 @@ test('the agent page reads as the web deck`s: its four figures in boxes, its tas
       expect(tabs.map(tab => tab.props.dimColor)).toEqual([false, true, true])
       expect((await ui.findAll({ type: 'Code' })).length > 0).toBe(true)
 
-      // Activity: as the dashboard words a call, newest first, how it went and when at the right
+      // Activity: as the web's tab rows a call, newest first: the tool's chip, what the call was, how it went and when at the right
       await ui.press({ key: 'detail:activity' })
       await ui.redraw()
       const rows = (await ui.findAll({ type: 'Box' })).filter(box => box.key?.startsWith('call:'))
-      expect(rows.map(row => row.key)).toEqual(['call:c4', 'call:c3', 'call:c2', 'call:c1'])
-      expect(rows.map(row => row.text)).toEqual(['edited src/token.ts' + 'running' + 'now', 'ran npm test' + 'failed' + '2m', 'edited src/auth.ts' + '30ms' + '4m', 'read src/auth.ts' + '40ms' + '6m'])
-      expect((await ui.find({ type: 'Text', text: /^failed$/ }))?.props.color).toBe(P.failText)
+      expect(rows.map(row => row.key)).toEqual([`call:${NOW - 10_000}:Edit`, `call:${NOW - 120_000}:Bash`, `call:${NOW - 240_000}:Edit`, `call:${NOW - 360_000}:Read`])
+      expect(rows.map(row => row.text)).toEqual([' Edit ' + 'src/token.ts' + '◐ running' + 'now', ' Bash ' + 'Run the unit tests' + '✕ failed' + '2m', ' Edit ' + 'src/auth.ts' + '30ms' + '4m', ' Read ' + 'src/auth.ts' + '40ms' + '6m'])
+      expect((await ui.find({ type: 'Text', text: /^✕ failed$/ }))?.props.color).toBe(P.failText)
       expect(await ui.find({ type: 'Text', text: 'Tool calls 4' })).toBeUndefined()
 
       // Talk: the thread and the field that sends, as the detail draws them
