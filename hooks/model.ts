@@ -48,7 +48,7 @@ export const ORCHESTRATOR = 'Orchestrator'
 export const SNAPSHOT_VERSION = 2
 
 /** The pane's tabs, in the order the tab row draws them; `agents` is Classic, the summary and outline of earlier builds. */
-export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'changes', 'stats', 'agents']
+export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'plan', 'changes', 'stats', 'agents']
 export const AGENT_PANES: readonly DeckAgentPane[] = ['activity', 'edits', 'chat']
 export const MAP_VIEWS: readonly DeckMapView[] = ['tree', 'wire']
 
@@ -208,11 +208,26 @@ export function defaultView(): DeckView {
     isDetailsOpen: false,
     page: '',
     isDemo: false,
+    planOpen: [],
   }
 }
 
 /** The outline folds `view.folded` keeps at most, the oldest dropped first. */
 const FOLDS_KEPT = 200
+
+/** The Plan tab's open rows and texts `view.planOpen` keeps at most, the oldest dropped first. */
+const PLAN_OPEN_KEPT = 100
+
+/**
+ * The Plan tab's disclosures (`view.planOpen`) with `id` opened, or folded
+ * when `isOpen` is false; toggled when `isOpen` is left out. A reopened one
+ * moves to the end, so the oldest go first past PLAN_OPEN_KEPT.
+ */
+export function planOpenWith(open: readonly string[], id: string, isOpen?: boolean): string[] {
+  const rest = open.filter(one => one !== id)
+  const isWanted = isOpen ?? !open.includes(id)
+  return (isWanted && id !== '' ? [...rest, id] : rest).slice(-PLAN_OPEN_KEPT)
+}
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback
@@ -249,6 +264,8 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     isDetailsOpen: flag(v.isDetailsOpen, base.isDetailsOpen),
     page: text(v.page, base.page),
     isDemo: flag(v.isDemo, base.isDemo),
+    // the Plan tab's open rows and texts: strings only, each once, the newest kept
+    planOpen: Array.isArray(v.planOpen) ? [...new Set(v.planOpen.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-PLAN_OPEN_KEPT) : base.planOpen,
   }
   if (data) {
     const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)

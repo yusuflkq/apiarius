@@ -114,8 +114,22 @@ export type Actions = {
 
 /** What the native dashboard's presses run, beside the deck's own (Actions). */
 export type DashActions = Actions & {
-  /** Opens agent `id`'s page over the tab in view; Back returns to that tab. */
-  openAgent: (id: string) => void
+  /**
+   * Opens agent `id`'s page over the tab in view; Back returns to that tab.
+   * With `pane`, the page opens on it, scrolled to it (Talk is `chat`).
+   */
+  openAgent: (id: string, pane?: DeckAgentPane) => void
+  /**
+   * Opens the Plan tab with step `key` (its `key` in the state's
+   * `plan.steps`) open and scrolled into view, from any tab or agent page.
+   */
+  openStep: (key: string) => void
+  /**
+   * Opens or folds one of the Plan tab's disclosures, by its
+   * `DeckView.planOpen` id (`step:<key>`, `goal`, `result:<agent id>`): it
+   * stays so through redraws and reloads.
+   */
+  togglePlan: (id: string) => void
   /** Leaves the agent page for the tab it was opened from. */
   back: () => void
   /**

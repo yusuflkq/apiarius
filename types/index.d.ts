@@ -337,12 +337,12 @@ export type DeckData = {
 }
 
 /**
- * The pane's tabs: the Dashboard, the org chart, Changes, Stats, and Classic
- * (`agents`: the summary and the full outline of earlier builds). Older
- * builds' names (overview, diffs, commits, graph, flow) and `classic` are
- * read as these by `tabNamed`.
+ * The pane's tabs: the Dashboard, the org chart, the Plan, Changes, Stats,
+ * and Classic (`agents`: the summary and the full outline of earlier builds).
+ * Older builds' names (overview, diffs, commits, graph, flow) and `classic`
+ * are read as these by `tabNamed`.
  */
-export type DeckTab = 'dashboard' | 'org' | 'agents' | 'changes' | 'stats'
+export type DeckTab = 'dashboard' | 'org' | 'plan' | 'agents' | 'changes' | 'stats'
 
 /** What the selected agent's detail shows: its exact diffs, its conversation, or its recent tool calls. */
 export type DeckAgentPane = 'activity' | 'edits' | 'chat'
@@ -382,6 +382,12 @@ export type DeckView = {
   page: string
   /** The pane shows the sample (`/deck demo`, web/fixtures/state.json) in place of this session. */
   isDemo: boolean
+  /**
+   * What the Plan tab has open: `step:` and a step's key for its row, `goal`
+   * for the goal's whole words, `result:` and an agent's id for its whole
+   * result. Oldest first, at most 100; everything else stays folded.
+   */
+  planOpen: string[]
 }
 
 export type DeckSnapshot = {

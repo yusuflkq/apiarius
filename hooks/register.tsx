@@ -31,6 +31,7 @@ import * as M from './model'
 import * as R from './repos'
 import { bandView } from './ui/band'
 import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
+import { stepOpenId, stepRowKey } from './ui/dash/plan'
 import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
 import type { ChatLine, DashActions, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
@@ -140,13 +141,13 @@ function screenKey(now: number): string {
 
 /**
  * What the native dashboard draws that the keys above leave out, while the
- * pane shows it (the Dashboard, Org, an agent page, the sample): the coarse
+ * pane shows it (the Dashboard, Org, Plan, an agent page, the sample): the coarse
  * ages it words ("4m", so to the minute), the calls held on you and whether
  * the deck may answer each, each agent's tokens as a card words them, the
  * sample's state, and where the org chart's Client failed. '' otherwise.
  */
 function dashKeyOf(now: number): string {
-  const isDash = isPaneOpen && (view.tab === 'dashboard' || view.tab === 'org' || view.page !== '' || view.isDemo)
+  const isDash = isPaneOpen && (view.tab === 'dashboard' || view.tab === 'org' || view.tab === 'plan' || view.page !== '' || view.isDemo)
   if (!isDash) return ''
   const held = data.pending.map(item => `${item.id}:${item.kind}:${askers.has(item.id)}`).join(',')
   const tokens = data.agents.map(agent => `${agent.id}:${F.num(agent.tokensIn + agent.tokensOut + agent.cacheRead)}`).join(',')
@@ -1703,6 +1704,46 @@ function changed($: EngineInterface) {
   redraw($)
 }
 
+/** How long a scroll waits for the drawing a press asked for: the engine folds redraws to ten a second. */
+const SCROLL_MS = 150
+
+/**
+ * Brings the element keyed `key` into the pane's view, its top at the
+ * window's top, once the drawing that holds it is up: a press that changed
+ * the view draws it again first. Tried once more a beat later when the
+ * engine says no (not drawn yet); an engine without `$.ui.scroll` leaves the
+ * pane where it is.
+ */
+function scrollTo($: EngineInterface, key: string, tries = 2) {
+  $.clock.after(SCROLL_MS, () => {
+    try {
+      void $.ui
+        .scroll({ to: { key }, in: PANE, block: 'start' })
+        .then(result => {
+          if (result.deny !== undefined && tries > 1) scrollTo($, key, tries - 1)
+        })
+        .catch(() => undefined)
+    } catch {
+      // no scroll on this engine: the pane stays where it is
+    }
+  })
+}
+
+/** The Plan tab with step `key` open, scrolled to once drawn: `openStep`, and `/deck plan <n>`. */
+function showStep($: EngineInterface, key: string) {
+  view.tab = 'plan'
+  view.page = ''
+  view.planOpen = M.planOpenWith(view.planOpen, stepOpenId(key), true)
+  changed($)
+  scrollTo($, stepRowKey(key))
+}
+
+/** The key of this session's plan step numbered `n` (1 for the first, as the Plan tab numbers them); '' for none. */
+function stepAt(n: string): string {
+  const at = /^\d{1,3}$/.test(n) ? Number(n) - 1 : -1
+  return M.planOf(data).steps[at]?.key ?? ''
+}
+
 /** Opens row `id` (an agent, a plan step, a file) in the detail block; an agent's conversation reloads when that view is the one open. */
 function pickAgent($: EngineInterface, id: string) {
   view.agent = id
@@ -1721,9 +1762,18 @@ function actionsFor($: EngineInterface): DashActions {
       if (tab === 'changes' && view.file) void loadFileDiff($, view.file)
       changed($)
     },
-    openAgent: id => {
+    openAgent: (id, pane) => {
       view.page = id
       lastAgent = id
+      // Talk → and the like: the page opens on that pane, scrolled to it
+      if (pane) view.agentPane = pane
+      changed($)
+      if (pane) scrollTo($, `detail:${pane}`)
+    },
+    // the Plan tab with that step open, from wherever the press was (the Dashboard's goal, an agent page)
+    openStep: key => showStep($, key),
+    togglePlan: id => {
+      view.planOpen = M.planOpenWith(view.planOpen, id)
       changed($)
     },
     back: () => {
@@ -2483,8 +2533,8 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: the dashboard of your agents (what needs you, the goal, each agent, the figures, the activity), the org chart, the diffs they make (/deck demo: sample data; /deck web: in the Browser pane)',
-        argumentHint: '[dashboard|org|changes|stats|classic|details|demo|web|web stop|band|close|probe]',
+        description: 'Open Agent Deck: the dashboard of your agents (what needs you, the goal, each agent, the figures, the activity), the org chart, the plan, the diffs they make (/deck demo: sample data; /deck web: in the Browser pane)',
+        argumentHint: '[dashboard|org|plan [step]|changes|stats|classic|details|demo|web|web stop|band|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2544,11 +2594,16 @@ export const register: Register = on => {
       view.tab = 'agents'
       view.isDetailsOpen = true
     }
+    // /deck plan 3: the Plan tab with its third step open, as the web page's #/plan/<key> opens one
+    const isStepAsked = words[0] === 'plan' && words.length === 2
+    const step = isStepAsked ? stepAt(words[1] ?? '') : ''
     // a tab's name or its start; an earlier build's name (overview, diffs, commits, graph) lands on the tab that replaced it
-    const tab = arg === 'details' ? undefined : M.tabFor(arg)
+    const tab = arg === 'details' ? undefined : M.tabFor(isStepAsked ? 'plan' : arg)
     if (tab) view.tab = tab
     const isPlaced = await openPane($)
-    changed($)
+    if (step) showStep($, step)
+    else changed($)
+    if (isStepAsked && !step) return { text: `The plan has no step ${words[1] ?? ''}: /deck plan shows its steps.` }
     return isPlaced ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
   })
 
