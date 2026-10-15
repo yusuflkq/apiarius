@@ -291,11 +291,11 @@ test('isOwnWords: the person`s words are; a notification, an agent`s message, a 
   for (const text of not) expect(M.isOwnWords(text), text).toBe(false)
 })
 
-test('recoverGoal: the pasted blocks a prompt opens with are cut to their first line, the headline is its first line that says something (80 characters at most), and messages of tool results alone are passed over', () => {
+test('recoverGoal: the pasted blocks read as a live goal`s do ("[pasted text, n lines]"), the headline is its first line that says something (80 characters at most), and messages of tool results alone are passed over', () => {
   const pasted = '\n\n<pasted_content id="a702">\nRelease notes draft\nVersion: 3.2.0\n</pasted_content id="a702">\n<pasted_content>\n\nOwner: platform team\nDue: Friday\n</pasted_content>\n\ncan you cut this one to 200 words?'
   expect(M.recoverGoal([user(pasted), assistant('Looking.')])).toEqual({
-    text: 'Release notes draft\nOwner: platform team\ncan you cut this one to 200 words?',
-    headline: 'Release notes draft',
+    text: '[pasted text, 2 lines]\n[pasted text, 2 lines]\n\ncan you cut this one to 200 words?',
+    headline: '[pasted text, 2 lines]',
   })
   const words = 'word '.repeat(40).trim()
   const long = M.recoverGoal([user(`## ${words}\nthe rest`)])

@@ -763,13 +763,21 @@ function pruneFull(data: DeckData): void {
   }
 }
 
+/**
+ * Logs a message, its words cut for the page (`setMessageText`). A prompt
+ * of yours is logged as you wrote it (`cleanPrompt`: a paste as `[pasted
+ * text]`, no reminder or local command's echo); one with none of your words
+ * left is not logged at all, and the message returned is in no list.
+ */
 export function addMessage(
   data: DeckData,
   message: Omit<DeckMessage, 'id' | 'text'> & { text: string },
 ): DeckMessage {
   const { text, ...rest } = message
   const made: DeckMessage = { ...rest, id: messageIdOf(data, message.at, message.from, message.to), text: '' }
-  setMessageText(made, text)
+  const isPrompt = isYourPrompt(message)
+  setMessageText(made, isPrompt ? cleanPrompt(text) : text)
+  if (isPrompt && made.text === '') return made
   data.messages.push(made)
   if (data.messages.length > LIMITS.messages) data.messages.splice(0, data.messages.length - LIMITS.messages)
   pruneFull(data)
@@ -893,7 +901,8 @@ export function healData(value: DeckData, now: number): DeckData {
   data.agents = Array.isArray(value.agents) ? value.agents.filter(isRecord).map(agent => healAgent({ ...newAgent(agent.id, agent.kind, agent.name, now), ...agent })) : base.agents
   if (!agentOf(data, YOU)) data.agents.unshift(base.agents[0] as DeckAgent)
   if (!agentOf(data, MAIN)) data.agents.splice(1, 0, base.agents[1] as DeckAgent)
-  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage) : []
+  // a prompt of yours that an earlier build kept and that holds none of your words (a local command's echo) goes
+  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage).filter(message => !isYourPrompt(message) || message.text !== '') : []
   data.pending = healPending(value.pending)
   data.acks = healAcks(value.acks)
   data.edits = Array.isArray(value.edits) ? value.edits : []
@@ -952,16 +961,19 @@ function healGoals(value: unknown): DeckGoal[] {
     .filter(isRecord)
     .filter(goal => typeof goal.id === 'string' && typeof goal.text === 'string' && num(goal.at) !== undefined)
     .map(goal => {
+      // words an earlier build kept with a paste's or a reminder's tags read as the person wrote them; a goal with none of theirs left keeps what it had
+      const text = healWords(goal.text as string) || (goal.text as string)
       const healed: DeckGoal = {
         id: goal.id as string,
-        headline: typeof goal.headline === 'string' ? goal.headline : headlineOf(goal.text as string),
-        text: goal.text as string,
+        headline: typeof goal.headline === 'string' && healWords(goal.headline) === goal.headline ? goal.headline : headlineOf(text),
+        text,
         at: goal.at as number,
         followUps: Array.isArray(goal.followUps)
           ? goal.followUps
               .filter(isRecord)
               .filter(one => typeof one.text === 'string' && num(one.at) !== undefined)
-              .map(one => ({ text: one.text as string, at: one.at as number }))
+              .map(one => ({ text: healWords(one.text as string), at: one.at as number }))
+              .filter(one => one.text !== '')
               .slice(-LIMITS.followUps)
           : [],
         origin: typeof goal.origin === 'string' ? goal.origin : 'composer',
@@ -1038,13 +1050,28 @@ function healWorkflows(value: unknown): DeckWorkflow[] {
     .slice(-LIMITS.workflows)
 }
 
-/** One restored message's newer fields, each kept only in its own shape. */
+/**
+ * One restored message's newer fields, each kept only in its own shape. A
+ * prompt of yours that an earlier build kept with a paste's or a reminder's
+ * tags reads as you wrote it (`cleanPrompt`; '' with none of your words left).
+ */
 function healMessage(value: Record<string, unknown>): DeckMessage {
   const message = value as unknown as DeckMessage
   if (typeof value.full !== 'string') delete message.full
   if (value.isSaved !== true) delete message.isSaved
   for (const field of ['ackId', 'callId'] as const) if (typeof value[field] !== 'string') delete message[field]
+  if (isYourPrompt(message) && typeof value.text === 'string') {
+    const kept = message.full ?? value.text
+    const words = cleanPrompt(kept)
+    if (words !== kept.trim()) setMessageText(message, words)
+  }
   return message
+}
+
+/** Words an earlier build kept with a paste's, a reminder's or a local command's tags, as the person wrote them (`cleanPrompt`); words with none stay exactly as they were. */
+function healWords(text: string): string {
+  const words = cleanPrompt(text)
+  return words === text.trim() ? text : words
 }
 
 const PENDING_KINDS: readonly DeckPending['kind'][] = ['question', 'permission']
@@ -2113,6 +2140,92 @@ export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: Dec
   return { agent: row, ...(from !== undefined ? { from } : {}) }
 }
 
+// Your words: a prompt as the person wrote it, without what the app and the engine wrap around it.
+
+/**
+ * The engine's blocks in a prompt that are no words of the person's, each
+ * taken out whole: a reminder, and a local command's echo (its caveat, the
+ * command's name, message and arguments, what it printed; a shell command's
+ * too).
+ */
+const NOT_WORDS: readonly string[] = [
+  'system-reminder',
+  'local-command-caveat',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command-stdout',
+  'local-command-stderr',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+]
+
+/** One such block with the blanks beside it on its line; one left open runs to the end. */
+const NOT_WORDS_BLOCK = new RegExp(`[ \\t]*<(${NOT_WORDS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?(?:</\\1\\s*>|$)[ \\t]*`, 'g')
+
+/** A pasted block's start, `<pasted_content id="3c84">` (the Desktop app's), and any block's end, `</pasted_content id="3c84">`. */
+const PASTE_START = /<pasted_content(\s[^>]*)?>/
+const PASTE_END = /<\/pasted_content(?:\s[^>]*)?>/
+
+/** What a pasted block of `body` reads as: `[pasted text]`, or `[pasted text, 12 lines]` for more than one line (blank lines at its ends not counted). */
+function pasteMarkOf(body: string): string {
+  const lines = body.split('\n')
+  while (lines.length > 0 && (lines[0] ?? '').trim() === '') lines.shift()
+  while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') lines.pop()
+  return lines.length > 1 ? `[pasted text, ${lines.length} lines]` : '[pasted text]'
+}
+
+/** `text` with each pasted block as its mark: a block ends where the end with its own id is, else at the next end, else at the end of the text. */
+function markPastes(text: string): string {
+  let out = ''
+  let rest = text
+  for (let start = PASTE_START.exec(rest); start; start = PASTE_START.exec(rest)) {
+    const body = rest.slice(start.index + start[0].length)
+    const own = start[1] ? `</pasted_content${start[1]}>` : ''
+    const ownAt = own ? body.indexOf(own) : -1
+    const next = ownAt >= 0 ? null : PASTE_END.exec(body)
+    const end = ownAt >= 0 ? { at: ownAt, length: own.length } : next ? { at: next.index, length: next[0].length } : null
+    out += rest.slice(0, start.index) + pasteMarkOf(end ? body.slice(0, end.at) : body)
+    rest = end ? body.slice(end.at + end.length) : ''
+  }
+  return out + rest
+}
+
+/**
+ * A prompt's text as the person wrote it, for the words people read (the
+ * goal's headline and text, its follow-ups, your prompts in Talk): each
+ * pasted block (`<pasted_content …>…</pasted_content …>`, the Desktop app's)
+ * as `[pasted text]`, or `[pasted text, 12 lines]` past one line, with your
+ * words around it kept; no reminder (`<system-reminder>…</system-reminder>`)
+ * and no local command's echo (`<command-name>`, `<command-message>`,
+ * `<command-args>`, `<local-command-caveat>`, what it printed). Trimmed; ''
+ * when none of the person's words are left, as for a local command's echo
+ * alone. Text with none of these comes back as it was, trimmed.
+ */
+export function cleanPrompt(text: string): string {
+  const plain = text.replace(/\r\n?/g, '\n')
+  const cut = markPastes(plain).replace(NOT_WORDS_BLOCK, (block: string, _name: string, at: number, whole: string) => {
+    // words right beside it on both sides, on its line, stay apart
+    const before = whole[at - 1] ?? ''
+    const after = whole[at + block.length] ?? ''
+    return /\S/.test(before) && /\S/.test(after) ? ' ' : ''
+  })
+  if (cut === plain) return plain.trim()
+  // what went leaves no blanks at a line's end, nor more than one empty line in a row
+  return cut
+    .split('\n')
+    .map(line => line.trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** Whether a message is a prompt of yours to the Orchestrator: your words as you typed or pasted them, read as `cleanPrompt` cleans them. */
+function isYourPrompt(message: Pick<DeckMessage, 'from' | 'kind'>): boolean {
+  return message.from === YOU && message.kind === 'prompt'
+}
+
 // Goals: what the person asked for.
 
 /** Whether a prompt is the person's own words: typed (composer), from a Remote Control client (bridge), the SDK host's, or a plugin's sent as theirs. */
@@ -2124,12 +2237,15 @@ export type PromptKind = 'goal' | 'followUp' | 'event'
 
 /**
  * What a submitted prompt starts. Anything not in the person's own words is
- * an event. Their words start a new goal while the session is idle (no
- * `turnId`: not typed over a running turn; the Orchestrator not running)
- * with nothing live from the last goal; otherwise they follow it up.
+ * an event, and so is a prompt with none of their words in its `text` once
+ * cleaned (`cleanPrompt`): a local command's echo, a reminder alone. Their
+ * words start a new goal while the session is idle (no `turnId`: not typed
+ * over a running turn; the Orchestrator not running) with nothing live from
+ * the last goal; otherwise they follow it up.
  */
-export function promptKindOf(data: DeckData, prompt: { origin: { kind: string; asUser?: unknown }; turnId?: string }): PromptKind {
+export function promptKindOf(data: DeckData, prompt: { origin: { kind: string; asUser?: unknown }; turnId?: string; text?: string }): PromptKind {
   if (!isUsersWords(prompt.origin)) return 'event'
+  if (prompt.text !== undefined && cleanPrompt(prompt.text) === '') return 'event'
   const last = goalOf(data)
   if (!last || data.isNewGoalNext === true) return 'goal'
   if (prompt.turnId !== undefined) return 'followUp'
@@ -2144,9 +2260,14 @@ export function headlineOf(text: string): string {
   return trunc(firstLine(text) || oneLine(text), LIMITS.headlineChars)
 }
 
-/** Records a prompt in the person's words: a new goal (the newest 20 kept), or a follow-up of the goal in hand. */
+/**
+ * Records a prompt in the person's words: a new goal (the newest 20 kept),
+ * or a follow-up of the goal in hand. Its words, and a headline given, are
+ * read as they wrote them (`cleanPrompt`); a prompt with none of theirs left
+ * records nothing.
+ */
 export function noteGoal(data: DeckData, kind: 'goal' | 'followUp', prompt: { text: string; origin: string; at: number; headline?: string }): DeckGoal | undefined {
-  const text = prompt.text.trim()
+  const text = cleanPrompt(prompt.text)
   if (text === '') return undefined
   const last = goalOf(data)
   if (kind === 'followUp' && last) {
@@ -2156,7 +2277,7 @@ export function noteGoal(data: DeckData, kind: 'goal' | 'followUp', prompt: { te
   }
   let id = `g${prompt.at}`
   for (let n = 2; data.goals.some(goal => goal.id === id); n++) id = `g${prompt.at}-${n}`
-  const headline = prompt.headline ? trunc(oneLine(prompt.headline), LIMITS.headlineChars) : ''
+  const headline = prompt.headline ? trunc(oneLine(cleanPrompt(prompt.headline)), LIMITS.headlineChars) : ''
   const goal: DeckGoal = { id, headline: headline || headlineOf(text), text: trunc(text, LIMITS.goalChars), at: prompt.at, followUps: [], origin: prompt.origin }
   data.goals.push(goal)
   if (data.goals.length > LIMITS.goals) data.goals.splice(0, data.goals.length - LIMITS.goals)
@@ -2174,10 +2295,10 @@ export function armNewGoal(data: DeckData): void {
   data.isNewGoalNext = true
 }
 
-/** Gives the goal in hand a slash command's own words as its headline, when it started at or after `since`. */
+/** Gives the goal in hand a slash command's own words as its headline (as `cleanPrompt` reads them), when it started at or after `since`. */
 export function retitleGoal(data: DeckData, headline: string, since: number): boolean {
   const goal = goalOf(data)
-  const next = trunc(oneLine(headline), LIMITS.headlineChars)
+  const next = trunc(oneLine(cleanPrompt(headline)), LIMITS.headlineChars)
   if (!goal || goal.at < since || next === '' || next === goal.headline) return false
   goal.headline = next
   return true
@@ -2237,38 +2358,19 @@ export function isNoticeText(text: string): boolean {
   return NOTICE_OPENINGS.some(opening => lead.startsWith(opening))
 }
 
-const PASTE_OPEN = /^<pasted_content(?:\s[^>]*)?>/
-const PASTE_CLOSE = /<\/pasted_content(?:\s[^>]*)?>/
-
-/** `text` with the `<pasted_content …>` blocks it opens with cut to each block's first line. */
-function unpasted(text: string): string {
-  const kept: string[] = []
-  let rest = text.trimStart()
-  for (let open = PASTE_OPEN.exec(rest); open; open = PASTE_OPEN.exec(rest)) {
-    const body = rest.slice(open[0].length)
-    const close = PASTE_CLOSE.exec(body)
-    const first = (close ? body.slice(0, close.index) : body)
-      .split('\n')
-      .map(line => line.trim())
-      .find(line => line !== '')
-    if (first) kept.push(first)
-    rest = close ? body.slice(close.index + close[0].length).trimStart() : ''
-  }
-  return [...kept, rest].filter(part => part !== '').join('\n')
-}
-
 /**
  * The goal a transcript holds: its newest user message in the person's own
  * words (`isOwnWords`; one of tool results alone, or of whitespace, is none),
- * the pasted blocks it opens with cut to their first line, and its headline,
- * the first line that says something (80 characters at most). Undefined when
+ * read as they wrote it, as a live goal is (`cleanPrompt`: each pasted block
+ * as its mark, no reminder or local command's echo), and its headline, the
+ * first line that says something (80 characters at most). Undefined when
  * there is none. One goal: the messages before it are not its follow-ups.
  */
 export function recoverGoal(messages: readonly TranscriptMessage[]): { text: string; headline: string } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (!message || message.role !== 'user' || message.text.trim() === '') continue
-    const text = unpasted(message.text).trim()
+    const text = cleanPrompt(message.text)
     if (isOwnWords(text)) return { text, headline: headlineOf(text) }
   }
   return undefined
