@@ -27,7 +27,7 @@ import { P, toneOf } from './palette'
 import { AVATAR, avatar, pill, quiet, sectionHead, tickTexts } from './parts'
 
 /** The tab names Back says it returns to. */
-const TAB_NAME: Readonly<Record<DeckTab, string>> = { dashboard: 'Dashboard', org: 'Org', agents: 'Classic', changes: 'Changes', stats: 'Stats' }
+const TAB_NAME: Readonly<Record<DeckTab, string>> = { dashboard: 'Dashboard', org: 'Org', plan: 'Plan', agents: 'Classic', changes: 'Changes', stats: 'Stats' }
 
 /** The characters a task or result shows before Show more, and at most after it. */
 const SHORT = 360
