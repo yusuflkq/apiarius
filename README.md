@@ -34,7 +34,7 @@ To load it for one terminal session only: `claude --plugin-dir <path>`.
 | `/deck band` | Hides or shows the agents band above the prompt |
 | `/deck close` | Closes the pane |
 
-Keys while the pane has focus: `1`–`6` switch tabs (Dashboard, Org, Plan, Changes, Stats, Classic); on an agent page `b` goes back and `d` / `t` / `c` show its Diffs, Talk or Tool calls. In Classic: `w` opens the dashboard in the Browser pane, `e` toggles Details, `n` opens what needs you; in Details, `o` selects the Orchestrator, `f` / `z` fold or zoom the selected row, `u` goes back up a zoom level.
+Keys while the pane has focus: `1`–`6` switch tabs (Dashboard, Org, Plan, Changes, Stats, Classic); on an agent page `b` goes back and `d` / `a` / `t` show its Diffs, Activity or Talk. In Classic: `w` opens the dashboard in the Browser pane, `e` toggles Details, `n` opens what needs you; in Details, `o` selects the Orchestrator, `f` / `z` fold or zoom the selected row, `u` goes back up a zoom level.
 
 ## The dashboard
 
@@ -60,7 +60,7 @@ A sidebar lists the pages and every agent, with live and waiting dots.
   - **Open in browser** starts `/deck web`.
 - **Org:** the org chart, cards over connectors. Click a card to open its agent; drag or the arrow keys pan a big chart. VS Code and mobile list the agents as an indented tree.
 - **Plan:** the goal and its follow-ups; how far the plan is (steps done, in progress and failed), where it came from, and its bar; then a row for each step with its status, its words, who works on it, and whether it needs you. Click a row to open it: a card for each agent on the step (with the agents it started under it), showing what it is doing now, its checklist, its last three tool calls, the files it touched, its result and anything it waits on you for, then **Open agent →** and **Talk →**. A step the Orchestrator does itself shows its checklist item and what it just did. Open steps stay open while the pane updates.
-- **Agent page:** its avatar, name, type, who it reports to and status; its Now line, task and checklist; what it waits on you for; its result; then Diffs (its exact patches), Talk (with a box to message it) and Tool calls. Back returns to the tab you came from.
+- **Agent page:** its avatar, name, type, who it reports to and status; four boxes for its model, tokens, lines changed and tool calls; its Now line, its task beside its checklist, what it waits on you for and its result. Then Diffs (its exact patches), Activity (each tool call with its description, how long it took and when) and Talk (chat bubbles, each of your messages with its delivery status, and a box to message it). Back returns to the tab you came from.
 - **Classic:** the earlier Agents tab, kept for now. A short summary, and **Details** for the full outline: the Orchestrator, its plan steps, the agents under the step they serve (sub-agents under their parent), then the files they are changing. Click a row for its detail.
 - **Changes:** the git checker: branch and upstream, uncommitted files with who edited each, and recent commits with the agent that made each. Press a file for its hunks or a commit for its patch. Outside a git repo, it lists the agents' edits by file.
 - **Stats:** session time, tool calls, lines changed by agents, uncommitted files, tokens and cost; activity over the last 30 minutes; lines changed per day over the last 7 days.
