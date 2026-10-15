@@ -734,3 +734,58 @@ test('end to end: a file pressed on the Dashboard opens in Changes, open there e
   expect((await ui.findAll({ type: 'Code' })).some(code => String(code.props.source).includes('LIMIT'))).toBe(true)
   await ui.unmount()
 })
+
+/** workData with the Orchestrator's own three-step todo list: the first step done, the second in hand. */
+function planData(): DeckData {
+  const data = workData()
+  const main = M.agentOf(data, M.MAIN)!
+  M.noteTodo(data, main, 'TodoWrite', { todos: [] }, { oldTodos: [], newTodos: [todo('Find the bug', 'completed'), todo('Fix it and run the tests', 'in_progress', 'Fixing it'), todo('Review the diff', 'pending')] }, NOW - 500_000)
+  return data
+}
+
+test('the goal card`s "Step n of m · <step>" is a plain Button: it opens the Plan tab on the step in hand, or the Plan tab itself while none is', async ($, on) => {
+  const calls: string[] = []
+  const state = stateOf(planData())
+  const active = state.plan.steps.find(step => step.status === 'active')
+  expect(active?.text).toBe('Fix it and run the tests')
+  probe(on, kit => dashboardTab(kit, state, noting(calls), NOW, null))
+  await started($, on)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface, 68, PROBE))
+    const link = await ui.find({ key: 'dash:step' })
+    expect(link?.props.plain).toBe(true)
+    expect(link?.text).toBe('Step 2 of 3 · Fix it and run the tests')
+    expect(Array.from(link?.text ?? '').length <= 67 - 4 - 2 - (surface === 'terminal' ? 0 : 2)).toBe(true)
+    calls.length = 0
+    await ui.press({ plugin: 'test', key: 'dash:step' })
+    expect(calls).toEqual([`openStep:${JSON.stringify(active?.key)}`])
+    await ui.unmount()
+  }
+  // every step done: "Plan done", and a press opens the Plan tab
+  for (const step of state.plan.steps) step.status = 'done'
+  state.summary.step = null
+  state.summary.stepText = null
+  const ui = await $.ui.mount(pane('desktop', 84, PROBE))
+  expect((await ui.find({ key: 'dash:step' }))?.text).toBe('Plan done')
+  calls.length = 0
+  await ui.press({ plugin: 'test', key: 'dash:step' })
+  expect(calls).toEqual(['setTab:"plan"'])
+  await ui.unmount()
+})
+
+test('end to end: the goal card`s step opens the Plan tab with that step open', async ($, on) => {
+  await started($, on, snapshot(planData()))
+  await $.command.run(deck(''))
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await ui.press({ key: 'dash:step' })
+    await ui.redraw()
+    expect((await ui.find({ key: 'tab:plan' }))?.props.dimColor).toBe(false)
+    const open = (await ui.findAll({ type: 'Box' })).filter(box => box.key?.startsWith('plan:body:'))
+    expect(open.length).toBe(1)
+    expect((await ui.find({ key: open[0]?.key?.replace('plan:body:', 'plan:step:') ?? '' }))?.text).toContain('Fix it and run the tests')
+    await ui.press({ key: 'tab:dashboard' })
+    await ui.redraw()
+    await ui.unmount()
+  }
+})

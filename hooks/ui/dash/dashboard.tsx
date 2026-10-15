@@ -6,7 +6,8 @@
  * - what needs you (./needs): questions to answer here, permissions to give
  *   in Claude Code, or the needs-you banner;
  * - the goal: its headline and up to two lines of its words, the follow-up
- *   last typed, "Step n of m · <step>" and the plan's segmented bar;
+ *   last typed, "Step n of m · <step>" (a press opens that step on the
+ *   Plan tab) and the plan's segmented bar;
  * - the agents: a bordered card each, two a row from 60 cells, one below:
  *   avatar, name, status pill, now line, "model · tokens · started 4m ago",
  *   and "Open →"; every line of it a press that opens the agent's page; the
@@ -45,7 +46,7 @@ export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, no
     <Box flexDirection="column" gap={1}>
       {needsCards(kit, state, actions, now, 'dash')}
       {needsBanner(kit, state, actions)}
-      {goalCard(kit, state, now)}
+      {goalCard(kit, state, now, actions)}
       {agentsSection(kit, state, actions, now)}
       {kpiStrip(kit, state)}
       {activitySection(kit, state, actions, now)}
@@ -72,8 +73,27 @@ function stepsBar(kit: Kit, statuses: readonly string[], room: number): RenderEl
   )
 }
 
-/** The goal: its headline bold beside its age, two lines of its words at most, the follow-up typed last, then where the plan stands. */
-function goalCard(kit: Kit, state: WebState, now: number): RenderElement {
+/**
+ * Where the plan stands, "Step 2 of 5 · <step>", as one plain Button: it
+ * opens the Plan tab on the step in hand (`openStep`, that step open and in
+ * view), or the Plan tab itself while no step is in hand. Cut to one line.
+ */
+function stepLink(kit: Kit, state: WebState, step: { lead: string; text: string }, room: number, actions: DashActions): RenderElement {
+  const { Text } = kit
+  const active = state.plan.steps.find(one => one.status === 'active')
+  const open = () => (active ? actions.openStep(active.key) : actions.setTab('plan'))
+  const width = Math.max(8, room - buttonSlack(kit))
+  const lead = cut(step.lead, width)
+  const textRoom = width - Array.from(lead).length - 3
+  const parts = [
+    <Text color={P.fg2}>{lead}</Text>,
+    ...(step.text && textRoom >= 4 ? [<Text color={P.muted3}> · </Text>, <Text color={P.muted}>{cut(step.text, textRoom)}</Text>] : []),
+  ]
+  return pressLine(kit, 'dash:step', parts, open)
+}
+
+/** The goal: its headline bold beside its age, two lines of its words at most, the follow-up typed last, then where the plan stands (a press opens that step on the Plan tab). */
+function goalCard(kit: Kit, state: WebState, now: number, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const goal = state.goal
   const room = Math.max(16, kit.columns - CARD_CHROME - 2)
@@ -123,13 +143,7 @@ function goalCard(kit: Kit, state: WebState, now: number): RenderElement {
             </Box>
           </Box>
         ) : null}
-        {step ? (
-          <Text wrap="truncate-end">
-            <Text color={P.fg2}>{step.lead}</Text>
-            {step.text ? <Text color={P.muted3}> · </Text> : null}
-            {step.text ? <Text color={P.muted}>{step.text}</Text> : null}
-          </Text>
-        ) : null}
+        {step ? stepLink(kit, state, step, room, actions) : null}
         {statuses.length > 0 ? stepsBar(kit, statuses, room) : null}
       </Box>
     </Box>
