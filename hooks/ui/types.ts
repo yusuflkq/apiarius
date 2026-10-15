@@ -99,7 +99,13 @@ export type Actions = {
   toggleFiles: () => void
   toggleBand: () => void
   refresh: () => void
-  sendChat: (agentId: string, text: string) => void
+  /**
+   * Sends `text` to agent `agentId` (to the Orchestrator: your next prompt).
+   * With `ackId` (`[A-Za-z0-9_-]`, at most 40) what came of it is noted in the
+   * state's `acks` under that id, and the message carries it, as for the web
+   * page's `chat` command.
+   */
+  sendChat: (agentId: string, text: string, ackId?: string) => void
   review: (text: string) => void
   open: (tab: DeckTab) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
@@ -140,6 +146,23 @@ export type DashActions = Actions & {
   answer: (callId: string, answers: Record<string, string>) => void
   /** Draws again after a change of the pane's own state (a pick in a question). */
   redraw: () => void
+  /**
+   * Reads the whole text of message `id` that the state cut (`isCut`), as the
+   * web page's `/message/<id>` serves it: `onRead` gets it (null when it cannot
+   * be read), then the pane draws again.
+   */
+  loadMessage: (id: string, onRead: (text: string | null) => void) => void
+  /**
+   * Brings the element keyed `key` into the pane's view once it is drawn:
+   * `start` puts its top at the window's top (the default), `nearest` moves the
+   * least that shows it. An agent page's Talk stops keeping to its end.
+   */
+  reveal: (key: string, block?: 'start' | 'nearest') => void
+  /**
+   * Takes the pane to its end (on an agent page's Talk, the newest message and
+   * the box that sends) and keeps it there as messages come, while you stay.
+   */
+  followTalk: () => void
   /** Leaves the sample (`/deck demo`) for this session's own deck. */
   exitDemo: () => void
 }

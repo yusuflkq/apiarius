@@ -506,7 +506,7 @@ test('the agent page reads as the web deck`s: its four figures in boxes, its tas
       expect((await ui.find({ type: 'Text', text: /^✕ failed$/ }))?.props.color).toBe(P.failText)
       expect(await ui.find({ type: 'Text', text: 'Tool calls 4' })).toBeUndefined()
 
-      // Talk: the thread and the field that sends, as the detail draws them
+      // Talk: the thread as the web's chat bubbles, and the field that sends
       await ui.press({ key: 'detail:chat' })
       await ui.redraw()
       expect((await ui.find({ key: 'detail:chat' }))?.props.dimColor).toBe(false)
@@ -588,7 +588,7 @@ test('in /deck demo every agent`s page is full: its figures, task and checklist;
     expect((await ui.findAll({ type: 'Box' })).some(box => box.key?.startsWith('call:'))).toBe(true)
     await ui.press({ key: 'detail:chat' })
     await ui.redraw()
-    expect((await ui.findAll({ type: 'Button' })).some(button => button.key?.startsWith('msg:'))).toBe(true)
+    expect((await ui.findAll({ type: 'Box' })).some(box => box.key?.startsWith('msg:'))).toBe(true)
     await ui.press({ key: 'detail:edits' })
     await ui.redraw()
     if (id !== 'agent-helper') expect((await ui.findAll({ type: 'Code' })).some(code => String(code.props.source).includes('@@'))).toBe(true)

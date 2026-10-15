@@ -32,6 +32,7 @@ import * as R from './repos'
 import { bandView } from './ui/band'
 import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
 import { stepOpenId, stepRowKey } from './ui/dash/plan'
+import { talkEndOf } from './ui/dash/talk'
 import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
 import type { ChatLine, DashActions, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
@@ -1709,24 +1710,102 @@ const SCROLL_MS = 150
 
 /**
  * Brings the element keyed `key` into the pane's view, its top at the
- * window's top, once the drawing that holds it is up: a press that changed
- * the view draws it again first. Tried once more a beat later when the
- * engine says no (not drawn yet); an engine without `$.ui.scroll` leaves the
- * pane where it is.
+ * window's top (`block` start; `nearest` moves the least that shows it),
+ * once the drawing that holds it is up: a press that changed the view draws
+ * it again first. Tried once more a beat later when the engine says no (not
+ * drawn yet); an engine without `$.ui.scroll` leaves the pane where it is.
  */
-function scrollTo($: EngineInterface, key: string, tries = 2) {
+function scrollTo($: EngineInterface, key: string, block: 'start' | 'nearest' = 'start', tries = 2) {
   $.clock.after(SCROLL_MS, () => {
     try {
       void $.ui
-        .scroll({ to: { key }, in: PANE, block: 'start' })
+        .scroll({ to: { key }, in: PANE, block })
         .then(result => {
-          if (result.deny !== undefined && tries > 1) scrollTo($, key, tries - 1)
+          if (result.deny !== undefined && tries > 1) scrollTo($, key, block, tries - 1)
         })
         .catch(() => undefined)
     } catch {
       // no scroll on this engine: the pane stays where it is
     }
   })
+}
+
+/**
+ * An agent page's Talk keeps to its newest message while you are at the
+ * pane's end, as a chat does: the Talk it showed last (`agent`, what its
+ * thread ended with) and whether you are at the end. You are there once
+ * Talk opens on a press or you send from it, and while your own scrolling
+ * (`ui.scroll`) leaves you there; not once you scroll up or a press brings
+ * something above into view.
+ */
+const talkView = { agent: '', end: '', isAtEnd: false }
+
+/** Takes the pane to its end, where the engine keeps it while the drawing grows and nothing else moves it. */
+function scrollToEnd($: EngineInterface) {
+  $.clock.after(SCROLL_MS, () => {
+    try {
+      void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
+    } catch {
+      // no scroll on this engine: the pane stays where it is
+    }
+  })
+}
+
+/** Talk opened on a press, or you sent from it: the pane goes to its end (the newest message and the box) and keeps to it. */
+function followTalk($: EngineInterface) {
+  talkView.agent = view.page
+  talkView.isAtEnd = true
+  scrollToEnd($)
+}
+
+/**
+ * At each drawing of the pane, with the state it draws: something new at
+ * the end of the Talk on show takes the pane to its end while you were
+ * there; another page, pane or agent leaves it to a press.
+ */
+function keepTalk($: EngineInterface, state: W.WebState | null) {
+  const id = state && view.page !== '' && view.agentPane === 'chat' ? view.page : ''
+  const end = state && id !== '' ? talkEndOf(state, id) : ''
+  if (id === '' || id !== talkView.agent) {
+    talkView.agent = id
+    talkView.isAtEnd = false
+  } else if (end !== talkView.end && talkView.isAtEnd) {
+    scrollToEnd($)
+  }
+  talkView.end = end
+}
+
+/**
+ * The whole text of message `id` the state cut (`isCut`), for an agent
+ * page's Show more, as the web page's `/message/<id>` serves it: the deck's
+ * own copy while it holds one (whole under 700 characters; a longer one's
+ * kept until the web deck writes it), else the file the web deck wrote
+ * (`.web/<session>/messages/<id>.md`), else in the sample its fixture's
+ * (web/fixtures/messages). `onRead` gets it, or null; then the pane draws.
+ */
+async function readMessage($: EngineInterface, id: string, onRead: (text: string | null) => void): Promise<void> {
+  let text: string | null = null
+  if (/^[A-Za-z0-9_-]{1,200}$/.test(id)) {
+    const own = view.isDemo ? undefined : data.messages.find(message => W.webIdOf(message.id) === id)
+    if (own?.full !== undefined) text = own.full
+    else if (own && own.isSaved !== true && Array.from(own.text).length < M.LIMITS.messageChars) text = own.text
+    else {
+      const root = $.plugin.root.replace(/[\\/]+$/, '')
+      const dir = view.isDemo ? `${root}/web/fixtures` : web.dir || W.webDirOf(root, sessionId)
+      try {
+        text = await $.fs.read(`${dir}/messages/${id}.md`)
+      } catch {
+        // not on disk: the deck's own cut is the most there is
+        text = own ? own.text : null
+      }
+    }
+  }
+  try {
+    onRead(text === null ? null : text.replace(/\r\n/g, '\n').trimEnd())
+  } catch {
+    // the pane goes on without it
+  }
+  redraw($)
 }
 
 /** The Plan tab with step `key` open, scrolled to once drawn: `openStep`, and `/deck plan <n>`. */
@@ -1765,10 +1844,11 @@ function actionsFor($: EngineInterface): DashActions {
     openAgent: (id, pane) => {
       view.page = id
       lastAgent = id
-      // Talk → and the like: the page opens on that pane, scrolled to it
+      // Talk → and the like: the page opens on that pane, scrolled to it (Talk to its end: the newest message and the box)
       if (pane) view.agentPane = pane
       changed($)
-      if (pane) scrollTo($, `detail:${pane}`)
+      if (pane === 'chat') followTalk($)
+      else if (pane) scrollTo($, `detail:${pane}`)
     },
     // the Plan tab with that step open, from wherever the press was (the Dashboard's goal, an agent page)
     openStep: key => showStep($, key),
@@ -1782,6 +1862,12 @@ function actionsFor($: EngineInterface): DashActions {
     },
     answer: (callId, answers) => (view.isDemo ? void answerInSample($, callId, answers) : answerFromPane($, callId, answers)),
     redraw: () => redraw($),
+    loadMessage: (id, onRead) => void readMessage($, id, onRead),
+    reveal: (key, block) => {
+      talkView.isAtEnd = false
+      scrollTo($, key, block)
+    },
+    followTalk: () => followTalk($),
     exitDemo: () => {
       leaveDemo()
       view.page = ''
@@ -1847,7 +1933,8 @@ function actionsFor($: EngineInterface): DashActions {
       $.ui.toast('Agent Deck refreshed')
     },
     // the sample's Talk sends nothing: its agents are a recording, and its Orchestrator is not this session's
-    sendChat: (agentId, text) => (view.isDemo ? $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.') : void sendChat($, agentId, text)),
+    // a send from the page's Talk carries an id: its ack says what came of it, under the message
+    sendChat: (agentId, text, ackId) => (view.isDemo ? $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.') : void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))),
     review: text => fillReview($, text),
     // the band's Open: this session's deck on that tab
     open: tab => {
@@ -3204,7 +3291,16 @@ export const register: Register = on => {
     const now = await $.clock.now()
     shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
-    return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface))
+    const dash = dashOf(now, e.surface)
+    keepTalk($, dash.state)
+    return deckView(kit, modelOf(now), actionsFor($), dash)
+  })
+
+  // your own scrolling of the pane: whether it leaves you at the end, where an agent page's Talk keeps to its newest message
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const result = await next(e)
+    if (e.origin.kind === 'person' && result.deny === undefined) talkView.isAtEnd = e.offset >= e.contentRows - e.bodyRows - 1
+    return result
   })
 
   // what the org chart's Client posts: a card clicked opens that agent's page

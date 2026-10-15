@@ -911,9 +911,9 @@ function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: 
  * own Edit and Write calls, each file's header over its exact hunks, the
  * files edited last drawn from the budget first; drawn again with
  * DETAIL_LEAN's shorter lists and diffs past DETAIL_CHARS. Null for an id
- * that names no agent. (The page draws its tabs and its Activity itself,
- * from the web deck's state: ./dash/agent. Classic's detail keeps its own
- * switch: Diffs · Talk · Tool calls.)
+ * that names no agent. (The page draws its tabs, its Activity and its Talk
+ * itself, from the web deck's state: ./dash/agent. Classic's detail keeps
+ * its own switch: Diffs · Talk · Tool calls.)
  */
 export function agentDiffsBlock(kit: Kit, data: DeckData, id: string): RenderElement | null {
   const agent = agentOf(data, id)
@@ -922,22 +922,6 @@ export function agentDiffsBlock(kit: Kit, data: DeckData, id: string): RenderEle
   const full = diffs(kit, vm, DETAIL_ROOM)
   if (treeSize(full).chars <= DETAIL_CHARS) return full
   return diffs(kit, vm, leaner(DETAIL_ROOM))
-}
-
-/**
- * An agent's Talk as its page draws it, from the deck model `data`: the
- * detail's two lines a message (who to whom and when, then its first line;
- * a press opens it whole) and the field that sends; drawn again with
- * DETAIL_LEAN's shorter list past DETAIL_CHARS. Null for an id that names
- * no agent.
- */
-export function agentTalkBlock(kit: Kit, data: DeckData, view: DeckView, id: string, actions: Actions): RenderElement | null {
-  const agent = agentOf(data, id)
-  if (!agent || agent.kind === 'you') return null
-  const full = talk(kit, talkVM(data, agent, DETAIL_ROOM), DETAIL_ROOM, actions, view.agentPane)
-  if (treeSize(full).chars <= DETAIL_CHARS) return full
-  const lean = leaner(DETAIL_ROOM)
-  return talk(kit, talkVM(data, agent, lean), lean, actions, view.agentPane)
 }
 
 /** Diffs with none: why, in the page's words. */

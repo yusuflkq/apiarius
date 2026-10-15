@@ -21,8 +21,8 @@
  *   its messages the state holds), the one open the view's: Diffs, its exact
  *   patches from the deck model of this session or the sample's (detail.tsx
  *   `agentDiffsBlock`); Activity, its calls as the web's tab rows them
- *   (./activity); Talk, its messages and the field that sends (detail.tsx
- *   `agentTalkBlock`).
+ *   (./activity); Talk, its messages as the web's chat bubbles and the box
+ *   that sends (./talk). A press on Talk takes the pane to its end.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks
  * module. The texts opened with Show more are this module's own.
@@ -32,13 +32,14 @@ import type { BoxProps, RenderElement } from 'claude-code'
 import type { DeckAgentPane, DeckData, DeckTab, DeckView } from '../../../types'
 import { clean } from '../../format'
 import type { WebAgent, WebState } from '../../web'
-import { agentDiffsBlock, agentTalkBlock } from '../detail'
+import { agentDiffsBlock } from '../detail'
 import type { DashActions, Kit } from '../types'
 import { activityTab } from './activity'
 import { agentOf, ago, agoText, cut, flat, foldText, isLive, isRunning, nowLine, num, plural, reportsTo, span, tokensOf } from './dashModel'
 import { needsCards } from './needs'
 import { P, barSvg, mix, toneOf, type IconName } from './palette'
 import { AVATAR, CARD_CHROME, avatar, icon, notePagePane, openAgentPage, pill, quiet, svgOf, tickTexts, widthFor } from './parts'
+import { talkTab } from './talk'
 
 /** The tab names Back says it returns to. */
 const TAB_NAME: Readonly<Record<DeckTab, string>> = { dashboard: 'Dashboard', org: 'Org', plan: 'Plan', agents: 'Classic', changes: 'Changes', stats: 'Stats' }
@@ -102,22 +103,23 @@ export function paneCountsOf(state: WebState, id: string): Record<DeckAgentPane,
 
 /**
  * Diffs · Activity · Talk, a count after each, then the pane open (the
- * view's; a press on a tab opens it, and its page opens on it next time).
+ * view's; a press on a tab opens it, and its page opens on it next time;
+ * a press on Talk takes the pane to its end, the newest message and the box).
  */
 function panesBlock(kit: Kit, state: WebState, data: DeckData, view: DeckView, agent: WebAgent, actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
   const open: DeckAgentPane = view.agentPane === 'activity' || view.agentPane === 'chat' ? view.agentPane : 'edits'
-  // Talk is the detail's still: the Orchestrator's, the whole log
-  const counts = { ...paneCountsOf(state, agent.id), ...(agent.kind === 'orchestrator' ? { chat: data.messages.length } : {}) }
+  const counts = paneCountsOf(state, agent.id)
   const pick = (pane: DeckAgentPane) => {
     notePagePane(agent.id, pane)
     actions.setAgentPane(pane)
+    if (pane === 'chat') actions.followTalk()
   }
   const body =
     open === 'activity'
       ? activityTab(kit, state, agent, now)
       : open === 'chat'
-        ? (agentTalkBlock(kit, data, view, agent.id, actions) ?? quiet(kit, `No messages with ${agent.label} yet.`))
+        ? talkTab(kit, state, agent, view, actions, now)
         : (agentDiffsBlock(kit, data, agent.id) ?? quiet(kit, `${agent.label} did not edit any files.`))
   return (
     <Box key="page:panes" flexDirection="column" gap={1}>
