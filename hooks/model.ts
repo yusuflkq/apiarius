@@ -47,18 +47,23 @@ export const ORCHESTRATOR = 'Orchestrator'
  */
 export const SNAPSHOT_VERSION = 2
 
-/** The pane's tabs, in the order the tab row draws them. */
-export const TABS: readonly DeckTab[] = ['agents', 'changes', 'stats']
+/** The pane's tabs, in the order the tab row draws them; `agents` is Classic, the summary and outline of earlier builds. */
+export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'changes', 'stats', 'agents']
 export const AGENT_PANES: readonly DeckAgentPane[] = ['activity', 'edits', 'chat']
 export const MAP_VIEWS: readonly DeckMapView[] = ['tree', 'wire']
 
-/** Earlier builds' tabs, by the tab that took each one's place: a saved view or a typed `/deck overview` still lands. */
+/**
+ * Earlier builds' tabs, by the tab that took each one's place, so a saved
+ * view or a typed `/deck overview` still lands; and `classic`, the tab row's
+ * name for the Agents tab.
+ */
 export const OLD_TABS: ReadonlyMap<string, DeckTab> = new Map<string, DeckTab>([
   ['overview', 'stats'],
   ['diffs', 'changes'],
   ['commits', 'changes'],
   ['graph', 'agents'],
   ['flow', 'agents'],
+  ['classic', 'agents'],
 ])
 
 /** The tab `name` is: one of TABS, or the one an earlier build's name became; undefined for anything else. */
@@ -185,10 +190,10 @@ export function emptyData(now: number): DeckData {
   }
 }
 
-/** A fresh view: the Agents tab with nothing selected (no detail until a row is picked), agents' panes on Diffs. */
+/** A fresh view: the Dashboard, no agent page over it, nothing selected in Classic (no detail until a row is picked), agents' panes on Diffs. */
 export function defaultView(): DeckView {
   return {
-    tab: 'agents',
+    tab: 'dashboard',
     agent: '',
     agentPane: 'edits',
     file: '',
@@ -201,6 +206,8 @@ export function defaultView(): DeckView {
     folded: [],
     zoom: '',
     isDetailsOpen: false,
+    page: '',
+    isDemo: false,
   }
 }
 
@@ -240,10 +247,14 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     folded: Array.isArray(v.folded) ? [...new Set(v.folded.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-FOLDS_KEPT) : base.folded,
     zoom: text(v.zoom, base.zoom),
     isDetailsOpen: flag(v.isDetailsOpen, base.isDetailsOpen),
+    page: text(v.page, base.page),
+    isDemo: flag(v.isDemo, base.isDemo),
   }
   if (data) {
     const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)
     if (view.agent !== '' && !agentOf(data, view.agent) && !isRow(view.agent)) view.agent = base.agent
+    // an agent page of this session's names one it holds; the sample's agents are the sample's
+    if (view.page !== '' && !view.isDemo && !agentOf(data, view.page)) view.page = base.page
     if (view.message !== '' && !data.messages.some(message => message.id === view.message)) view.message = ''
   }
   return view

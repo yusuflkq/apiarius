@@ -192,19 +192,21 @@ async function indentOf(ui: Drawing, id: string): Promise<number> {
   return Number(line.children?.[0]?.props?.paddingLeft ?? -1)
 }
 
-test('the default tab is Agents: the tab row, then, before the first prompt, one quiet line for the whole tab, on each surface', async ($, on) => {
+test('the tab row is Dashboard, Org, Changes, Stats and Classic (keys 1 to 5); Classic, the Agents tab, is one quiet line before the first prompt, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('classic'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    expect((await ui.find({ key: 'tab:agents' }))?.props).toMatchObject({ dimColor: false, hotkey: '1' })
-    expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: true, hotkey: '2' })
-    expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: true, hotkey: '3' })
+    expect((await ui.find({ key: 'tab:dashboard' }))?.props).toMatchObject({ label: 'Dashboard', dimColor: true, hotkey: '1' })
+    expect((await ui.find({ key: 'tab:org' }))?.props).toMatchObject({ label: 'Org', dimColor: true, hotkey: '2' })
+    expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: true, hotkey: '3' })
+    expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: true, hotkey: '4' })
+    expect((await ui.find({ key: 'tab:agents' }))?.props).toMatchObject({ label: 'Classic', dimColor: false, hotkey: '5' })
     // one dim italic line where the needs-you line, the goal, the outline, Files and the detail will be
     const line = await ui.find({ type: 'Text', text: UNTOUCHED })
     expect(line?.props).toMatchObject({ dimColor: true, italic: true })
@@ -212,7 +214,7 @@ test('the default tab is Agents: the tab row, then, before the first prompt, one
     for (const text of [M.needsOf(M.emptyData(NOW), GIT).text, 'Goal', /files?$/, 'No agents yet']) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
     expect(await copperBars(ui)).toEqual([])
     expect(await rowsOf(ui)).toEqual([])
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:agents', 'tab:changes', 'tab:stats', 'web:open'])
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:dashboard', 'tab:org', 'tab:changes', 'tab:stats', 'tab:agents', 'web:open'])
     await ui.unmount()
   }
 })
@@ -268,7 +270,7 @@ for (const needs of NEEDS) {
     const data = needs.data()
     world(on, { restored: snapshot(data) })
     await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-    await $.command.run(deck(''))
+    await $.command.run(deck('classic'))
     await clock.advance(1000)
 
     const said = M.needsOf(data, GIT, NOW)
@@ -339,7 +341,7 @@ test('the summary says what each agent waits on you for, in its own row, in ochr
   M.notePending(data, M.permissionOf({ id: 'toolu_p', tool: 'Edit', input: { file_path: '/repo/src/auth.ts', old_string: 'a', new_string: 'b' }, agentId: 'agent-fixer', at: NOW - 4_000 }, '/repo'))
   world(on, { restored: snapshot(data) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('classic'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
@@ -373,7 +375,7 @@ test('the Agents tab is a summary: the needs-you line, the goal and its step, on
   M.agentOf(data, 'agent-helper')!.goal = data.goals[0]?.id
   world(on, { restored: snapshot(data) })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
+  await $.command.run(deck('classic'))
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
@@ -543,8 +545,9 @@ test('the band above the prompt shows only while a subagent runs, one line and a
   }
   expect(opened).toEqual(['agent-deck', 'agent-deck'])
 
+  // Open shows this session's Dashboard
   const ui = await $.ui.mount(pane('terminal'))
-  expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(false)
+  expect((await ui.find({ key: 'tab:dashboard' }))?.props.dimColor).toBe(false)
   await ui.unmount()
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-scout' })
@@ -581,16 +584,19 @@ test('the band puts the agent that waits on you first, saying for what; the othe
   }
 })
 
-test('old saved tab names normalise, from a snapshot and from /deck', async ($, on) => {
-  expect(M.TABS).toEqual(['agents', 'changes', 'stats'])
-  expect(M.defaultView().tab).toBe('agents')
-  expect(['overview', 'diffs', 'commits', 'graph', 'flow', 'agents', 'changes', 'stats', 'nonsense', 7].map(M.tabNamed)).toEqual([
+test('old saved tab names normalise, from a snapshot and from /deck; /deck alone opens the Dashboard', async ($, on) => {
+  expect(M.TABS).toEqual(['dashboard', 'org', 'changes', 'stats', 'agents'])
+  expect(M.defaultView().tab).toBe('dashboard')
+  expect(['overview', 'diffs', 'commits', 'graph', 'flow', 'classic', 'agents', 'dashboard', 'org', 'changes', 'stats', 'nonsense', 7].map(M.tabNamed)).toEqual([
     'stats',
     'changes',
     'changes',
     'agents',
     'agents',
     'agents',
+    'agents',
+    'dashboard',
+    'org',
     'changes',
     'stats',
     undefined,
@@ -598,15 +604,14 @@ test('old saved tab names normalise, from a snapshot and from /deck', async ($, 
   ])
   expect(M.healView({ tab: 'diffs' }).tab).toBe('changes')
   expect(M.healView({ tab: 'overview' }).tab).toBe('stats')
-  expect(M.healView({ tab: 'toString' }).tab).toBe('agents')
-  expect(['a', 'c', 's', 'o', 'co', 'd', 'g', 'f', 'x', ''].map(M.tabFor)).toEqual(['agents', 'changes', 'stats', 'stats', 'changes', 'changes', 'agents', 'agents', undefined, undefined])
+  expect(M.healView({ tab: 'toString' }).tab).toBe('dashboard')
+  expect(['a', 'c', 's', 'o', 'co', 'd', 'g', 'f', 'cl', 'x', ''].map(M.tabFor)).toEqual(['agents', 'changes', 'stats', 'org', 'changes', 'dashboard', 'agents', 'agents', 'agents', undefined, undefined])
 
-  // a live session saved on the old Diffs tab comes back on Changes
+  // a live session saved on the old Diffs tab comes back on Changes; /deck alone opens its Dashboard
   const clock = mock.clock(on, { now: NOW })
   const saved = snapshot(busyData())
   world(on, { restored: { ...saved, view: { ...saved.view, tab: 'diffs' } as unknown as DeckSnapshot['view'] } })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck(''))
   await clock.advance(1000)
   const isOpen = async (tab: string) => {
     const ui = await $.ui.mount(pane('desktop'))
@@ -615,6 +620,10 @@ test('old saved tab names normalise, from a snapshot and from /deck', async ($, 
     return open
   }
   expect(await isOpen('changes')).toBe(true)
+  await $.command.run(deck(''))
+  expect(await isOpen('dashboard')).toBe(true)
+  await $.command.run(deck('org'))
+  expect(await isOpen('org')).toBe(true)
 
   await $.command.run(deck('overview'))
   expect(await isOpen('stats')).toBe(true)

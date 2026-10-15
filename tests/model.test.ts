@@ -270,7 +270,11 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   expect(M.healView('agents')).toEqual(M.defaultView())
   expect(
     M.healView({ tab: 'flow', agent: 'agent-old', agentPane: 'chat', file: 7, showFiles: 'no', isBandHidden: true, map: 'sideways', message: 'gone' }, data),
-  ).toEqual({ ...M.defaultView(), agent: 'agent-old', agentPane: 'chat', isBandHidden: true })
+  ).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'chat', isBandHidden: true })
+  // an agent page names an agent the deck holds (the sample's are the sample's), and the sample is a flag
+  expect(M.healView({ page: 'agent-old', isDemo: 'yes' }, data)).toMatchObject({ page: 'agent-old', isDemo: false })
+  expect(M.healView({ page: 'agent-gone' }, data).page).toBe('')
+  expect(M.healView({ page: 'demo-agent', isDemo: true }, data)).toMatchObject({ page: 'demo-agent', isDemo: true })
   // an agent it no longer holds is let go: nothing selected; a saved selection it holds stays, the Orchestrator's too
   expect(M.healView({ tab: 'stats', map: 'wire', agent: 'agent-gone', message: spawned.id }, data)).toEqual({
     ...M.defaultView(),
@@ -297,8 +301,9 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   await clock.advance(2000)
   const kept = lastOf(saved)
   expect(kept.v).toBe(M.SNAPSHOT_VERSION)
-  // its graph tab is the Agents tab now; the pane it had open stays
-  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'activity', showFiles: false })
+  // its graph tab is the Agents tab now (Classic), and /deck opens the Dashboard; the pane it had open stays
+  expect(M.healView(older.view, kept.data).tab).toBe('agents')
+  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'dashboard', agent: 'agent-old', agentPane: 'activity', showFiles: false })
   expect(kept.data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-old'])
   expect(kept.data.messages.map(message => message.id)).toEqual([spawned.id])
   expect(kept.data.tasks).toEqual({})

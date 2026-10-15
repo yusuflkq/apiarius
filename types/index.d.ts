@@ -336,8 +336,13 @@ export type DeckData = {
   acks: DeckAck[]
 }
 
-/** The pane's tabs. Older builds' names (overview, diffs, commits, graph, flow) are read as these by `tabNamed`. */
-export type DeckTab = 'agents' | 'changes' | 'stats'
+/**
+ * The pane's tabs: the Dashboard, the org chart, Changes, Stats, and Classic
+ * (`agents`: the summary and the full outline of earlier builds). Older
+ * builds' names (overview, diffs, commits, graph, flow) and `classic` are
+ * read as these by `tabNamed`.
+ */
+export type DeckTab = 'dashboard' | 'org' | 'agents' | 'changes' | 'stats'
 
 /** What the selected agent's detail shows: its exact diffs, its conversation, or its recent tool calls. */
 export type DeckAgentPane = 'activity' | 'edits' | 'chat'
@@ -373,6 +378,10 @@ export type DeckView = {
   zoom: string
   /** The Agents tab shows the full outline (Details) instead of its summary. */
   isDetailsOpen: boolean
+  /** The agent whose page shows over the tab in view (Back returns to the tab); '' for none. */
+  page: string
+  /** The pane shows the sample (`/deck demo`, web/fixtures/state.json) in place of this session. */
+  isDemo: boolean
 }
 
 export type DeckSnapshot = {

@@ -7,6 +7,7 @@ import type { Elements, RenderSurface } from 'claude-code'
 
 import type { DeckAgentPane, DeckData, DeckTab, DeckView } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
+import type { WebState } from '../web'
 
 type TerminalTable = Elements['terminal']
 
@@ -20,6 +21,8 @@ export type Kit = {
   Input?: TerminalTable['Input']
   Select?: TerminalTable['Select']
   Svg?: Elements['desktop']['Svg']
+  /** Where the surface runs a plugin's surface module (the terminal and the desktop): the org chart's. */
+  Client?: Elements['desktop']['Client']
   columns: number
 }
 
@@ -107,4 +110,38 @@ export type Actions = {
   toggleDetails: () => void
   /** Shows the full outline with row `id` selected (as `select`); '' only opens it. */
   showDetails: (id: string) => void
+}
+
+/** What the native dashboard's presses run, beside the deck's own (Actions). */
+export type DashActions = Actions & {
+  /** Opens agent `id`'s page over the tab in view; Back returns to that tab. */
+  openAgent: (id: string) => void
+  /** Leaves the agent page for the tab it was opened from. */
+  back: () => void
+  /**
+   * Answers the question held on call `callId`, by question text: through
+   * the resolver the web deck's `answer` command takes; in the sample, in
+   * the sample alone.
+   */
+  answer: (callId: string, answers: Record<string, string>) => void
+  /** Draws again after a change of the pane's own state (a pick in a question). */
+  redraw: () => void
+  /** Leaves the sample (`/deck demo`) for this session's own deck. */
+  exitDemo: () => void
+}
+
+/** What the native dashboard draws from, beside the deck's model. */
+export type DashModel = {
+  /** The web deck's state (`webStateOf` of the live deck), or the sample's; null while the sample is read. */
+  state: WebState | null
+  /** The sample (`/deck demo`) is shown, not this session. */
+  isDemo: boolean
+  /** Why the sample could not be read; '' otherwise. */
+  demoNote: string
+  /** The deck model the agent page's Diffs, Talk and Tool calls read: this session's, or the sample's. */
+  paneData: DeckData
+  /** The org chart's Client failed on this surface: the Org tab lists the agents as a tree instead. */
+  isOrgDown: boolean
+  /** The agent the org chart marks: the one whose page was opened last; null for none. */
+  selected: string | null
 }

@@ -30,9 +30,10 @@ import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
 import { bandView } from './ui/band'
+import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
 import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
-import type { Actions, ChatLine, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
+import type { ChatLine, DashActions, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { deckView } from './views'
 import * as W from './web'
 
@@ -65,6 +66,20 @@ const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer; dump?: Tim
 /** The screen key the last drawing showed (or the last timed redraw asked for); see `screenKey`. */
 let shownKey = ''
 let gitKeyMemo: { of: G.GitState; key: string } | null = null
+
+/**
+ * The sample `/deck demo` shows (web/fixtures/state.json, its times moved
+ * to the moment it was read), and the deck model its agent pages read; null
+ * until it is read. `note` says why it could not be; `version` counts its
+ * changes (an answer given in it), for the screen key.
+ */
+const demo: { state: W.WebState | null; data: DeckData | null; note: string; version: number } = { state: null, data: null, note: '', version: 0 }
+
+/** The surfaces whose org chart Client failed (`ui.fault`): their Org tab lists the agents as a tree until /deck opens again. */
+const orgDown = new Set<RenderSurface>()
+
+/** The agent whose page was opened last: the org chart marks it. */
+let lastAgent: string | null = null
 
 /** Draws every site of this plugin again; the engine folds calls to ten a second. Events that change the data call it. */
 function redraw($: EngineInterface) {
@@ -106,8 +121,9 @@ function gitKeyOf(state: G.GitState): string {
  * elapsed time while it runs, the banner; the Agents tab's goal, plan,
  * checklists, last actions, files, messages, needs-you line and summary
  * (`M.deckKeyOf`); git (whether read, HEAD, branch, files and counts); the
- * usage figures rounded; the day history; the edits; and on the Stats tab
- * the session's totals and the minute. Equal keys draw the same screen.
+ * usage figures rounded; the day history; the edits; on the Stats tab the
+ * session's totals and the minute; and what the native dashboard shows
+ * beside them (`dashKeyOf`). Equal keys draw the same screen.
  */
 function screenKey(now: number): string {
   const figures = usage
@@ -119,7 +135,22 @@ function screenKey(now: number): string {
   const edits = `${data.edits.length}:${data.edits[data.edits.length - 1]?.id ?? ''}`
   const shown = webPaneOf()
   const webKey = `${shown.status}\t${shown.url}\t${shown.opened}\t${shown.note}`
-  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits, webKey].join('\n\u0001')
+  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits, webKey, dashKeyOf(now)].join('\n\u0001')
+}
+
+/**
+ * What the native dashboard draws that the keys above leave out, while the
+ * pane shows it (the Dashboard, Org, an agent page, the sample): the coarse
+ * ages it words ("4m", so to the minute), the calls held on you and whether
+ * the deck may answer each, each agent's tokens as a card words them, the
+ * sample's state, and where the org chart's Client failed. '' otherwise.
+ */
+function dashKeyOf(now: number): string {
+  const isDash = isPaneOpen && (view.tab === 'dashboard' || view.tab === 'org' || view.page !== '' || view.isDemo)
+  if (!isDash) return ''
+  const held = data.pending.map(item => `${item.id}:${item.kind}:${askers.has(item.id)}`).join(',')
+  const tokens = data.agents.map(agent => `${agent.id}:${F.num(agent.tokensIn + agent.tokensOut + agent.cacheRead)}`).join(',')
+  return [M.minuteOf(now), held, tokens, view.isDemo, demo.version, demo.state !== null, demo.note, [...orgDown].join(',')].join('|')
 }
 
 /**
@@ -662,7 +693,7 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
  * A whole line from the server: its ready line (the port it listens on), or
  * a command from the page, checked against the model (`W.routeOf`) and acted
  * on: `chat` through `sendChat`, `review` through `sendReview`, `answer` to
- * the question it names (`answerQuestion`). A command with an `id` gets an
+ * the question it names (`answerCall`, the pane's resolver too). A command with an `id` gets an
  * ack, the page's word on what came of it; one refused gets why. Anything
  * else is ignored. Answers whether it was the ready line.
  */
@@ -687,7 +718,7 @@ function onWebLine($: EngineInterface, line: string): boolean {
   if (route === null) void ack($, ackId, 'failed', W.refusalOf(said.cmd, data))
   else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
   else if (route.kind === 'review') void sendReview($, route.text, ackId)
-  else if (route.kind === 'answer') answerQuestion($, route.callId, route.answers, ackId)
+  else if (route.kind === 'answer') answerCall($, route.callId, route.answers, ackId)
   return false
 }
 
@@ -1538,12 +1569,30 @@ function pickAgent($: EngineInterface, id: string) {
 }
 
 /** The closures the views' buttons and fields run. */
-function actionsFor($: EngineInterface): Actions {
+function actionsFor($: EngineInterface): DashActions {
   return {
     setTab: tab => {
       view.tab = tab
+      // a tab pressed on an agent's page leaves the page for that tab
+      view.page = ''
       if (tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
       if (tab === 'changes' && view.file) void loadFileDiff($, view.file)
+      changed($)
+    },
+    openAgent: id => {
+      view.page = id
+      lastAgent = id
+      changed($)
+    },
+    back: () => {
+      view.page = ''
+      changed($)
+    },
+    answer: (callId, answers) => (view.isDemo ? void answerInSample($, callId, answers) : answerFromPane($, callId, answers)),
+    redraw: () => redraw($),
+    exitDemo: () => {
+      leaveDemo()
+      view.page = ''
       changed($)
     },
     select: id => {
@@ -1605,10 +1654,14 @@ function actionsFor($: EngineInterface): Actions {
       if (view.tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
       $.ui.toast('Agent Deck refreshed')
     },
-    sendChat: (agentId, text) => void sendChat($, agentId, text),
+    // the sample's Talk sends nothing: its agents are a recording, and its Orchestrator is not this session's
+    sendChat: (agentId, text) => (view.isDemo ? $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.') : void sendChat($, agentId, text)),
     review: text => fillReview($, text),
+    // the band's Open: this session's deck on that tab
     open: tab => {
+      leaveDemo()
       view.tab = tab
+      view.page = ''
       changed($)
       void openPane($)
     },
@@ -1643,7 +1696,103 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
     ...('Select' in ui ? { Select: ui.Select } : {}),
     // the terminal's table answers to Svg but draws nothing for it: there Stats draws its cards and charts as text
     ...('Svg' in ui && surface !== 'terminal' ? { Svg: ui.Svg } : {}),
+    // a table answers to every element name: only the terminal and the desktop run a surface module
+    ...('Client' in ui && (surface === 'terminal' || surface === 'desktop') ? { Client: ui.Client } : {}),
   }
+}
+
+/** What the native dashboard draws from: this session's web state (the page's, `webStateOf`), or the sample's while it shows. */
+function dashOf(now: number, surface: RenderSurface): DashModel {
+  const isDemo = view.isDemo
+  return {
+    // a question the deck may answer is one whose race runs in this module, as the page is told
+    state: isDemo ? demo.state : W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())),
+    isDemo,
+    demoNote: demo.note,
+    paneData: isDemo && demo.data ? demo.data : data,
+    isOrgDown: orgDown.has(surface),
+    selected: lastAgent,
+  }
+}
+
+/** Leaves the sample: the pane shows this session again. */
+function leaveDemo() {
+  if (!view.isDemo && demo.state === null) return
+  view.isDemo = false
+  demo.state = null
+  demo.data = null
+  demo.note = ''
+  demo.version += 1
+}
+
+/**
+ * `/deck demo`, or a reload while the sample showed: reads the web deck's
+ * fixture under the mod's folder (web/fixtures/state.json, and each edit's
+ * patch from web/fixtures/patches) and shows it as the sample, its times
+ * moved to now. `isFresh` opens it on the Dashboard; a reload keeps the tab
+ * and page it was on. Answers why it could not be read; '' once it shows.
+ */
+async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
+  const root = $.plugin.root.replace(/[\\/]+$/, '')
+  view.isDemo = true
+  if (isFresh) {
+    view.tab = 'dashboard'
+    view.page = ''
+  }
+  demo.state = null
+  demo.data = null
+  demo.note = ''
+  demo.version += 1
+  redraw($)
+  let state: W.WebState | null = null
+  try {
+    state = demoStateOf(await $.fs.read(`${root}/web/fixtures/state.json`), await $.clock.now())
+  } catch {
+    state = null
+  }
+  // left (or loaded afresh) while it was read
+  if (!view.isDemo || demo.state !== null) return ''
+  if (!state) {
+    demo.note = 'The sample could not be read: web/fixtures/state.json is missing, or not a deck state.'
+    demo.version += 1
+    redraw($)
+    return demo.note
+  }
+  const patches: Record<string, string> = {}
+  await Promise.all(
+    state.edits
+      .filter(edit => /^[A-Za-z0-9_-]{1,120}$/.test(edit.id))
+      .map(async edit => {
+        try {
+          patches[edit.id] = await $.fs.read(`${root}/web/fixtures/patches/${edit.id}.diff`)
+        } catch {
+          // an edit with no patch shows no lines
+        }
+      }),
+  )
+  if (!view.isDemo) return ''
+  demo.state = state
+  demo.data = demoDataOf(state, patches)
+  if (view.page !== '' && !state.agents.some(agent => agent.id === view.page)) view.page = ''
+  demo.version += 1
+  changed($)
+  return ''
+}
+
+/**
+ * What the org chart's Client posted: `{ type: 'open', id }` for a card
+ * clicked opens that agent's page, when the pane shows that agent (this
+ * session's, or the sample's). Anything else is let go: it came from code.
+ */
+function openFromChart($: EngineInterface, posted: unknown) {
+  if (typeof posted !== 'object' || posted === null) return
+  const { type, id } = posted as { type?: unknown; id?: unknown }
+  if (type !== 'open' || typeof id !== 'string') return
+  const isShown = view.isDemo ? demo.state?.agents.some(agent => agent.id === id) === true : id !== M.YOU && M.agentOf(data, id) !== undefined
+  if (!isShown) return
+  view.page = id
+  lastAgent = id
+  changed($)
 }
 
 /** The state a drawing reads: the live model, as it is now; the views build their rows from it. */
@@ -1924,13 +2073,32 @@ async function raceDeck($: EngineInterface, e: ToolCallEvent, next: ToolCallNext
 }
 
 /**
- * The page's answer to the question held on call `callId`: it settles that
- * call's race (`raceDeck`), which says what came of it. Refused, with why,
- * when nothing races there any more (answered in Claude Code, by its idle
- * timer, or gone; or restored by a reload, which the page may not answer),
- * or when an answer is to no question that call asked.
+ * An answer to the question held on call `callId`, from the web page (its
+ * `answer` command, `ackId` its id) or the pane's needs-you card (no ack):
+ * the one resolver both take. Checked as the page's command is
+ * (`W.routeOf`: one to four answers, none too long), then it settles that
+ * call's race (`answerQuestion`). Answers why it was refused; '' when it
+ * went to the race, which says what came of it.
  */
-function answerQuestion($: EngineInterface, callId: string, answers: Record<string, string>, ackId: string) {
+function answerCall($: EngineInterface, callId: string, answers: Record<string, string>, ackId: string): string {
+  const route = W.routeOf({ cmd: 'answer', callId, answers }, data)
+  if (route === null || route.kind !== 'answer') {
+    const why = 'Not an answer the deck can read'
+    void ack($, ackId, 'failed', why)
+    return why
+  }
+  return answerQuestion($, route.callId, route.answers, ackId)
+}
+
+/**
+ * The answer to the question held on call `callId`: it settles that call's
+ * race (`raceDeck`), which says what came of it. Refused, with why (the
+ * page's ack, and the answer), when nothing races there any more (answered
+ * in Claude Code, by its idle timer, or gone; or restored by a reload, which
+ * the deck may not answer), or when an answer is to no question that call
+ * asked; '' when it went to the race.
+ */
+function answerQuestion($: EngineInterface, callId: string, answers: Record<string, string>, ackId: string): string {
   const item = M.pendingOf(data).find(one => one.id === callId)
   const asker = askers.get(callId)
   if (!asker) {
@@ -1944,15 +2112,33 @@ function answerQuestion($: EngineInterface, callId: string, answers: Record<stri
             ? 'The deck cannot answer this one since it reloaded: answer it in Claude Code'
             : 'No longer pending'
     void ack($, ackId, 'failed', why)
-    return
+    return why
   }
   const problem = W.answerProblemOf(item, answers)
   if (problem || !item) {
     void ack($, ackId, 'failed', problem || 'No longer pending')
-    return
+    return problem || 'No longer pending'
   }
   askers.delete(callId)
   asker({ answers: W.answersFor(item, answers), ackId })
+  return ''
+}
+
+/** The pane's answer (a needs-you card's option, Other or Submit): the page's resolver (`answerCall`), what came of it in a toast. */
+function answerFromPane($: EngineInterface, callId: string, answers: Record<string, string>) {
+  const why = answerCall($, callId, answers, '')
+  $.ui.toast(why ? `Not answered: ${why}` : 'Answered: Claude carries on')
+  redraw($)
+}
+
+/** An answer given in the sample: the sample's question taken down there alone; nothing reaches Claude. */
+async function answerInSample($: EngineInterface, callId: string, answers: Record<string, string>): Promise<void> {
+  if (!demo.state || !demo.data) return
+  const words = answerDemo(demo.state, demo.data, callId, answers, await $.clock.now())
+  if (!words) return
+  demo.version += 1
+  $.ui.toast(`Sample data: you answered ${F.trunc(words, 120)}. Nothing was sent to Claude.`)
+  redraw($)
 }
 
 /** Marks the commits a shell command made as that agent's. */
@@ -2142,6 +2328,9 @@ export const register: Register = on => {
       // the model shows once a request reports it
     }
 
+    // a reload while the sample showed reads it again, on the tab and page it was on
+    if (view.isDemo) void loadDemo($, false)
+
     void startRepos($)
     void loadDays($)
     void syncAgents($)
@@ -2152,8 +2341,8 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: who each agent is, what it is doing, how they talk, and the diffs they make (/deck web: the live dashboard in the Browser pane)',
-        argumentHint: '[agents|changes|stats|details|web|web stop|band|close|probe]',
+        description: 'Open Agent Deck: the dashboard of your agents (what needs you, the goal, each agent, the figures, the activity), the org chart, the diffs they make (/deck demo: sample data; /deck web: in the Browser pane)',
+        argumentHint: '[dashboard|org|changes|stats|classic|details|demo|web|web stop|band|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2194,6 +2383,20 @@ export const register: Register = on => {
       if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Agent Deck web stopped.' : 'Agent Deck web was not running.' }
       return openWeb($)
     }
+    // a Client that failed is tried again whenever /deck opens
+    orgDown.clear()
+    // the sample: the native dashboard drawn from the web deck's fixture
+    if (arg === 'demo' || arg === 'sample') {
+      const why = await loadDemo($, true)
+      const isShown = await openPane($)
+      changed($)
+      if (why) return { text: why }
+      return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+    }
+    // anything else is this session's deck: /deck alone its Dashboard
+    leaveDemo()
+    view.page = ''
+    if (arg === '') view.tab = 'dashboard'
     // the Agents tab's full outline
     if (arg === 'details') {
       view.tab = 'agents'
@@ -2789,7 +2992,20 @@ export const register: Register = on => {
     const now = await $.clock.now()
     shownKey = screenKey(now)
     const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
-    return deckView(kit, modelOf(now), actionsFor($))
+    return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface))
+  })
+
+  // what the org chart's Client posts: a card clicked opens that agent's page
+  on('ui.message', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    openFromChart($, e.data)
+    return next(e)
+  })
+
+  // the org chart's Client failed: that surface's Org tab lists the agents as a tree until /deck opens again
+  on('ui.fault', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    orgDown.add(e.surface)
+    redraw($)
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

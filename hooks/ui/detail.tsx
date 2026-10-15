@@ -902,8 +902,27 @@ function checklist(kit: Kit, list: ChecklistVM, most: number): RenderElement {
 
 /** Diffs · Talk N · Tool calls N, and the pane open under it; the Orchestrator's pick is its own, an agent's the view's. */
 function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: Actions): RenderElement {
+  return panesOf(kit, vm.pane, vm.room, actions)
+}
+
+/**
+ * An agent's Diffs · Talk · Tool calls as its detail draws them, for the
+ * native dashboard's agent page: the same switch, rows and field, from the
+ * deck model `data` (this session's, or the sample's). A drawing past
+ * DETAIL_CHARS is drawn again with DETAIL_LEAN's shorter lists and diffs.
+ * Null for an id that names no agent.
+ */
+export function agentPanesBlock(kit: Kit, data: DeckData, view: DeckView, id: string, actions: Actions): RenderElement | null {
+  const agent = agentOf(data, id)
+  if (!agent || agent.kind === 'you') return null
+  const full = panesOf(kit, paneVM(data, view, agent, DETAIL_ROOM), DETAIL_ROOM, actions)
+  if (treeSize(full).chars <= DETAIL_CHARS) return full
+  const lean = leaner(DETAIL_ROOM)
+  return panesOf(kit, paneVM(data, view, agent, lean), lean, actions)
+}
+
+function panesOf(kit: Kit, pane: PaneVM, room: DetailRoom, actions: Actions): RenderElement {
   const { Box } = kit
-  const pane = vm.pane
   const items: readonly ToggleItem<DeckAgentPane>[] = [
     { id: 'edits', label: 'Diffs', hotkey: 'd' },
     { id: 'chat', label: pane.talk > 0 ? `Talk ${F.num(pane.talk)}` : 'Talk', hotkey: 't' },
@@ -914,7 +933,7 @@ function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: 
     mainPane = one
     redrawFor(actions, pane.viewPane)
   }
-  const body = pane.chat ? talk(kit, pane.chat, vm.room, actions, pane.viewPane) : pane.activity ? calls(kit, pane.activity) : pane.diffs ? diffs(kit, pane.diffs, vm.room) : null
+  const body = pane.chat ? talk(kit, pane.chat, room, actions, pane.viewPane) : pane.activity ? calls(kit, pane.activity) : pane.diffs ? diffs(kit, pane.diffs, room) : null
   return (
     <Box flexDirection="column">
       {toggles(kit, 'detail', items, pane.open, pick)}

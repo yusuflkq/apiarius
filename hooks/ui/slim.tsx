@@ -171,8 +171,8 @@ export function dashboardBlock(kit: Kit, web: WebPane | undefined, actions: Acti
   )
 }
 
-/** The web deck's state in one line: nothing while it is off. */
-function webLine(kit: Kit, web: WebPane): RenderElement | null {
+/** The web deck's state in one line: nothing while it is off (the Dashboard's Open in browser shows it too). */
+export function webLine(kit: Kit, web: WebPane): RenderElement | null {
   const { Text, Markdown } = kit
   if (web.status === 'starting') return <Text dimColor>Starting the dashboard…</Text>
   if (web.status === 'failed') {

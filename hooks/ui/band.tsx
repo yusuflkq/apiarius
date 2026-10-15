@@ -2,7 +2,7 @@
  * The band above the prompt, drawn only while subagents run: one line of
  * who is at work and on which step ("■ Run outline tests needs your OK to
  * run `npm test` · ■ Phase A Stamping spawns"), and an Open button into the
- * deck. The agent the engine waits on you for leads, saying what it waits
+ * deck's Dashboard. The agent the engine waits on you for leads, saying what it waits
  * on (a question it asks, a permission prompt); then the others in spawn
  * order. Each agent's step is its
  * checklist's (`stepOf`), else what it was given (`scopeOf`), so the line
@@ -49,7 +49,7 @@ export function bandView(kit: Kit, model: DeckModel, actions: Actions, theirs: R
           {more > 0 ? <Text dimColor>{` · +${more} more`}</Text> : null}
         </Text>
         <Box flexShrink={0}>
-          <Button key="band:open" label="Open" onPress={() => actions.open('agents')} />
+          <Button key="band:open" label="Open" onPress={() => actions.open('dashboard')} />
         </Box>
       </Box>
       {theirs}

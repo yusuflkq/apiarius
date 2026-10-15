@@ -655,12 +655,12 @@ test('a restart that cannot take its old port again takes another and says so; o
   expect(linkOf(answer.text).url).toBe('http://127.0.0.1:5555/?t=token-kept')
 })
 
-test('the pane: the summary`s Open dashboard starts the web deck; with no Browser pane to open it, the link shows as markdown', async ($, on) => {
+test('the pane: Classic`s Open dashboard starts the web deck; with no Browser pane to open it, the link shows as markdown', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ hasBrowser: false })
   world(on, w)
   await work($)
-  await $.command.run(deck(''))
+  await $.command.run(deck('classic'))
   await clock.advance(500)
   const pane = { plugin: 'agent-deck', surface: 'desktop' as const, component: 'Pane' as const, requestId: 'agent-deck', viewport: { columns: 100, rows: 50, isFullscreen: true }, props: { title: 'Agent Deck', isFocused: true, bodyColumns: 96, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const }
   const ui = await $.ui.mount(pane)

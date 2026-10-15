@@ -116,7 +116,7 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
-test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a file diff, the commit log) and Stats on each surface', async ($, on) => {
+test('/deck opens the pane on the Dashboard; the tab row reaches Changes (a file diff, the commit log), Stats and Classic on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -127,13 +127,13 @@ test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a fil
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-    expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(false)
-    // before the first prompt the tab is one quiet line
-    expect(await ui.find({ type: 'Text', text: /^No goal yet: your next prompt sets it/ })).toBeDefined()
+    expect((await ui.find({ key: 'tab:dashboard' }))?.props.dimColor).toBe(false)
+    // before the first prompt the goal card says what will be there
+    expect(await ui.find({ type: 'Text', text: /^No goal yet\. Your next prompt to Claude Code becomes the goal\./ })).toBeDefined()
 
     await ui.press({ key: 'tab:changes' })
     expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)
-    expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(true)
+    expect((await ui.find({ key: 'tab:dashboard' }))?.props.dimColor).toBe(true)
     expect(await ui.find({ key: 'file:src/app.ts' })).toBeDefined()
     expect(await ui.find({ key: 'file:notes.txt' })).toBeDefined()
     await ui.press({ key: 'file:src/app.ts' })
@@ -148,7 +148,11 @@ test('/deck opens the pane on the Agents tab; the tab row reaches Changes (a fil
 
     await ui.press({ key: 'tab:stats' })
     expect((await ui.find({ key: 'tab:stats' }))?.props.dimColor).toBe(false)
+    // Classic: the Agents tab of earlier builds, before the first prompt one quiet line
     await ui.press({ key: 'tab:agents' })
+    expect((await ui.find({ key: 'tab:agents' }))?.props).toMatchObject({ label: 'Classic', dimColor: false })
+    expect(await ui.find({ type: 'Text', text: /^No goal yet: your next prompt sets it/ })).toBeDefined()
+    await ui.press({ key: 'tab:dashboard' })
     await ui.unmount()
   }
 })
