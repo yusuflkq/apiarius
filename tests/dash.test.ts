@@ -520,7 +520,7 @@ test('where no Client draws (VS Code), and where the chart`s Client failed, the 
   await down.unmount()
 })
 
-test('an agent`s page: its header, who it reports to, its Now line, task and checklist, then the detail`s own Diffs, Talk and Tool calls; Back returns to the tab it was opened from', async ($, on) => {
+test('an agent`s page: its header, who it reports to, its Now line, task and checklist, then its Diffs, Activity and Talk; Back returns to the tab it was opened from', async ($, on) => {
   await opened($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
@@ -539,11 +539,11 @@ test('an agent`s page: its header, who it reports to, its Now line, task and che
     expect(await ui.find({ key: 'needs:toolu_p' })).toBeDefined()
     expect(await ui.find({ key: 'needs:open:toolu_p' })).toBeUndefined()
     expect(await ui.find({ key: 'needs:toolu_q' })).toBeUndefined()
-    // the detail's panes: Diffs first, its exact patch; Tool calls
+    // the page's panes: Diffs first, its exact patch; Activity, its calls worded as the dashboard words them (its shell call, held on you)
     expect((await ui.find({ key: 'detail:edits' }))?.props.dimColor).toBe(false)
     expect((await ui.find({ type: 'Code' }))?.text).toContain('+const b = 3')
     await press(ui, 'detail:activity')
-    expect(await ui.find({ type: 'Text', text: 'Bash' })).toBeDefined()
+    expect((await ui.find({ key: 'call:t1' }))?.text).toBe('ran npm test' + 'waiting' + 'now')
     await press(ui, 'detail:edits')
 
     // who it reports to: a press opens the Orchestrator's page, its checklist the plan's steps
