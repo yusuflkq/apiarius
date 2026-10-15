@@ -77,6 +77,13 @@ export type WebState = {
     done: number
     failed: number
     files: number
+    /**
+     * The files agents edited in the repository: `files[]` without `isOutside`
+     * (all of them with no repository). `webStateOf` always writes it; a state
+     * an earlier build wrote, or one made by hand, may leave it out: then it is
+     * that count.
+     */
+    filesInRepo?: number
     added: number
     removed: number
     /** Since the goal (or the session) started. */
@@ -92,8 +99,8 @@ export type WebState = {
   messages: WebMessage[]
   /** The newest 150 tool calls of all agents, oldest first. */
   activity: { at: number; agent: string; tool: string; target: string; ok: boolean | null; ms: number | null }[]
-  /** Every file agents edited, the one edited last first. */
-  files: { path: string; editors: string[]; live: boolean; isShared: boolean; added: number; removed: number; lastAt: number }[]
+  /** Every file agents edited: the repository's first, then those outside it (`isOutside`), each the one edited last first. */
+  files: WebFile[]
   /** The newest 300, oldest first; each one's patch at /patch/<id>. */
   edits: { id: string; agent: string; tool: string; path: string; at: number; added: number; removed: number }[]
   /** Git's uncommitted files. */
@@ -104,6 +111,19 @@ export type WebState = {
   pending: WebPending[]
   /** What came of the page's commands, by their `id`: the newest 50, oldest first. */
   acks: WebAck[]
+}
+
+export type WebFile = {
+  /** Repository-relative, or absolute for a file outside the repository. */
+  path: string
+  editors: string[]
+  live: boolean
+  isShared: boolean
+  added: number
+  removed: number
+  lastAt: number
+  /** Not under the repository's root: its path stayed absolute when the deck made it repository-relative (a scratch or temp file). Never set with no repository. */
+  isOutside?: true
 }
 
 export type WebMessage = {
@@ -321,6 +341,30 @@ function webAgentOf(data: DeckData, agent: DeckAgent, root: string, plan: M.Deck
   }
 }
 
+/** A path that names its drive or the file system's root: `C:/…`, `/tmp/…`, `//server/…`. */
+const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/])/
+
+/**
+ * The files agents edited, as the page lists them: the repository's first,
+ * then those outside it, each the one edited last first. A file is outside
+ * (`isOutside`) when its path stayed absolute as the deck made it relative
+ * to the repository's root `root` (paths are made relative to that root as
+ * they are recorded, `M.relOf`); with no root ('') none is.
+ */
+function webFilesOf(data: DeckData, root: string): WebFile[] {
+  const files: WebFile[] = M.filesOf(data).map(file => ({
+    path: file.path,
+    editors: file.editors,
+    live: file.live,
+    isShared: file.isShared,
+    added: file.added,
+    removed: file.removed,
+    lastAt: file.lastAt,
+    ...(root !== '' && ABSOLUTE.test(file.path) ? { isOutside: true as const } : {}),
+  }))
+  return [...files.filter(file => !file.isOutside), ...files.filter(file => file.isOutside)]
+}
+
 /** Who edited each path the deck shows, by its spelling for comparing. */
 function editorsByPath(data: DeckData): Map<string, string[]> {
   const byPath = new Map<string, string[]>()
@@ -389,6 +433,7 @@ export function webStateOf(
   const isRepo = git.isRepo === true && root !== ''
   const editors = editorsByPath(data)
   const agents = data.agents.filter(agent => agent.kind !== 'you')
+  const files = webFilesOf(data, root)
 
   const activity = agents
     .flatMap(agent => agent.recent.map(one => ({ at: one.at, agent: agent.id, tool: one.tool, target: one.target, ok: one.ok ?? null, ms: one.ms ?? null })))
@@ -411,6 +456,7 @@ export function webStateOf(
       done: sum.done,
       failed: sum.failed,
       files: sum.files,
+      filesInRepo: files.filter(file => !file.isOutside).length,
       added: sum.added,
       removed: sum.removed,
       minutes: goal ? sum.minutes : Math.max(0, Math.floor((now - data.startedAt) / 60_000)),
@@ -422,7 +468,7 @@ export function webStateOf(
     agents: agents.map(agent => webAgentOf(data, agent, root, plan)),
     messages: data.messages.slice(-WEB_CAPS.messages).map(webMessageOf),
     activity,
-    files: M.filesOf(data).map(file => ({ path: file.path, editors: file.editors, live: file.live, isShared: file.isShared, added: file.added, removed: file.removed, lastAt: file.lastAt })),
+    files,
     edits: data.edits.slice(-WEB_CAPS.edits).map(edit => ({ id: webIdOf(edit.id), agent: edit.agent, tool: edit.tool, path: edit.path, at: edit.at, added: edit.added, removed: edit.removed })),
     changes: isRepo ? git.files.map(file => ({ path: file.path, code: file.code, added: file.added, removed: file.removed, editors: editors.get(M.normPath(file.path)) ?? [] })) : [],
     commits: isRepo

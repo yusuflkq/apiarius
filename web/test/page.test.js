@@ -607,3 +607,78 @@ test('Review asks first ("It runs when Claude is free"), then shows what came of
   assert.equal(note(), 'Queued: it runs when Claude is free')
   assert.equal(find(review(), 'confirm').length, 1)
 })
+
+// ---- files outside the repository (the contract's files[].isOutside and summary.filesInRepo)
+
+const SCRATCH = 'C:/Users/developer/AppData/Local/Temp/claude/C--Users-developer-Documents/0d3f5b7a-1c2e-4a6b-9d8f-2e4a6c8b0f13/scratchpad/talk'
+const fileOf = (path, extra = {}) => ({ path, editors: ['a84fbb5d74d874189'], live: false, isShared: false, added: 3, removed: 1, lastAt: NOW - MIN, ...extra })
+const editOf = (id, path) => ({ id, agent: 'a84fbb5d74d874189', tool: 'Edit', path, at: NOW - MIN, added: 3, removed: 1 })
+
+/** A run whose agents edited two files of the repository and two scratch files, listed as the mod lists them: the repository's first. */
+function outsideState(extra = {}) {
+  return runState({
+    files: [fileOf('README.md'), fileOf('hooks/ui/detail.tsx'), fileOf(`${SCRATCH}/msg2.txt`, { isOutside: true }), fileOf(`${SCRATCH}/detail4.spec`, { isOutside: true })],
+    edits: [editOf('t1', `${SCRATCH}/msg2.txt`), editOf('t2', 'README.md'), editOf('t3', `${SCRATCH}/detail4.spec`), editOf('t4', 'hooks/ui/detail.tsx')],
+    ...extra,
+  })
+}
+
+/** The Dashboard's FILES section. */
+const filesCard = p => find(p.view('Dashboard()'), 'sec').find(s => /^Files\b/.test(textOf(find(s, 'sec-title')[0])))
+
+/** The Changes page's section of the agents' other edits. */
+const otherEdits = p => find(p.view('ChangesPage()'), 'sec').find(s => /^Other agent edits/.test(textOf(find(s, 'sec-title')[0])))
+
+test('the Dashboard`s FILES: the repository`s files, counted by filesInRepo, then one dim row of those outside it that opens on them, each path its last two parts and the whole on hover', () => {
+  const p = page()
+  const state = outsideState()
+  state.summary.filesInRepo = 2
+  p.load(state)
+  let card = filesCard(p)
+  assert.equal(textOf(find(card, 'sec-title')[0]), 'Files 2')
+  assert.deepEqual(find(card, 'path').map(x => x.p.title), ['README.md', 'hooks/ui/detail.tsx'])
+  const row = find(card, 'outside-row')[0]
+  assert.equal(row.t, 'button')
+  assert.equal(textOf(row), '2 files outside the repo')
+  assert.equal(row.p['aria-expanded'], 'false')
+  // opened: the scratch files follow the repository's, in the mod's order
+  click(row)
+  card = filesCard(p)
+  assert.equal(find(card, 'outside-row')[0].p['aria-expanded'], 'true')
+  const paths = find(card, 'path')
+  assert.deepEqual(paths.map(textOf), ['README.md', 'hooks/ui/ detail.tsx', '…/talk/ msg2.txt', '…/talk/ detail4.spec'])
+  assert.deepEqual(paths.slice(2).map(x => x.p.title), [`${SCRATCH}/msg2.txt`, `${SCRATCH}/detail4.spec`])
+  // a press on one opens it on Changes, the dim row there unfolded
+  click(find(card, 'file-row')[2])
+  assert.equal(p.run('ui.open.get("outside|changes")'), true)
+  assert.equal(p.run(`ui.open.get(${JSON.stringify(`byfile|${SCRATCH}/msg2.txt`)})`), true)
+})
+
+test('Changes: the repository`s other edits first, then the dim row that opens on those outside it, shortened with the whole path on hover; with only those, the heading gives no count of its own', () => {
+  const p = page()
+  p.load(outsideState())
+  let sec = otherEdits(p)
+  assert.equal(textOf(find(sec, 'sec-title')[0]), 'Other agent edits 2')
+  assert.deepEqual(find(sec, 'fgroup').map(g => find(g, 'path')[0].p.title), ['README.md', 'hooks/ui/detail.tsx'])
+  assert.equal(textOf(find(sec, 'outside-row')[0]), '2 files outside the repo')
+  click(find(sec, 'outside-row')[0])
+  sec = otherEdits(p)
+  const heads = find(sec, 'fgroup').map(g => find(g, 'path')[0])
+  assert.deepEqual(heads.map(textOf), ['README.md', 'hooks/ui/ detail.tsx', '…/talk/ msg2.txt', '…/talk/ detail4.spec'])
+  assert.deepEqual(heads.slice(2).map(x => x.p.title), [`${SCRATCH}/msg2.txt`, `${SCRATCH}/detail4.spec`])
+  // only files outside the repository: the dim row says how many
+  p.load(outsideState({ files: [fileOf(`${SCRATCH}/msg2.txt`, { isOutside: true })], edits: [editOf('t1', `${SCRATCH}/msg2.txt`)] }))
+  sec = otherEdits(p)
+  assert.equal(textOf(find(sec, 'sec-title')[0]), 'Other agent edits')
+  assert.equal(textOf(find(sec, 'outside-row')[0]), '1 file outside the repo')
+})
+
+test('FILES shows the ten files edited last, the mod`s first ten; a state that marks no file outside (an older mod`s) lists them all as before, counted whole', () => {
+  const p = page()
+  const paths = Array.from({ length: 12 }, (_, i) => `src/file${i + 1}.js`)
+  p.load(runState({ files: paths.map(path => fileOf(path)) }))
+  const card = filesCard(p)
+  assert.equal(textOf(find(card, 'sec-title')[0]), 'Files 12')
+  assert.deepEqual(find(card, 'path').map(x => x.p.title), paths.slice(0, 10))
+  assert.equal(find(card, 'outside-row').length, 0)
+})

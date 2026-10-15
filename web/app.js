@@ -71,6 +71,11 @@ function splitPath(p) {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
   return i < 0 ? ['', p] : [p.slice(0, i + 1), p.slice(i + 1)];
 }
+/** A path outside the repository as its last two parts, "…/talk/msg2.txt"; one of two parts or fewer as it is. */
+function shortPath(p) {
+  const parts = String(p).split(/[\\/]+/).filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : String(p);
+}
 function firstLine(text, max = 140) {
   const line = String(text || '').split('\n').find(l => l.trim()) || '';
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
@@ -382,6 +387,7 @@ function buildIndex(s) {
     byId, kids, roots, tree, depth, rails,
     editsBy: group(s.edits, e => e.agent),
     editsByPath: group(s.edits, e => e.path),
+    fileByPath: new Map(s.files.map(f => [f.path, f])),
     actBy: group(s.activity, x => x.agent),
     talk,
     pendingBy: group(s.pending, p => p.agentId),
@@ -742,9 +748,10 @@ function DiffStat(add, rem) {
     h('span', { class: 'minus' }, `−${rem || 0}`));
 }
 
-function PathText(p, cls) {
+/** A path, its folder muted; `full` is the whole path one shortened (`shortPath`) stands for, shown on hover. */
+function PathText(p, cls, full) {
   const [dir, base] = splitPath(p);
-  return h('span', { class: `path${cls ? ` ${cls}` : ''}`, title: p },
+  return h('span', { class: `path${cls ? ` ${cls}` : ''}`, title: full || p },
     dir && h('span', { class: 'path-dir' }, dir),
     h('span', { class: 'path-base' }, base));
 }
@@ -879,7 +886,7 @@ function FileGroup(path, edits, opts) {
     h('button', { class: 'fgroup-head', type: 'button', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) },
       icon('chevronRight', 'chev'),
       icon('file', 'fic'),
-      PathText(path, 'grow'),
+      PathText(opts.outside ? shortPath(path) : path, 'grow', path),
       live && Dot('run', true),
       opts.editors && AvatarStack(opts.editors, 18),
       h('span', { class: 'fgroup-n' }, plural(edits.length, 'edit')),
@@ -1364,11 +1371,38 @@ function ActivityRow(x) {
     h('span', { class: 'act-time' }, ago(x.at)));
 }
 
+/** A path that names its drive or the file system's root: a file outside the repository keeps one. */
+const ABS_PATH = /^(?:[A-Za-z]:[\\/]|[\\/])/;
+
+/** Whether an edited path is outside the repository: as the mod marks its file (`isOutside`), else (a path it lists no file for) when it stayed absolute in a repository. */
+function isOutsidePath(p) {
+  const f = IX.fileByPath.get(p);
+  return f ? f.isOutside === true : !!S.repo && ABS_PATH.test(p);
+}
+
+/**
+ * The files outside the repository (an agent's scratch and temp files), after
+ * the repository's own: one dim row, "n files outside the repo", that opens
+ * on them (`rows()`). `where` keeps its open state apart per list.
+ */
+function OutsideRows(n, where, rows) {
+  if (!n) return null;
+  const key = `outside|${where}`;
+  const open = isOpen(key, false);
+  return [
+    h('button', { key, class: `outside-row${open ? ' open' : ''}`, type: 'button', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) },
+      icon('chevronRight', 'chev'),
+      h('span', { class: 'outside-text' }, `${plural(n, 'file')} outside the repo`)),
+    open ? rows() : null,
+  ];
+}
+
 function FileRow(f) {
-  // opens on the Changes page whichever list holds it: the uncommitted files, or the other edits
-  return h('a', { key: f.path, class: 'file-row', href: '#/changes', onClick: () => { ui.open.set(`chg|${f.path}`, true); ui.open.set(`byfile|${f.path}`, true); } },
+  // opens on the Changes page whichever list holds it: the uncommitted files, or the other edits (those outside the repository unfolded)
+  const outside = f.isOutside === true;
+  return h('a', { key: f.path, class: 'file-row', href: '#/changes', onClick: () => { ui.open.set(`chg|${f.path}`, true); ui.open.set(`byfile|${f.path}`, true); if (outside) ui.open.set('outside|changes', true); } },
     icon('file', 'fic'),
-    PathText(f.path, 'grow'),
+    PathText(outside ? shortPath(f.path) : f.path, 'grow', f.path),
     f.live && Dot('run', true),
     f.isShared && h('span', { class: 'tag tag-wait', title: 'More than one agent edited this file' }, 'shared'),
     AvatarStack(f.editors || [], 18),
@@ -1389,8 +1423,10 @@ function Dashboard() {
   if (S.empty || (!S.agents.length && !S.goal)) return Welcome();
   const { shown, hidden } = dashAgents();
   const recent = S.activity.slice(-10).reverse();
-  // The mod's order (first touched first), so a file never jumps when it is edited again; live ones pulse.
-  const files = S.files.slice(-10);
+  // The mod's order: the repository's files first, each list the one edited last first (live ones pulse). The ten latest of
+  // the repository's show; those outside it (scratch and temp files) fold into one dim row after them.
+  const own = S.files.filter(f => !f.isOutside), outside = S.files.filter(f => f.isOutside);
+  const ownCount = typeof S.summary.filesInRepo === 'number' ? S.summary.filesInRepo : own.length;
   return h('div', { key: 'dash', class: 'page page-dash' },
     NeedsYou(),
     GoalCard(),
@@ -1405,8 +1441,10 @@ function Dashboard() {
         SecHead('Recent activity'),
         recent.length ? h('div', { class: 'card list' }, recent.map(ActivityRow)) : h('div', { class: 'card' }, Empty('activity', 'No tool calls yet', 'Every agent\'s tool calls show here as they happen.'))),
       h('section', { class: 'sec' },
-        SecHead('Files', S.files.length || null, S.files.length ? h('a', { class: 'sec-link', href: '#/changes' }, 'Changes', icon('arrowRight')) : null),
-        files.length ? h('div', { class: 'card list' }, files.map(FileRow)) : h('div', { class: 'card' }, Empty('file', 'No files touched yet', 'Files the agents edit show here, with who is on each.')))));
+        SecHead('Files', ownCount || null, S.files.length ? h('a', { class: 'sec-link', href: '#/changes' }, 'Changes', icon('arrowRight')) : null),
+        S.files.length
+          ? h('div', { class: 'card list' }, own.slice(0, 10).map(FileRow), OutsideRows(outside.length, 'dash', () => outside.map(FileRow)))
+          : h('div', { class: 'card' }, Empty('file', 'No files touched yet', 'Files the agents edit show here, with who is on each.')))));
 }
 
 // ----------------------------------------------------------------- org chart
@@ -2283,8 +2321,11 @@ function ChangesPage() {
   // (committed since, undone, or outside the repository); outside one, every file the agents edited
   const uncommitted = new Set(ch.map(c => c.path));
   const editedPaths = [...IX.editsByPath.keys()].filter(p => !repo || !uncommitted.has(p));
+  // the repository's own first; those outside it (scratch and temp files) fold into one dim row after them
+  const ownPaths = editedPaths.filter(p => !isOutsidePath(p)), outsidePaths = editedPaths.filter(p => isOutsidePath(p));
   const live = new Set(S.files.filter(f => f.live).map(f => f.path));
   const editorsOf = new Map(S.files.map(f => [f.path, f.editors]));
+  const group = (p, outside) => FileGroup(p, IX.editsByPath.get(p), { scope: 'byfile', open: false, showAgent: true, live: live.has(p), editors: editorsOf.get(p) || [...new Set(IX.editsByPath.get(p).map(e => e.agent))], outside });
   const scope = 'changes';
   return h('div', { key: 'changes', class: 'page page-changes narrow' },
     h('div', { class: 'chg-top' },
@@ -2299,9 +2340,10 @@ function ChangesPage() {
       SecHead('Uncommitted', ch.length),
       ch.length ? h('div', { class: 'card list chgs' }, ch.map(ChangeRow)) : h('div', { class: 'card' }, Empty('check', 'Working tree clean', 'Nothing to commit.'))),
     (!repo || editedPaths.length > 0) && h('section', { class: 'sec' },
-      SecHead(repo ? 'Other agent edits' : 'Edits by file', editedPaths.length),
+      // the count is the repository's files; with only files outside it, the dim row says how many
+      SecHead(repo ? 'Other agent edits' : 'Edits by file', ownPaths.length || !outsidePaths.length ? ownPaths.length : null),
       editedPaths.length
-        ? h('div', { class: 'fgroups' }, editedPaths.map((p, i) => FileGroup(p, IX.editsByPath.get(p), { scope: 'byfile', open: false, showAgent: true, live: live.has(p), editors: editorsOf.get(p) || [...new Set(IX.editsByPath.get(p).map(e => e.agent))] })))
+        ? h('div', { class: 'fgroups' }, ownPaths.map(p => group(p, false)), OutsideRows(outsidePaths.length, 'changes', () => outsidePaths.map(p => group(p, true))))
         : h('div', { class: 'card' }, Empty('pencil', 'No agent edits yet', 'Each Edit and Write an agent makes shows here, grouped by file.'))),
     S.commits.length > 0 && h('section', { class: 'sec' },
       SecHead('Recent commits', S.commits.length),

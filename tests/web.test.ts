@@ -92,7 +92,7 @@ const USAGE = { startedAt: NOW - 600_000, contextPercent: 38, costUsd: 6.42, lim
 
 const STATE_KEYS = ['v', 'now', 'session', 'repo', 'goal', 'needs', 'summary', 'plan', 'agents', 'messages', 'activity', 'files', 'edits', 'changes', 'commits', 'pending', 'acks']
 const AGENT_KEYS = ['id', 'label', 'scope', 'type', 'model', 'kind', 'parent', 'status', 'needsYou', 'startedAt', 'endedAt', 'now', 'task', 'result', 'checklist', 'lastAction', 'tools', 'errors', 'tokens', 'added', 'removed', 'files', 'avatar']
-const SUMMARY_KEYS = ['step', 'stepText', 'running', 'waiting', 'done', 'failed', 'files', 'added', 'removed', 'minutes', 'tokens', 'costUsd', 'contextPercent']
+const SUMMARY_KEYS = ['step', 'stepText', 'running', 'waiting', 'done', 'failed', 'files', 'filesInRepo', 'added', 'removed', 'minutes', 'tokens', 'costUsd', 'contextPercent']
 
 test('webStateOf: the v1 schema, field by field, as plain JSON', () => {
   const data = richData()
