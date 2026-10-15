@@ -181,7 +181,7 @@ test('/deck opens the Dashboard, drawn from the web deck`s own state: what needs
     expect(permit?.text).toContain('fixer needs your OK to run npm test')
     expect(permit?.text).toContain('Run the unit tests')
     expect(permit?.text).toContain('Allow or deny it in Claude Code.')
-    expect((await ui.find({ key: 'needs:open:toolu_p' }))?.props).toMatchObject({ label: 'Open', plain: true })
+    expect((await ui.find({ key: 'needs:open:toolu_p' }))?.props).toMatchObject({ label: 'Open →', plain: true })
 
     // the goal: its headline, its words after it, the step in hand, the plan's bar (an image where Svg draws, cells on the terminal)
     const goal = await ui.find({ key: 'dash:goal' })
@@ -419,7 +419,7 @@ test('in the sample an answer stays in the sample, Talk sends nothing, and the t
   // Changes, Stats and Classic are this session's: the sample says so
   for (const tab of ['changes', 'stats', 'agents']) {
     await press(ui, `tab:${tab}`)
-    expect(await ui.find({ type: 'Text', text: /^The sample covers the Dashboard, Org and the agent pages\./ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^The sample covers the Dashboard, Org, Plan and the agent pages\./ })).toBeDefined()
   }
 
   // Back to this chat: this session's Dashboard, its scout among the cards
@@ -476,9 +476,9 @@ test('the tab row switches tabs: Org draws the chart Client sized to the chart, 
     expect(props.selected).toBe(surface === 'terminal' ? null : 'agent-fixer')
 
     await press(ui, 'tab:changes')
-    expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: false, hotkey: '3' })
+    expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: false, hotkey: '4' })
     await press(ui, 'tab:stats')
-    expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: false, hotkey: '4' })
+    expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: false, hotkey: '5' })
     await press(ui, 'tab:agents')
     expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Open dashboard')
     // an agent page over the Dashboard; a tab pressed there opens that tab
