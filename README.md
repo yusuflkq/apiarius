@@ -46,7 +46,7 @@ A sidebar lists the pages and every agent, with live and waiting dots.
 - **Agent page:** its task, checklist and result, with its model, tokens, lines changed and tool calls. Then three tabs:
   - **Diffs:** the patches from its own Edit and Write calls.
   - **Activity:** its tool calls.
-  - **Talk:** its messages, and a box to message it. A subagent gets the message at once (a finished one resumes to answer); for the Orchestrator it becomes your next prompt.
+  - **Talk:** its messages, and a box to message it. A subagent gets the message at once (a finished one resumes to answer); for the Orchestrator it becomes your next prompt. In auto mode, where Claude Code takes no message to a subagent from the deck, the Orchestrator passes it on: the request shows in the chat, and the message stays in that agent's Talk.
 - **Review** (on an agent page and on Changes) puts a review request in your Claude Code prompt box; you press Enter to send it.
 
 ## The side pane
@@ -79,7 +79,7 @@ The pane also works in a terminal session, where Stats draws its charts as text.
 
 ```bash
 claude plugin validate .
-claude plugin test .     # 188 tests
+claude plugin test .     # 190 tests
 node --test web/test/    # 39 server and page tests
 node web/dev.js          # serves the dashboard on the sample data in web/fixtures and prints the URL
 ```
