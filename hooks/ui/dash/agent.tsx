@@ -1,41 +1,53 @@
 /**
  * An agent's page, over the tab it was opened from (Back returns there),
- * as the web deck's agent page reads:
+ * as the web deck's agent page reads (web/app.js `AgentPage`):
  *
  * - its avatar, name, type, who it reports to (a press opens that agent),
- *   its status pill, and when it started or how long it ran;
+ *   its status pill, when it started or how long it ran, its calls, and its
+ *   errors in red;
  * - its Now line behind a rail in its status's hue;
- * - its task (four lines, Show more for the rest) and its checklist;
+ * - four figures in bordered boxes: its model (and what it is), its tokens
+ *   (in · out · cache), the lines it changed (+a −r, and its files), its
+ *   tool calls (and its errors, in red); four a row at the pane's 84 cells,
+ *   two below;
+ * - its task, folded to about four rows (Show more for the rest), and its
+ *   checklist (done of total, a bar, each item, the one in hand in its own
+ *   words under it): side by side at 84 cells, the checklist under the task
+ *   below that;
  * - what it waits on you for, answerable here (./needs);
  * - its result once it ended (the Orchestrator's: its latest answer to you);
- * - its Diffs · Talk · Tool calls, the detail's own (detail.tsx
+ * - its Diffs · Activity · Talk, a count after each (detail.tsx
  *   `agentPanesBlock`), from the deck model of this session or the sample's.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks
  * module. The texts opened with Show more are this module's own.
  */
-import type { RenderElement } from 'claude-code'
+import type { BoxProps, RenderElement } from 'claude-code'
 
 import type { DeckData, DeckTab, DeckView } from '../../../types'
 import { clean } from '../../format'
 import type { WebAgent, WebState } from '../../web'
 import { agentPanesBlock } from '../detail'
 import type { DashActions, Kit } from '../types'
-import { agentOf, ago, agoText, cut, flat, isLive, isRunning, nowLine, plural, reportsTo, span } from './dashModel'
+import { agentOf, ago, agoText, cut, flat, foldText, isLive, isRunning, nowLine, num, plural, reportsTo, span, tokensOf } from './dashModel'
 import { needsCards } from './needs'
-import { P, toneOf } from './palette'
-import { AVATAR, avatar, pill, quiet, sectionHead, tickTexts } from './parts'
+import { P, barSvg, mix, toneOf, type IconName } from './palette'
+import { AVATAR, CARD_CHROME, avatar, icon, notePagePane, openAgentPage, pill, quiet, svgOf, tickTexts, widthFor } from './parts'
 
 /** The tab names Back says it returns to. */
 const TAB_NAME: Readonly<Record<DeckTab, string>> = { dashboard: 'Dashboard', org: 'Org', plan: 'Plan', agents: 'Classic', changes: 'Changes', stats: 'Stats' }
 
-/** The characters a task or result shows before Show more, and at most after it. */
+/** From this many cells (the pane at its widest, 84, less the cell the deck keeps) the four figures share a row and the checklist stands beside the task. */
+export const PAGE_WIDE = 83
+
+/** The rows a task shows before Show more; the characters a result shows before it; the most either shows after it. */
+const TASK_ROWS = 4
 const SHORT = 360
 const LONG = 2400
 
 const opened = new Set<string>()
 
-/** The page of agent `view.page`: its header, Now, task and checklist, what it waits on you for, its result, and its Diffs · Talk · Tool calls. */
+/** The page of agent `view.page`: its header, Now, figures, task and checklist, what it waits on you for, its result, and its Diffs · Activity · Talk. */
 export function agentPage(kit: Kit, state: WebState, data: DeckData, view: DeckView, actions: DashActions, now: number): RenderElement {
   const { Box, Button } = kit
   const agent = agentOf(state, view.page)
@@ -57,22 +69,21 @@ export function agentPage(kit: Kit, state: WebState, data: DeckData, view: DeckV
       {back}
       {header(kit, state, agent, actions, now)}
       {nowStrip(kit, agent, now)}
-      {taskBlock(kit, agent, actions)}
-      {checklistBlock(kit, agent)}
+      {statsRow(kit, agent)}
+      {workBlock(kit, agent, actions)}
       {needsCards(kit, state, actions, now, 'agent', agent.id)}
       {resultBlock(kit, agent, actions, now)}
-      {agentPanesBlock(kit, data, view, agent.id, actions)}
+      {agentPanesBlock(kit, data, view, agent.id, actions, { now, onPick: pane => notePagePane(agent.id, pane) })}
     </Box>
   )
 }
 
-/** Avatar, name and pill; under the name its type and who it reports to, then when it started or how long it ran and its calls. */
+/** Avatar, name and pill; under the name its type and who it reports to, then when it started or how long it ran, its calls and its errors. */
 function header(kit: Kit, state: WebState, agent: WebAgent, actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
   const tone = toneOf(agent.status)
   const boss = reportsTo(state, agent)
   const ran = isLive(agent.status) ? `started ${agoText(agent.startedAt, now)}` : `ran ${span((agent.endedAt || now) - agent.startedAt)}`
-  const meta = [ran, plural(agent.tools || 0, 'tool call'), agent.errors ? plural(agent.errors, 'error') : ''].filter(Boolean).join(' · ')
   const bossId = boss.id
   return (
     <Box key="page:head" flexDirection="row" columnGap={1} alignItems="center">
@@ -85,10 +96,12 @@ function header(kit: Kit, state: WebState, agent: WebAgent, actions: DashActions
           <Text color={P.muted} wrap="truncate-end">
             {`${agent.type || agent.kind} · reports to`}
           </Text>
-          {bossId ? <Button key={`page:boss:${bossId}`} label={boss.name} plain onPress={() => actions.openAgent(bossId)} /> : <Text color={P.fg2}>{boss.name}</Text>}
+          {bossId ? <Button key={`page:boss:${bossId}`} label={boss.name} plain onPress={() => openAgentPage(actions, state, bossId)} /> : <Text color={P.fg2}>{boss.name}</Text>}
         </Box>
         <Text color={P.muted2} wrap="truncate-end">
-          {meta}
+          {`${ran} · ${plural(agent.tools || 0, 'tool call')}`}
+          {agent.errors ? <Text color={P.muted2}> · </Text> : null}
+          {agent.errors ? <Text color={P.failText}>{plural(agent.errors, 'error')}</Text> : null}
         </Text>
       </Box>
       <Box flexShrink={0}>{pill(kit, agent.status)}</Box>
@@ -121,44 +134,142 @@ function nowStrip(kit: Kit, agent: WebAgent, now: number): RenderElement {
   )
 }
 
-/** A text cut to SHORT characters with Show more beside it while there is more; opened, the whole of it (up to LONG). */
-function expandable(kit: Kit, key: string, text: string, actions: DashActions, draw: (shown: string) => RenderElement): RenderElement[] {
+/** One figure in a bordered box, as the web's stat cards: its icon and label, its value, a line under it. */
+function statBox(kit: Kit, key: string, mark: IconName, label: string, value: RenderElement, sub: RenderElement, width: number): RenderElement {
+  const { Box, Text } = kit
+  const glyph = icon(kit, mark, P.muted2, 14)
+  return (
+    <Box key={`stat:${key}`} flexDirection="column" width={width} borderStyle="round" borderColor={P.border} paddingX={1}>
+      <Box flexDirection="row" columnGap={1}>
+        {glyph ? <Box flexShrink={0}>{glyph}</Box> : null}
+        <Text color={P.muted} wrap="truncate-end">
+          {label}
+        </Text>
+      </Box>
+      {value}
+      {sub}
+    </Box>
+  )
+}
+
+/** The four figures: model, tokens, lines changed, tool calls; four a row at the pane's widest, else two. */
+function statsRow(kit: Kit, agent: WebAgent): RenderElement {
+  const { Box, Text } = kit
+  const width = widthFor(kit.columns, kit.columns >= PAGE_WIDE ? 4 : 2)
+  const t = agent.tokens
+  const files = agent.files.length
+  return (
+    <Box key="page:stats" flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={1}>
+      {statBox(
+        kit,
+        'model',
+        'cpu',
+        'Model',
+        <Text bold color={P.text} wrap="truncate-end">
+          {agent.model || '—'}
+        </Text>,
+        <Text color={P.muted2} wrap="wrap">
+          {agent.kind === 'orchestrator' ? 'the main loop' : agent.kind}
+        </Text>,
+        width,
+      )}
+      {statBox(
+        kit,
+        'tokens',
+        'coins',
+        'Tokens',
+        <Text bold color={P.text} wrap="truncate-end">
+          {num(tokensOf(agent))}
+        </Text>,
+        <Text color={P.muted2} wrap="wrap">
+          {`${num(t.in)} in · ${num(t.out)} out · ${num(t.cacheRead)} cache`}
+        </Text>,
+        width,
+      )}
+      {statBox(
+        kit,
+        'lines',
+        'diff',
+        'Lines changed',
+        <Text bold wrap="truncate-end">
+          <Text color={P.doneText}>{`+${agent.added || 0}`}</Text>
+          <Text> </Text>
+          <Text color={P.failText}>{`−${agent.removed || 0}`}</Text>
+        </Text>,
+        <Text color={P.muted2} wrap="wrap">
+          {files > 0 ? plural(files, 'file') : isLive(agent.status) ? 'no files yet' : 'no files changed'}
+        </Text>,
+        width,
+      )}
+      {statBox(
+        kit,
+        'calls',
+        'wrench',
+        'Tool calls',
+        <Text bold color={P.text} wrap="truncate-end">
+          {String(agent.tools || 0)}
+        </Text>,
+        <Text color={agent.errors ? P.failText : P.muted2} wrap="wrap">
+          {agent.errors ? plural(agent.errors, 'error') : 'no errors'}
+        </Text>,
+        width,
+      )}
+    </Box>
+  )
+}
+
+/** Show more (or Show less) for the text `key` names: a press opens or folds it, and draws again. */
+function moreButton(kit: Kit, key: string, actions: DashActions): RenderElement {
   const { Box, Button } = kit
   const isOpen = opened.has(key)
-  const hasMore = Array.from(text).length > SHORT
-  const shown = isOpen ? cut(text, LONG) : cut(text, SHORT)
   const toggle = () => {
     if (opened.has(key)) opened.delete(key)
     else opened.add(key)
     actions.redraw()
   }
-  return [
-    draw(shown),
-    ...(hasMore
-      ? [
-          <Box flexDirection="row">
-            <Button key={`page:more:${key}`} label={isOpen ? 'Show less' : 'Show more'} plain dimColor onPress={toggle} />
-          </Box>,
-        ]
-      : []),
-  ]
+  return (
+    <Box flexDirection="row">
+      <Button key={`page:more:${key}`} label={isOpen ? 'Show less' : 'Show more'} plain dimColor onPress={toggle} />
+    </Box>
+  )
 }
 
-/** The task: what it was given, its scope beside the head; the Orchestrator's is the goal, or your prompts. */
-function taskBlock(kit: Kit, agent: WebAgent, actions: DashActions): RenderElement {
+/** A bordered card of the page's, `width` cells across where given (else the page's); a red edge for a failed agent's result. */
+function cardProps(width: number | undefined, edge: string = P.border): BoxProps {
+  return { flexDirection: 'column', borderStyle: 'round', borderColor: edge, paddingX: 1, ...(width === undefined ? {} : { width }) }
+}
+
+/** The task: "Task" and its scope, then what it was given, folded to about four rows with Show more; the Orchestrator's is the goal, or your prompts. */
+function taskCard(kit: Kit, agent: WebAgent, actions: DashActions, width: number | undefined): RenderElement {
   const { Box, Text } = kit
   const text = clean(String(agent.task || '')).trim()
   const scope = flat(agent.scope || '')
+  const key = `task:${agent.id}`
+  const fold = foldText(text, (width ?? kit.columns) - CARD_CHROME, TASK_ROWS)
   return (
-    <Box key="page:task" flexDirection="column">
-      {sectionHead(kit, 'Task', null, scope ? <Text color={P.muted2}>{cut(scope, Math.max(12, Math.floor(kit.columns / 2)))}</Text> : null)}
-      {text
-        ? expandable(kit, `task:${agent.id}`, text, actions, shown => (
-            <Text color={P.fg2} wrap="wrap">
-              {shown}
+    <Box key="page:task" {...cardProps(width)}>
+      <Box flexDirection="row" columnGap={2}>
+        <Box flexShrink={0}>
+          <Text bold color={P.text}>
+            Task
+          </Text>
+        </Box>
+        {scope ? (
+          <Box flexShrink={1}>
+            <Text color={P.muted2} wrap="truncate-end">
+              {scope}
             </Text>
-          ))
-        : quiet(kit, agent.kind === 'orchestrator' ? 'Your prompts in the Claude Code conversation.' : 'No task recorded.')}
+          </Box>
+        ) : null}
+      </Box>
+      {text ? (
+        <Text color={P.fg2} wrap="wrap">
+          {opened.has(key) ? cut(text, LONG) : fold.text}
+        </Text>
+      ) : (
+        quiet(kit, agent.kind === 'orchestrator' ? 'Your prompts in the Claude Code conversation.' : 'No task recorded.')
+      )}
+      {text && fold.isCut ? moreButton(kit, key, actions) : null}
     </Box>
   )
 }
@@ -171,22 +282,54 @@ function itemMark(kit: Kit, agent: WebAgent, status: string): RenderElement {
   return <Text color={P.muted3}>○</Text>
 }
 
-/** The checklist: done of total beside the head, then each item with its mark, the one in hand in its own words beside it. */
-function checklistBlock(kit: Kit, agent: WebAgent): RenderElement | null {
+/** What the item in hand says it is doing, in its agent's hue: blue while it runs, amber while it waits, red once it failed, grey once it stopped. */
+function doingHue(agent: WebAgent): string {
+  if (agent.status === 'waiting') return P.waitText
+  if (agent.status === 'failed') return P.failText
+  return isRunning(agent.status) ? P.runText : P.muted
+}
+
+/** A thin bar of `done` of `total`: an image where Svg draws (blue, green once all are done), else a run of cells. */
+function progressBar(kit: Kit, done: number, total: number, cells: number): RenderElement {
+  const { Text } = kit
+  const Svg = svgOf(kit)
+  if (Svg) return <Svg source={barSvg(done, total, Math.max(64, cells * 8))} alt={`${done} of ${total} done`} />
+  const filled = total > 0 ? Math.round((Math.max(0, cells) * Math.min(done, total)) / total) : 0
+  return (
+    <Text wrap="truncate-end">
+      <Text color={done >= total ? P.done : P.run}>{'━'.repeat(filled)}</Text>
+      <Text color={P.track}>{'━'.repeat(Math.max(0, cells - filled))}</Text>
+    </Text>
+  )
+}
+
+/** The checklist: "Checklist" and done of total, the bar, then each item with its mark, the one in hand bold with what it is doing under it. */
+function checklistCard(kit: Kit, agent: WebAgent, width: number | undefined): RenderElement | null {
   const { Box, Text } = kit
   const list = agent.checklist
   if (!list || list.items.length === 0) return null
+  const inner = Math.max(8, (width ?? kit.columns) - CARD_CHROME)
   return (
-    <Box key="page:checklist" flexDirection="column">
-      {sectionHead(kit, 'Checklist', null, <Text color={P.muted2}>{`${list.done}/${list.total}`}</Text>)}
+    <Box key="page:checklist" {...cardProps(width)}>
+      <Box flexDirection="row" justifyContent="space-between" columnGap={1}>
+        <Text bold color={P.text}>
+          Checklist
+        </Text>
+        <Text color={P.muted}>{`${list.done}/${list.total}`}</Text>
+      </Box>
+      {list.total > 0 ? progressBar(kit, list.done, list.total, inner) : null}
       {list.items.map((item, i) => (
         <Box key={`check:${i}`} flexDirection="row" columnGap={1}>
           <Box flexShrink={0}>{itemMark(kit, agent, item.status)}</Box>
-          <Box flexGrow={1} flexShrink={1}>
-            <Text wrap="wrap">
-              <Text color={item.status === 'done' ? P.muted : item.status === 'active' ? P.text : P.fg2}>{flat(item.text)}</Text>
-              {item.status === 'active' && item.doing ? <Text color={P.muted}>{`  ${flat(item.doing)}`}</Text> : null}
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text bold={item.status === 'active'} color={item.status === 'active' ? P.text : item.status === 'done' || item.status === 'pending' ? P.muted : P.fg2} wrap="wrap">
+              {flat(item.text)}
             </Text>
+            {item.status === 'active' && item.doing ? (
+              <Text color={doingHue(agent)} wrap="wrap">
+                {flat(item.doing)}
+              </Text>
+            ) : null}
           </Box>
         </Box>
       ))}
@@ -194,18 +337,46 @@ function checklistBlock(kit: Kit, agent: WebAgent): RenderElement | null {
   )
 }
 
-/** Its result once it ended, as Markdown (the Orchestrator's: its latest answer to you); a failed one's head says so. */
+/** The task and the checklist: side by side at the pane's widest (the task the wider, as the web's), the checklist under the task below that; the task alone while there is no checklist. */
+function workBlock(kit: Kit, agent: WebAgent, actions: DashActions): RenderElement {
+  const { Box } = kit
+  if (agent.checklist.items.length === 0) return taskCard(kit, agent, actions, undefined)
+  if (kit.columns >= PAGE_WIDE) {
+    const taskWidth = Math.round(((kit.columns - 1) * 1.4) / 2.4)
+    return (
+      <Box key="page:work" flexDirection="row" columnGap={1} alignItems="flex-start">
+        {taskCard(kit, agent, actions, taskWidth)}
+        {checklistCard(kit, agent, kit.columns - 1 - taskWidth)}
+      </Box>
+    )
+  }
+  return (
+    <Box key="page:work" flexDirection="column" gap={1}>
+      {taskCard(kit, agent, actions, undefined)}
+      {checklistCard(kit, agent, undefined)}
+    </Box>
+  )
+}
+
+/** Its result once it ended, as Markdown in a card (the Orchestrator's: its latest answer to you), Show more past SHORT characters; a failed one's edge and head say so. */
 function resultBlock(kit: Kit, agent: WebAgent, actions: DashActions, now: number): RenderElement | null {
   const { Box, Text, Markdown } = kit
   const text = clean(String(agent.result || '')).trim()
   if (!text) return null
-  const title = agent.kind === 'orchestrator' ? 'Latest answer' : agent.status === 'failed' ? 'Result · failed' : 'Result'
+  const isFailed = agent.status === 'failed' && agent.kind !== 'orchestrator'
+  const title = agent.kind === 'orchestrator' ? 'Latest answer' : isFailed ? 'Result · failed' : 'Result'
+  const key = `result:${agent.id}`
+  const isLong = Array.from(text).length > SHORT
   return (
-    <Box key="page:result" flexDirection="column">
-      {sectionHead(kit, title, null, agent.endedAt ? <Text color={P.muted2}>{agoText(agent.endedAt, now)}</Text> : null)}
-      {expandable(kit, `result:${agent.id}`, text, actions, shown => (
-        <Markdown text={shown} />
-      ))}
+    <Box key="page:result" {...cardProps(undefined, isFailed ? mix(P.fail, P.card, 0.55) : P.border)}>
+      <Box flexDirection="row" justifyContent="space-between" columnGap={2}>
+        <Text bold color={isFailed ? P.failText : P.text}>
+          {title}
+        </Text>
+        {agent.endedAt ? <Text color={P.muted2}>{agoText(agent.endedAt, now)}</Text> : null}
+      </Box>
+      <Markdown text={opened.has(key) ? cut(text, LONG) : cut(text, SHORT)} />
+      {isLong ? moreButton(kit, key, actions) : null}
     </Box>
   )
 }

@@ -165,6 +165,25 @@ export function stepsSvg(statuses: readonly string[], width: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${rects.join('')}</svg>`
 }
 
+/**
+ * A progress bar as an SVG document, as the web's checklist draws it: a
+ * thin rounded track with `done` of `total` filled, blue while some are
+ * left and green once all are done; `width` logical px across (the slot's
+ * cells times 8: the desktop scales it to fill the slot), 8 high.
+ */
+export function barSvg(done: number, total: number, width: number): string {
+  const height = 8
+  const fraction = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0
+  const fill = Math.round(width * fraction * 10) / 10
+  const hue = total > 0 && done >= total ? P.done : P.run
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<rect x="0" y="2" width="${width}" height="4" rx="2" fill="${P.track}"/>`,
+    fill > 0 ? `<rect x="0" y="2" width="${Math.max(4, fill)}" height="4" rx="2" fill="${hue}"/>` : '',
+    '</svg>',
+  ].join('')
+}
+
 // The web's icons (web/app.js IC: Lucide-style 24 px strokes) the dashboard draws.
 
 const ICONS: Readonly<Record<string, string>> = {
@@ -178,10 +197,15 @@ const ICONS: Readonly<Record<string, string>> = {
   listChecks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
   dollar: '<line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   cornerDownRight: '<polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/>',
+  diff: '<path d="M12 3v14"/><path d="M5 10h14"/><path d="M5 21h14"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
 }
 
 /** The icon names the dashboard draws. */
-export type IconName = 'help' | 'shield' | 'target' | 'hand' | 'octagon' | 'circleCheck' | 'bot' | 'listChecks' | 'dollar' | 'cornerDownRight'
+export type IconName = 'help' | 'shield' | 'target' | 'hand' | 'octagon' | 'circleCheck' | 'bot' | 'listChecks' | 'dollar' | 'cornerDownRight' | 'cpu' | 'coins' | 'diff' | 'wrench' | 'file'
 
 const iconMemo = new Map<string, string>()
 

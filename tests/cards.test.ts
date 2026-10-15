@@ -1,8 +1,12 @@
 /**
- * The native dashboard's cards and rows as things to press (tests/dash.test.ts
- * covers the rest of it): every line of an agent card, an Org tree row and a
- * needs card or row opens that agent's page, and "Open →" says so, lit while
- * the pointer is on what it opens.
+ * The native dashboard's cards and rows as things to press, and the agent
+ * page they open (tests/dash.test.ts covers the rest of it): every line of
+ * an agent card, an Org tree row and a needs card or row opens that agent's
+ * page, and "Open →" says so, lit while the pointer is on what it opens; the
+ * page reads as the web deck's, its four figures, its task beside its
+ * checklist, then Diffs · Activity · Talk, opening on a pane it has
+ * something for; and in the sample every page has its task, checklist,
+ * diffs, activity and talk.
  */
 import type { On, RenderElement } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -10,14 +14,14 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
 import { dashboardTab } from '../hooks/ui/dash/dashboard'
-import { wrapTicks } from '../hooks/ui/dash/dashModel'
+import { firstPaneOf, foldText, wrapTicks } from '../hooks/ui/dash/dashModel'
 import { needsCards } from '../hooks/ui/dash/needs'
 import { orgTree } from '../hooks/ui/dash/orgTree'
-import { TONE } from '../hooks/ui/dash/palette'
-import { quiet } from '../hooks/ui/dash/parts'
+import { P, TONE } from '../hooks/ui/dash/palette'
+import { notePagePane, openAgentPage, quiet } from '../hooks/ui/dash/parts'
 import type { DashActions, Kit } from '../hooks/ui/types'
 import * as W from '../hooks/web'
-import type { DeckData, DeckSnapshot } from '../types'
+import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
 import { deck, newWorld, NOW, world } from './world'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -84,6 +88,11 @@ function noting(calls: string[]): DashActions {
   ) as DashActions
 }
 
+/** The agents `openAgent` was called with, in order. */
+function opens(calls: readonly string[]): string[] {
+  return calls.filter(one => one.startsWith('openAgent:')).map(one => JSON.parse(one.slice('openAgent:'.length)) as string)
+}
+
 const QUESTION = {
   question: 'Which library should we use for dates?',
   header: 'Library',
@@ -145,6 +154,65 @@ async function started($: Engine, on: On, restored?: DeckSnapshot) {
   return clock
 }
 
+const PATCH_A = ['@@ -1,3 +1,3 @@', ' const a = 1', '-const b = 2', '+const b = 3', ' export { a, b }'].join('\n')
+const PATCH_B = ['@@ -0,0 +1,2 @@', '+export const TTL = 60', '+export const LIMIT = 100'].join('\n')
+
+function todo(content: string, status: 'completed' | 'in_progress' | 'pending', activeForm = content) {
+  return { content, status, activeForm }
+}
+
+/** A call made and ended: `ms` after `at`, ok or failed; `ms` null leaves it in flight. */
+function call(data: DeckData, agent: DeckAgent, id: string, tool: string, input: Record<string, unknown>, at: number, ms: number | null, ok = true) {
+  M.beginTool(data, agent, M.activityOf(id, tool, input, '/repo', at))
+  if (ms !== null) M.endTool(agent, id, ok, at + ms)
+}
+
+/** The task fixer is given: long enough to fold. */
+const LONG_TASK = [
+  'Fix the login bug in src/auth.ts: a token that expires mid-request is read as valid, so the user is logged in for one more request after it lapsed.',
+  'Keep the old tokens working while the new ones roll out, add a test for the expiry edge, run the unit tests, and report what you changed and why.',
+  'The last words of the task are these.',
+].join(' ')
+
+/**
+ * fixer at work, for its page: a long task, a four-item checklist (two
+ * done, one in hand), three edits on two files, four calls (one failed, one
+ * in flight), its tokens, and three messages; helper done, with none of
+ * its own edits.
+ */
+function workData(): DeckData {
+  const data = M.emptyData(NOW - 600_000)
+  const main = M.agentOf(data, M.MAIN)!
+  main.status = 'running'
+  main.model = 'claude-opus-5-5'
+  M.noteGoal(data, 'goal', { text: 'Fix the login bug', origin: 'composer', at: NOW - 540_000 })
+  const fixer = M.newAgent('agent-fixer', 'agent', 'fixer', NOW - 400_000, {
+    type: 'general-purpose',
+    parentId: M.MAIN,
+    status: 'running',
+    prompt: LONG_TASK,
+    description: 'Fix the login bug',
+    model: 'claude-haiku-4-5-20251001',
+    tokensIn: 92_400,
+    tokensOut: 14_830,
+    cacheRead: 1_048_200,
+  })
+  data.agents.push(fixer)
+  data.agents.push(M.newAgent('agent-helper', 'agent', 'helper', NOW - 300_000, { type: 'Explore', parentId: fixer.id, status: 'completed', endedAt: NOW - 200_000, prompt: 'Find the auth module', description: 'Find the auth module', answer: 'It is src/auth.ts' }))
+  M.noteTodo(data, fixer, 'TodoWrite', { todos: [] }, { oldTodos: [], newTodos: [todo('Read the auth code', 'completed'), todo('Find the expiry check', 'completed'), todo('Fix the check', 'in_progress', 'Fixing the expiry check'), todo('Run the tests', 'pending')] }, NOW - 380_000)
+  call(data, fixer, 'c1', 'Read', { file_path: '/repo/src/auth.ts' }, NOW - 360_000, 40)
+  call(data, fixer, 'c2', 'Edit', { file_path: '/repo/src/auth.ts' }, NOW - 240_000, 30)
+  call(data, fixer, 'c3', 'Bash', { command: 'npm test', description: 'Run the unit tests' }, NOW - 120_000, 2400, false)
+  call(data, fixer, 'c4', 'Edit', { file_path: '/repo/src/token.ts' }, NOW - 10_000, null)
+  M.addEdit(data, fixer, { id: 'e1', agent: fixer.id, tool: 'Edit', path: 'src/auth.ts', abs: '/repo/src/auth.ts', at: NOW - 240_000, added: 1, removed: 1, patch: PATCH_A, isNew: false })
+  M.addEdit(data, fixer, { id: 'e2', agent: fixer.id, tool: 'Edit', path: 'src/auth.ts', abs: '/repo/src/auth.ts', at: NOW - 200_000, added: 1, removed: 1, patch: PATCH_A, isNew: false })
+  M.addEdit(data, fixer, { id: 'e3', agent: fixer.id, tool: 'Write', path: 'src/token.ts', abs: '/repo/src/token.ts', at: NOW - 100_000, added: 2, removed: 0, patch: PATCH_B, isNew: true })
+  M.addMessage(data, { from: M.MAIN, to: fixer.id, kind: 'spawn', at: NOW - 400_000, text: LONG_TASK })
+  M.addMessage(data, { from: M.YOU, to: fixer.id, kind: 'chat', at: NOW - 90_000, text: 'Keep the old tokens working.' })
+  M.addMessage(data, { from: fixer.id, to: M.YOU, kind: 'chat', at: NOW - 80_000, text: 'Will do: both kinds are read.' })
+  return data
+}
+
 test('wrapTicks lays a line into rows at its spaces, keeps code spans as code on each row, cuts a word longer than a row, and ends the last row in … when words are left', () => {
   expect(wrapTicks('Run `npm test` now', 40, 2)).toEqual([
     [
@@ -174,6 +242,18 @@ test('wrapTicks lays a line into rows at its spaces, keeps code spans as code on
   expect(wrapTicks('a b', 10, 2)).toEqual([[{ text: 'a b', isCode: false }]])
 })
 
+test('foldText keeps about so many rows of a column, its own lines kept, and says whether it left anything out', () => {
+  expect(foldText('short', 20, 4)).toEqual({ text: 'short', isCut: false })
+  // three lines of one row each, a fourth of two: cut in the fourth
+  const folded = foldText(['one', 'two', 'three', 'a line long enough to take two rows of this column'].join('\n'), 20, 4)
+  expect(folded.isCut).toBe(true)
+  expect(folded.text.split('\n').slice(0, 3)).toEqual(['one', 'two', 'three'])
+  expect(folded.text.endsWith('…')).toBe(true)
+  // the rows full at a line's end: the rest is left out, unless it is only blank lines
+  expect(foldText('a\nb\nc', 20, 2)).toEqual({ text: 'a\nb', isCut: true })
+  expect(foldText('a\nb\n\n', 20, 2)).toEqual({ text: 'a\nb', isCut: false })
+})
+
 test('an agent card: its name, now line and "model · tokens · time" are each a plain Button that opens its page, "Open →" at its foot, lit in its hue while the pointer is on the card', async ($, on) => {
   const calls: string[] = []
   const state = stateOf()
@@ -194,7 +274,7 @@ test('an agent card: its name, now line and "model · tokens · time" are each a
           expect(button?.props.plain).toBe(true)
           calls.length = 0
           await ui.press({ plugin: 'test', key })
-          expect(calls).toEqual([`openAgent:${JSON.stringify(agent.id)}`])
+          expect(opens(calls)).toEqual([agent.id])
         }
         const open = keyed(drawn, `dash:open:${agent.id}`)
         expect(open?.props).toMatchObject({ label: 'Open →', plain: true, dimColor: true })
@@ -202,12 +282,12 @@ test('an agent card: its name, now line and "model · tokens · time" are each a
         // the lines keep their colours: the foot in the dim grey, as before
         const foot = await ui.find({ key: `dash:foot:${agent.id}` })
         expect(foot?.text).toContain(agent.model)
-        expect((foot?.children[0] as Element | undefined)?.props?.color).toBe('#737373')
+        expect((foot?.children[0] as Element | undefined)?.props?.color).toBe(P.muted2)
       }
       // the now line on one row or two, its code span a chip
       const said = [await ui.find({ key: 'dash:now:agent-fixer:0' }), await ui.find({ key: 'dash:now:agent-fixer:1' })].map(one => one?.text ?? '').filter(Boolean)
       expect(said.join(' ')).toBe('Needs your OK to run npm test')
-      expect((await ui.findAll({ type: 'Text', text: 'npm' })).some(one => one.props.backgroundColor === '#262626')).toBe(true)
+      expect((await ui.findAll({ type: 'Text', text: 'npm' })).some(one => one.props.backgroundColor === P.chip)).toBe(true)
       await ui.unmount()
     }
   }
@@ -267,7 +347,7 @@ test('an Org tree row: its name, its now line and Open → each open the agent`s
       for (const key of [`org:agent:${agent.id}`, `org:now:${agent.id}`, `org:open:${agent.id}`]) {
         calls.length = 0
         await ui.press({ plugin: 'test', key })
-        expect(calls).toEqual([`openAgent:${JSON.stringify(agent.id)}`])
+        expect(opens(calls)).toEqual([agent.id])
       }
       expect(keyed(drawn, `org:open:${agent.id}`)?.hover).toEqual({ color: TONE[agent.status].pillFg, dimColor: false })
       // inside the row's keyed Box, which the hover answers to
@@ -283,7 +363,7 @@ test('an Org tree row: its name, its now line and Open → each open the agent`s
 test('what needs you: on the Dashboard a card`s title and Open → open the asking agent`s page, the card`s edge lit under the pointer; on that agent`s own page neither shows; past three cards each row ends in Open →', async ($, on) => {
   const calls: string[] = []
   const data = sessionData()
-  // two more held calls: five in all, so two go past the cards as rows
+  // three more held calls: five in all, so two go past the cards as rows
   M.notePending(data, M.permissionOf({ id: 'toolu_p2', tool: 'Edit', input: { file_path: '/repo/src/a.ts' }, agentId: 'agent-fixer', at: NOW - 3_000 }, '/repo'))
   M.notePending(data, M.permissionOf({ id: 'toolu_p3', tool: 'WebFetch', input: { url: 'https://example.com' }, agentId: 'agent-fixer', at: NOW - 2_000 }, '/repo'))
   M.notePending(data, M.permissionOf({ id: 'toolu_p4', tool: 'Bash', input: { command: 'npm run build' }, agentId: M.MAIN, at: NOW - 1_000 }, '/repo'))
@@ -318,7 +398,7 @@ test('what needs you: on the Dashboard a card`s title and Open → open the aski
       for (const key of [`needs:title:${id}`, `needs:open:${id}`]) {
         calls.length = 0
         await ui.press({ plugin: 'test', key })
-        expect(calls).toEqual([`openAgent:${JSON.stringify(agent)}`])
+        expect(opens(calls)).toEqual([agent])
       }
     }
     expect((await ui.find({ key: 'needs:title:toolu_q' }))?.text).toBe('Orchestrator asks you')
@@ -331,9 +411,192 @@ test('what needs you: on the Dashboard a card`s title and Open → open the aski
       for (const key of [`needs:more:${id}`, `needs:more:open:${id}`]) {
         calls.length = 0
         await ui.press({ plugin: 'test', key })
-        expect(calls).toEqual([`openAgent:${JSON.stringify(agent)}`])
+        expect(opens(calls)).toEqual([agent])
       }
     }
     await ui.unmount()
   }
+})
+
+test('a page opens on a pane it has something for, as the web deck`s: the Orchestrator`s Talk; Diffs where the agent edited, Activity while it works, else Talk; then on the pane it showed last', () => {
+  const data = workData()
+  M.agentOf(data, 'agent-helper')!.status = 'completed'
+  const scout = M.newAgent('agent-scout', 'agent', 'scout', NOW - 100_000, { parentId: M.MAIN, status: 'running', description: 'Look around' })
+  data.agents.push(scout)
+  const state = stateOf(data)
+  expect(firstPaneOf(state, 'main')).toBe('chat')
+  expect(firstPaneOf(state, 'agent-fixer')).toBe('edits')
+  expect(firstPaneOf(state, 'agent-scout')).toBe('activity')
+  expect(firstPaneOf(state, 'agent-helper')).toBe('chat')
+  expect(firstPaneOf(state, 'nobody')).toBe('chat')
+
+  // the pane is set first, then the page opens; a pane given wins for that once; a pane picked on the page is the one it opens on next
+  const calls: string[] = []
+  openAgentPage(noting(calls), state, 'agent-scout')
+  expect(calls).toEqual(['setAgentPane:"activity"', 'openAgent:"agent-scout"'])
+  calls.length = 0
+  openAgentPage(noting(calls), state, 'agent-scout', 'chat')
+  openAgentPage(noting(calls), state, 'agent-scout')
+  expect(calls).toEqual(['setAgentPane:"chat"', 'openAgent:"agent-scout"', 'setAgentPane:"activity"', 'openAgent:"agent-scout"'])
+  calls.length = 0
+  notePagePane('agent-scout', 'edits')
+  openAgentPage(noting(calls), state, 'agent-scout')
+  expect(calls).toEqual(['setAgentPane:"edits"', 'openAgent:"agent-scout"'])
+})
+
+test('the agent page reads as the web deck`s: its four figures in boxes, its task folded beside its checklist (under it below 84 cells), the checklist`s bar, then Diffs · Activity · Talk with a count each', async ($, on) => {
+  await started($, on, snapshot(workData()))
+  await $.command.run(deck(''))
+  for (const surface of SURFACES) {
+    for (const columns of [84, 68]) {
+      const isWide = columns === 84
+      const ui = await $.ui.mount(pane(surface, columns))
+      await ui.press({ key: 'dash:agent:agent-fixer' })
+      await ui.redraw()
+
+      // the four figures, four a row at 84 cells, two below
+      const boxes = await Promise.all(['model', 'tokens', 'lines', 'calls'].map(key => ui.find({ key: `stat:${key}` })))
+      const width = isWide ? 20 : 33
+      expect(boxes.map(box => box?.props.width)).toEqual([width, width, width, width])
+      expect(boxes.map(box => box?.props.borderStyle)).toEqual(['round', 'round', 'round', 'round'])
+      expect(boxes[0]?.text).toContain('Model')
+      expect(boxes[0]?.text).toContain('haiku-4.5')
+      expect(boxes[0]?.text).toContain('agent')
+      expect(boxes[1]?.text).toContain('1.2M')
+      expect(boxes[1]?.text).toContain('92.4k in · 14.8k out · 1M cache')
+      expect(boxes[2]?.text).toContain('Lines changed')
+      expect(boxes[2]?.text).toContain('2 files')
+      expect((await ui.find({ type: 'Text', text: /^[+]4$/ }))?.props.color).toBe(P.doneText)
+      expect((await ui.find({ type: 'Text', text: /^−2$/ }))?.props.color).toBe(P.failText)
+      expect(boxes[3]?.text).toContain('4')
+      expect((await ui.find({ type: 'Text', text: /^1 error$/ }))?.props.color).toBe(P.failText)
+
+      // the task beside the checklist at 84 cells, under it below; folded to about four rows, Show more for the rest
+      expect((await ui.find({ key: 'page:work' }))?.props.flexDirection).toBe(isWide ? 'row' : 'column')
+      const task = await ui.find({ key: 'page:task' })
+      expect(task?.text).toContain('Task')
+      expect(task?.text).toContain('Fix the login bug in src/auth.ts')
+      expect(task?.text).not.toContain('The last words of the task are these.')
+      expect((await ui.find({ key: 'page:more:task:agent-fixer' }))?.props.label).toBe('Show more')
+      await ui.press({ key: 'page:more:task:agent-fixer' })
+      await ui.redraw()
+      expect((await ui.find({ key: 'page:task' }))?.text).toContain('The last words of the task are these.')
+      await ui.press({ key: 'page:more:task:agent-fixer' })
+      await ui.redraw()
+      const list = await ui.find({ key: 'page:checklist' })
+      expect(list?.text).toContain('Checklist')
+      expect(list?.text).toContain('2/4')
+      expect(list?.text).toContain('Fixing the expiry check')
+      const bar = (await ui.findAll({ type: 'Svg' })).find(svg => svg.props.alt === '2 of 4 done')
+      if (surface === 'desktop') expect(bar).toBeDefined()
+      else expect(list?.text).toContain('━')
+
+      // the tabs in the web's names and order, a count each: files, calls, messages; open on Diffs, as fixer edited
+      const tabs = (await ui.findAll({ type: 'Button' })).filter(button => /^detail:(edits|activity|chat)$/.test(button.key ?? ''))
+      expect(tabs.map(tab => tab.props.label)).toEqual(['Diffs 2', 'Activity 4', 'Talk 3'])
+      expect(tabs.map(tab => tab.props.dimColor)).toEqual([false, true, true])
+      expect((await ui.findAll({ type: 'Code' })).length > 0).toBe(true)
+
+      // Activity: as the dashboard words a call, newest first, how it went and when at the right
+      await ui.press({ key: 'detail:activity' })
+      await ui.redraw()
+      const rows = (await ui.findAll({ type: 'Box' })).filter(box => box.key?.startsWith('call:'))
+      expect(rows.map(row => row.key)).toEqual(['call:c4', 'call:c3', 'call:c2', 'call:c1'])
+      expect(rows.map(row => row.text)).toEqual(['edited src/token.ts' + 'running' + 'now', 'ran npm test' + 'failed' + '2m', 'edited src/auth.ts' + '30ms' + '4m', 'read src/auth.ts' + '40ms' + '6m'])
+      expect((await ui.find({ type: 'Text', text: /^failed$/ }))?.props.color).toBe(P.failText)
+      expect(await ui.find({ type: 'Text', text: 'Tool calls 4' })).toBeUndefined()
+
+      // Talk: the thread and the field that sends, as the detail draws them
+      await ui.press({ key: 'detail:chat' })
+      await ui.redraw()
+      expect((await ui.find({ key: 'detail:chat' }))?.props.dimColor).toBe(false)
+      expect(await ui.find({ key: 'chat:agent-fixer' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'Will do: both kinds are read.' })).toBeDefined()
+
+      // Back, and the card again: the page opens on Talk, the pane it showed last
+      await ui.press({ key: 'page:back' })
+      await ui.redraw()
+      await ui.press({ key: 'dash:agent:agent-fixer' })
+      await ui.redraw()
+      expect((await ui.find({ key: 'detail:chat' }))?.props.dimColor).toBe(false)
+      await ui.press({ key: 'detail:edits' })
+      await ui.redraw()
+      await ui.press({ key: 'page:back' })
+      await ui.redraw()
+
+      // helper, done with no edits of its own: its page opens on Talk, and its Diffs says it edited nothing
+      await ui.press({ key: 'dash:agent:agent-helper' })
+      await ui.redraw()
+      expect((await ui.find({ key: 'detail:chat' }))?.props.dimColor).toBe(false)
+      await ui.press({ key: 'detail:edits' })
+      await ui.redraw()
+      expect(await ui.find({ type: 'Text', text: 'helper did not edit any files.' })).toBeDefined()
+      await ui.press({ key: 'detail:chat' })
+      await ui.redraw()
+      await ui.press({ key: 'page:back' })
+      await ui.redraw()
+      await ui.unmount()
+    }
+  }
+})
+
+/**
+ * A sample in web/fixtures/state.json's shape: three agents, each with a
+ * task, a checklist, calls and messages; two with edits, whose patches the
+ * sample keeps by edit id, as web/fixtures/patches does.
+ */
+function sampleOf(): { text: string; patches: Record<string, string> } {
+  const data = workData()
+  const helper = M.agentOf(data, 'agent-helper')!
+  M.noteTodo(data, helper, 'TodoWrite', { todos: [] }, { oldTodos: [], newTodos: [todo('Find the auth module', 'completed')] }, NOW - 290_000)
+  call(data, helper, 'h1', 'Grep', { pattern: 'login', path: '/repo/src' }, NOW - 280_000, 20)
+  M.addMessage(data, { from: helper.id, to: 'agent-fixer', kind: 'result', at: NOW - 200_000, text: 'It is src/auth.ts' })
+  const main = M.agentOf(data, M.MAIN)!
+  M.noteTodo(data, main, 'TodoWrite', { todos: [] }, { oldTodos: [], newTodos: [todo('Fix the bug', 'in_progress', 'Fixing the bug'), todo('Review', 'pending')] }, NOW - 500_000)
+  call(data, main, 'm1', 'Agent', { description: 'fixer: fix the login bug', prompt: LONG_TASK }, NOW - 400_000, null)
+  M.addEdit(data, main, { id: 'e4', agent: M.MAIN, tool: 'Edit', path: 'README.md', abs: '/repo/README.md', at: NOW - 50_000, added: 1, removed: 0, patch: PATCH_B, isNew: false })
+  M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', at: NOW - 540_000, text: 'Fix the login bug' })
+  const state = W.webStateOf(data, M.defaultView(), emptyGit(), null, NOW, 'sample', '/acme')
+  const patches: Record<string, string> = {}
+  for (const edit of data.edits) patches[W.webIdOf(edit.id)] = edit.patch
+  return { text: JSON.stringify(state), patches }
+}
+
+test('in /deck demo every agent`s page is full: its figures, task and checklist; its first pane has something in it; Diffs from the sample`s patches, Activity and Talk each with rows', async ($, on) => {
+  const sample = sampleOf()
+  on('fs.read', ($, e) => {
+    if (/state\.json$/.test(e.path)) return { value: sample.text }
+    const id = /([A-Za-z0-9_-]+)\.diff$/.exec(e.path)?.[1] ?? ''
+    return sample.patches[id] !== undefined ? { value: sample.patches[id] ?? '' } : { deny: 'no such file' }
+  })
+  const clock = await started($, on)
+  await $.command.run(deck('demo'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount(pane('desktop'))
+  for (const [id, first] of [
+    ['main', 'chat'],
+    ['agent-fixer', 'edits'],
+    ['agent-helper', 'chat'],
+  ] as const) {
+    await ui.press({ key: `dash:open:${id}` })
+    await ui.redraw()
+    for (const key of ['stat:model', 'stat:tokens', 'stat:lines', 'stat:calls', 'page:task', 'page:checklist']) expect(await ui.find({ key })).toBeDefined()
+    expect((await ui.find({ key: `detail:${first}` }))?.props.dimColor).toBe(false)
+    // each pane, and what it holds
+    await ui.press({ key: 'detail:activity' })
+    await ui.redraw()
+    expect((await ui.findAll({ type: 'Box' })).some(box => box.key?.startsWith('call:'))).toBe(true)
+    await ui.press({ key: 'detail:chat' })
+    await ui.redraw()
+    expect((await ui.findAll({ type: 'Button' })).some(button => button.key?.startsWith('msg:'))).toBe(true)
+    await ui.press({ key: 'detail:edits' })
+    await ui.redraw()
+    if (id !== 'agent-helper') expect((await ui.findAll({ type: 'Code' })).some(code => String(code.props.source).includes('@@'))).toBe(true)
+    else expect(await ui.find({ type: 'Text', text: 'helper did not edit any files.' })).toBeDefined()
+    await ui.press({ key: `detail:${first}` })
+    await ui.redraw()
+    await ui.press({ key: 'page:back' })
+    await ui.redraw()
+  }
+  await ui.unmount()
 })

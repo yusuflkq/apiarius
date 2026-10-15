@@ -27,7 +27,7 @@ import type { DashActions, Kit, WebPane } from '../types'
 import { activityRows, ago, cardFoot, cut, dashAgents, firstLine, flat, goalRest, kpisOf, nowLine, stepLineOf, wrapTicks, type ActivityRow } from './dashModel'
 import { needsBanner, needsCards } from './needs'
 import { P, STEP_HUE, mix, stepsSvg, toneOf, type IconName } from './palette'
-import { AVATAR, CARD_CHROME, PILL, avatar, buttonSlack, icon, openButton, pill, pressLine, quiet, sectionHead, svgOf, tickParts, tickTexts, widthFor } from './parts'
+import { AVATAR, CARD_CHROME, PILL, avatar, buttonSlack, icon, openAgentPage, openButton, pill, pressLine, quiet, sectionHead, svgOf, tickParts, tickTexts, widthFor } from './parts'
 
 /** From this many cells the agent cards go two a row and the KPI boxes four. */
 export const WIDE = 60
@@ -143,7 +143,7 @@ function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: num
         quiet(kit, 'No agents yet: when Claude Code starts working, the Orchestrator and the agents it delegates to show up here.')
       ) : (
         <Box flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={1}>
-          {shown.map(agent => agentCard(kit, agent, width, actions, now))}
+          {shown.map(agent => agentCard(kit, state, agent, width, actions, now))}
         </Box>
       )}
     </Box>
@@ -157,12 +157,12 @@ function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: num
  * started; "Open →" at the right. A grey edge, or its hue's while it runs,
  * waits on you or failed; its hue under the pointer, "Open →" lit with it.
  */
-function agentCard(kit: Kit, agent: WebAgent, width: number, actions: DashActions, now: number): RenderElement {
+function agentCard(kit: Kit, state: WebState, agent: WebAgent, width: number, actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
   const tone = toneOf(agent.status)
   const inner = Math.max(8, width - CARD_CHROME)
   const room = Math.max(6, inner - buttonSlack(kit))
-  const open = () => actions.openAgent(agent.id)
+  const open = () => openAgentPage(actions, state, agent.id)
   const said = nowLine(agent)
   const lines = said ? wrapTicks(said, room, 2) : []
   return (
@@ -235,14 +235,14 @@ function activitySection(kit: Kit, state: WebState, actions: DashActions, now: n
       {rows.length === 0 ? (
         quiet(kit, "No tool calls yet: every agent's tool calls show here as they happen.")
       ) : (
-        <Box flexDirection="column">{rows.map(row => activityRow(kit, row, actions, now))}</Box>
+        <Box flexDirection="column">{rows.map(row => activityRow(kit, state, row, actions, now))}</Box>
       )}
     </Box>
   )
 }
 
 /** One call: the agent's avatar, then its name, the verb and the target as one press that opens the agent; how it went and when at the right. */
-function activityRow(kit: Kit, row: ActivityRow, actions: DashActions, now: number): RenderElement {
+function activityRow(kit: Kit, state: WebState, row: ActivityRow, actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
   const room = Math.max(16, kit.columns - 3 - OUTCOME - TIME - 3)
   const name = cut(row.name, 18)
@@ -259,7 +259,7 @@ function activityRow(kit: Kit, row: ActivityRow, actions: DashActions, now: numb
     <Box key={`act:${row.key}`} flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>{avatar(kit, row.avatar, AVATAR.row, row.name)}</Box>
       <Box flexGrow={1} flexShrink={1}>
-        <Button key={`dash:act:${row.key}`} plain onPress={() => actions.openAgent(row.agent)}>
+        <Button key={`dash:act:${row.key}`} plain onPress={() => openAgentPage(actions, state, row.agent, 'activity')}>
           {words}
         </Button>
       </Box>

@@ -5,14 +5,18 @@
  * pill (the word on a dark tint of its hue), a section's head, a line whose
  * code spans read as code, a bordered card, the quiet line where content
  * will be, and the pressable lines and "Open →" that every card and row a
- * press opens an agent from is made of.
+ * press opens an agent from is made of; and `openAgentPage`, which opens an
+ * agent's page on the pane it showed last.
  *
- * Pure: Kit comes from the hooks module.
+ * Pure but for that: Kit comes from the hooks module, and the pane each
+ * agent's page showed last is kept here while the module lives.
  */
 import type { RenderElement } from 'claude-code'
 
-import type { Kit } from '../types'
-import { ticks, type TickPart } from './dashModel'
+import type { DeckAgentPane } from '../../../types'
+import type { WebState } from '../../web'
+import type { DashActions, Kit } from '../types'
+import { firstPaneOf, ticks, type TickPart } from './dashModel'
 import { P, avatarColor, avatarSvg, iconSvg, toneOf, type IconName } from './palette'
 
 /** The Svg element where the surface draws one as an image: every table but the terminal's, which answers to Svg with an empty box. */
@@ -44,6 +48,11 @@ const ICON_ALT: Readonly<Record<IconName, string>> = {
   listChecks: 'Plan',
   dollar: 'Spend',
   cornerDownRight: 'Follow-up',
+  cpu: 'Model',
+  coins: 'Tokens',
+  diff: 'Lines changed',
+  wrench: 'Tool calls',
+  file: 'File',
 }
 
 /** An icon where the surface draws Svg; null elsewhere (the terminal draws its text alone). */
@@ -115,6 +124,28 @@ export const CARD_CHROME = 4
 /** `n` boxes across `columns` with one cell between them: each one's width. */
 export function widthFor(columns: number, n: number): number {
   return Math.max(12, Math.floor((columns - (n - 1)) / Math.max(1, n)))
+}
+
+// Which pane an agent's page opens on.
+
+/** The pane picked last on each agent's page (Diffs, Activity or Talk), while the module lives: its page opens on it again, as the web deck's does. */
+const pagePanes = new Map<string, DeckAgentPane>()
+
+/** Notes the pane picked on agent `id`'s page: a press on its tabs. */
+export function notePagePane(id: string, pane: DeckAgentPane): void {
+  pagePanes.set(id, pane)
+}
+
+/**
+ * Opens agent `id`'s page on `pane` when given (an activity row opens it on
+ * Activity, for that once), else on the pane last picked on it, else on its
+ * first (as the web deck's: the Orchestrator's Talk; an agent's Diffs where
+ * it edited, Activity while it works, Talk once it ended), so no page opens
+ * on a pane it has nothing for.
+ */
+export function openAgentPage(actions: DashActions, state: WebState, id: string, pane?: DeckAgentPane): void {
+  actions.setAgentPane(pane ?? pagePanes.get(id) ?? firstPaneOf(state, id))
+  actions.openAgent(id)
 }
 
 // What a press opens an agent from: lines that are Buttons, and "Open →".

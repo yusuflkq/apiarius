@@ -14,7 +14,7 @@ import type { WebState } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { cut, nowLine, treeOf, wrapTicks } from './dashModel'
 import { P, toneOf } from './palette'
-import { AVATAR, PILL, avatar, buttonSlack, openButton, openWidth, pill, pressLine, quiet, tickParts } from './parts'
+import { AVATAR, PILL, avatar, buttonSlack, openAgentPage, openButton, openWidth, pill, pressLine, quiet, tickParts } from './parts'
 
 /** The cells each level of the tree indents, and the most levels it indents. */
 const INDENT = 2
@@ -35,7 +35,7 @@ export function orgTree(kit: Kit, state: WebState, actions: DashActions, selecte
         // the name's room: the row less its indent, the corner, the avatar, the pill, "Open →" and the gaps between
         const room = Math.max(8, kit.columns - indent - (depth > 0 ? 2 : 0) - 3 - PILL - 1 - openWidth(kit) - 1 - slack)
         const isPicked = agent.id === selected
-        const open = () => actions.openAgent(agent.id)
+        const open = () => openAgentPage(actions, state, agent.id)
         const said = wrapTicks(nowLine(agent) || '—', Math.max(8, kit.columns - indent - lead - slack), 1)[0] ?? []
         return (
           <Box key={`org:${agent.id}`} flexDirection="column" paddingLeft={indent}>

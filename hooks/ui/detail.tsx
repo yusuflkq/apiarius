@@ -26,7 +26,7 @@
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckAgent, DeckAgentPane, DeckData, DeckEdit, DeckMessage, DeckShownStatus, DeckStepStatus, DeckView } from '../../types'
+import type { DeckActivity, DeckAgent, DeckAgentPane, DeckData, DeckEdit, DeckMessage, DeckShownStatus, DeckStepStatus, DeckView } from '../../types'
 import { hunksOf, type Hunk } from '../diff'
 import * as F from '../format'
 import type { FileDiff, GitState } from '../git'
@@ -53,6 +53,8 @@ import {
   type DeckStepLink,
 } from '../model'
 import { codeBlocks, delta, deltaText, emptyLine, rail, square, stepMark, toggles, treeSize, type ToggleItem } from './common'
+import { ago, msText, verbOf } from './dash/dashModel'
+import { P } from './dash/palette'
 import { editorsText, fileColsOf, fileFactsOf, fileLine, fileStatusOf, isEditOf, type FileRowVM } from './files'
 import { goalChars } from './outline'
 import { foldStateOf, goalLineOf, shownStatusOf, waitsOnYou } from './outlineModel'
@@ -905,20 +907,133 @@ function paneBlock(kit: Kit, vm: AgentDetailVM | OrchestratorDetailVM, actions: 
   return panesOf(kit, vm.pane, vm.room, actions)
 }
 
+/** What the agent page's panes read beside the deck: the time its ages count from, and what a press on one of its tabs notes (the page's own memory of it). */
+export type PagePanes = { now: number; onPick: (pane: DeckAgentPane) => void }
+
 /**
- * An agent's Diffs · Talk · Tool calls as its detail draws them, for the
- * native dashboard's agent page: the same switch, rows and field, from the
- * deck model `data` (this session's, or the sample's). A drawing past
- * DETAIL_CHARS is drawn again with DETAIL_LEAN's shorter lists and diffs.
- * Null for an id that names no agent.
+ * An agent's Diffs · Activity · Talk, as its page on the native dashboard
+ * draws them, from the deck model `data` (this session's, or the sample's):
+ * the web deck's names and order, a count after each (files, calls,
+ * messages); the detail's own Diffs and Talk, and Activity's calls worded as
+ * the dashboard words them ("edited src/a.ts", "ran npm test"), how each
+ * went and when at the right, newest first. The pane open is the view's,
+ * the Orchestrator's too (`openAgent(id, pane)` opens a page on one). A
+ * drawing past DETAIL_CHARS is drawn again with DETAIL_LEAN's shorter lists
+ * and diffs. Null for an id that names no agent. (Classic's detail keeps its
+ * own switch: Diffs · Talk · Tool calls.)
  */
-export function agentPanesBlock(kit: Kit, data: DeckData, view: DeckView, id: string, actions: Actions): RenderElement | null {
+export function agentPanesBlock(kit: Kit, data: DeckData, view: DeckView, id: string, actions: Actions, page: PagePanes): RenderElement | null {
   const agent = agentOf(data, id)
   if (!agent || agent.kind === 'you') return null
-  const full = panesOf(kit, paneVM(data, view, agent, DETAIL_ROOM), DETAIL_ROOM, actions)
+  const full = pagePanesOf(kit, data, view, agent, DETAIL_ROOM, actions, page)
   if (treeSize(full).chars <= DETAIL_CHARS) return full
-  const lean = leaner(DETAIL_ROOM)
-  return panesOf(kit, paneVM(data, view, agent, lean), lean, actions)
+  return pagePanesOf(kit, data, view, agent, leaner(DETAIL_ROOM), actions, page)
+}
+
+/** The page's tabs, in the web deck's order, with the hotkeys that press them. */
+const PAGE_TABS: readonly { id: DeckAgentPane; name: string; hotkey: string }[] = [
+  { id: 'edits', name: 'Diffs', hotkey: 'd' },
+  { id: 'activity', name: 'Activity', hotkey: 'a' },
+  { id: 'chat', name: 'Talk', hotkey: 't' },
+]
+
+/** The cells an Activity row's outcome and age take at its right. */
+const CALL_OUTCOME = 8
+const CALL_AGE = 4
+/** A failed call's target, as the web deck reddens it. */
+const FAIL_TARGET = '#fca5a5'
+const SHELLS: ReadonlySet<string> = new Set(['Bash', 'PowerShell'])
+
+function pagePanesOf(kit: Kit, data: DeckData, view: DeckView, agent: DeckAgent, room: DetailRoom, actions: Actions, page: PagePanes): RenderElement {
+  const { Box, Text, Button } = kit
+  const open = PANES.includes(view.agentPane) ? view.agentPane : 'edits'
+  const groups = groupsOf(data.edits.filter(edit => edit.agent === agent.id))
+  const talkVm = talkVM(data, agent, room)
+  const counts: Record<DeckAgentPane, number> = { edits: groups.length, activity: agent.tools, chat: talkVm.rows.length + talkVm.earlier }
+  const pick = (one: DeckAgentPane) => {
+    page.onPick(one)
+    actions.setAgentPane(one)
+  }
+  const body = open === 'chat' ? talk(kit, talkVm, room, actions, view.agentPane) : open === 'activity' ? pageCalls(kit, data, agent, page.now) : diffs(kit, { groups, empty: pageNoEdits(data, agent) }, room)
+  return (
+    <Box flexDirection="column" gap={1}>
+      <Box flexDirection="row" columnGap={3}>
+        {PAGE_TABS.map(tab => {
+          const isOn = tab.id === open
+          const n = F.num(counts[tab.id])
+          return (
+            <Button key={`detail:${tab.id}`} label={`${tab.name} ${n}`} plain dimColor={!isOn} hotkey={tab.hotkey} onPress={() => pick(tab.id)}>
+              <Text bold={isOn} underline={isOn}>
+                {tab.name}
+              </Text>
+              <Text color={P.muted2}>{` ${n}`}</Text>
+            </Button>
+          )
+        })}
+      </Box>
+      {body}
+    </Box>
+  )
+}
+
+/** Diffs with none: why, in the page's words. */
+function pageNoEdits(data: DeckData, agent: DeckAgent): string {
+  const name = labelOf(agent)
+  if (agent.kind === 'peer') return 'A peer edits outside this session; what it sends is under Talk.'
+  const status = shownStatusOf(agent, data)
+  if (status === 'running' || status === 'waiting') return `No edits by ${name} yet: its Edit and Write patches show here the moment it makes them.`
+  return agent.kind === 'main' ? 'The Orchestrator edited no files itself: its agents did.' : `${name} did not edit any files.`
+}
+
+/** How a call went, as the dashboard says it: failed, in flight (waiting on you while its agent does), or how long it took; '—' for one its agent left unfinished. */
+function callOutcome(call: DeckActivity, status: DeckShownStatus): { text: string; color: string } {
+  if (call.ok === false) return { text: 'failed', color: P.failText }
+  if (call.ms === undefined) {
+    if (status === 'waiting') return { text: 'waiting', color: P.waitText }
+    if (status !== 'running') return { text: '—', color: P.muted2 }
+    return { text: 'running', color: P.runText }
+  }
+  return { text: msText(call.ms) || 'ok', color: P.muted2 }
+}
+
+/**
+ * The page's Activity: the agent's recent calls, newest first, as the
+ * dashboard's Recent activity words them without the name ("edited
+ * src/a.ts"; a shell call its command, "ran npm test"), how each went and
+ * its age at the right; the calls before them counted above.
+ */
+function pageCalls(kit: Kit, data: DeckData, agent: DeckAgent, now: number): RenderElement {
+  const { Box, Text } = kit
+  const recent = [...agent.recent].reverse()
+  if (recent.length === 0) return emptyLine(kit, `No tool calls by ${labelOf(agent)} yet: they show here as it makes them.`)
+  const status = shownStatusOf(agent, data)
+  const room = Math.max(12, kit.columns - CALL_OUTCOME - CALL_AGE - 2)
+  return (
+    <Box flexDirection="column">
+      {recent.length < agent.tools ? <Text color={P.muted2}>{`The last ${F.num(recent.length)} of ${F.plural(agent.tools, 'call')}, newest first`}</Text> : null}
+      {recent.map(call => {
+        const target = F.oneLine((SHELLS.has(call.tool) && call.command) || call.target || '')
+        const verb = verbOf(call.tool, target !== '')
+        const outcome = callOutcome(call, status)
+        return (
+          <Box key={`call:${call.id}`} flexDirection="row" columnGap={1}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="truncate-end">
+                <Text color={P.muted}>{verb}</Text>
+                {target ? <Text color={call.ok === false ? FAIL_TARGET : P.fg2}>{` ${F.trunc(target, Math.max(6, room - Array.from(verb).length - 1))}`}</Text> : null}
+              </Text>
+            </Box>
+            <Box width={CALL_OUTCOME} flexShrink={0} justifyContent="flex-end">
+              <Text color={outcome.color}>{outcome.text}</Text>
+            </Box>
+            <Box width={CALL_AGE} flexShrink={0} justifyContent="flex-end">
+              <Text color={P.muted2}>{ago(call.at, now)}</Text>
+            </Box>
+          </Box>
+        )
+      })}
+    </Box>
+  )
 }
 
 function panesOf(kit: Kit, pane: PaneVM, room: DetailRoom, actions: Actions): RenderElement {

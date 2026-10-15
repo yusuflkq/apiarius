@@ -8,6 +8,7 @@
  *
  * Pure: every function reads the state and the `now` it is handed.
  */
+import type { DeckAgentPane } from '../../../types'
 import type { WebAgent, WebPending, WebState } from '../../web'
 import type { OrgAgent } from './orgLayout'
 
@@ -80,6 +81,30 @@ export function flat(text: string): string {
 /** The first line that says something. */
 export function firstLine(text: string): string {
   return flat(String(text ?? '').split('\n').find(line => line.trim() !== '') ?? '')
+}
+
+/**
+ * `text` folded to about `rows` rows of a column `width` cells wide, as a
+ * wrapping Text lays it out (its own lines kept, each taking a row or more;
+ * a row counted a little short, for the words wrapping leaves over), and
+ * whether anything was left out. A line cut part way ends in "…".
+ */
+export function foldText(text: string, width: number, rows: number): { text: string; isCut: boolean } {
+  const perRow = Math.max(2, Math.floor(width) - 2)
+  const lines = String(text ?? '').split('\n')
+  const shown: string[] = []
+  let left = Math.max(1, rows)
+  for (const [i, line] of lines.entries()) {
+    const need = Math.max(1, Math.ceil(Array.from(line).length / perRow))
+    if (need > left) {
+      shown.push(cut(line, Math.max(2, left * perRow)))
+      return { text: shown.join('\n'), isCut: true }
+    }
+    shown.push(line)
+    left -= need
+    if (left === 0 && i < lines.length - 1) return { text: shown.join('\n'), isCut: lines.slice(i + 1).some(rest => rest.trim() !== '') }
+  }
+  return { text: shown.join('\n'), isCut: false }
 }
 
 /** A line with `code` spans, as the mod words a wait ("Needs your OK to run `npm test`"): its plain and code parts in order. */
@@ -222,6 +247,19 @@ export function dashAgents(state: WebState): { shown: WebAgent[]; hidden: number
   if (list.length <= MOST_CARDS) return { shown: list, hidden: 0 }
   const [first, ...rest] = list
   return { shown: [...(first ? [first] : []), ...rest.slice(rest.length - (MOST_CARDS - 1))], hidden: list.length - MOST_CARDS }
+}
+
+/**
+ * The pane an agent's page opens on first, as the web deck's: the
+ * Orchestrator's Talk (its answers to you); an agent's Diffs where it
+ * edited, Activity while it works, Talk once it ended. So no page opens on
+ * a pane it has nothing for.
+ */
+export function firstPaneOf(state: WebState, id: string): DeckAgentPane {
+  const agent = agentOf(state, id)
+  if (agent?.kind === 'orchestrator') return 'chat'
+  if (state.edits.some(edit => edit.agent === id)) return 'edits'
+  return agent && isLive(agent.status) ? 'activity' : 'chat'
 }
 
 /** Who an agent reports to: its parent agent, you for the Orchestrator, nobody for one the deck cannot place. */
@@ -437,6 +475,11 @@ export const TOOL_VERB: Readonly<Record<string, string>> = {
 /** The tools whose target is a path or a command: drawn as code. */
 export const PATHY: ReadonlySet<string> = new Set(['Read', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write', 'Glob', 'Grep', 'Bash', 'PowerShell'])
 
+/** What a call did, as the page says it: "edited", "ran", "asked you:"; for a tool it has no word for, "used <tool> on" ("used an MCP tool on"), "on" left out with no target. */
+export function verbOf(tool: string, hasTarget: boolean): string {
+  return TOOL_VERB[tool] ?? `used ${tool.startsWith('mcp__') ? 'an MCP tool' : tool}${hasTarget ? ' on' : ''}`
+}
+
 /** How a call stands, beside its row: running, waiting on you, failed, or how long it took. */
 export type Outcome = { text: string; tone: 'live' | 'wait' | 'fail' | 'quiet' }
 
@@ -468,7 +511,7 @@ export function activityRows(state: WebState, most = 8): ActivityRow[] {
       agent: x.agent,
       name: agent ? agent.label : nameOf(state, x.agent),
       avatar: agent ? agent.avatar : null,
-      verb: TOOL_VERB[x.tool] ?? `used ${x.tool.startsWith('mcp__') ? 'an MCP tool' : x.tool}${x.target ? ' on' : ''}`,
+      verb: verbOf(x.tool, Boolean(x.target)),
       target: flat(x.target || ''),
       isCode: PATHY.has(x.tool),
       outcome: outcomeOf(state, x),

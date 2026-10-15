@@ -30,7 +30,7 @@ import type { DashActions, Kit } from '../types'
 import * as A from './answers'
 import { agentOf, ago, cut, firstLine, isAnswerable, nameOf, pendingOf, pendingText, permitOf, plural, questionsOf, wrapTicks } from './dashModel'
 import { P, mix } from './palette'
-import { CARD_CHROME, buttonSlack, icon, openButton, openWidth, pressLine, tickParts, tickTexts } from './parts'
+import { CARD_CHROME, buttonSlack, icon, openAgentPage, openButton, openWidth, pressLine, tickParts, tickTexts } from './parts'
 
 /** The cards drawn whole at most; past them, a row each. */
 const MOST_CARDS = 3
@@ -138,7 +138,7 @@ function card(kit: Kit, state: WebState, p: WebPending, actions: DashActions, no
   const mark = icon(kit, isQuestion ? 'help' : 'shield', P.waitText) ?? <Text bold color={P.waitText}>{isQuestion ? '?' : '!'}</Text>
   const canOpen = where === 'dash' && agentOf(state, p.agentId) !== undefined
   const name = nameOf(state, p.agentId)
-  const open = () => actions.openAgent(p.agentId)
+  const open = () => openAgentPage(actions, state, p.agentId)
   // the title's room on its row: less the card's rule and padding, the mark, the time, "Open →", the gaps and its button's chrome
   const titleRoom = kit.columns - CARD_CHROME - 2 - 1 - 4 - 1 - openWidth(kit) - 1 - buttonSlack(kit)
   const title = canOpen ? titleLine(kit, p, name, titleRoom, open) : null
@@ -360,7 +360,7 @@ function moreRows(kit: Kit, state: WebState, rest: readonly WebPending[], action
     <Box key="needs:more" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
       <Text color={P.muted}>{`Also waiting on you: ${plural(rest.length, 'more')}`}</Text>
       {rest.map(p => {
-        const open = () => actions.openAgent(p.agentId)
+        const open = () => openAgentPage(actions, state, p.agentId)
         const words = wrapTicks(pendingText(p, nameOf(state, p.agentId)), room, 1)[0] ?? []
         return (
           <Box key={`needs:row:${p.id}`} flexDirection="row" columnGap={1}>
@@ -426,7 +426,7 @@ export function needsBanner(kit: Kit, state: WebState, actions: DashActions): Re
           {isAlert ? 'Open the agent to see what went wrong, then tell Claude how to go on.' : 'Answer it in the Claude Code conversation; the agent carries on once you do.'}
         </Text>
       </Box>
-      {target ? <Box flexShrink={0}>{openButton(kit, 'needs:banner:open', isAlert ? P.failText : P.waitText, () => actions.openAgent(target))}</Box> : null}
+      {target ? <Box flexShrink={0}>{openButton(kit, 'needs:banner:open', isAlert ? P.failText : P.waitText, () => openAgentPage(actions, state, target))}</Box> : null}
     </Box>
   )
 }
