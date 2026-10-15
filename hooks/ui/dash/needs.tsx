@@ -28,9 +28,9 @@ import { clean } from '../../format'
 import type { WebPending, WebState } from '../../web'
 import type { DashActions, Kit } from '../types'
 import * as A from './answers'
-import { agentOf, ago, cut, firstLine, isAnswerable, nameOf, pendingOf, pendingText, permitOf, plural, questionsOf } from './dashModel'
+import { agentOf, ago, cut, firstLine, isAnswerable, nameOf, pendingOf, pendingText, permitOf, plural, questionsOf, wrapTicks } from './dashModel'
 import { P, mix } from './palette'
-import { icon, tickTexts } from './parts'
+import { CARD_CHROME, buttonSlack, icon, openButton, openWidth, pressLine, tickParts, tickTexts } from './parts'
 
 /** The cards drawn whole at most; past them, a row each. */
 const MOST_CARDS = 3
@@ -85,26 +85,74 @@ function titleOf(kit: Kit, p: WebPending, name: string): RenderElement {
   )
 }
 
+/**
+ * A card's title as one press that opens its agent's page, where it fits on
+ * one line beside the time and "Open →"; null where it does not (it wraps,
+ * as Text, and "Open →" opens the page).
+ */
+function titleLine(kit: Kit, p: WebPending, name: string, room: number, onPress: () => void): RenderElement | null {
+  const { Text } = kit
+  const key = `needs:title:${p.id}`
+  if (p.kind === 'question') {
+    const n = questionsOf(p).length
+    const words = n > 1 ? `${name} asks ${n} questions` : `${name} asks you`
+    if (Array.from(words).length > room) return null
+    return pressLine(
+      kit,
+      key,
+      [
+        <Text bold color={P.waitTitle}>
+          {words}
+        </Text>,
+      ],
+      onPress,
+    )
+  }
+  const { verb, what } = permitOf(p)
+  const line = firstLine(what)
+  const lead = `${name} needs your OK to ${verb}`
+  const code = cut(line, TITLE_CODE)
+  if (Array.from(lead).length + (line ? 1 + Array.from(code).length : 0) > room) return null
+  return pressLine(
+    kit,
+    key,
+    [
+      <Text bold color={P.waitTitle}>
+        {line ? `${lead} ` : lead}
+      </Text>,
+      ...(line
+        ? [
+            <Text bold color={P.text} backgroundColor={P.chip}>
+              {code}
+            </Text>,
+          ]
+        : []),
+    ],
+    onPress,
+  )
+}
+
 function card(kit: Kit, state: WebState, p: WebPending, actions: DashActions, now: number, where: NeedsWhere): RenderElement {
-  const { Box, Text, Button } = kit
+  const { Box, Text } = kit
   const isQuestion = p.kind === 'question'
   const mark = icon(kit, isQuestion ? 'help' : 'shield', P.waitText) ?? <Text bold color={P.waitText}>{isQuestion ? '?' : '!'}</Text>
   const canOpen = where === 'dash' && agentOf(state, p.agentId) !== undefined
+  const name = nameOf(state, p.agentId)
+  const open = () => actions.openAgent(p.agentId)
+  // the title's room on its row: less the card's rule and padding, the mark, the time, "Open →", the gaps and its button's chrome
+  const titleRoom = kit.columns - CARD_CHROME - 2 - 1 - 4 - 1 - openWidth(kit) - 1 - buttonSlack(kit)
+  const title = canOpen ? titleLine(kit, p, name, titleRoom, open) : null
   return (
-    <Box key={`needs:${p.id}`} flexDirection="column" borderStyle="round" borderColor={EDGE} paddingX={1} gap={1}>
+    <Box key={`needs:${p.id}`} flexDirection="column" borderStyle="round" borderColor={EDGE} {...(canOpen ? { hover: { borderColor: P.wait } } : {})} paddingX={1} gap={1}>
       <Box flexDirection="row" columnGap={1}>
         <Box flexShrink={0}>{mark}</Box>
         <Box flexGrow={1} flexShrink={1}>
-          {titleOf(kit, p, nameOf(state, p.agentId))}
+          {title ?? titleOf(kit, p, name)}
         </Box>
         <Box flexShrink={0}>
           <Text color={TIME}>{ago(p.at, now)}</Text>
         </Box>
-        {canOpen ? (
-          <Box flexShrink={0}>
-            <Button key={`needs:open:${p.id}`} label="Open" plain onPress={() => actions.openAgent(p.agentId)} />
-          </Box>
-        ) : null}
+        {canOpen ? <Box flexShrink={0}>{openButton(kit, `needs:open:${p.id}`, P.waitText, open)}</Box> : null}
       </Box>
       {isQuestion ? questionBody(kit, p, actions) : permissionBody(kit, p)}
     </Box>
@@ -303,24 +351,31 @@ function permissionBody(kit: Kit, p: WebPending): RenderElement {
   )
 }
 
-/** Past the cards: one row a held call, its words, its time; a press opens its agent's page. */
+/** Past the cards: one row a held call, its words, its time and "Open →"; a press on its words or on "Open →" opens its agent's page. */
 function moreRows(kit: Kit, state: WebState, rest: readonly WebPending[], actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
+  // the words' room: less the card's rule and padding, the time, "Open →", the gaps and the button's chrome
+  const room = Math.max(16, kit.columns - CARD_CHROME - 4 - 1 - openWidth(kit) - 1 - buttonSlack(kit))
   return (
     <Box key="needs:more" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
       <Text color={P.muted}>{`Also waiting on you: ${plural(rest.length, 'more')}`}</Text>
-      {rest.map(p => (
-        <Box key={`needs:row:${p.id}`} flexDirection="row" columnGap={1}>
-          <Box flexGrow={1} flexShrink={1}>
-            <Button key={`needs:more:${p.id}`} plain onPress={() => actions.openAgent(p.agentId)}>
-              {tickTexts(kit, cut(pendingText(p, nameOf(state, p.agentId)), Math.max(16, kit.columns - 12)), P.fg2)}
-            </Button>
+      {rest.map(p => {
+        const open = () => actions.openAgent(p.agentId)
+        const words = wrapTicks(pendingText(p, nameOf(state, p.agentId)), room, 1)[0] ?? []
+        return (
+          <Box key={`needs:row:${p.id}`} flexDirection="row" columnGap={1}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Button key={`needs:more:${p.id}`} plain onPress={open}>
+                {tickParts(kit, words, P.fg2)}
+              </Button>
+            </Box>
+            <Box flexShrink={0}>
+              <Text color={P.muted2}>{ago(p.at, now)}</Text>
+            </Box>
+            <Box flexShrink={0}>{openButton(kit, `needs:more:open:${p.id}`, P.waitText, open)}</Box>
           </Box>
-          <Box flexShrink={0}>
-            <Text color={P.muted2}>{ago(p.at, now)}</Text>
-          </Box>
-        </Box>
-      ))}
+        )
+      })}
     </Box>
   )
 }
@@ -371,11 +426,7 @@ export function needsBanner(kit: Kit, state: WebState, actions: DashActions): Re
           {isAlert ? 'Open the agent to see what went wrong, then tell Claude how to go on.' : 'Answer it in the Claude Code conversation; the agent carries on once you do.'}
         </Text>
       </Box>
-      {target ? (
-        <Box flexShrink={0}>
-          <Button key="needs:banner:open" label="Open" plain onPress={() => actions.openAgent(target)} />
-        </Box>
-      ) : null}
+      {target ? <Box flexShrink={0}>{openButton(kit, 'needs:banner:open', isAlert ? P.failText : P.waitText, () => actions.openAgent(target))}</Box> : null}
     </Box>
   )
 }

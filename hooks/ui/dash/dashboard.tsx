@@ -8,9 +8,10 @@
  * - the goal: its headline and up to two lines of its words, the follow-up
  *   last typed, "Step n of m · <step>" and the plan's segmented bar;
  * - the agents: a bordered card each, two a row from 60 cells, one below:
- *   avatar, name (opens its page), status pill, now line, "model · tokens ·
- *   started 4m ago"; the edge in the status's hue while it runs, waits or
- *   failed, and in its hue under the pointer;
+ *   avatar, name, status pill, now line, "model · tokens · started 4m ago",
+ *   and "Open →"; every line of it a press that opens the agent's page; the
+ *   edge in the status's hue while it runs, waits or failed, and in its hue
+ *   under the pointer, "Open →" lit with it;
  * - the KPI strip: agents running, plan steps, session spend, waiting on you;
  * - recent activity: the newest eight calls, a press opening the agent;
  * - Open in browser, the web deck one press away (not in the sample).
@@ -23,10 +24,10 @@ import type { RenderElement } from 'claude-code'
 import type { WebAgent, WebState } from '../../web'
 import { webLine } from '../slim'
 import type { DashActions, Kit, WebPane } from '../types'
-import { activityRows, ago, cardFoot, cut, dashAgents, firstLine, flat, goalRest, kpisOf, nowLine, stepLineOf, type ActivityRow } from './dashModel'
+import { activityRows, ago, cardFoot, cut, dashAgents, firstLine, flat, goalRest, kpisOf, nowLine, stepLineOf, wrapTicks, type ActivityRow } from './dashModel'
 import { needsBanner, needsCards } from './needs'
 import { P, STEP_HUE, mix, stepsSvg, toneOf, type IconName } from './palette'
-import { AVATAR, CARD_CHROME, PILL, avatar, icon, pill, quiet, sectionHead, svgOf, tickTexts, widthFor } from './parts'
+import { AVATAR, CARD_CHROME, PILL, avatar, buttonSlack, icon, openButton, pill, pressLine, quiet, sectionHead, svgOf, tickParts, tickTexts, widthFor } from './parts'
 
 /** From this many cells the agent cards go two a row and the KPI boxes four. */
 export const WIDE = 60
@@ -150,31 +151,38 @@ function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: num
 }
 
 /**
- * One agent's card: its avatar (its status dot at the foot), its name as a
- * plain Button that opens its page, its pill; its now line, two lines kept;
- * its model, tokens and when it started. A grey edge, or its hue's while it
- * runs, waits on you or failed; its hue under the pointer.
+ * One agent's card, every line of it a plain Button that opens its page:
+ * its avatar (its status dot at the foot) and name beside its pill; its now
+ * line, two lines kept, a Button a line; its model, tokens and when it
+ * started; "Open →" at the right. A grey edge, or its hue's while it runs,
+ * waits on you or failed; its hue under the pointer, "Open →" lit with it.
  */
 function agentCard(kit: Kit, agent: WebAgent, width: number, actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
   const tone = toneOf(agent.status)
   const inner = Math.max(8, width - CARD_CHROME)
+  const room = Math.max(6, inner - buttonSlack(kit))
+  const open = () => actions.openAgent(agent.id)
   const said = nowLine(agent)
+  const lines = said ? wrapTicks(said, room, 2) : []
   return (
     <Box key={`card:${agent.id}`} flexDirection="column" width={width} borderStyle="round" borderColor={tone.edge} hover={{ borderColor: tone.hot }} paddingX={1}>
       <Box flexDirection="row" columnGap={1} alignItems="center">
         <Box flexShrink={0}>{avatar(kit, agent.avatar, AVATAR.card, agent.label, tone.hue)}</Box>
         <Box flexGrow={1} flexShrink={1}>
-          <Button key={`dash:agent:${agent.id}`} label={cut(agent.label, Math.max(6, inner - PILL - 5))} plain onPress={() => actions.openAgent(agent.id)} />
+          <Button key={`dash:agent:${agent.id}`} label={cut(agent.label, Math.max(6, inner - PILL - 5))} plain onPress={open} />
         </Box>
         <Box flexShrink={0}>{pill(kit, agent.status)}</Box>
       </Box>
-      <Box height={2} overflow="hidden">
-        <Text wrap="wrap">{said ? tickTexts(kit, cut(said, inner * 2), P.muted) : <Text color={P.muted3}>—</Text>}</Text>
+      <Box flexDirection="column" height={2} overflow="hidden">
+        {lines.length > 0
+          ? lines.map((parts, i) => pressLine(kit, `dash:now:${agent.id}:${i}`, tickParts(kit, parts, P.muted), open))
+          : pressLine(kit, `dash:now:${agent.id}:0`, [<Text color={P.muted3}>—</Text>], open)}
       </Box>
-      <Text color={P.muted2} wrap="truncate-end">
-        {cardFoot(agent, now)}
-      </Text>
+      {pressLine(kit, `dash:foot:${agent.id}`, [<Text color={P.muted2}>{cut(cardFoot(agent, now), room)}</Text>], open)}
+      <Box flexDirection="row" justifyContent="flex-end">
+        {openButton(kit, `dash:open:${agent.id}`, tone.pillFg, open)}
+      </Box>
     </Box>
   )
 }

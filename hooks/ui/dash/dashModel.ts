@@ -95,6 +95,72 @@ export function plainTicks(text: string): string {
   return String(text ?? '').replace(/`([^`\n]+)`/g, '$1')
 }
 
+/** One run of a line as `ticks` and `wrapTicks` give it: plain words, or a code span's. */
+export type TickPart = { text: string; isCode: boolean }
+
+/**
+ * A line with `code` spans laid into at most `rows` lines of at most `room`
+ * characters each, broken at spaces (a word longer than a line is cut
+ * across it), each line its plain and code runs in order. When words are
+ * left over, the last line ends in "…". [] for a blank text. A Button draws
+ * one line, so a pressable text of two lines is two Buttons, one a line.
+ */
+export function wrapTicks(text: string, room: number, rows: number): TickPart[][] {
+  const chars: string[] = []
+  const code: boolean[] = []
+  for (const part of ticks(flat(text))) {
+    for (const ch of Array.from(part.text)) {
+      chars.push(ch)
+      code.push(part.isCode)
+    }
+  }
+  const width = Math.max(2, Math.floor(room))
+  const spans: [number, number][] = []
+  let at = 0
+  const skipSpaces = () => {
+    while (at < chars.length && chars[at] === ' ') at++
+  }
+  skipSpaces()
+  while (at < chars.length && spans.length < Math.max(1, rows)) {
+    let end = Math.min(chars.length, at + width)
+    if (end < chars.length && chars[end] !== ' ') {
+      // back to the last space inside the line, so the word it splits starts the next one; a word
+      // longer than a whole line (a long path) is cut where the line ends instead, rather than leave it short
+      let space = end - 1
+      while (space > at && chars[space] !== ' ') space--
+      let wordEnd = space + 1
+      while (wordEnd < chars.length && chars[wordEnd] !== ' ') wordEnd++
+      if (space > at && wordEnd - (space + 1) <= width) end = space
+    }
+    spans.push([at, end])
+    at = end
+    skipSpaces()
+  }
+  const isCut = at < chars.length
+  return spans.map(([from, to], i) => {
+    const isLast = isCut && i === spans.length - 1
+    let line = chars.slice(from, to)
+    let lineCode = code.slice(from, to)
+    if (isLast) {
+      line = line.slice(0, width - 1)
+      lineCode = lineCode.slice(0, width - 1)
+    }
+    while (line.length > 0 && line[line.length - 1] === ' ') {
+      line = line.slice(0, -1)
+      lineCode = lineCode.slice(0, -1)
+    }
+    const parts: TickPart[] = []
+    line.forEach((ch, j) => {
+      const isCode = lineCode[j] === true
+      const last = parts[parts.length - 1]
+      if (last && last.isCode === isCode) last.text += ch
+      else parts.push({ text: ch, isCode })
+    })
+    if (isLast) parts.push({ text: '…', isCode: false })
+    return parts
+  })
+}
+
 // Agents.
 
 export function isRunning(status: string): boolean {

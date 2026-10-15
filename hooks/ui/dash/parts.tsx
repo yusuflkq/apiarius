@@ -3,15 +3,16 @@
  * agent's avatar (a small static Svg of the web's gradient face where the
  * surface draws Svg, a dot in its colour on the terminal), an icon, a status
  * pill (the word on a dark tint of its hue), a section's head, a line whose
- * code spans read as code, a bordered card, and the quiet line where content
- * will be.
+ * code spans read as code, a bordered card, the quiet line where content
+ * will be, and the pressable lines and "Open →" that every card and row a
+ * press opens an agent from is made of.
  *
  * Pure: Kit comes from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
 import type { Kit } from '../types'
-import { ticks } from './dashModel'
+import { ticks, type TickPart } from './dashModel'
 import { P, avatarColor, avatarSvg, iconSvg, toneOf, type IconName } from './palette'
 
 /** The Svg element where the surface draws one as an image: every table but the terminal's, which answers to Svg with an empty box. */
@@ -79,10 +80,10 @@ export function sectionHead(kit: Kit, title: string, count: number | null, right
   )
 }
 
-/** A line's parts as Text: its plain words in `color`, its code spans (backticked) on the chip's grey. */
-export function tickTexts(kit: Kit, text: string, color: string): RenderElement[] {
+/** A line's runs (plain and code, as `ticks` and `wrapTicks` give them) as Text: its plain words in `color`, its code spans on the chip's grey. */
+export function tickParts(kit: Kit, parts: readonly TickPart[], color: string): RenderElement[] {
   const { Text } = kit
-  return ticks(text).map(part =>
+  return parts.map(part =>
     part.isCode ? (
       <Text color={P.fg2} backgroundColor={P.chip}>
         {part.text}
@@ -91,6 +92,11 @@ export function tickTexts(kit: Kit, text: string, color: string): RenderElement[
       <Text color={color}>{part.text}</Text>
     ),
   )
+}
+
+/** A line's parts as Text: its plain words in `color`, its code spans (backticked) on the chip's grey. */
+export function tickTexts(kit: Kit, text: string, color: string): RenderElement[] {
+  return tickParts(kit, ticks(text), color)
 }
 
 /** One quiet line where content will be, saying in a plain sentence what will appear there. */
@@ -109,4 +115,51 @@ export const CARD_CHROME = 4
 /** `n` boxes across `columns` with one cell between them: each one's width. */
 export function widthFor(columns: number, n: number): number {
   return Math.max(12, Math.floor((columns - (n - 1)) / Math.max(1, n)))
+}
+
+// What a press opens an agent from: lines that are Buttons, and "Open →".
+
+/**
+ * The cells a plain Button takes beyond its text: none on the terminal
+ * (the label alone), a desktop's native button its padding. A pressable
+ * line's text is cut to its room less this, so it never wraps or spills.
+ */
+export function buttonSlack(kit: Kit): number {
+  return kit.surface === 'terminal' ? 0 : 2
+}
+
+/** What ends every card and row a press opens an agent from. */
+export const OPEN_LABEL = 'Open →'
+
+/** The cells "Open →" takes, its button's chrome with it. */
+export function openWidth(kit: Kit): number {
+  return Array.from(OPEN_LABEL).length + buttonSlack(kit)
+}
+
+/**
+ * "Open →": a plain Button, dim at rest and lit in `hue` while the pointer
+ * is anywhere on the keyed Box that holds it (the card or row it opens), so
+ * the whole of that reads as one thing to press. Drawn in a keyed Box only.
+ */
+export function openButton(kit: Kit, key: string, hue: string, onPress: () => void): RenderElement {
+  const { Button } = kit
+  return <Button key={key} label={OPEN_LABEL} plain dimColor hover={{ color: hue, dimColor: false }} onPress={onPress} />
+}
+
+/**
+ * One line of a card or row as a plain Button keyed `key`: its runs are
+ * Text, so they keep their colours, and a press anywhere on them runs
+ * `onPress`. Its row lets it shrink, never grow past the line.
+ */
+export function pressLine(kit: Kit, key: string, parts: RenderElement[], onPress: () => void): RenderElement {
+  const { Box, Button } = kit
+  return (
+    <Box flexDirection="row">
+      <Box flexShrink={1}>
+        <Button key={key} plain onPress={onPress}>
+          {parts}
+        </Button>
+      </Box>
+    </Box>
+  )
 }
