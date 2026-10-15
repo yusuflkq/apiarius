@@ -856,7 +856,7 @@ async function sendReview($: EngineInterface, text: string, ackId: string): Prom
     await ack($, ackId, 'delivered', 'In your prompt box: press Enter to send it')
   } else if (said.kind === 'queue') {
     const isBusy = M.agentOf(data, M.MAIN)?.status === 'running'
-    await queueForMain($, text, ackId, isBusy ? 'Claude reviews it when it finishes its current turn' : 'Claude reviews it now')
+    await queueForMain($, text, ackId, { status: 'queued', text: isBusy ? 'Claude reviews it when it finishes its current turn' : 'Claude reviews it now' })
     $.ui.toast(isBusy ? 'Review queued: Claude reviews the changes when it finishes its current turn.' : 'Review sent: Claude reviews the changes now.')
   } else {
     $.ui.toast('Could not fill the prompt.')
@@ -873,19 +873,19 @@ const deckPrompts: { text: string; isSubmitted: boolean }[] = []
 
 /**
  * Your words to the Orchestrator from the deck: logged at once as your
- * message (its ack `queued`: `queued` says when Claude reads it), then
- * submitted as your next prompt (`asUser`: the model reads them bare), which
- * runs once the session is idle. A prompt a hook drops, or one that cannot
- * be queued, fails its ack.
+ * message (its ack `told`: queued while Claude works, saying when it reads
+ * them; delivered while it is idle), then submitted as your next prompt
+ * (`asUser`: the model reads them bare), which runs once the session is
+ * idle. A prompt a hook drops, or one that cannot be queued, fails its ack.
  */
-async function queueForMain($: EngineInterface, text: string, ackId: string, queued: string): Promise<void> {
+async function queueForMain($: EngineInterface, text: string, ackId: string, told: { status: 'queued' | 'delivered'; text: string }): Promise<void> {
   const said = text.trim()
   const now = await $.clock.now()
   M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'chat', text: said, at: now, ...(ackId ? { ackId } : {}) })
   const entry = { text: said, isSubmitted: false }
   deckPrompts.push(entry)
   if (deckPrompts.length > 20) deckPrompts.splice(0, deckPrompts.length - 20)
-  await ack($, ackId, 'queued', queued)
+  await ack($, ackId, told.status, told.text)
   touched($, now)
   const forget = () => {
     const at = deckPrompts.indexOf(entry)
@@ -1316,7 +1316,8 @@ async function sendChat($: EngineInterface, agentId: string, text: string, ackId
 
   if (agent.kind === 'main') {
     const isBusy = agent.status === 'running'
-    await queueForMain($, text, ackId, isBusy ? 'Claude reads it when it finishes its current turn' : 'Claude reads it now')
+    // busy, it reads them once its turn ends; idle, at once
+    await queueForMain($, text, ackId, isBusy ? { status: 'queued', text: 'Claude reads it when it finishes its current turn' } : { status: 'delivered', text: 'Claude reads it now' })
     $.ui.toast(isBusy ? 'Queued for the Orchestrator: it reads it when its current turn ends.' : 'Sent to the Orchestrator.')
     chat?.lines.push({ role: 'parent', who: 'You', text })
     redraw($)
@@ -1332,11 +1333,29 @@ async function sendChat($: EngineInterface, agentId: string, text: string, ackId
     replies.set(agentId, { since: now, isRead: false })
     await ack($, ackId, 'delivered', 'It reads it at its next step')
   } else {
-    $.ui.toast(`Not delivered: ${sent.reason}`)
-    await ack($, ackId, 'failed', sent.reason || 'Not delivered')
+    const why = undeliveredOf(sent.reason)
+    $.ui.toast(why)
+    await ack($, ackId, 'failed', why)
   }
   save($)
   redraw($)
+}
+
+/** What a refused send to a subagent says in auto mode, where Claude Code's classifier judges the deck's sends. */
+const AUTO_MODE_REFUSAL = "Not delivered: in auto mode, Claude Code doesn't accept messages to subagents from the deck. Send it from the chat, or turn auto mode off for this chat."
+
+/**
+ * A refused send in the deck's own words, never the engine's raw refusal
+ * (an auto-mode classifier's holds words meant for the model): a refusal of
+ * the auto-mode classifier ("no verdict", "denied by the … classifier") says
+ * so plainly; any other its first sentence, at most 120 characters.
+ */
+function undeliveredOf(reason: string | undefined): string {
+  const said = F.oneLine(reason ?? '').replace(/^\w*Error:\s*/, '')
+  if (/\bno verdict\b|\bclassifier\b|\bauto[- ]mode\b/i.test(said)) return AUTO_MODE_REFUSAL
+  const first = /^.*?[.!?](?=\s|$)/.exec(said)?.[0] ?? said
+  const shown = F.trunc(first.trim(), 120)
+  return shown ? `Not delivered: ${shown}` : 'Not delivered'
 }
 
 function usageOf(raw: Awaited<ReturnType<EngineInterface['session']['usage']>>): UsageInfo {

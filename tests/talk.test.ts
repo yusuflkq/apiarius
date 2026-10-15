@@ -67,7 +67,7 @@ test('Talk to the Orchestrator: your words are logged at once and queued as your
   command(child, { cmd: 'chat', id: 'c2', agentId: 'main', text: 'Thanks' })
   await clock.settle()
   await clock.advance(400)
-  expect(lastState(w).acks.find(one => one.id === 'c2')).toMatchObject({ status: 'queued', text: 'Claude reads it now' })
+  expect(lastState(w).acks.find(one => one.id === 'c2')).toMatchObject({ ok: true, status: 'delivered', text: 'Claude reads it now' })
   // a turn of the same words typed in Claude Code later is yours, and logged
   await $.turn.start({ text: 'Thanks', turnId: 't3' })
   await $.prompt.submit({ text: 'Thanks', origin: { kind: 'composer' }, wait: false })
@@ -180,7 +180,7 @@ test('what the deck refuses is acked with why: no such agent, one that takes no 
     ['n4', false, 'failed', 'Too long: at most 4000 characters'],
     ['n5', false, 'failed', 'Not a command the deck knows: delete'],
     ['n6', false, 'failed', 'Not an answer the deck can read'],
-    ['n7', false, 'failed', 'scout is not running'],
+    ['n7', false, 'failed', 'Not delivered: scout is not running'],
   ])
   // the refused send is in Talk, undelivered
   expect(talkOf(state, M.YOU, 'agent-x1')).toEqual([['you', 'agent-x1', 'chat', 'Stop there']])
@@ -284,3 +284,53 @@ test('a snapshot`s messages, calls held on you and acks heal field by field', ()
   expect(data.acks[data.acks.length - 1]).toEqual({ id: 'c59', ok: false, status: 'failed', text: 'Not sent', at: NOW + 99 })
 })
 
+
+/** A refusal as Claude Code's auto-mode classifier words it: sentences meant for the model, not for you. */
+const CLASSIFIER = 'the server-side auto mode classifier gave no verdict for SendMessage (it skipped this action). Issue the action again once, as-is; if it is refused again, stop and tell the user.'
+
+test('a refused send reads in the deck`s own words, never the engine`s: in auto mode it says why plainly, else its first sentence; the Orchestrator idle takes your words at once', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  const child = w.children[0]
+
+  // the auto-mode classifier refuses the send, from the page and from the pane's Talk
+  w.sendRefusal = CLASSIFIER
+  command(child, { cmd: 'chat', id: 'k1', agentId: 'agent-x1', text: 'Stop there' })
+  await clock.settle()
+  const friendly = "Not delivered: in auto mode, Claude Code doesn't accept messages to subagents from the deck. Send it from the chat, or turn auto mode off for this chat."
+  await clock.advance(400)
+  expect(lastState(w).acks.find(one => one.id === 'k1')).toMatchObject({ ok: false, status: 'failed', text: friendly })
+  expect(w.toasts).toContain(friendly)
+  w.sendRefusal = 'denied by the auto mode classifier: this action needs the user'
+  command(child, { cmd: 'chat', id: 'k2', agentId: 'agent-x1', text: 'Stop there' })
+  await clock.settle()
+  await clock.advance(400)
+  expect(lastState(w).acks.find(one => one.id === 'k2')?.text).toBe(friendly)
+  // none of the engine's words reach you: not in the state the page reads, not in a toast
+  const shown = `${JSON.stringify(lastState(w))}\n${w.toasts.join('\n')}`
+  for (const raw of ['Issue the action again', 'gave no verdict', 'tell the user', 'needs the user']) expect(shown).not.toContain(raw)
+
+  // any other refusal: its first sentence, at most 120 characters
+  w.sendRefusal = `The agent is not running. ${'Try again later. '.repeat(20)}`
+  command(child, { cmd: 'chat', id: 'k3', agentId: 'agent-x1', text: 'Stop there' })
+  await clock.settle()
+  w.sendRefusal = 'x'.repeat(300)
+  command(child, { cmd: 'chat', id: 'k4', agentId: 'agent-x1', text: 'Stop there' })
+  await clock.settle()
+  await clock.advance(400)
+  const acks = lastState(w).acks
+  expect(acks.find(one => one.id === 'k3')?.text).toBe('Not delivered: The agent is not running.')
+  const long = acks.find(one => one.id === 'k4')?.text ?? ''
+  expect(long.startsWith('Not delivered: xxx')).toBe(true)
+  expect(Array.from(long.slice('Not delivered: '.length)).length).toBe(120)
+
+  // the Orchestrator idle: delivered, Claude reads it now
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 500, isAborted: false, reason: 'answer' })
+  command(child, { cmd: 'chat', id: 'k5', agentId: 'main', text: 'One more thing' })
+  await clock.settle()
+  await clock.advance(400)
+  expect(lastState(w).acks.find(one => one.id === 'k5')).toMatchObject({ ok: true, status: 'delivered', text: 'Claude reads it now' })
+  expect(w.submitted.map(one => one.text)).toContain('One more thing')
+})
