@@ -604,3 +604,27 @@ test('the layout keeps to the pane: two agent cards and four figures a row from 
     await ui.unmount()
   }
 })
+
+test('every surface draws the Dashboard, Org and an agent page as its own table allows: no Client or Other field where it has none', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  engine(on, w)
+  await work($)
+  const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'toolu_q3', questions: [QUESTION, CHECKS] } as never)
+  await clock.settle()
+  await $.command.run(deck(''))
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    expect(await ui.find({ key: 'answer:toolu_q3:0:0' })).toBeDefined()
+    expect((await ui.find({ key: 'other:toolu_q3:0' })) !== undefined).toBe(surface !== 'mobile')
+    await press(ui, 'tab:org')
+    expect((await ui.find({ type: 'Client' })) !== undefined).toBe(surface === 'terminal' || surface === 'desktop')
+    await press(ui, 'tab:dashboard')
+    await press(ui, 'dash:agent:main')
+    expect(await ui.find({ key: 'page:head' })).toBeDefined()
+    await press(ui, 'page:back')
+    await ui.unmount()
+  }
+  w.held[0]?.settle({ result: { questions: [QUESTION, CHECKS], answers: { [QUESTION.question]: 'Luxon', [CHECKS.question]: 'Lint' } } })
+  await call
+})
