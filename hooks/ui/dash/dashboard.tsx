@@ -13,7 +13,13 @@
  *   edge in the status's hue while it runs, waits or failed, and in its hue
  *   under the pointer, "Open →" lit with it;
  * - the KPI strip: agents running, plan steps, session spend, waiting on you;
- * - recent activity: the newest eight calls, a press opening the agent;
+ * - recent activity: the newest eight calls, a press opening the agent on
+ *   its Activity;
+ * - files: the eight edited last, as the web's FILES panel: the path (its
+ *   folder dim, its name bright), a live dot, "shared" where two agents
+ *   edit it, the editors' faces, +a −r; a press opens the file in Changes
+ *   where Changes lists it, else the Diffs of the agent that edited it last
+ *   (always so in the sample, which has no Changes of its own);
  * - Open in browser, the web deck one press away (not in the sample).
  *
  * Every time is coarse ("4m"), so a redraw a minute is the most time alone
@@ -24,9 +30,9 @@ import type { RenderElement } from 'claude-code'
 import type { WebAgent, WebState } from '../../web'
 import { webLine } from '../slim'
 import type { DashActions, Kit, WebPane } from '../types'
-import { activityRows, ago, cardFoot, cut, dashAgents, firstLine, flat, goalRest, kpisOf, nowLine, stepLineOf, wrapTicks, type ActivityRow } from './dashModel'
+import { activityRows, agentOf, ago, cardFoot, cut, dashAgents, fileRows, firstLine, fitPath, flat, goalRest, kpisOf, nameOf, nowLine, stepLineOf, wrapTicks, type ActivityRow, type FileRow } from './dashModel'
 import { needsBanner, needsCards } from './needs'
-import { P, STEP_HUE, mix, stepsSvg, toneOf, type IconName } from './palette'
+import { P, STEP_HUE, TONE, mix, stepsSvg, toneOf, type IconName } from './palette'
 import { AVATAR, CARD_CHROME, PILL, avatar, buttonSlack, icon, openAgentPage, openButton, pill, pressLine, quiet, sectionHead, svgOf, tickParts, tickTexts, widthFor } from './parts'
 
 /** From this many cells the agent cards go two a row and the KPI boxes four. */
@@ -43,6 +49,7 @@ export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, no
       {agentsSection(kit, state, actions, now)}
       {kpiStrip(kit, state)}
       {activitySection(kit, state, actions, now)}
+      {filesSection(kit, state, actions, web !== null)}
       {web ? webBlock(kit, web, actions) : null}
     </Box>
   )
@@ -268,6 +275,103 @@ function activityRow(kit: Kit, state: WebState, row: ActivityRow, actions: DashA
       </Box>
       <Box flexShrink={0} width={TIME} justifyContent="flex-end">
         <Text color={P.muted2}>{ago(row.at, now)}</Text>
+      </Box>
+    </Box>
+  )
+}
+
+/** The files the panel shows at most. */
+const MOST_FILES = 8
+/** The tag on a file more than one agent edited, as the web's amber "shared". */
+const SHARED = ' shared '
+/** The editors' faces a file row shows at most, and each face's size in px. */
+const MOST_FACES = 3
+const FACE = 16
+
+/**
+ * Files: the eight agents edited last, as the web's FILES panel, "Changes →"
+ * beside the head where this session's Changes tab can show them (`hasChanges`:
+ * not in the sample). Each row is a press on its path and on its +a −r.
+ */
+function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChanges: boolean): RenderElement {
+  const { Box, Button } = kit
+  const rows = fileRows(state, MOST_FILES)
+  const link = hasChanges && rows.length > 0 ? <Button key="dash:changes" label="Changes →" plain dimColor onPress={() => actions.setTab('changes')} /> : null
+  return (
+    <Box key="dash:files" flexDirection="column">
+      {sectionHead(kit, 'Files', state.files.length > 0 ? state.files.length : null, link)}
+      {rows.length === 0 ? (
+        quiet(kit, 'No files touched yet: the files agents edit show here, with who is on each.')
+      ) : (
+        <Box flexDirection="column">{rows.map(row => fileRow(kit, state, row, actions, hasChanges))}</Box>
+      )}
+    </Box>
+  )
+}
+
+/**
+ * One file: its icon, its path (the folder dim, the name bright), a live dot
+ * while an agent is on it, "shared" when more than one edited it, the
+ * editors' faces, +a −r. A press on the path or the counts opens the file in
+ * the Changes tab where Changes lists it (its own diff open there), else
+ * the Diffs of the agent that edited it last.
+ */
+function fileRow(kit: Kit, state: WebState, row: FileRow, actions: DashActions, hasChanges: boolean): RenderElement {
+  const { Box, Text, Button } = kit
+  const open = () => {
+    if (hasChanges && row.inChanges) {
+      // a file already open there would fold at a second press: none open first, then this one
+      actions.selectFile('')
+      actions.setTab('changes')
+      actions.selectFile(row.path)
+      return
+    }
+    if (row.editor) actions.openAgent(row.editor, 'edits')
+  }
+  const slack = buttonSlack(kit)
+  const faces = row.editors.slice(0, MOST_FACES)
+  const more = row.editors.length - faces.length
+  const stat = `+${row.added} −${row.removed}`
+  // the path's room: the row less the icon, the dot, the tag, the faces, the counts, their gaps and the buttons' chrome
+  const taken = 3 + (row.live ? 2 : 0) + (row.isShared ? SHARED.length + 1 : 0) + faces.length * 2 + (more > 0 ? String(more).length + 2 : 0) + 1 + stat.length + slack + 1 + slack
+  const path = fitPath(row.dir, row.name, Math.max(8, kit.columns - taken))
+  const pathParts = [
+    ...(path.dir ? [<Text color={P.muted2}>{path.dir}</Text>] : []),
+    <Text color={P.fg2}>{path.name}</Text>,
+  ]
+  return (
+    <Box key={`files:${row.path}`} flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexShrink={0}>{icon(kit, 'file', P.muted2, 14) ?? <Text color={P.muted3}>·</Text>}</Box>
+      <Box flexGrow={1} flexShrink={1}>
+        <Button key={`dash:file:${row.path}`} plain onPress={open}>
+          {pathParts}
+        </Button>
+      </Box>
+      {row.live ? (
+        <Box flexShrink={0}>
+          <Text color={P.run}>●</Text>
+        </Box>
+      ) : null}
+      {row.isShared ? (
+        <Box flexShrink={0}>
+          <Text color={TONE.waiting.pillFg} backgroundColor={TONE.waiting.pillBg}>
+            {SHARED}
+          </Text>
+        </Box>
+      ) : null}
+      <Box flexShrink={0} flexDirection="row">
+        {faces.map(id => {
+          const agent = agentOf(state, id)
+          return avatar(kit, agent ? agent.avatar : null, FACE, nameOf(state, id))
+        })}
+        {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
+      </Box>
+      <Box flexShrink={0}>
+        <Button key={`dash:filestat:${row.path}`} plain onPress={open}>
+          <Text color={P.doneText}>{`+${row.added}`}</Text>
+          <Text> </Text>
+          <Text color={P.failText}>{`−${row.removed}`}</Text>
+        </Button>
       </Box>
     </Box>
   )

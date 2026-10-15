@@ -600,3 +600,137 @@ test('in /deck demo every agent`s page is full: its figures, task and checklist;
   }
   await ui.unmount()
 })
+
+/** A file edit for the Files panel's tests: `added` and `removed` lines by `agent`, at `at`. */
+function fileEdit(data: DeckData, agentId: string, id: string, path: string, at: number, added: number, removed: number) {
+  const agent = M.agentOf(data, agentId)!
+  M.addEdit(data, agent, { id, agent: agentId, tool: 'Edit', path, abs: `/repo/${path}`, at, added, removed, patch: PATCH_A, isNew: false })
+}
+
+/** workData with ten files edited, one a minute apart (f9 last), src/shared.ts by fixer and helper both. */
+function filesData(): DeckData {
+  const data = workData()
+  for (let i = 0; i < 10; i++) fileEdit(data, 'agent-fixer', `f${i}`, `src/deep/folder/file${i}.ts`, NOW - 600_000 + i * 60_000, i + 1, i)
+  fileEdit(data, 'agent-helper', 'g1', 'src/shared.ts', NOW - 30_000, 3, 1)
+  fileEdit(data, 'agent-fixer', 'g2', 'src/shared.ts', NOW - 20_000, 2, 0)
+  return data
+}
+
+const LIVE_WEB = { status: 'off' as const, url: '', opened: '' as const, note: '' }
+
+test('the Dashboard`s Files: the eight edited last under Recent activity, each its path (folder dim, name bright), a live dot, "shared", its editors` faces and +a −r; "Changes →" beside the head where Changes can show them', async ($, on) => {
+  const state = stateOf(filesData())
+  const shared = state.files.find(file => file.path === 'src/shared.ts')!
+  // the panel draws what the state says of a file: shared, and an agent at it now
+  shared.isShared = true
+  shared.live = true
+  const where: { web: typeof LIVE_WEB | null } = { web: LIVE_WEB }
+  probe(on, kit => dashboardTab(kit, state, noting([]), NOW, where.web))
+  await started($, on)
+  for (const surface of SURFACES) {
+    where.web = LIVE_WEB
+    const ui = await $.ui.mount(pane(surface, 84, PROBE))
+    const drawn = await ui.drawn()
+    // under Recent activity
+    const tab = keyed(drawn, 'dash:files')
+    expect(tab).toBeDefined()
+    const order = (await ui.findAll({ type: 'Box' })).map(box => box.key)
+    expect(order.indexOf('dash:files') > order.findIndex(key => key?.startsWith('act:'))).toBe(true)
+    // the eight edited last, newest first
+    const rows = (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith('dash:file:'))
+    expect(rows).toEqual(['dash:file:src/shared.ts', 'dash:file:src/deep/folder/file9.ts', 'dash:file:src/token.ts', 'dash:file:src/deep/folder/file8.ts', 'dash:file:src/deep/folder/file7.ts', 'dash:file:src/auth.ts', 'dash:file:src/deep/folder/file6.ts', 'dash:file:src/deep/folder/file5.ts'])
+    expect((await ui.find({ key: 'dash:files' }))?.text).toContain('FILES')
+    expect((await ui.find({ key: 'dash:changes' }))?.props).toMatchObject({ label: 'Changes →', plain: true })
+    // the path: its folder dim, its name bright
+    const path = keyed(drawn, 'dash:file:src/deep/folder/file9.ts')
+    expect((path?.children ?? []).map(child => [(child as Element).props?.color, ((child as Element).children ?? []).join('')])).toEqual([
+      [P.muted2, 'src/deep/folder/'],
+      [P.fg2, 'file9.ts'],
+    ])
+    // shared: the tag, a live dot, both editors' faces, its counts green and red
+    const row = await ui.find({ key: 'files:src/shared.ts' })
+    expect(row?.text).toContain(' shared ')
+    expect(row?.text).toContain('●')
+    expect(row?.text).toContain('+5')
+    expect(row?.text).toContain('−1')
+    expect((await ui.find({ key: 'files:src/token.ts' }))?.text).not.toContain('shared')
+    const stat = keyed(drawn, 'dash:filestat:src/shared.ts')
+    expect((stat?.children ?? []).map(child => (child as Element).props?.color)).toEqual([P.doneText, undefined, P.failText])
+    if (surface === 'desktop') {
+      const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar') && svg.props.width === 16)
+      expect(faces.length).toBe(9)
+    }
+    await ui.unmount()
+
+    // the sample: no "Changes →", which there has nothing of its own
+    where.web = null
+    const sample = await $.ui.mount(pane(surface, 84, PROBE))
+    expect(await sample.find({ key: 'dash:changes' })).toBeUndefined()
+    expect(await sample.find({ key: 'dash:file:src/shared.ts' })).toBeDefined()
+    await sample.unmount()
+  }
+})
+
+test('a press on a file opens it in Changes where Changes lists it (git`s uncommitted files in a repository; outside one, every file agents edited), else the Diffs of the agent that edited it last', async ($, on) => {
+  const calls: string[] = []
+  const state = stateOf(filesData())
+  const where: { web: typeof LIVE_WEB | null } = { web: LIVE_WEB }
+  probe(on, kit => dashboardTab(kit, state, noting(calls), NOW, where.web))
+  await started($, on)
+  const pressed = async (key: string) => {
+    const ui = await $.ui.mount(pane('desktop', 84, PROBE))
+    calls.length = 0
+    await ui.press({ plugin: 'test', key })
+    await ui.unmount()
+    return [...calls]
+  }
+  // outside a repository: Changes lists every file agents edited; none open first, so a second press never folds it
+  const opensInChanges = ['selectFile:""', 'setTab:"changes"', 'selectFile:"src/token.ts"']
+  expect(await pressed('dash:file:src/token.ts')).toEqual(opensInChanges)
+  expect(await pressed('dash:filestat:src/token.ts')).toEqual(opensInChanges)
+  // in a repository: git's uncommitted files open in Changes; one it no longer lists opens its last editor's Diffs
+  state.repo = { name: 'repo', root: '/repo', branch: 'main', ahead: 0, behind: 0, head: 'abc1234' }
+  state.changes = [{ path: 'src/token.ts', code: 'M', added: 2, removed: 0, editors: ['agent-fixer'] }]
+  expect(await pressed('dash:file:src/token.ts')).toEqual(opensInChanges)
+  expect(await pressed('dash:file:src/shared.ts')).toEqual(['openAgent:"agent-fixer","edits"'])
+  // the sample has no Changes of its own: every file opens its last editor's Diffs
+  where.web = null
+  state.repo = null
+  expect(await pressed('dash:file:src/token.ts')).toEqual(['openAgent:"agent-fixer","edits"'])
+  expect(await pressed('dash:filestat:src/shared.ts')).toEqual(['openAgent:"agent-fixer","edits"'])
+})
+
+test('end to end: a file pressed on the Dashboard opens in Changes, open there each time; in /deck demo it opens the Diffs of the agent that edited it last', async ($, on) => {
+  const sample = sampleOf()
+  on('fs.read', ($, e) => {
+    if (/state\.json$/.test(e.path)) return { value: sample.text }
+    const id = /([A-Za-z0-9_-]+)\.diff$/.exec(e.path)?.[1] ?? ''
+    return sample.patches[id] !== undefined ? { value: sample.patches[id] ?? '' } : { deny: 'no such file' }
+  })
+  const clock = await started($, on, snapshot(workData()))
+  await $.command.run(deck(''))
+  const ui = await $.ui.mount(pane('desktop'))
+  // this session, outside a repository: Changes lists the files agents edited, by the path the deck shows them at (here the whole one)
+  const row = (await ui.findAll({ type: 'Button' })).find(button => button.key?.startsWith('dash:file:') && button.key.endsWith('src/token.ts'))
+  const path = (row?.key ?? '').slice('dash:file:'.length)
+  expect(path.endsWith('src/token.ts')).toBe(true)
+  for (let i = 0; i < 2; i++) {
+    await ui.press({ key: `dash:file:${path}` })
+    await ui.redraw()
+    expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: `file:${path}` }))?.props.dimColor).toBe(false)
+    expect(await ui.find({ type: 'Text', text: /^Created by fixer/ })).toBeDefined()
+    await ui.press({ key: 'tab:dashboard' })
+    await ui.redraw()
+  }
+  // the sample: the Diffs of the agent that edited it last
+  await $.command.run(deck('demo'))
+  await clock.advance(1000)
+  await ui.redraw()
+  await ui.press({ key: 'dash:file:README.md' })
+  await ui.redraw()
+  expect((await ui.find({ key: 'page:head' }))?.text).toContain('Orchestrator')
+  expect((await ui.find({ key: 'detail:edits' }))?.props.dimColor).toBe(false)
+  expect((await ui.findAll({ type: 'Code' })).some(code => String(code.props.source).includes('LIMIT'))).toBe(true)
+  await ui.unmount()
+})

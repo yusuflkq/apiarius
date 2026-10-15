@@ -519,3 +519,72 @@ export function activityRows(state: WebState, most = 8): ActivityRow[] {
     }
   })
 }
+
+// Files.
+
+/** A path as two paths are compared: forward slashes, no leading "./", one case (a Windows path's case says nothing). */
+function pathKey(path: string): string {
+  return String(path ?? '')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .toLowerCase()
+}
+
+/** One row of the Files panel: the file split into its folder and its name, who edited it (the newest editor apart), and whether the Changes tab lists it. */
+export type FileRow = {
+  path: string
+  /** The folder with its trailing slash; '' for a file at the top. */
+  dir: string
+  name: string
+  editors: string[]
+  /** The agent that edited it last: whose Diffs a press opens where Changes does not list it. */
+  editor: string
+  live: boolean
+  isShared: boolean
+  added: number
+  removed: number
+  lastAt: number
+  /** Changes lists it, so a press can open it there: one of git's uncommitted files in a repository; outside one, any file agents edited. */
+  inChanges: boolean
+}
+
+/** The files agents edited, the one edited last first (ties in the state's order), at most `most`: as the Files panel rows them. */
+export function fileRows(state: WebState, most = 8): FileRow[] {
+  const listed = state.repo ? new Set(state.changes.map(change => pathKey(change.path))) : null
+  return state.files
+    .map((file, i) => ({ file, i }))
+    .sort((a, b) => (b.file.lastAt || 0) - (a.file.lastAt || 0) || a.i - b.i)
+    .slice(0, Math.max(0, most))
+    .map(({ file }) => {
+      const key = pathKey(file.path)
+      const newest = [...state.edits].reverse().find(edit => pathKey(edit.path) === key)
+      const at = Math.max(file.path.lastIndexOf('/'), file.path.lastIndexOf('\\'))
+      return {
+        path: file.path,
+        dir: at >= 0 ? file.path.slice(0, at + 1) : '',
+        name: at >= 0 ? file.path.slice(at + 1) : file.path,
+        editors: [...file.editors],
+        editor: newest?.agent ?? file.editors[file.editors.length - 1] ?? '',
+        live: file.live === true,
+        isShared: file.isShared === true,
+        added: file.added || 0,
+        removed: file.removed || 0,
+        lastAt: file.lastAt || 0,
+        inChanges: listed === null || listed.has(key),
+      }
+    })
+}
+
+/**
+ * A row's path fitted to `room` characters: the name whole where it fits,
+ * its folder cut from the start ("…/stores/") to make room; a name too long
+ * on its own cut at its end, with no folder.
+ */
+export function fitPath(dir: string, name: string, room: number): { dir: string; name: string } {
+  const nameLength = Array.from(name).length
+  const dirChars = Array.from(dir)
+  if (dirChars.length + nameLength <= room) return { dir, name }
+  if (nameLength >= room - 1) return { dir: '', name: cut(name, Math.max(2, room)) }
+  const keep = room - nameLength - 1
+  return { dir: keep > 0 ? `…${dirChars.slice(dirChars.length - keep).join('')}` : '', name }
+}
