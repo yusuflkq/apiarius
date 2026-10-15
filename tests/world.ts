@@ -32,6 +32,8 @@ export type World = {
   /** Why `session.send` refuses, when it does. */
   sendRefusal: string
   submitted: { text: string; origin: unknown }[]
+  /** Why a hook beneath drops every prompt submitted, when one does. */
+  dropPrompt: string
   /** How the prompt box takes a fill: it does, there is none (the Desktop app), or a dialog holds the keys. */
   fill: 'filled' | 'no_composer' | 'dialog'
   filled: string[]
@@ -54,6 +56,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     sent: [],
     sendRefusal: '',
     submitted: [],
+    dropPrompt: '',
     fill: 'filled',
     filled: [],
     toasts: [],
@@ -106,6 +109,8 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     w.sent.push({ to: e.to, text: e.text })
     return w.sendRefusal ? { isDelivered: false, reason: w.sendRefusal } : { isDelivered: true }
   })
+  // a message a subagent's loop reads: as it came
+  on('session.receive', ($, e) => ({ text: e.text }))
   on('prompt.fill', ($, e) => {
     if (w.fill !== 'filled') return { isFilled: false, refusal: w.fill }
     w.filled.push(e.text)
@@ -113,7 +118,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   })
   on('prompt.submit', ($, e) => {
     w.submitted.push({ text: e.text, origin: e.origin })
-    return { text: e.text }
+    return w.dropPrompt ? { drop: w.dropPrompt } : { text: e.text }
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))

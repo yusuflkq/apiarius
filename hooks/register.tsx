@@ -23,7 +23,7 @@ import type {
   ToolCallResult,
 } from 'claude-code'
 
-import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckStatus, DeckView } from '../types'
+import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckMessage, DeckStatus, DeckView } from '../types'
 import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
@@ -1325,13 +1325,16 @@ async function sendChat($: EngineInterface, agentId: string, text: string, ackId
   }
 
   const sent = await $.session.send({ to: { agentId }, text }).catch(error => ({ isDelivered: false as const, reason: String(error) }))
-  M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered, ...(ackId ? { ackId } : {}) })
+  const message = M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered, ...(ackId ? { ackId } : {}) })
   if (chat?.agent === agentId) chat.lines.push({ role: 'parent', who: 'You (deck)', text })
   if (sent.isDelivered) {
     $.ui.toast(`Sent to ${M.labelOf(agent)}`)
     if (M.isEnded(agent.status)) M.reopen(agent)
     replies.set(agentId, { since: now, isRead: false })
     await ack($, ackId, 'delivered', 'It reads it at its next step')
+  } else if (isAutoModeRefusal(sent.reason)) {
+    // auto mode takes no send from the deck: the Orchestrator passes your words on, and they stay in this agent's Talk
+    await relayViaMain($, agent, text, ackId, message)
   } else {
     const why = undeliveredOf(sent.reason)
     $.ui.toast(why)
@@ -1344,18 +1347,138 @@ async function sendChat($: EngineInterface, agentId: string, text: string, ackId
 /** What a refused send to a subagent says in auto mode, where Claude Code's classifier judges the deck's sends. */
 const AUTO_MODE_REFUSAL = "Not delivered: in auto mode, Claude Code doesn't accept messages to subagents from the deck. Send it from the chat, or turn auto mode off for this chat."
 
+/** Whether a send was refused by auto mode's classifier ("no verdict", "denied by the … classifier"): one the Orchestrator can pass on. */
+function isAutoModeRefusal(reason: string | undefined): boolean {
+  return /\bno verdict\b|\bclassifier\b|\bauto[- ]mode\b/i.test(F.oneLine(reason ?? ''))
+}
+
+/** A text's first sentence on one line, at most `most` characters, an error's own name left off; '' for none. */
+function firstSentenceOf(text: string | undefined, most = 120): string {
+  const said = F.oneLine(text ?? '').replace(/^\w*Error:\s*/, '')
+  const first = /^.*?[.!?](?=\s|$)/.exec(said)?.[0] ?? said
+  return F.trunc(first.trim(), most)
+}
+
 /**
  * A refused send in the deck's own words, never the engine's raw refusal
  * (an auto-mode classifier's holds words meant for the model): a refusal of
- * the auto-mode classifier ("no verdict", "denied by the … classifier") says
- * so plainly; any other its first sentence, at most 120 characters.
+ * the auto-mode classifier says so plainly; any other its first sentence,
+ * at most 120 characters.
  */
 function undeliveredOf(reason: string | undefined): string {
-  const said = F.oneLine(reason ?? '').replace(/^\w*Error:\s*/, '')
-  if (/\bno verdict\b|\bclassifier\b|\bauto[- ]mode\b/i.test(said)) return AUTO_MODE_REFUSAL
-  const first = /^.*?[.!?](?=\s|$)/.exec(said)?.[0] ?? said
-  const shown = F.trunc(first.trim(), 120)
+  if (isAutoModeRefusal(reason)) return AUTO_MODE_REFUSAL
+  const shown = firstSentenceOf(reason)
   return shown ? `Not delivered: ${shown}` : 'Not delivered'
+}
+
+/**
+ * Your messages to subagents that auto mode would not take from the deck,
+ * which the deck asked the Orchestrator to pass on (`relayViaMain`): the
+ * agent and its label, your words, the page's command id for the ack, your
+ * message as Talk logged it, the prompt that asks, the relay turn it
+ * started ('' until it starts), whether the Orchestrator passed it on, and
+ * whether the agent has read it since. A reload forgets them; the newest 20 stay.
+ */
+type Relay = { agentId: string; label: string; text: string; ackId: string; message: DeckMessage; prompt: string; isSubmitted: boolean; turnId: string; isPassed: boolean; isRead: boolean }
+const relays: Relay[] = []
+
+/**
+ * Your words to a subagent that auto mode would not take from the deck,
+ * passed on by the Orchestrator instead: they stay your message in that
+ * agent's Talk, acked queued until the Orchestrator sends them, and a
+ * prompt in your name asks it to, with SendMessage, word for word. The
+ * prompt shows in the chat and runs once Claude is free; auto mode judges
+ * the Orchestrator's send as it judges any of its own. The turn it starts
+ * is a relay turn: nothing of it goes in the Orchestrator's Talk
+ * (`takeRelayTurn`, `endRelay`); its send marks your message delivered
+ * (`passRelay`); a relay turn that ends without one fails it.
+ */
+async function relayViaMain($: EngineInterface, agent: DeckAgent, text: string, ackId: string, message: DeckMessage): Promise<void> {
+  const label = M.labelOf(agent)
+  const prompt = `Pass this message from me to the agent "${label}" (id ${agent.id}) with SendMessage, word for word, then carry on with what you were doing:\n\n${text}`
+  const relay: Relay = { agentId: agent.id, label, text, ackId, message, prompt, isSubmitted: false, turnId: '', isPassed: false, isRead: false }
+  relays.push(relay)
+  if (relays.length > 20) relays.splice(0, relays.length - 20)
+  await ack($, ackId, 'queued', 'Waiting for the Orchestrator to pass it on')
+  $.ui.toast(`Auto mode: the Orchestrator will pass your message on to ${label}.`)
+  // the Orchestrator could not be asked either (a hook dropped the prompt): auto mode's refusal stands, in words for you
+  const refuse = () => {
+    const at = relays.indexOf(relay)
+    if (at >= 0) relays.splice(at, 1)
+    $.ui.toast(AUTO_MODE_REFUSAL)
+    void ack($, ackId, 'failed', AUTO_MODE_REFUSAL)
+  }
+  void $.prompt.submit({ text: prompt, asUser: true }).then(
+    result => {
+      if (result.drop !== undefined) refuse()
+    },
+    () => refuse(),
+  )
+}
+
+/** Whether `text` is a relay prompt of the deck's still on its way. */
+function isRelayPrompt(text: string): boolean {
+  const said = text.trim()
+  return relays.some(one => one.turnId === '' && one.prompt.trim() === said)
+}
+
+/** The deck's relay prompt that `prompt.submit` passed with the deck's own origin and these words: marked, for its turn to know it. */
+function markRelayPrompt(text: string) {
+  const said = text.trim()
+  const relay = relays.find(one => !one.isSubmitted && one.prompt.trim() === said)
+  if (relay) relay.isSubmitted = true
+}
+
+/** The relay a turn of the Orchestrator's starts with (its prompt, one marked submitted first), now tied to that turn; undefined for any other turn. */
+function takeRelayTurn(text: string, turnId: string): Relay | undefined {
+  const said = text.trim()
+  if (said === '') return undefined
+  const waiting = relays.filter(one => one.turnId === '' && one.prompt.trim() === said)
+  const relay = waiting.find(one => one.isSubmitted) ?? waiting[0]
+  if (relay) relay.turnId = turnId || 'turn'
+  return relay
+}
+
+/** The relay a send of the Orchestrator's to `agentId` passes on: the oldest not yet passed whose words the send holds. */
+function passRelay(agentId: string, text: string): Relay | undefined {
+  const sent = F.oneLine(text)
+  return relays.find(one => !one.isPassed && one.agentId === agentId && F.oneLine(one.text) !== '' && sent.includes(F.oneLine(one.text)))
+}
+
+/** The Orchestrator sent your words on: your message is delivered and its agent awaited (its next words are its reply), said in the ack and a toast. */
+async function relayPassed($: EngineInterface, relay: Relay, now: number): Promise<void> {
+  relay.isPassed = true
+  relay.message.isDelivered = true
+  const agent = M.agentOf(data, relay.agentId)
+  if (agent && M.isEnded(agent.status)) M.reopen(agent)
+  replies.set(relay.agentId, { since: now, isRead: false })
+  $.ui.toast(`Passed on to ${relay.label} by the Orchestrator.`)
+  await ack($, relay.ackId, 'delivered', 'Passed on by the Orchestrator')
+}
+
+/** Whether what agent `to` received is your message the Orchestrator passed on (logged already, as yours): marked read, so it matches once. */
+function isRelayEcho(to: string, text: string): boolean {
+  const body = F.oneLine(M.unwrapMessage(text).text)
+  const relay = relays.find(one => one.isPassed && !one.isRead && one.agentId === to && body.includes(F.oneLine(one.text)))
+  if (relay) relay.isRead = true
+  return relay !== undefined
+}
+
+/**
+ * The Orchestrator's turn `turnId` ended: whether it was a relay turn. A
+ * relay it started that was not passed on fails, saying so, with the first
+ * sentence of the turn's answer when it has one.
+ */
+function endRelay($: EngineInterface, turnId: string, answer: string): boolean {
+  const ended = relays.filter(one => one.turnId !== '' && one.turnId === (turnId || 'turn'))
+  for (const relay of ended) {
+    if (relay.isPassed) continue
+    relays.splice(relays.indexOf(relay), 1)
+    const first = firstSentenceOf(answer)
+    $.ui.toast(`The Orchestrator didn't pass your message on to ${relay.label}.`)
+    void ack($, relay.ackId, 'failed', first ? `The Orchestrator didn't pass it on. ${first}` : "The Orchestrator didn't pass it on")
+  }
+  return ended.length > 0
 }
 
 function usageOf(raw: Awaited<ReturnType<EngineInterface['session']['usage']>>): UsageInfo {
@@ -2665,13 +2788,19 @@ export const register: Register = on => {
     } catch {
       kind = 'event'
     }
+    const isDecks = e.origin.kind === 'plugin' && e.origin.name === $.plugin.name
+    // the deck's prompt asking the Orchestrator to pass your words to a subagent is no goal of yours, nor a follow-up
+    if (isDecks && isRelayPrompt(e.text)) kind = 'event'
     const result = await next(e)
     try {
       const now = await $.clock.now()
       let isChanged = false
       if (result.drop === undefined) {
-        // the deck's own prompt, logged as your message when it was sent: the turn it starts logs it no second time
-        if (e.origin.kind === 'plugin' && e.origin.name === $.plugin.name) markDeckPrompt(e.text)
+        // the deck's own prompt, logged as your message when it was sent (a relay, in its agent's Talk): the turn it starts logs it no second time
+        if (isDecks) {
+          markDeckPrompt(e.text)
+          markRelayPrompt(e.text)
+        }
         // the turn it starts logs it as yours only when it is in your words: an agent's hand-back or a notification is not
         isNextTurnTheirs = M.isUsersWords(e.origin)
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
@@ -2721,8 +2850,8 @@ export const register: Register = on => {
       // opens with a notice: a background agent's <task-notification> can start a turn with no prompt.submit before it
       const isTheirs = (isNextTurnTheirs ?? true) && !M.isNoticeText(e.text)
       isNextTurnTheirs = null
-      // your words from the deck were logged when you sent them
-      const isDecks = takeDeckPrompt(e.text)
+      // your words from the deck were logged when you sent them; a relay of them to a subagent goes in no Talk of the Orchestrator's
+      const isDecks = takeRelayTurn(e.text, e.turnId) !== undefined || takeDeckPrompt(e.text)
       if (e.text.trim() && isTheirs && !isDecks) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
       // a new turn: no call of the Orchestrator's last one is held on you any more
       M.dropStale(data, M.MAIN, openCalls)
@@ -2799,14 +2928,18 @@ export const register: Register = on => {
         if (replies.get(e.agentId)?.isRead) replies.delete(e.agentId)
       } else {
         const main = M.agentOf(data, M.MAIN)
+        // a relay turn passed your words on to a subagent (or failed to, which its ack says): nothing of it is an answer to you
+        const isRelay = endRelay($, e.turnId, e.answer)
         if (main) {
           main.status = 'idle'
           delete main.current
           main.lastAt = now
           delete main.todo
           // its answer to you is its latest report (the web deck's Orchestrator shows it), and its reply in your Talk
-          M.noteMainAnswer(main, e.answer)
-          if (e.answer.trim()) M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'answer', text: e.answer, at: now })
+          if (!isRelay) {
+            M.noteMainAnswer(main, e.answer)
+            if (e.answer.trim()) M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'answer', text: e.answer, at: now })
+          }
         }
         data.turns += 1
         data.turnMs += e.durationMs
@@ -2903,7 +3036,10 @@ export const register: Register = on => {
         if (from !== M.MAIN) M.seeLoop(data, from, now)
         // a name two agents carried goes to the newest live one
         const target = M.resolveRecipient(data, e.to) ?? M.peerOf(data, e.to, now)
-        M.addMessage(data, { from, to: target.id, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered })
+        // the Orchestrator passing your words on (a relay): your message, now delivered, and no second one
+        const relay = from === M.MAIN && e.origin.kind === 'model' && result.isDelivered ? passRelay(target.id, e.text) : undefined
+        if (relay) await relayPassed($, relay, now)
+        else M.addMessage(data, { from, to: target.id, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered })
         touched($, now)
       }
     } catch {
@@ -2925,6 +3061,8 @@ export const register: Register = on => {
         if (echo) {
           echo.isDelivered = true
           if (echo.to !== to && M.agentOf(data, to)) echo.to = to
+        } else if (isRelayEcho(to, e.text)) {
+          // your words the Orchestrator passed on: logged already, as yours
         } else if (!('plugin' in origin && origin.plugin === $.plugin.name)) {
           const unwrapped = M.unwrapMessage(e.text)
           const named = 'teammate' in origin ? origin.teammate : unwrapped.from

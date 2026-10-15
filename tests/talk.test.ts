@@ -288,31 +288,14 @@ test('a snapshot`s messages, calls held on you and acks heal field by field', ()
 /** A refusal as Claude Code's auto-mode classifier words it: sentences meant for the model, not for you. */
 const CLASSIFIER = 'the server-side auto mode classifier gave no verdict for SendMessage (it skipped this action). Issue the action again once, as-is; if it is refused again, stop and tell the user.'
 
-test('a refused send reads in the deck`s own words, never the engine`s: in auto mode it says why plainly, else its first sentence; the Orchestrator idle takes your words at once', async ($, on) => {
+test('a refused send reads in the deck`s own words, never the engine`s: its first sentence, at most 120 characters; the Orchestrator idle takes your words at once', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
   await work($)
   const child = w.children[0]
 
-  // the auto-mode classifier refuses the send, from the page and from the pane's Talk
-  w.sendRefusal = CLASSIFIER
-  command(child, { cmd: 'chat', id: 'k1', agentId: 'agent-x1', text: 'Stop there' })
-  await clock.settle()
-  const friendly = "Not delivered: in auto mode, Claude Code doesn't accept messages to subagents from the deck. Send it from the chat, or turn auto mode off for this chat."
-  await clock.advance(400)
-  expect(lastState(w).acks.find(one => one.id === 'k1')).toMatchObject({ ok: false, status: 'failed', text: friendly })
-  expect(w.toasts).toContain(friendly)
-  w.sendRefusal = 'denied by the auto mode classifier: this action needs the user'
-  command(child, { cmd: 'chat', id: 'k2', agentId: 'agent-x1', text: 'Stop there' })
-  await clock.settle()
-  await clock.advance(400)
-  expect(lastState(w).acks.find(one => one.id === 'k2')?.text).toBe(friendly)
-  // none of the engine's words reach you: not in the state the page reads, not in a toast
-  const shown = `${JSON.stringify(lastState(w))}\n${w.toasts.join('\n')}`
-  for (const raw of ['Issue the action again', 'gave no verdict', 'tell the user', 'needs the user']) expect(shown).not.toContain(raw)
-
-  // any other refusal: its first sentence, at most 120 characters
+  // any refusal but auto mode's: its first sentence, at most 120 characters
   w.sendRefusal = `The agent is not running. ${'Try again later. '.repeat(20)}`
   command(child, { cmd: 'chat', id: 'k3', agentId: 'agent-x1', text: 'Stop there' })
   await clock.settle()
@@ -333,4 +316,96 @@ test('a refused send reads in the deck`s own words, never the engine`s: in auto 
   await clock.advance(400)
   expect(lastState(w).acks.find(one => one.id === 'k5')).toMatchObject({ ok: true, status: 'delivered', text: 'Claude reads it now' })
   expect(w.submitted.map(one => one.text)).toContain('One more thing')
+})
+
+/** The prompt that asks the Orchestrator to pass `text` on to scout (`agent-x1`). */
+function relayOf(text: string): string {
+  return `Pass this message from me to the agent "scout" (id agent-x1) with SendMessage, word for word, then carry on with what you were doing:\n\n${text}`
+}
+
+test('in auto mode your message to a subagent is relayed by the Orchestrator: it stays in that agent`s Talk, the relay prompt shows in the chat, and the Orchestrator`s send delivers it, logged once', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  const child = w.children[0]
+  const asked = w.submitted.length
+
+  // allowed: sent directly, nothing relayed
+  command(child, { cmd: 'chat', id: 'd1', agentId: 'agent-x1', text: 'Look at range.js first' })
+  await clock.settle()
+  expect(w.sent).toEqual([{ to: 'agent-x1', text: 'Look at range.js first' }])
+  expect(w.submitted.length).toBe(asked)
+
+  // auto mode's classifier refuses the deck's send: the Orchestrator is asked to pass it on, in a prompt in your name
+  w.sendRefusal = CLASSIFIER
+  const words = 'Stop there and hand back what you have'
+  command(child, { cmd: 'chat', id: 'r1', agentId: 'agent-x1', text: words })
+  await clock.settle()
+  expect(w.submitted.slice(asked).map(one => one.text)).toEqual([relayOf(words)])
+  await clock.advance(400)
+  let state = lastState(w)
+  expect(state.acks.find(one => one.id === 'r1')).toMatchObject({ ok: true, status: 'queued', text: 'Waiting for the Orchestrator to pass it on' })
+  expect(talkOf(state, M.YOU, 'agent-x1').map(one => one[3])).toEqual(['Look at range.js first', words])
+  // the prompt is in no Talk and no goal; the engine's words reach you nowhere
+  const shown = `${JSON.stringify(state)}\n${w.toasts.join('\n')}`
+  for (const hidden of ['Pass this message', 'Issue the action again', 'gave no verdict']) expect(shown).not.toContain(hidden)
+
+  // its turn: the Orchestrator sends your words on; delivered, and logged once, as yours, on both ends
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 500, isAborted: false, reason: 'answer' })
+  await $.turn.start({ text: relayOf(words), turnId: 't2' })
+  w.sendRefusal = ''
+  // its own words around yours, and scout reads them at a later step
+  const passed = `From the user: ${words}`
+  await $.session.send({ to: 'scout', text: passed, origin: { kind: 'model' } })
+  await clock.advance(30_000)
+  await $.session.receive({ origin: { kind: 'coordinator' }, text: `<agent-message from="team-lead">\n${passed}\n</agent-message>`, agentId: 'agent-x1' })
+  await $.turn.complete({ turnId: 't2', answer: 'Passed it on to scout.', durationMs: 500, isAborted: false, reason: 'answer' })
+  await clock.advance(400)
+  state = lastState(w)
+  expect(state.acks.find(one => one.id === 'r1')).toMatchObject({ ok: true, status: 'delivered', text: 'Passed on by the Orchestrator' })
+  expect(talkOf(state, M.YOU, 'agent-x1').map(one => one[3])).toEqual(['Look at range.js first', words])
+  expect(talkOf(state, M.MAIN, 'agent-x1').filter(one => one[2] === 'message')).toEqual([])
+  // the relay turn is in none of the Orchestrator's Talk: not its prompt, not its answer
+  const withMain = talkOf(state, M.YOU, M.MAIN).map(one => one[3])
+  expect(withMain.some(text => text.includes('Pass this message'))).toBe(false)
+  expect(withMain).not.toContain('Passed it on to scout.')
+  expect(state.agents.find(one => one.id === M.MAIN)?.result).not.toBe('Passed it on to scout.')
+
+  // scout's reply shows as a direct send's does
+  w.steps.push({ answer: 'Stopping; here is what I have.' })
+  await step($, 'agent-x1', 0)
+  await clock.advance(400)
+  expect(talkOf(lastState(w), M.YOU, 'agent-x1').pop()).toEqual(['agent-x1', 'you', 'chat', 'Stopping; here is what I have.'])
+})
+
+test('a relay turn that ends without the send fails, with the first words of the Orchestrator`s answer; a relay prompt dropped says auto mode refused it, in plain words', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  const child = w.children[0]
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 500, isAborted: false, reason: 'answer' })
+
+  w.sendRefusal = 'denied by the auto mode classifier: this action needs the user'
+  command(child, { cmd: 'chat', id: 'r2', agentId: 'agent-x1', text: 'One more thing' })
+  await clock.settle()
+  await $.turn.start({ text: relayOf('One more thing'), turnId: 't2' })
+  await $.turn.complete({ turnId: 't2', answer: 'I could not find scout. It may have ended.', durationMs: 500, isAborted: false, reason: 'answer' })
+  await clock.advance(400)
+  let state = lastState(w)
+  expect(state.acks.find(one => one.id === 'r2')).toMatchObject({ ok: false, status: 'failed', text: "The Orchestrator didn't pass it on. I could not find scout." })
+  expect(talkOf(state, M.YOU, M.MAIN).map(one => one[3])).not.toContain('I could not find scout. It may have ended.')
+  expect(talkOf(state, M.YOU, 'agent-x1').map(one => one[3])).toEqual(['One more thing'])
+
+  // a hook drops the relay prompt: auto mode's refusal stands, in words for you
+  w.dropPrompt = 'Blocked by a hook.'
+  command(child, { cmd: 'chat', id: 'r3', agentId: 'agent-x1', text: 'Last thing' })
+  await clock.settle()
+  await clock.advance(400)
+  state = lastState(w)
+  const plain = "Not delivered: in auto mode, Claude Code doesn't accept messages to subagents from the deck. Send it from the chat, or turn auto mode off for this chat."
+  expect(state.acks.find(one => one.id === 'r3')).toMatchObject({ ok: false, status: 'failed', text: plain })
+  expect(w.toasts).toContain(plain)
+  expect(`${JSON.stringify(state)}\n${w.toasts.join('\n')}`).not.toContain('needs the user')
 })
