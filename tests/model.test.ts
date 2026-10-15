@@ -4,6 +4,7 @@ import { expect, mock, test, type MockClock } from 'claude-code/testing'
 import { emptyGit, type FileRow } from '../hooks/git'
 import * as M from '../hooks/model'
 import type { DeckAgent, DeckData, DeckSnapshot, DeckStatus } from '../types'
+import { bash } from './tools'
 
 const HASH = 'c'.repeat(40)
 /** On a minute's edge, so a test's first minute is whole. */
@@ -83,7 +84,8 @@ function world(on: On, clock: MockClock, options: { bashMs?: number; saved?: Dec
   on('agent.spawn', () => ({ model: 'claude-haiku', agentId: 'agent-x1' }))
   on('classic.Notification', () => ({}))
   on('tool.call', async ($, e) => {
-    if (e.tool === 'Bash' && options.bashMs) await clock.sleep(options.bashMs)
+    // compared as a string: the tool table may lack Bash (tests/tools.ts)
+    if ((e.tool as string) === 'Bash' && options.bashMs) await clock.sleep(options.bashMs)
     if (e.tool === 'TaskCreate') return { result: { task: { id: '7', subject: e.subject } } }
     return { result: 'ok' }
   })
@@ -321,7 +323,7 @@ test('no redraw while nothing changes: idle ticks raise no ui.invalidate, a tool
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
   await $.command.run(deck('agents'))
   await $.agent.spawn(spawn('scout', 'look around', 'Look around src/'))
-  await $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the unit tests' })
+  await $.tool.call(bash({ command: 'npm test', description: 'Run the unit tests' }))
   const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'desktop', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
   expect(await ui.drawn()).toBeDefined()
   await clock.advance(10_000)
@@ -352,7 +354,7 @@ test('waiting on you: a permission prompt marks the Orchestrator until the call 
 
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
   await $.turn.start({ text: 'clean up', turnId: 't1' })
-  const call = $.tool.call({ tool: 'Bash', command: 'rm -rf build', description: 'Clean the build' })
+  const call = $.tool.call(bash({ command: 'rm -rf build', description: 'Clean the build' }))
   await clock.settle()
   await $.classic.Notification({ message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' })
   await clock.advance(2000)

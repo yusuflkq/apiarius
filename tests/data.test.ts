@@ -4,6 +4,7 @@ import { expect, mock, test, type MockClock } from 'claude-code/testing'
 import { emptyGit, type FileRow, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
+import { bash, type BashArgs } from './tools'
 
 /**
  * The v3 data layer: goals, plans and their sources, checklists, placeholder
@@ -132,10 +133,12 @@ function world(on: On, clock: MockClock, saved: DeckSnapshot[], options: WorldOp
       if (options.refused?.includes(e.tool_use_id)) return { deny: 'The person declined to start it' }
       return { result: { status: 'async_launched' as const, agentId: `agent-${e.name ?? 'bound'}`, description: e.description, prompt: e.prompt, outputFile: '' } }
     }
-    if (e.tool === 'Bash') {
+    // compared as a string, its command read as BashArgs: the tool table may lack Bash (tests/tools.ts)
+    if ((e.tool as string) === 'Bash') {
       if (options.bashMs) await clock.sleep(options.bashMs)
       const diff = bashDiffs.shift()
-      const commit = options.commitSha && e.command.includes('git commit') ? { gitOperation: { commit: { sha: options.commitSha, kind: 'committed' as const } } } : {}
+      const { command } = e as unknown as BashArgs
+      const commit = options.commitSha && command.includes('git commit') ? { gitOperation: { commit: { sha: options.commitSha, kind: 'committed' as const } } } : {}
       return { result: { stdout: '', stderr: '', interrupted: false, ...(diff ? { bashEditDiff: diff as never } : {}), ...commit } }
     }
     if (e.tool === 'TodoWrite') return { result: { oldTodos: [], newTodos: e.todos } }
@@ -614,7 +617,7 @@ test('each agent keeps its whole todo list: done of total, the step in hand stea
   await clock.advance(60_000)
 
   // a call in flight: it is the last action, live; the step does not move
-  const call = $.tool.call(inLoop('agent-fixer', { tool: 'Bash' as const, command: 'npm test', description: 'Run the unit tests' }))
+  const call = $.tool.call(inLoop('agent-fixer', bash({ command: 'npm test', description: 'Run the unit tests' })))
   await clock.advance(2000)
   let fixer = agentIn(lastOf(saved), 'agent-fixer')
   expect(M.lastActionOf(fixer)).toEqual({ text: 'Run the unit tests', tool: 'Bash', at: NOW + 60_000, isLive: true })
@@ -694,9 +697,9 @@ test('a Bash command`s bashEditDiff records each file it changed with its hunks;
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
   await clock.advance(1000)
   await $.agent.spawn(spawnOf({ toolUseId: 'toolu_fixer', description: 'Generate', name: 'fixer' }))
-  await $.tool.call(inLoop('agent-fixer', { tool: 'Bash' as const, command: 'npm run gen', description: 'Generate the client' }))
+  await $.tool.call(inLoop('agent-fixer', bash({ command: 'npm run gen', description: 'Generate the client' })))
   await clock.advance(1000)
-  await $.tool.call(inLoop('agent-fixer', { tool: 'Bash' as const, command: 'npm run gen', description: 'Generate it again' }))
+  await $.tool.call(inLoop('agent-fixer', bash({ command: 'npm run gen', description: 'Generate it again' })))
   await clock.advance(1000)
   await $.tool.call(inLoop('agent-fixer', { tool: 'Edit' as const, file_path: '/repo/src/app.ts', old_string: 'a', new_string: 'b (edited)' }))
   await clock.advance(3000)
@@ -915,7 +918,7 @@ test('an approved ExitPlanMode plan, the team`s TaskCreated and TaskCompleted, a
 
   await $.classic.TaskCreated({ task_id: '9', task_subject: 'Wire the outline', task_description: 'rows and folds' })
   await $.classic.TaskCompleted({ task_id: '9', task_subject: 'Wire the outline' })
-  await $.tool.call({ tool: 'Bash', command: 'git commit -m "Wire the outline"', description: 'Commit the outline' })
+  await $.tool.call(bash({ command: 'git commit -m "Wire the outline"', description: 'Commit the outline' }))
   await clock.advance(2000)
   data = lastOf(saved)
   expect(data.board['9']).toMatchObject({ id: '9', subject: 'Wire the outline', description: 'rows and folds', status: 'done', doneAt: NOW + 2000 })

@@ -3,6 +3,7 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 import * as M from '../hooks/model'
 import * as W from '../hooks/web'
 import type { DeckPending } from '../types'
+import { bash } from './tools'
 import { command, deck, lastState, newWorld, NOW, step, work, world, type World } from './world'
 
 /**
@@ -209,7 +210,7 @@ test('a permission prompt is held on you only once its dialog shows (a tool.chec
   world(on, w)
   await work($)
   const input = { command: 'npm test -- --watch=false', description: 'Run the unit tests' }
-  const call = $.tool.call({ tool: 'Bash', tool_use_id: 'toolu_b1', ...input, agentId: 'agent-x1' } as never)
+  const call = $.tool.call(bash({ tool_use_id: 'toolu_b1', ...input, agentId: 'agent-x1' }))
   await clock.settle()
   // the engine asks the mode's decider: no dialog yet (the auto-mode classifier and a headless host get the same ask)
   await $.tool.check({ tool: 'Bash', input, tool_use_id: 'toolu_b1', agentId: 'agent-x1' })

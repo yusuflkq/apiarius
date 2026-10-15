@@ -1,6 +1,8 @@
 import type { AgentInfo, On } from 'claude-code'
 import { expect, mock, test, type FoundElement } from 'claude-code/testing'
 
+import { bash } from './tools'
+
 /**
  * The QA run's live scenario, replayed through the stubbed engine. You ask
  * the Orchestrator to fix a token refresh bug in /repo, a repository the
@@ -303,7 +305,7 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await $.tool.call(edit('agent-fixer', 'test/token.test.js'))
   await $.agent.spawn(spawn('helper', 'general-purpose', 'Add a Refresh window note to README.md.', 'agent-fixer'))
   await $.tool.call(edit('agent-helper', 'README.md'))
-  await $.tool.call(inLoop('agent-fixer', { tool: 'Bash' as const, command: 'node --test', description: 'Run the unit tests' }))
+  await $.tool.call(inLoop('agent-fixer', bash({ command: 'node --test', description: 'Run the unit tests' })))
   await clock.advance(1000)
 
   // while they work: the goal, who runs, who started whom and where each is
