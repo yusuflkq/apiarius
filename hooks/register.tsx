@@ -3006,9 +3006,13 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // a subagent's or teammate's run starts a turn of its own (engine 2.1.304): none of it is the main loop's
+    if (e.agentId !== undefined) return next(e)
     try {
       const now = await $.clock.now()
       const main = M.agentOf(data, M.MAIN)
+      // the main loop's running turn: the one Stop turn ends ($.turn.abort takes its id)
+      M.noteMainTurn(data, e.turnId)
       // you answered, or the Orchestrator went on by itself: it waits on nobody
       M.clearNeeds(data, { kind: 'turn' })
       if (main) {
@@ -3097,6 +3101,8 @@ export const register: Register = on => {
         if (replies.get(e.agentId)?.isRead) replies.delete(e.agentId)
       } else {
         const main = M.agentOf(data, M.MAIN)
+        // no turn of the main loop's runs now: nothing for Stop turn to end
+        M.endMainTurn(data, e.turnId)
         // a relay turn passed your words on to a subagent (or failed to, which its ack says): nothing of it is an answer to you
         const isRelay = endRelay($, e.turnId, e.answer)
         if (main) {

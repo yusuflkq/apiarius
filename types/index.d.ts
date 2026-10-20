@@ -334,6 +334,12 @@ export type DeckData = {
   pending: DeckPending[]
   /** What came of the web deck's commands, newest last (at most 50). */
   acks: DeckAck[]
+  /**
+   * The main loop's running turn, as its `turn.start` gave it (never a
+   * subagent's or teammate's, whose runs raise `turn.start` too); absent
+   * between turns. Stop turn ends it (`$.turn.abort`).
+   */
+  mainTurnId?: string
 }
 
 /**
