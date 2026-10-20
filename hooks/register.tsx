@@ -36,6 +36,7 @@ import { talkEndOf } from './ui/dash/talk'
 import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
 import type { ChatLine, DashActions, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
+import { newRenderMemo } from './renderMemo'
 import { deckView } from './views'
 import * as W from './web'
 
@@ -96,8 +97,17 @@ let lastAgent: string | null = null
 
 /** Draws every site of this plugin again; the engine folds calls to ten a second. Events that change the data call it. */
 function redraw($: EngineInterface) {
+  drawn.clear()
   $.ui.invalidate('ui.render')
 }
+
+/**
+ * The tree the pane and the band drew last, handed back while what they draw
+ * from is the same (hooks/renderMemo.ts): a draw the engine asks for on its own,
+ * as when a click gives the pane the keyboard, then keeps every Button's press
+ * handle, so that click lands. `redraw` clears it.
+ */
+const drawn = newRenderMemo()
 
 /** What the git half of the screen shows: not when git was read, only whether it has been and what it found. */
 function gitKeyOf(state: G.GitState): string {
@@ -3307,10 +3317,12 @@ export const register: Register = on => {
     isPaneOpen = true
     const now = await $.clock.now()
     shownKey = screenKey(now)
-    const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
-    const dash = dashOf(now, e.surface)
-    keepTalk($, dash.state)
-    return deckView(kit, modelOf(now), actionsFor($), dash)
+    return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, shownKey, view], () => {
+      const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
+      const dash = dashOf(now, e.surface)
+      keepTalk($, dash.state)
+      return deckView(kit, modelOf(now), actionsFor($), dash)
+    })
   })
 
   // your own scrolling of the pane: whether it leaves you at the end, where an agent page's Talk keeps to its newest message
@@ -3340,9 +3352,12 @@ export const register: Register = on => {
     const theirs: RenderElement = await next(e)
     const now = await $.clock.now()
     // the band speaks for the screen only while the pane, which shows more, is shut
-    if (!isPaneOpen) shownKey = screenKey(now)
-    const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
-    return bandView(kit, modelOf(now), actionsFor($), theirs) ?? theirs
+    const key = screenKey(now)
+    if (!isPaneOpen) shownKey = key
+    return drawn.of(`band:${e.surface}`, [e.props.bodyColumns, key, view, theirs], () => {
+      const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
+      return bandView(kit, modelOf(now), actionsFor($), theirs) ?? theirs
+    })
   })
 
   on('ui.render', { component: 'Pane', requestId: PROBE }, async ($, e) => {
