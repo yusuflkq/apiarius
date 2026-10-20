@@ -260,6 +260,56 @@ let expansion: { headline: string; at: number } | null = null
 let isNextTurnTheirs: boolean | null = null
 
 /**
+ * Your prompts typed while a turn of the main loop's ran, logged when they
+ * were submitted (`prompt.submit` with that turn's `turnId`): the turn one
+ * starts, when the engine runs it as a turn of its own, logs it no second
+ * time. The newest 20.
+ */
+const typedMidTurn: string[] = []
+
+/** A prompt of yours logged as you typed it over a running turn: kept for the turn it may start. */
+function noteTypedMidTurn(text: string) {
+  const said = text.trim()
+  if (said === '') return
+  typedMidTurn.push(said)
+  if (typedMidTurn.length > 20) typedMidTurn.splice(0, typedMidTurn.length - 20)
+}
+
+/**
+ * Whether a turn of the main loop's starts with prompts of yours logged
+ * already as you typed them over the turn before (its words one of them, or
+ * those queued together): they are let go, logged once.
+ */
+function takeTypedMidTurn(text: string): boolean {
+  const said = text.trim()
+  if (said === '' || typedMidTurn.length === 0) return false
+  const at = typedMidTurn.indexOf(said)
+  if (at >= 0) {
+    typedMidTurn.splice(at, 1)
+    return true
+  }
+  // several queued prompts can start one turn together
+  const within = typedMidTurn.filter(one => said.includes(one))
+  if (within.length < 2 || within.reduce((rest, one) => rest.replace(one, ''), said).trim() !== '') return false
+  for (const one of within) typedMidTurn.splice(typedMidTurn.indexOf(one), 1)
+  return true
+}
+
+/**
+ * SendMessage calls under way, each with its own `summary` (the label Claude
+ * gives its own transcript row): the row their `session.send` logs takes it
+ * as its title. Let go when the call ends.
+ */
+const sendTitles: { id: string; from: string; text: string; summary: string }[] = []
+
+/** The summary of the SendMessage under way that sends `text` from loop `from`; '' for none. */
+function sendTitleOf(from: string, text: string): string {
+  const sent = F.oneLine(text)
+  const found = sendTitles.find(one => one.from === from && (one.text === text || (F.oneLine(one.text) !== '' && sent.includes(F.oneLine(one.text).slice(0, 80)))))
+  return found?.summary ?? ''
+}
+
+/**
  * A placeholder row took its agent's id: what the view held of it (the
  * selection, a fold, a zoom, as the id or inside a key) follows it.
  */
@@ -2789,6 +2839,12 @@ export const register: Register = on => {
       // the call goes ahead whatever the deck makes of it
     }
 
+    // a SendMessage's own summary titles the row its send logs
+    const summary = tool === 'SendMessage' && typeof input.summary === 'string' ? F.trunc(F.oneLine(input.summary), 200) : ''
+    if (summary !== '' && typeof input.message === 'string') {
+      sendTitles.push({ id: e.tool_use_id, from: agentId, text: input.message, summary })
+      if (sendTitles.length > 20) sendTitles.splice(0, sendTitles.length - 20)
+    }
     const before = isShell && git.isRepo && G.mayCommit(command) ? await runGit($, G.argv.head).then(ran => (ran.ok ? ran.out.trim() : '')) : ''
     let ran: ToolCallResult
     try {
@@ -2797,6 +2853,10 @@ export const register: Register = on => {
     } finally {
       // the call ended (answered, run, refused or failed): nothing of it is held on you any more
       openCalls.delete(e.tool_use_id)
+      if (summary !== '') {
+        const at = sendTitles.findIndex(one => one.id === e.tool_use_id)
+        if (at >= 0) sendTitles.splice(at, 1)
+      }
       asks.delete(e.tool_use_id)
       M.dropPending(data, e.tool_use_id)
     }
@@ -2879,7 +2939,11 @@ export const register: Register = on => {
       try {
         let plan = typeof record?.plan === 'string' ? record.plan : typeof input.plan === 'string' ? input.plan : ''
         if (plan.trim() === '' && typeof record?.filePath === 'string' && record.filePath !== '') plan = await $.fs.read(record.filePath)
-        if (plan.trim() !== '') M.notePlan(data, plan, end)
+        if (plan.trim() !== '') {
+          // as Claude wrote it, for the plan it is; and split into steps for the screens of earlier builds
+          M.noteApproved(data, plan, agentId, end)
+          M.notePlan(data, plan, end)
+        }
       } catch {
         // no plan the deck could read
       }
@@ -2934,6 +2998,7 @@ export const register: Register = on => {
           isTeammate: e.isTeammate === true,
           ...(e.workflow ? { workflow: e.workflow.runId } : {}),
           model: result.model,
+          background: e.background === true,
           at: now,
         })
         if (from !== undefined) renameInView(from, agent.id)
@@ -2975,8 +3040,20 @@ export const register: Register = on => {
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
         expansion = null
         if (kind !== 'event') isChanged = M.noteGoal(data, kind, { text: e.text, origin: e.origin.kind, at: now, ...(kind === 'goal' && said ? { headline: said } : {}) }) !== undefined
-        // a background task's notification may end a Workflow run
-        if (e.origin.kind === 'task-notification') isChanged = M.endWorkflows(data, e.text, now) || isChanged
+        // typed over the running turn: logged now, as it went in, and by the turn it may start no second time
+        if (e.turnId !== undefined && !isDecks && M.isUsersWords(e.origin)) {
+          const words = 'text' in result && typeof result.text === 'string' ? result.text : e.text
+          const logged = M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: words, at: now })
+          if (data.messages.includes(logged)) {
+            noteTypedMidTurn(words)
+            isChanged = true
+          }
+        }
+        // a background task's notification: Claude Code's row to the main loop, and it may end a Workflow run
+        if (e.origin.kind === 'task-notification') {
+          isChanged = M.noteTaskNotices(data, e.text, now) || isChanged
+          isChanged = M.endWorkflows(data, e.text, now) || isChanged
+        }
       }
       if (isChanged) touched($, now)
     } catch {
@@ -3025,7 +3102,11 @@ export const register: Register = on => {
       isNextTurnTheirs = null
       // your words from the deck were logged when you sent them; a relay of them to a subagent goes in no Talk of the Orchestrator's
       const isDecks = takeRelayTurn(e.text, e.turnId) !== undefined || takeDeckPrompt(e.text)
-      if (e.text.trim() && isTheirs && !isDecks) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      // a prompt you typed over the turn before was logged as you typed it
+      const isTyped = isTheirs && !isDecks && takeTypedMidTurn(e.text)
+      if (e.text.trim() && isTheirs && !isDecks && !isTyped) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      // a turn the engine starts with a background task's notification, no prompt.submit before it: Claude Code's row, once
+      if (M.isNoticeText(e.text)) M.noteTaskNotices(data, e.text, now)
       // a new turn: no call of the Orchestrator's last one is held on you any more
       M.dropStale(data, M.MAIN, openCalls)
       touched($, now)
@@ -3046,11 +3127,11 @@ export const register: Register = on => {
     const result = yield* next(e)
     try {
       if (awaited && e.agentId !== undefined && replies.get(e.agentId) === awaited && startedAt > awaited.since) {
-        // its first words since your message are its reply
+        // its first words since your message: said to nobody in particular, so never taken to be to you
         if (result.answer.trim() !== '') {
           replies.delete(e.agentId)
           const now = await $.clock.now()
-          M.addMessage(data, { from: e.agentId, to: M.YOU, kind: 'chat', text: result.answer, at: now })
+          M.addMessage(data, { from: e.agentId, to: '', kind: 'chat', text: result.answer, at: now })
           touched($, now)
         } else {
           awaited.isRead = true
@@ -3209,12 +3290,14 @@ export const register: Register = on => {
         const now = await $.clock.now()
         const from = e.agentId ?? M.MAIN
         if (from !== M.MAIN) M.seeLoop(data, from, now)
-        // a name two agents carried goes to the newest live one
-        const target = M.resolveRecipient(data, e.to) ?? M.peerOf(data, e.to, now)
+        // a name two agents carried goes to the newest live one; a name none carries stays the name SendMessage was given
+        const target = M.resolveRecipient(data, e.to)
+        const to = target?.id ?? F.trunc(F.oneLine(e.to), 120)
         // the Orchestrator passing your words on (a relay): your message, now delivered, and no second one
-        const relay = from === M.MAIN && e.origin.kind === 'model' && result.isDelivered ? passRelay(target.id, e.text) : undefined
+        const relay = from === M.MAIN && e.origin.kind === 'model' && result.isDelivered && target ? passRelay(target.id, e.text) : undefined
+        const title = e.origin.kind === 'model' ? sendTitleOf(from, e.text) : ''
         if (relay) await relayPassed($, relay, now)
-        else M.addMessage(data, { from, to: target.id, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered })
+        else M.addMessage(data, { from, to, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered, ...(title !== '' ? { title } : {}) })
         touched($, now)
       }
     } catch {
@@ -3241,11 +3324,8 @@ export const register: Register = on => {
         } else if (!('plugin' in origin && origin.plugin === $.plugin.name)) {
           const unwrapped = M.unwrapMessage(e.text)
           const named = 'teammate' in origin ? origin.teammate : unwrapped.from
-          const from = named
-            ? (M.resolveRecipient(data, named)?.id ?? M.peerOf(data, named, now).id)
-            : origin.kind === 'coordinator'
-              ? M.MAIN
-              : M.peerOf(data, origin.kind === 'peer-send-message' ? 'another session' : 'peer', now).id
+          // a sender no agent of the session is keeps the name it went by; with none, the delivery's own kind
+          const from = named ? (M.resolveRecipient(data, named)?.id ?? F.trunc(F.oneLine(named), 120)) : origin.kind === 'coordinator' ? M.MAIN : origin.kind
           if (unwrapped.text.trim() !== '') M.addMessage(data, { from, to, kind: 'message', text: unwrapped.text, at: now })
         }
         touched($, now)
@@ -3305,14 +3385,12 @@ export const register: Register = on => {
     return result
   })
 
-  // Waiting on you: a permission prompt, an MCP server's question, Claude idle for your input. Observe only.
+  // Claude Code's notification: a row in the chat, as it sent it, and waiting on you when it asks (a permission prompt, an MCP server's question, Claude idle for your input). Observe only.
   on('classic.Notification', async ($, e, next) => {
     try {
-      if (M.isNeedsYou(e.notification_type, e.message)) {
-        const now = await $.clock.now()
-        M.noteNeeds(data, { kind: e.notification_type, text: e.message, at: now, ...(e.agent_id ? { agent: e.agent_id } : {}) })
-        touched($, now)
-      }
+      const now = await $.clock.now()
+      const note = { type: e.notification_type, message: e.message, at: now, ...(e.title ? { title: e.title } : {}), ...(e.agent_id ? { agent: e.agent_id } : {}) }
+      if (M.noteNotification(data, note)) touched($, now)
     } catch {
       // the notification goes out whatever the deck makes of it
     }

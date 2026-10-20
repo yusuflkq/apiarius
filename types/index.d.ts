@@ -81,8 +81,9 @@ export type DeckDuring = {
 
 /**
  * The engine told the person it needs them (a permission prompt, an MCP
- * server's question, Claude waiting for input). Kept on the Orchestrator;
- * the next tool call or turn takes it down.
+ * server's question, Claude waiting for input). Each is kept in
+ * `DeckData.needs`, the newest also on the Orchestrator (`needs`); the next
+ * tool call of the loop it waits on, or the main loop's next turn, takes it down.
  */
 export type DeckNeeds = {
   /** The notification's message ("Claude needs your permission to use Bash"). */
@@ -94,6 +95,8 @@ export type DeckNeeds = {
   agent?: string
   /** That tool call's id: its end takes the note down. */
   call?: string
+  /** The notification's own title, when it carried one. */
+  title?: string
 }
 
 export type DeckAgent = {
@@ -151,21 +154,37 @@ export type DeckAgent = {
   todosAt?: number
   /** The workflow run (its Workflow call's id) a workflow agent belongs to. */
   workflow?: string
+  /**
+   * Its spawn ran it in the background (`agent.spawn`'s `background`: a
+   * background or remote agent, and every teammate); absent before its spawn
+   * says. Only such an agent can be stopped (TaskStop); a foreground one ends
+   * with its caller's turn.
+   */
+  background?: boolean
 }
 
 /**
- * Who said what to whom: `prompt` your prompt to the Orchestrator, `spawn` a
- * task handed down, `result` a report handed back, `message` a SendMessage
- * between agents, `chat` yours from the deck (or an agent's reply to it),
- * `answer` the Orchestrator's reply to you, `question` an agent's question to
- * you (AskUserQuestion), `choice` how it was answered.
+ * Who said what to whom: `prompt` your prompt to the Orchestrator (typed
+ * mid-turn too), `spawn` a task handed down, `result` a report handed back,
+ * `message` a SendMessage between agents, `chat` yours from the deck (or an
+ * agent's words after it), `answer` the Orchestrator's reply to you,
+ * `question` an agent's question to you (AskUserQuestion), `choice` how it
+ * was answered, `notification` Claude Code's notification to you
+ * (classic Notification, from `engine`), `task` a background task's
+ * notification to the main loop (`<task-notification>`, from `engine`).
  */
-export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice'
+export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task'
 
 export type DeckMessage = {
   /** `[A-Za-z0-9_]` and `-` only: the web deck serves it as a file name. */
   id: string
+  /** An agent's id, `you`, `engine` (Claude Code itself), or the name a sender went by that no agent of the session carries. */
   from: string
+  /**
+   * An agent's id, `you`, or the name SendMessage was given that no agent of
+   * the session carries; '' when the words went to nobody in particular (an
+   * agent's words after your message: never taken to be to you).
+   */
   to: string
   kind: DeckMessageKind
   /** At most 700 characters (`LIMITS.messageChars`). */
@@ -180,6 +199,10 @@ export type DeckMessage = {
   ackId?: string
   /** A question's or a choice's call (the AskUserQuestion tool_use_id). */
   callId?: string
+  /** Its own title: a SendMessage's `summary`; a notification's title, else its type; a task notification's status. */
+  title?: string
+  /** The agent a notification is about: the loop it fired in, or the agent whose task it reports. */
+  agent?: string
 }
 
 /** One question of an AskUserQuestion call, as its dialog draws it. */
@@ -334,6 +357,10 @@ export type DeckData = {
   pending: DeckPending[]
   /** What came of the web deck's commands, newest last (at most 50). */
   acks: DeckAck[]
+  /** Claude Code's notifications that wait on the person, oldest first (at most 20); each goes once what it waits on moves (`clearNeeds`). */
+  needs: DeckNeeds[]
+  /** The plan approved last (ExitPlanMode), as Claude wrote it (at most 20,000 characters), and the loop that made it. */
+  approved?: { text: string; at: number; by: string }
   /**
    * The main loop's running turn, as its `turn.start` gave it (never a
    * subagent's or teammate's, whose runs raise `turn.start` too); absent

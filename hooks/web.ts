@@ -140,6 +140,8 @@ export type WebMessage = {
   ackId?: string
   /** A question's or a choice's call (the pending item's `id` while it is held). */
   callId?: string
+  /** Delivered to its agent (a send from the deck, a SendMessage); absent when no one said. */
+  isDelivered?: boolean
 }
 
 export type WebPending = Omit<DeckPending, 'questions'> & {
@@ -372,21 +374,31 @@ function editorsByPath(data: DeckData): Map<string, string[]> {
   return byPath
 }
 
-/** A message as the page reads it: its id file-safe, its text cut at 600 characters (`isCut` then), and the command or call it belongs to. */
+/**
+ * A message as the page reads it: its id file-safe, its text cut at 600
+ * characters (`isCut` then), whether it was delivered, and the command or
+ * call it belongs to. v1 reads an agent's words to nobody in particular (its
+ * words after your message, `to` '') as to you, as it always has: v2 says
+ * whom they went to (`chatOf`).
+ */
 function webMessageOf(message: DeckData['messages'][number]): WebMessage {
   const text = cutMarkdown(message.text, WEB_CAPS.messageChars)
   return {
     id: webIdOf(message.id),
     at: message.at,
     from: message.from,
-    to: message.to,
+    to: message.to === '' ? M.YOU : message.to,
     kind: message.kind,
     text,
     ...(text !== message.text ? { isCut: true as const } : {}),
+    ...(message.isDelivered !== undefined ? { isDelivered: message.isDelivered } : {}),
     ...(message.ackId ? { ackId: message.ackId } : {}),
     ...(message.callId ? { callId: message.callId } : {}),
   }
 }
+
+/** The message kinds v1's page and pane know: Claude Code's notifications (to you, and of a task to the main loop) are v2's alone. */
+const V1_KINDS: ReadonlySet<DeckMessageKind> = new Set(['prompt', 'spawn', 'result', 'message', 'chat', 'answer', 'question', 'choice'])
 
 /** A call held on you as the page reads it; `answerable` holds the calls the deck can still answer (their races live in this module). */
 function webPendingOf(item: DeckPending, answerable: ReadonlySet<string>): WebPending {
@@ -466,7 +478,10 @@ export function webStateOf(
     },
     plan: { source: plan.source, steps: plan.steps.map(step => ({ key: step.key, text: step.text, status: step.status, agents: [...step.agents] })) },
     agents: agents.map(agent => webAgentOf(data, agent, root, plan)),
-    messages: data.messages.slice(-WEB_CAPS.messages).map(webMessageOf),
+    messages: data.messages
+      .filter(message => V1_KINDS.has(message.kind))
+      .slice(-WEB_CAPS.messages)
+      .map(webMessageOf),
     activity,
     files,
     edits: data.edits.slice(-WEB_CAPS.edits).map(edit => ({ id: webIdOf(edit.id), agent: edit.agent, tool: edit.tool, path: edit.path, at: edit.at, added: edit.added, removed: edit.removed })),

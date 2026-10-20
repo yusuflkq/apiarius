@@ -835,7 +835,7 @@ test('a snapshot restored with the old cut gets those labels made again, sibling
 
 // The redraw policy.
 
-test('events draw only when the screen would change: a notice that asks nothing and a stop of an unknown loop draw nothing; a checklist change does', async ($, on) => {
+test('events draw only when the screen would change: a stop of an unknown loop and a notification said again at once draw nothing; a notification (a row in the chat) and a checklist change do', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []
   const redraws = { count: 0 }
@@ -846,8 +846,13 @@ test('events draw only when the screen would change: a notice that asks nothing 
   await clock.advance(3000)
 
   redraws.count = 0
-  await $.classic.Notification({ message: 'Signed in', notification_type: 'auth_success' })
   await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'agent-unknown', agent_transcript_path: '', agent_type: 'general-purpose' })
+  expect(redraws.count).toBe(0)
+  // Claude Code's notification is a row in the chat, one that asks nothing too; the same words again at once are that row
+  await $.classic.Notification({ message: 'Signed in', notification_type: 'auth_success' })
+  expect(redraws.count > 0).toBe(true)
+  redraws.count = 0
+  await $.classic.Notification({ message: 'Signed in', notification_type: 'auth_success' })
   expect(redraws.count).toBe(0)
 
   await $.tool.call(inLoop('agent-fixer', { tool: 'TodoWrite' as const, todos: [todo('Fix the bug', 'in_progress', 'Fixing the bug')] }))

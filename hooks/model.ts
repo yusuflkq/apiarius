@@ -41,6 +41,10 @@ export const MAIN = 'main'
 export const YOU = 'you'
 /** What the deck calls the main loop (internal id `main`) everywhere it draws it. */
 export const ORCHESTRATOR = 'Orchestrator'
+/** The sender of what Claude Code itself says: its notification to you, a background task's notification to the main loop. */
+export const ENGINE = 'engine'
+/** What the deck calls that sender, Claude Code itself, where it draws it. */
+export const ENGINE_NAME = 'Claude Code'
 /**
  * The snapshot's shape. Kept at 2 on purpose: a reload restores the session's
  * agents, and `healData` / `healView` fill or fix what an older shape lacks.
@@ -121,6 +125,10 @@ export const LIMITS = {
   /** The files edited. */
   files: 500,
   workflows: 10,
+  /** Claude Code's notifications that wait on the person, kept at once. */
+  needs: 20,
+  /** The approved plan's words, in characters. */
+  planChars: 20_000,
   /** The steps a plan is cut to. */
   steps: 30,
   /** An agent's label, in characters. */
@@ -197,6 +205,7 @@ export function emptyData(now: number): DeckData {
     workflows: [],
     pending: [],
     acks: [],
+    needs: [],
   }
 }
 
@@ -849,6 +858,8 @@ export type MessageKindCount = Partial<Record<DeckMessageKind, number>>
 export function linksOf(data: DeckData): Map<string, { a: string; b: string; ab: number; ba: number; last: number; kinds: MessageKindCount }> {
   const links = new Map<string, { a: string; b: string; ab: number; ba: number; last: number; kinds: MessageKindCount }>()
   for (const message of data.messages) {
+    // words to nobody in particular link no one
+    if (message.to === '') continue
     const [a, b] = message.from < message.to ? [message.from, message.to] : [message.to, message.from]
     const key = `${a}|${b}`
     const link = links.get(key) ?? { a, b, ab: 0, ba: 0, last: 0, kinds: {} }
@@ -933,6 +944,13 @@ export function healData(value: DeckData, now: number): DeckData {
   data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage).filter(message => !isYourPrompt(message) || message.text !== '') : []
   data.pending = healPending(value.pending)
   data.acks = healAcks(value.acks)
+  data.needs = healNeeds(value.needs)
+  const approved = value.approved as unknown
+  if (isRecord(approved) && typeof approved.text === 'string' && approved.text.trim() !== '' && num(approved.at) !== undefined) {
+    data.approved = { text: trunc(approved.text, LIMITS.planChars), at: approved.at as number, by: typeof approved.by === 'string' ? approved.by : MAIN }
+  } else {
+    delete data.approved
+  }
   data.edits = Array.isArray(value.edits) ? value.edits : []
   data.minutes = Array.isArray(value.minutes) ? value.minutes : []
   data.commitsBy = value.commitsBy && typeof value.commitsBy === 'object' ? value.commitsBy : {}
@@ -969,6 +987,7 @@ function healAgent(agent: DeckAgent): DeckAgent {
   if (typeof loose.scope !== 'string') delete agent.scope
   if (!ORIGINS.includes(loose.origin as DeckOrigin)) delete agent.origin
   for (const field of ['toolUseId', 'goal', 'workflow'] as const) if (typeof loose[field] !== 'string') delete agent[field]
+  if (typeof loose.background !== 'boolean') delete agent.background
   if (num(loose.todosAt) === undefined) delete agent.todosAt
   if (!['handback', 'answer', 'call', 'stop'].includes(String(loose.resultVia))) delete agent.resultVia
   const during = loose.during
@@ -1088,7 +1107,7 @@ function healMessage(value: Record<string, unknown>): DeckMessage {
   const message = value as unknown as DeckMessage
   if (typeof value.full !== 'string') delete message.full
   if (value.isSaved !== true) delete message.isSaved
-  for (const field of ['ackId', 'callId'] as const) if (typeof value[field] !== 'string') delete message[field]
+  for (const field of ['ackId', 'callId', 'title', 'agent'] as const) if (typeof value[field] !== 'string') delete message[field]
   if (isYourPrompt(message) && typeof value.text === 'string') {
     const kept = message.full ?? value.text
     const words = cleanPrompt(kept)
@@ -1121,6 +1140,20 @@ function healPending(value: unknown): DeckPending[] {
 }
 
 const ACK_STATES: readonly DeckAck['status'][] = ['queued', 'delivered', 'answered', 'failed']
+
+/** The notifications a snapshot says wait on the person: each of its shape, at most 20. */
+function healNeeds(value: unknown): DeckNeeds[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(isRecord)
+    .filter(one => typeof one.text === 'string' && typeof one.kind === 'string' && num(one.at) !== undefined)
+    .map(one => {
+      const healed: DeckNeeds = { text: one.text as string, kind: one.kind as string, at: one.at as number }
+      for (const field of ['agent', 'call', 'title'] as const) if (typeof one[field] === 'string') healed[field] = one[field] as string
+      return healed
+    })
+    .slice(-LIMITS.needs)
+}
 
 function healAcks(value: unknown): DeckAck[] {
   if (!Array.isArray(value)) return []
@@ -1307,45 +1340,149 @@ function waitingCallOf(data: DeckData, kind: string, message: string, agentId: s
 }
 
 /**
- * Notes on the Orchestrator that the engine waits on the person, with the
- * agent and the call that wait when they can be told (`agent` is the
- * notification's own `agent_id`, when it carried one). Answers the note.
+ * Notes that the engine waits on the person, with the agent and the call
+ * that wait when they can be told (`agent` is the notification's own
+ * `agent_id`, when it carried one): in `data.needs` (the same notice of the
+ * same loop and call again replaces the older; the newest 20 kept), its
+ * words as Claude Code wrote them, and the newest on the Orchestrator for
+ * the screens of earlier builds (`needs`). Answers the note.
  */
-export function noteNeeds(data: DeckData, note: { kind: string; text: string; at: number; agent?: string }): DeckNeeds | undefined {
+export function noteNeeds(data: DeckData, note: { kind: string; text: string; at: number; agent?: string; title?: string }): DeckNeeds | undefined {
   const main = agentOf(data, MAIN)
   if (!main) return undefined
   const named = note.agent !== undefined && agentOf(data, note.agent) ? note.agent : undefined
   const waiting = waitingCallOf(data, note.kind, note.text, named)
   const agent = waiting?.agent ?? named
+  const title = trunc(oneLine(note.title ?? ''), 120)
   const needs: DeckNeeds = {
-    text: trunc(oneLine(note.text), NOTE_CHARS) || 'Claude is waiting for you',
+    text: trunc(oneLine(note.text), NOTE_CHARS),
     kind: note.kind,
     at: note.at,
     ...(agent !== undefined ? { agent } : {}),
     ...(waiting ? { call: waiting.call } : {}),
+    ...(title !== '' ? { title } : {}),
   }
-  main.needs = needs
+  data.needs = [...data.needs.filter(one => !(one.kind === needs.kind && one.agent === needs.agent && one.call === needs.call)), needs].slice(-LIMITS.needs)
+  main.needs = shownNeedsOf(needs)
   return needs
+}
+
+/** A note as the screens of earlier builds read it on the Orchestrator: never without words. */
+function shownNeedsOf(needs: DeckNeeds): DeckNeeds {
+  return needs.text !== '' ? { ...needs } : { ...needs, text: 'Claude is waiting for you' }
 }
 
 /** What moved since the engine started waiting on the person. */
 export type NeedsMove = { kind: 'turn' } | { kind: 'start'; agent: string } | { kind: 'end'; agent: string; call: string }
 
 /**
- * Takes the needs-you note down once what it waited on moved: a turn
- * starting; the agent it waits on starting another call; the call it waits
- * on ending (with no call told, any call of that agent ending). The agent
- * is the Orchestrator unless the note names another. Answers whether it did.
+ * Takes each needs-you note down once what it waited on moved: the main
+ * loop's turn starting (a note of the Orchestrator's); the agent it waits on
+ * starting another call; the call it waits on ending (with no call told, any
+ * call of that agent ending). The agent is the Orchestrator unless the note
+ * names another. The Orchestrator's `needs` follows: the newest note left.
+ * Answers whether any went.
  */
 export function clearNeeds(data: DeckData, move: NeedsMove): boolean {
   const main = agentOf(data, MAIN)
-  const needs = main?.needs
-  if (!main || !needs) return false
-  const owner = needs.agent ?? MAIN
-  const isMoved =
-    move.kind === 'turn' || (move.kind === 'start' ? move.agent === owner : needs.call !== undefined ? move.call === needs.call : move.agent === owner)
-  if (isMoved) delete main.needs
-  return isMoved
+  if (!main) return false
+  const isMoved = (needs: DeckNeeds): boolean => {
+    const owner = needs.agent ?? MAIN
+    if (move.kind === 'turn') return owner === MAIN
+    if (move.kind === 'start') return move.agent === owner
+    return needs.call !== undefined ? move.call === needs.call : move.agent === owner
+  }
+  const kept = data.needs.filter(one => !isMoved(one))
+  const isListMoved = kept.length !== data.needs.length
+  const isShownMoved = main.needs !== undefined && isMoved(main.needs)
+  if (!isListMoved && !isShownMoved) return false
+  data.needs = kept
+  const newest = kept[kept.length - 1]
+  if (newest) main.needs = shownNeedsOf(newest)
+  else delete main.needs
+  return true
+}
+
+/**
+ * Claude Code's notification (classic Notification), as it sent it: a chat
+ * row from Claude Code to you, its words and its title (else its type)
+ * verbatim, about the loop it fired in (the same words of the same type
+ * within 30 s are one row); and, when it asks something of the person
+ * (`isNeedsYou`), a need (`noteNeeds`). Answers whether anything changed.
+ */
+export function noteNotification(data: DeckData, note: { type: string; message: string; title?: string; agent?: string; at: number }): boolean {
+  const text = note.message.trim()
+  const title = trunc(oneLine(note.title?.trim() || note.type), 120)
+  const agent = note.agent !== undefined && note.agent !== '' ? note.agent : undefined
+  let isChanged = false
+  const last = [...data.messages].reverse().find(one => one.kind === 'notification')
+  const isAgain = last !== undefined && last.text === trunc(text, LIMITS.messageChars) && (last.title ?? '') === title && note.at - last.at < 30_000
+  if (!isAgain && (text !== '' || title !== '')) {
+    addMessage(data, { from: ENGINE, to: YOU, kind: 'notification', text, at: note.at, ...(title !== '' ? { title } : {}), ...(agent ? { agent } : {}) })
+    isChanged = true
+  }
+  if (isNeedsYou(note.type, note.message)) {
+    noteNeeds(data, { kind: note.type, text: note.message, at: note.at, ...(agent ? { agent } : {}), ...(note.title ? { title: note.title } : {}) })
+    isChanged = true
+  }
+  return isChanged
+}
+
+/** One background task's notification (`<task-notification>…</task-notification>`), as its own tags say it. */
+export type TaskNotice = { taskId?: string; toolUseId?: string; status?: string; summary?: string }
+
+/** The task notifications a text holds, each block's tags read (task-id, tool-use-id, status, summary); none for text with no block. */
+export function taskNoticesOf(text: string): TaskNotice[] {
+  const notices: TaskNotice[] = []
+  for (const block of text.matchAll(/<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/g)) {
+    const body = block[1] ?? ''
+    const tag = (name: string): string | undefined => {
+      const said = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(body)?.[1]?.trim()
+      return said ? said : undefined
+    }
+    const notice: TaskNotice = {}
+    const taskId = tag('task-id')
+    const toolUseId = tag('tool-use-id')
+    const status = tag('status')
+    const summary = tag('summary')
+    if (taskId) notice.taskId = taskId
+    if (toolUseId) notice.toolUseId = toolUseId
+    if (status) notice.status = status
+    if (summary) notice.summary = summary
+    if (Object.keys(notice).length > 0) notices.push(notice)
+  }
+  return notices
+}
+
+/**
+ * The task notifications a prompt or a turn of the main loop's holds, each a
+ * chat row from Claude Code to the main loop: its summary verbatim (else its
+ * task's id and status), its status as the title, about the agent whose task
+ * it is (by its id, or the Agent call that started it). One already logged
+ * (the same task, status and words among the last 50 messages) is not
+ * logged again. Answers whether any was.
+ */
+export function noteTaskNotices(data: DeckData, text: string, at: number): boolean {
+  let isChanged = false
+  for (const notice of taskNoticesOf(text)) {
+    const agent = data.agents.find(one => (notice.taskId !== undefined && one.id === notice.taskId) || (notice.toolUseId !== undefined && one.toolUseId === notice.toolUseId))
+    const words = notice.summary ?? [notice.taskId, notice.status].filter(Boolean).join(' ')
+    const title = notice.status ?? ''
+    const body = trunc(words.trim(), LIMITS.messageChars)
+    const isLogged = data.messages.slice(-50).some(one => one.kind === 'task' && one.text === body && (one.title ?? '') === title && one.agent === agent?.id)
+    if (isLogged || words.trim() === '') continue
+    addMessage(data, { from: ENGINE, to: MAIN, kind: 'task', text: words, at, ...(title !== '' ? { title } : {}), ...(agent ? { agent: agent.id } : {}) })
+    isChanged = true
+  }
+  return isChanged
+}
+
+/** The plan the person approved (ExitPlanMode), as Claude wrote it, by the loop `by` that made it: the one shown until the next. */
+export function noteApproved(data: DeckData, text: string, by: string, at: number): boolean {
+  const body = text.trim()
+  if (body === '') return false
+  data.approved = { text: trunc(body, LIMITS.planChars), at, by }
+  return true
 }
 
 // Held on you: the calls the engine holds on the person, a question (AskUserQuestion) or a permission prompt.
@@ -1613,7 +1750,7 @@ export type Talk = { id: string; sent: number; received: number; last: number }
 export function talkOf(data: DeckData, agentId: string): Talk[] {
   const byId = new Map<string, Talk>()
   for (const message of data.messages) {
-    if (message.from === message.to) continue
+    if (message.from === message.to || message.to === '') continue
     const isSent = message.from === agentId
     if (!isSent && message.to !== agentId) continue
     const other = isSent ? message.to : message.from
@@ -2046,6 +2183,7 @@ function renameAgent(data: DeckData, from: string, to: string): void {
   const needs = agentOf(data, MAIN)?.needs
   if (needs?.agent === from) needs.agent = to
   for (const item of data.pending) if (item.agentId === from) item.agentId = to
+  for (const one of data.needs) if (one.agent === from) one.agent = to
 }
 
 /**
@@ -2080,6 +2218,8 @@ export type Spawn = {
   /** A workflow agent's run id (`workflow.runId`, '' outside a real run); undefined for any other agent. */
   workflow?: string
   model?: string
+  /** The spawn runs it in the background (`agent.spawn`'s `background`). */
+  background?: boolean
   at: number
 }
 
@@ -2111,6 +2251,7 @@ export function noteSpawn(data: DeckData, spawn: Spawn): { agent: DeckAgent; isN
   agent.prompt = trunc(spawn.prompt, LIMITS.promptChars)
   agent.parentId = run ? run.caller : spawn.parentId
   if (spawn.model) agent.model = spawn.model
+  if (spawn.background !== undefined) agent.background = spawn.background
   agent.status = 'running'
   delete agent.endedAt
   if (isNew) agent.startedAt = spawn.at
@@ -3583,7 +3724,10 @@ export function echoOf(data: DeckData, to: string, text: string, now: number): D
     const message = recent[i]
     if (!message || now - message.at >= 20_000 || message.kind === 'result') continue
     const target = agentOf(data, message.to)
-    const isToReceiver = message.to === to || (name !== '' && target !== undefined && !isNameless(target) && target.name.toLowerCase() === name)
+    // a send to a name no agent carried then: the receiver's name now
+    const sentName = message.to.toLowerCase()
+    const isToName = target === undefined && name !== '' && (sentName === name || sentName.split('@')[0] === name)
+    const isToReceiver = message.to === to || isToName || (name !== '' && target !== undefined && !isNameless(target) && target.name.toLowerCase() === name)
     if (!isToReceiver) continue
     const sent = oneLine(message.text)
     if (sent === body || sent.startsWith(head) || body.startsWith(sent.slice(0, 40))) return message
