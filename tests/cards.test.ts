@@ -14,11 +14,11 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
 import { dashboardTab } from '../hooks/ui/dash/dashboard'
-import { firstPaneOf, foldText, wrapTicks } from '../hooks/ui/dash/dashModel'
+import { cellsOf, firstPaneOf, foldText, monoAdvance, uiAdvance, wrapTicks } from '../hooks/ui/dash/dashModel'
 import { needsCards } from '../hooks/ui/dash/needs'
 import { orgTree } from '../hooks/ui/dash/orgTree'
 import { P, TONE } from '../hooks/ui/dash/palette'
-import { notePagePane, openAgentPage, quiet } from '../hooks/ui/dash/parts'
+import { CELL_PX, notePagePane, openAgentPage, quiet } from '../hooks/ui/dash/parts'
 import type { DashActions, Kit } from '../hooks/ui/types'
 import * as W from '../hooks/web'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
@@ -254,7 +254,7 @@ test('foldText keeps about so many rows of a column, its own lines kept, and say
   expect(foldText('a\nb\n\n', 20, 2)).toEqual({ text: 'a\nb', isCut: false })
 })
 
-test('an agent card: its name, now line and "model · tokens · time" are each a plain Button that opens its page, "Open →" at its foot, lit in its hue while the pointer is on the card', async ($, on) => {
+test('an agent card: its name, its step box`s words, its now line and both halves of its foot are each a plain Button that opens its page; "Open →" at the right of its head where cards are wide enough (84 cells, not 68), lit in its hue while the pointer is on the card', async ($, on) => {
   const calls: string[] = []
   const state = stateOf()
   probe(on, kit => dashboardTab(kit, state, noting(calls), NOW, null))
@@ -267,7 +267,7 @@ test('an agent card: its name, now line and "model · tokens · time" are each a
         const tone = TONE[agent.status]
         // the card keeps its edge and its hover tint
         expect(keyed(drawn, `card:${agent.id}`)?.hover).toEqual({ borderColor: tone.hot })
-        const lines = [`dash:agent:${agent.id}`, `dash:now:${agent.id}:0`, `dash:foot:${agent.id}`, `dash:open:${agent.id}`]
+        const lines = [`dash:agent:${agent.id}`, `dash:chip:${agent.id}`, `dash:now:${agent.id}:0`, `dash:foot:${agent.id}`, `dash:time:${agent.id}`, ...(columns === 84 ? [`dash:open:${agent.id}`] : [])]
         for (const key of lines) {
           const button = await ui.find({ key })
           expect(button?.type).toBe('Button')
@@ -276,13 +276,18 @@ test('an agent card: its name, now line and "model · tokens · time" are each a
           await ui.press({ plugin: 'test', key })
           expect(opens(calls)).toEqual([agent.id])
         }
-        const open = keyed(drawn, `dash:open:${agent.id}`)
-        expect(open?.props).toMatchObject({ label: 'Open →', plain: true, dimColor: true })
-        expect(open?.hover).toEqual({ color: tone.pillFg, dimColor: false })
-        // the lines keep their colours: the foot in the dim grey, as before
+        // "Open →" in the head where a name keeps its room beside it: at 84 cells, two cards a row of 41; none at 68
+        const open = keyed(keyed(drawn, `card:${agent.id}`), `dash:open:${agent.id}`)
+        if (columns === 68) expect(open).toBeUndefined()
+        else {
+          expect(open?.props).toMatchObject({ label: 'Open →', plain: true, dimColor: true })
+          expect(open?.hover).toEqual({ color: tone.pillFg, dimColor: false })
+        }
+        // the lines keep their colours where the surface draws a Button's Text: the foot in the dim grey, as before
         const foot = await ui.find({ key: `dash:foot:${agent.id}` })
         expect(foot?.text).toContain(agent.model)
         expect((foot?.children[0] as Element | undefined)?.props?.color).toBe(P.muted2)
+        expect((await ui.find({ key: `dash:time:${agent.id}` }))?.text).toMatch(/^(Started|Finished|Failed|Waiting) /)
       }
       // the now line on one row or two, its code span a chip
       const said = [await ui.find({ key: 'dash:now:agent-fixer:0' }), await ui.find({ key: 'dash:now:agent-fixer:1' })].map(one => one?.text ?? '').filter(Boolean)
@@ -301,17 +306,19 @@ test('a now line longer than its card is two Buttons, the second cut with …; o
   await started($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface, 68, PROBE))
-    // 68 cells: two cards a row of 33, 29 inside, less a desktop button's chrome
-    const room = 29 - (surface === 'terminal' ? 0 : 2)
+    // 68 cells: two cards a row of 33; inside a card, less its edges and padding (a cell each on the terminal, on a desktop a
+    // pixel each) and a desktop button's padding; a desktop's text measured in its proportional face
+    const room = surface === 'terminal' ? 33 - 4 : 33 - (2 + 2 / CELL_PX) - 1
+    const advance = surface === 'terminal' ? monoAdvance : uiAdvance
     const first = await ui.find({ key: 'dash:now:agent-fixer:0' })
     const second = await ui.find({ key: 'dash:now:agent-fixer:1' })
     expect(await ui.find({ key: 'dash:now:agent-fixer:2' })).toBeUndefined()
     expect(first?.text.startsWith('Editing')).toBe(true)
     expect(second?.text.endsWith('…')).toBe(true)
-    for (const line of [first, second]) expect(Array.from(line?.text ?? '').length <= room).toBe(true)
+    for (const line of [first, second]) expect(cellsOf(line?.text ?? '', advance) <= room).toBe(true)
     // code spans stay code on the row they land on
-    const chip = (await ui.findAll({ type: 'Text', text: /redisStore/ })).find(one => one.props.backgroundColor !== undefined)
-    expect(chip).toBeDefined()
+    const chips = (await ui.findAll({ type: 'Text' })).filter(one => one.props.backgroundColor === P.chip && one.text !== '' && 'src/middleware/stores/redisStore.ts'.includes(one.text))
+    expect(chips.length > 0).toBe(true)
     expect(await ui.find({ key: 'dash:now:agent-helper:1' })).toBeUndefined()
     await ui.unmount()
   }

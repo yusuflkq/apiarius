@@ -201,16 +201,24 @@ test('/deck opens the Dashboard, drawn from the web deck`s own state: what needs
     expect((await ui.find({ key: 'card:agent-helper' }))?.props.borderColor).toBe(P.border)
     expect(keyed(drawn, 'card:agent-helper')?.hover).toEqual({ borderColor: TONE.done.hot })
     expect((await ui.find({ key: 'dash:agent:agent-fixer' }))?.props).toMatchObject({ label: 'fixer', plain: true })
-    expect(fixer?.text).toContain(' waiting ')
     expect(fixer?.text).toContain('Needs your OK to run npm test')
-    expect(fixer?.text).toContain('haiku-4.5 · 48k · waiting · 6m')
-    const pills = await ui.findAll({ type: 'Text', text: /^ waiting $/ })
-    expect(pills.length).toBe(2)
-    expect(pills.map(one => [one.props.color, one.props.backgroundColor])).toEqual([
-      [TONE.waiting.pillFg, TONE.waiting.pillBg],
-      [TONE.waiting.pillFg, TONE.waiting.pillBg],
-    ])
-    expect((await ui.find({ key: 'card:agent-helper' }))?.text).toContain('finished 3m ago')
+    // its foot as the web's: the model and tokens at the left, when at the right
+    expect((await ui.find({ key: 'dash:foot:agent-fixer' }))?.text).toBe('haiku-4.5 · 48k')
+    expect((await ui.find({ key: 'dash:time:agent-fixer' }))?.text).toBe('Waiting · 6m')
+    // the pills: the word on its hue's tint on the terminal, the web's rounded pill as an image where Svg draws
+    if (surface === 'terminal') {
+      expect(fixer?.text).toContain(' waiting ')
+      const pills = await ui.findAll({ type: 'Text', text: /^ waiting $/ })
+      expect(pills.map(one => [one.props.color, one.props.backgroundColor])).toEqual([
+        [TONE.waiting.pillFg, TONE.waiting.pillBg],
+        [TONE.waiting.pillFg, TONE.waiting.pillBg],
+      ])
+    } else {
+      const pills = (await ui.findAll({ type: 'Svg' })).filter(svg => svg.props.alt === 'waiting')
+      expect(pills.length).toBe(2)
+      expect(String(pills[0]?.props.source)).toContain(`stroke="${TONE.waiting.hue}"`)
+    }
+    expect((await ui.find({ key: 'card:agent-helper' }))?.text).toContain('Finished 3m ago')
 
     // the four figures
     const kpis = await Promise.all(['running', 'plan', 'spend', 'waiting'].map(key => ui.find({ key: `kpi:${key}` })))
@@ -377,7 +385,7 @@ test('/deck demo draws the sample: Sample data and Back to this chat in its head
     expect((await ui.find({ key: 'needs:toolu_sp' }))?.text).toContain('Tests needs your OK to run npm test -- rateLimit')
     // its times as of now: the goal set 36 minutes before the sample was written reads 36m
     expect((await ui.find({ key: 'dash:goal' }))?.text).toContain('36m')
-    expect((await ui.find({ key: 'card:s-docs' }))?.text).toContain('failed 6m ago')
+    expect((await ui.find({ key: 'card:s-docs' }))?.text).toContain('Failed 6m ago')
     for (const key of ['kpi:running', 'kpi:plan', 'kpi:spend', 'kpi:waiting']) expect(await ui.find({ key })).toBeDefined()
     expect((await ui.find({ key: 'kpi:spend' }))?.text).toContain('$6.42')
     expect((await ui.findAll({ type: 'Button' })).some(button => button.key?.startsWith('dash:act:'))).toBe(true)
@@ -587,7 +595,7 @@ test('a card the org chart posts opens that agent`s page, Back returning to Org;
   await ui.unmount()
 })
 
-test('the layout keeps to the pane: two agent cards and four figures a row from 60 cells (the pane`s 68 to 84), one card and two figures below', async ($, on) => {
+test('the layout keeps to the pane: two agent cards a row at the pane`s 68 to 84 cells and four figures a row from 60, one card and two figures below', async ($, on) => {
   await opened($, on)
   for (const [body, card, kpi] of [
     [68, 33, 16],

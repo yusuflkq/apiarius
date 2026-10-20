@@ -1,18 +1,23 @@
 /**
  * The Dashboard tab, the deck's first screen, drawn from the same state the
- * web deck's page reads (`webStateOf`), so the two always agree. Top to
- * bottom, as the page lays it out:
+ * web deck's page reads (`webStateOf`), so the two always agree, and laid out
+ * as that page lays it out, top to bottom:
  *
  * - what needs you (./needs): questions to answer here, permissions to give
  *   in Claude Code, or the needs-you banner;
  * - the goal: its headline and up to two lines of its words, the follow-up
  *   last typed, "Step n of m · <step>" (a press opens that step on the
  *   Plan tab) and the plan's segmented bar;
- * - the agents: a bordered card each, two a row from 60 cells, one below:
- *   avatar, name, status pill, now line, "model · tokens · started 4m ago",
- *   and "Open →"; every line of it a press that opens the agent's page; the
- *   edge in the status's hue while it runs, waits or failed, and in its hue
- *   under the pointer, "Open →" lit with it;
+ * - the agents, a card each as the web's run cards, in rows of as many as fit
+ *   at 32 cells or more (`cardsPerRow`: two at the pane's usual 68 to 84
+ *   cells, up to six at its widest), each row's cards as wide and as tall.
+ *   A card: the avatar (its status dot at the foot), the name, its status
+ *   pill right after it and "Open →" at the right; the step box (its status
+ *   glyph, the agent's scope or the Orchestrator's place in the plan,
+ *   "n/total"); its now line or result, two lines at most; "model · tokens"
+ *   and "Started 6h ago". Every line of it a press that opens the agent's
+ *   page; the edge in the status's hue while it runs, waits or failed, and
+ *   in its hue under the pointer, "Open →" lit with it;
  * - the KPI strip: agents running, plan steps, session spend, waiting on you;
  * - recent activity: the newest eight calls, a press opening the agent on
  *   its Activity;
@@ -23,23 +28,92 @@
  *   (always so in the sample, which has no Changes of its own);
  * - Open in browser, the web deck one press away (not in the sample).
  *
- * Every time is coarse ("4m"), so a redraw a minute is the most time alone
- * asks. Pure: Kit, the state and DashActions come from the hooks module.
+ * A desktop draws a plain Button's label alone, in its own ink, so the
+ * colours and weights the web gives a card's words sit on Text and images
+ * beside the pressable words, not in them, and a line the web draws dim is a
+ * dim Button there; its gaps are half lines, so a card breathes as the web's
+ * does, where the terminal keeps its lines close. Every time is coarse
+ * ("4m"), so a redraw a minute is the most time alone asks.
+ *
+ * Pure: Kit, the state and DashActions come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
 import type { WebAgent, WebState } from '../../web'
 import { webLine } from '../slim'
 import type { DashActions, Kit, WebPane } from '../types'
-import { activityRows, agentOf, ago, cardFoot, cut, dashAgents, fileRows, firstLine, fitPath, flat, goalRest, kpisOf, nameOf, nowLine, stepLineOf, wrapTicks, type ActivityRow, type FileRow } from './dashModel'
+import {
+  activityRows,
+  agentOf,
+  ago,
+  cardLine,
+  cardsPerRow,
+  cellsOf,
+  chipOf,
+  cut,
+  cutCells,
+  dashAgents,
+  fileRows,
+  firstLine,
+  fitPath,
+  flat,
+  goalRest,
+  kpisOf,
+  modelLine,
+  nameOf,
+  runShort,
+  runTitle,
+  stepLineOf,
+  wrapTicks,
+  type ActivityRow,
+  type Chip,
+  type FileRow,
+  type TickPart,
+} from './dashModel'
 import { needsBanner, needsCards } from './needs'
 import { P, STEP_HUE, TONE, mix, stepsSvg, toneOf, type IconName } from './palette'
-import { AVATAR, CARD_CHROME, PILL, avatar, buttonSlack, icon, openAgentPage, openButton, pill, pressLine, quiet, sectionHead, svgOf, tickParts, tickTexts, widthFor } from './parts'
+import {
+  AVATAR,
+  CARD_CHROME,
+  OPEN_LABEL,
+  advanceOf,
+  avatar,
+  buttonSlack,
+  cellsForPx,
+  chromeOf,
+  glyph,
+  glyphCells,
+  icon,
+  openAgentPage,
+  openButton,
+  pillCells,
+  plainSlack,
+  pressLine,
+  pressText,
+  quiet,
+  sectionHead,
+  statusPill,
+  svgOf,
+  tickParts,
+  tickTexts,
+  widthFor,
+  wrapAdvanceOf,
+} from './parts'
 
-/** From this many cells the agent cards go two a row and the KPI boxes four. */
+/** From this many cells the KPI boxes go four a row; two below. */
 export const WIDE = 60
 
-/** The tab: what needs you, the goal, the agents, the figures, the activity; and the web deck's button. */
+/**
+ * Whether `kit` lays its gaps out in half lines (a desktop: a gap of one is
+ * half a line, about the web's 10 to 12 px), so cards and lists may breathe
+ * without a blank line between their parts; the terminal's gaps are whole
+ * lines, so there they stay close.
+ */
+function isAiry(kit: Kit): boolean {
+  return kit.surface !== 'terminal'
+}
+
+/** The tab: what needs you, the goal, the agents, the figures, the activity and the files; and the web deck's button. */
 export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, now: number, web: WebPane | null): RenderElement {
   const { Box } = kit
   return (
@@ -150,21 +224,44 @@ function goalCard(kit: Kit, state: WebState, now: number, actions: DashActions):
   )
 }
 
-/** The agents: their count and the way to the org chart, then a card each, two a row where the pane is wide enough. */
+// The agents.
+
+/** One card before it is drawn: its agent, its step box, and its body laid into lines (the row it sits in pads each card to its tallest). */
+type CardModel = { agent: WebAgent; chip: Chip; lines: TickPart[][] }
+
+/** An agent's card laid out for a card `width` cells wide: its step box, and its now line or result in two lines at most. */
+function cardOf(kit: Kit, state: WebState, agent: WebAgent, width: number): CardModel {
+  const chip = chipOf(state, agent)
+  const said = cardLine(agent, chip.text)
+  const room = Math.max(6, width - chromeOf(kit) - plainSlack(kit))
+  return { agent, chip, lines: said ? wrapTicks(said, room, 2, wrapAdvanceOf(kit)) : [] }
+}
+
+/**
+ * The agents: their count and the way to the org chart, then their cards in
+ * rows of as many as fit (`cardsPerRow`), every card in a row as wide, and as
+ * tall: each body padded to the row's longest, one line or two.
+ */
 function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: number): RenderElement {
   const { Box, Button } = kit
   const { shown, hidden } = dashAgents(state)
-  const perRow = kit.columns >= WIDE ? 2 : 1
+  const perRow = cardsPerRow(kit.columns)
   const width = widthFor(kit.columns, perRow)
   const link = <Button key="dash:org" label={hidden > 0 ? `${hidden} more in the org chart →` : 'Org chart →'} plain dimColor onPress={() => actions.setTab('org')} />
+  const cards = shown.map(agent => cardOf(kit, state, agent, width))
+  const rows: CardModel[][] = []
+  for (let i = 0; i < cards.length; i += perRow) rows.push(cards.slice(i, i + perRow))
   return (
-    <Box flexDirection="column">
+    <Box key="dash:agents" flexDirection="column">
       {sectionHead(kit, 'Agents', state.agents.length, link)}
       {shown.length === 0 ? (
         quiet(kit, 'No agents yet: when Claude Code starts working, the Orchestrator and the agents it delegates to show up here.')
       ) : (
-        <Box flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={1}>
-          {shown.map(agent => agentCard(kit, state, agent, width, actions, now))}
+        <Box flexDirection="column" rowGap={1}>
+          {rows.map(row => {
+            const lines = Math.max(1, ...row.map(card => card.lines.length))
+            return <Box flexDirection="row" columnGap={1}>{row.map(card => agentCard(kit, state, card, width, lines, actions, now))}</Box>
+          })}
         </Box>
       )}
     </Box>
@@ -172,41 +269,151 @@ function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: num
 }
 
 /**
- * One agent's card, every line of it a plain Button that opens its page:
- * its avatar (its status dot at the foot) and name beside its pill; its now
- * line, two lines kept, a Button a line; its model, tokens and when it
- * started; "Open →" at the right. A grey edge, or its hue's while it runs,
- * waits on you or failed; its hue under the pointer, "Open →" lit with it.
+ * One agent's card, as the web's run card, every line of it a plain Button
+ * that opens its page: its head (avatar, name, pill, "Open →"), its step box,
+ * its now line in `lines` lines, its foot. A grey edge, or its hue's while it
+ * runs, waits on you or failed; its hue under the pointer, "Open →" lit with it.
  */
-function agentCard(kit: Kit, state: WebState, agent: WebAgent, width: number, actions: DashActions, now: number): RenderElement {
-  const { Box, Text, Button } = kit
+function agentCard(kit: Kit, state: WebState, card: CardModel, width: number, lines: number, actions: DashActions, now: number): RenderElement {
+  const { Box } = kit
+  const { agent } = card
   const tone = toneOf(agent.status)
-  const inner = Math.max(8, width - CARD_CHROME)
-  const room = Math.max(6, inner - buttonSlack(kit))
+  const inner = Math.max(8, width - chromeOf(kit))
   const open = () => openAgentPage(actions, state, agent.id)
-  const said = nowLine(agent)
-  const lines = said ? wrapTicks(said, room, 2) : []
   return (
-    <Box key={`card:${agent.id}`} flexDirection="column" width={width} borderStyle="round" borderColor={tone.edge} hover={{ borderColor: tone.hot }} paddingX={1}>
-      <Box flexDirection="row" columnGap={1} alignItems="center">
-        <Box flexShrink={0}>{avatar(kit, agent.avatar, AVATAR.card, agent.label, tone.hue)}</Box>
-        <Box flexGrow={1} flexShrink={1}>
-          <Button key={`dash:agent:${agent.id}`} label={cut(agent.label, Math.max(6, inner - PILL - 5))} plain onPress={open} />
+    <Box key={`card:${agent.id}`} flexDirection="column" width={width} borderStyle="round" borderColor={tone.edge} hover={{ borderColor: tone.hot }} paddingX={1} rowGap={isAiry(kit) ? 1 : 0}>
+      {cardHead(kit, agent, inner, open)}
+      {cardStep(kit, agent, card.chip, inner, open)}
+      {cardBody(kit, agent, card.lines, lines, open)}
+      {cardFoot(kit, agent, inner, now, open)}
+    </Box>
+  )
+}
+
+/** An avatar's status dot, as the web's card draws it: its status's hue, a darker grey while idle. */
+function dotOf(status: string): string {
+  return status === 'idle' ? P.idleDot : toneOf(status).hue
+}
+
+/** The cells "Open →" takes where a card's head lays it out. */
+function openCells(kit: Kit): number {
+  return cellsOf(OPEN_LABEL, advanceOf(kit)) + plainSlack(kit)
+}
+
+/** The room a name keeps at the least beside "Open →" and the widest pill for a card to show it: about a dozen letters ("Orchestrator"). */
+const NAME_MIN = 11
+
+/**
+ * A card's head, as the web's: the avatar with its status dot, the name (a
+ * plain Button, bold where the surface draws a Button's Text), the status
+ * pill right after it, and "Open →" at the far right, dim, lit while the
+ * pointer is on the card. "Open →" stands where cards this wide leave a name
+ * NAME_MIN beside it and the widest pill, so a width's cards agree, and only
+ * beside a name that fits whole: a long name keeps its words, not the arrow.
+ */
+function cardHead(kit: Kit, agent: WebAgent, inner: number, open: () => void): RenderElement {
+  const { Box, Button, Text } = kit
+  const adv = advanceOf(kit)
+  const before = (svgOf(kit) ? cellsForPx(AVATAR.card) : 1) + 1 + plainSlack(kit) + 1
+  const beside = 1 + openCells(kit)
+  const room = inner - before - pillCells(kit, agent.status)
+  const isOpenShown = inner - before - pillCells(kit, 'starting') - beside >= NAME_MIN && cellsOf(agent.label, adv) <= room - beside
+  const name = cutCells(agent.label, Math.max(4, isOpenShown ? room - beside : room), adv)
+  return (
+    <Box flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexShrink={0}>{avatar(kit, agent.avatar, AVATAR.card, agent.label, dotOf(agent.status))}</Box>
+      <Box flexShrink={1} minWidth={0}>
+        <Button key={`dash:agent:${agent.id}`} label={name} plain onPress={open}>
+          <Text bold color={P.text}>
+            {name}
+          </Text>
+        </Button>
+      </Box>
+      <Box flexShrink={0}>{statusPill(kit, agent.status)}</Box>
+      {isOpenShown ? (
+        <Box flexGrow={1} flexShrink={0} justifyContent="flex-end">
+          {openButton(kit, `dash:open:${agent.id}`, toneOf(agent.status).pillFg, open)}
         </Box>
-        <Box flexShrink={0}>{pill(kit, agent.status)}</Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/**
+ * A card's step box, as the web's chip: a small bordered box a shade lighter
+ * than the pane, its status glyph (✓ done, ◐ in hand, ✕ failed, ‖ waiting on
+ * you, a dashed ring idle), its words (a plain Button, so it opens the page
+ * too), and "n/total" dim at its right.
+ */
+function cardStep(kit: Kit, agent: WebAgent, chip: Chip, inner: number, open: () => void): RenderElement {
+  const { Box, Button, Text } = kit
+  const adv = advanceOf(kit)
+  const room = inner - chromeOf(kit) - glyphCells(kit) - 1 - plainSlack(kit) - (chip.n ? 1 + cellsOf(chip.n, adv) : 0)
+  const text = cutCells(chip.text, Math.max(4, room), adv)
+  return (
+    <Box key={`chip:${agent.id}`} flexDirection="row" columnGap={1} alignItems="center" borderStyle="round" borderColor={P.stepEdge} backgroundColor={P.stepBox} paddingX={1}>
+      <Box flexShrink={0}>{glyph(kit, chip.glyph)}</Box>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Button key={`dash:chip:${agent.id}`} label={text} plain onPress={open}>
+          <Text color={P.fg2}>{text}</Text>
+        </Button>
       </Box>
-      <Box flexDirection="column" height={2} overflow="hidden">
-        {lines.length > 0
-          ? lines.map((parts, i) => pressLine(kit, `dash:now:${agent.id}:${i}`, tickParts(kit, parts, P.muted), open))
-          : pressLine(kit, `dash:now:${agent.id}:0`, [<Text color={P.muted3}>—</Text>], open)}
+      {chip.n ? (
+        <Box flexShrink={0}>
+          <Text color={P.muted2}>{chip.n}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/** A card's now line or result in `rows` lines (padded to its row's tallest), each a dim plain Button; a dash where it has none. */
+function cardBody(kit: Kit, agent: WebAgent, lines: readonly TickPart[][], rows: number, open: () => void): RenderElement {
+  const { Box, Text } = kit
+  return (
+    <Box flexDirection="column" height={rows} overflow="hidden">
+      {lines.length > 0
+        ? lines.map((parts, i) => pressText(kit, `dash:now:${agent.id}:${i}`, tickParts(kit, parts, P.muted), open, true))
+        : pressText(kit, `dash:now:${agent.id}:0`, [<Text color={P.muted3}>—</Text>], open, true)}
+    </Box>
+  )
+}
+
+/**
+ * A card's foot, as the web's: "opus-5.5 · 13.7M" at the left and
+ * "Started 6h ago" at the right, both dim, each a plain Button. Where both
+ * do not fit, the tokens go first, then the time's first word ("6h ago"),
+ * then the model's name is cut.
+ */
+function cardFoot(kit: Kit, agent: WebAgent, inner: number, now: number, open: () => void): RenderElement {
+  const { Box, Button, Text } = kit
+  const adv = advanceOf(kit)
+  const slack = plainSlack(kit)
+  const dim = isAiry(kit)
+  const fits = (left: string, right: string) => cellsOf(left, adv) + cellsOf(right, adv) + 2 * slack + 1 <= inner
+  const bare = agent.model || '—'
+  let left = modelLine(agent)
+  let time = runTitle(agent, now)
+  if (!fits(left, time)) left = bare
+  if (!fits(left, time)) time = runShort(agent, now)
+  if (!fits(left, time)) left = cutCells(bare, Math.max(4, inner - cellsOf(time, adv) - 2 * slack - 1), adv)
+  return (
+    <Box flexDirection="row" justifyContent="space-between" columnGap={1}>
+      <Box flexShrink={1} minWidth={0}>
+        <Button key={`dash:foot:${agent.id}`} label={left} plain dimColor={dim} onPress={open}>
+          <Text color={P.muted2}>{left}</Text>
+        </Button>
       </Box>
-      {pressLine(kit, `dash:foot:${agent.id}`, [<Text color={P.muted2}>{cut(cardFoot(agent, now), room)}</Text>], open)}
-      <Box flexDirection="row" justifyContent="flex-end">
-        {openButton(kit, `dash:open:${agent.id}`, tone.pillFg, open)}
+      <Box flexShrink={0}>
+        <Button key={`dash:time:${agent.id}`} label={time} plain dimColor={dim} onPress={open}>
+          <Text color={P.muted2}>{time}</Text>
+        </Button>
       </Box>
     </Box>
   )
 }
+
+// The figures.
 
 /** Each figure's icon, at its right as the page draws it, in the page's half-strength grey. */
 const KPI_ICON: Readonly<Record<string, IconName>> = { running: 'bot', plan: 'listChecks', spend: 'dollar', waiting: 'hand' }

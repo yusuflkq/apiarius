@@ -1,9 +1,10 @@
 /**
  * The native dashboard's colours and avatars, taken from the web deck
  * (web/app.css, web/app.js) so the pane and the page look alike: neutral
- * greys for structure, colour only for status, tinted pills, and the ten
- * gradient persona avatars (a gumdrop with a small face, indexed by
- * `WebAgent.avatar`).
+ * greys for structure, colour only for status, tinted pills, the status
+ * glyphs, and the ten gradient persona avatars (a gumdrop with a small face,
+ * indexed by `WebAgent.avatar`); and the web's status pill as an SVG document
+ * a desktop draws as an image.
  *
  * Native Text and Box take these hex values as given. Nothing here paints
  * the pane's own background: the host's dark theme shows through.
@@ -43,6 +44,13 @@ export const P = {
   waitNote: '#fde68a',
   /** A question's header chip. */
   chip: '#262626',
+  /** The pane's own ground as the desktop's dark theme draws it: for mixing only (the idle glyph's grey). */
+  ground: '#1a1a1a',
+  /** An agent card's step box: a shade lighter than the pane, and its soft edge. */
+  stepBox: '#212121',
+  stepEdge: '#2e2e2e',
+  /** An idle agent's status dot (the web's `.avd-dot.hue-idle`). */
+  idleDot: '#6b7075',
 } as const
 
 /** `a` blended toward `b` by `t` (0 is all `a`, 1 all `b`), as hex: how the web's translucent edges flatten here. */
@@ -75,6 +83,32 @@ export function toneOf(status: string): Tone {
 
 /** A plan step's segment colour: done green, in hand blue, failed red, not started the grey track. */
 export const STEP_HUE: Readonly<Record<string, string>> = { done: P.done, active: P.run, failed: P.fail, pending: P.track }
+
+/** The glyphs of the web's status family (web/app.js GLYPH). */
+export type GlyphName = 'done' | 'active' | 'failed' | 'waiting' | 'idle' | 'pending'
+
+/** The idle and pending glyphs' grey: the idle hue at 62%, as the web's `.glyph.hue-idle`. */
+const IDLE_INK = mix(P.idle, P.ground, 0.38)
+
+/**
+ * The web's status glyphs, what an agent card's step box leads with: done a
+ * green check, in hand blue, failed a red cross, waiting on you amber, idle a
+ * dashed grey ring, pending a grey ring. Each its icon where Svg draws, and
+ * the character the terminal draws in its place.
+ */
+export const GLYPH: Readonly<Record<GlyphName, { icon: IconName; hue: string; mark: string }>> = {
+  done: { icon: 'circleCheck', hue: P.done, mark: '✓' },
+  active: { icon: 'progress', hue: P.run, mark: '◐' },
+  failed: { icon: 'circleX', hue: P.fail, mark: '✕' },
+  waiting: { icon: 'circlePause', hue: P.wait, mark: '‖' },
+  idle: { icon: 'circleDashed', hue: IDLE_INK, mark: '◌' },
+  pending: { icon: 'circle', hue: IDLE_INK, mark: '○' },
+}
+
+/** A glyph by name; pending for a name the family does not hold. */
+export function glyphOf(name: string): { icon: IconName; hue: string; mark: string } {
+  return GLYPH[name as GlyphName] ?? GLYPH.pending
+}
 
 // The avatars (web/app.js: AV, BLOB, AV_HTML).
 
@@ -147,6 +181,53 @@ export function avatarSvg(avatar: number, px: number, dot?: string): string {
   return svg
 }
 
+// The web's status pill as an image.
+
+const shapeMemo = new Map<string, string>()
+
+/** `make()` once per `key` while the module lives (the newest 200 kept): the same shape gives the same string, so its image is never drawn anew. */
+function memo(key: string, make: () => string): string {
+  const known = shapeMemo.get(key)
+  if (known !== undefined) return known
+  const made = make()
+  if (shapeMemo.size >= 200) shapeMemo.delete(shapeMemo.keys().next().value as string)
+  shapeMemo.set(key, made)
+  return made
+}
+
+/** Words for an SVG document, its markup characters escaped. */
+function esc(text: string): string {
+  return text.replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`)
+}
+
+/** A status pill's height in CSS px, as the web's `.pill`. */
+export const PILL_HEIGHT = 22
+
+/** A status pill's width in CSS px: its word at 12 px (about 6 px a letter) with the web's 10 px and ring either side, 56 at the least and 72 (the web's fixed pill) at the most. */
+export function pillWidth(word: string): number {
+  return Math.max(56, Math.min(72, Math.ceil(Array.from(word).length * 6 + 24)))
+}
+
+/**
+ * A status pill as the web draws it (`.pill`): its word in `hue` lifted
+ * toward white, on an 18% wash of the hue, ringed in it at 48%, fully
+ * rounded, the word centred; as wide as its word asks (`pillWidth`), so a
+ * card's name keeps the room. It names no font, so the desktop draws the
+ * word in its own.
+ */
+export function pillSvg(word: string, hue: string): string {
+  const width = pillWidth(word)
+  const height = PILL_HEIGHT
+  return memo(`pill|${word}|${hue}`, () =>
+    [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<rect x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="${(height - 1) / 2}" fill="${hue}" fill-opacity=".18" stroke="${hue}" stroke-opacity=".48"/>`,
+      `<text x="${width / 2}" y="15" text-anchor="middle" font-size="12" font-weight="500" fill="${mix(hue, '#ffffff', 0.22)}">${esc(word)}</text>`,
+      '</svg>',
+    ].join(''),
+  )
+}
+
 /**
  * The plan's progress bar as an SVG document: one rounded segment a step in
  * its status colour, `width` logical px across (the slot's cells times 8,
@@ -202,10 +283,37 @@ const ICONS: Readonly<Record<string, string>> = {
   diff: '<path d="M12 3v14"/><path d="M5 10h14"/><path d="M5 21h14"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  // the status glyphs (GLYPH): a ring with its mark; the one in hand a ring with a gap, the web's spinner at rest
+  circle: '<circle cx="12" cy="12" r="10"/>',
+  circleX: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  circlePause: '<circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/>',
+  circleDashed:
+    '<path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/>',
+  progress: '<circle cx="12" cy="12" r="10" pathLength="100" stroke-dasharray="78 22"/>',
 }
 
 /** The icon names the dashboard draws. */
-export type IconName = 'help' | 'shield' | 'target' | 'hand' | 'octagon' | 'circleCheck' | 'bot' | 'listChecks' | 'dollar' | 'cornerDownRight' | 'cpu' | 'coins' | 'diff' | 'wrench' | 'file'
+export type IconName =
+  | 'help'
+  | 'shield'
+  | 'target'
+  | 'hand'
+  | 'octagon'
+  | 'circleCheck'
+  | 'bot'
+  | 'listChecks'
+  | 'dollar'
+  | 'cornerDownRight'
+  | 'cpu'
+  | 'coins'
+  | 'diff'
+  | 'wrench'
+  | 'file'
+  | 'circle'
+  | 'circleX'
+  | 'circlePause'
+  | 'circleDashed'
+  | 'progress'
 
 const iconMemo = new Map<string, string>()
 
@@ -215,7 +323,7 @@ export function iconSvg(name: IconName, color: string, px: number): string {
   const known = iconMemo.get(key)
   if (known !== undefined) return known
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] ?? ''}</svg>`
-  if (iconMemo.size >= 60) iconMemo.delete(iconMemo.keys().next().value as string)
+  if (iconMemo.size >= 120) iconMemo.delete(iconMemo.keys().next().value as string)
   iconMemo.set(key, svg)
   return svg
 }

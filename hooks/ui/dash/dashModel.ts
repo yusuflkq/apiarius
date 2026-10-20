@@ -1,9 +1,11 @@
 /**
  * The native dashboard's reading of the web deck's state (`WebState`, as
  * `webStateOf` builds it for the page): coarse times and counts worded as
- * the page words them, what waits on you, the agents in card order, the KPI
- * figures, the activity rows, the goal's words after its headline, and the
- * agents as the org chart takes them. The page's own helpers (web/app.js)
+ * the page words them, what waits on you, the agents in card order, how many
+ * cards a row and what a card says (its step box, its line, when it ran), the
+ * KPI figures, the activity rows, the goal's words after its headline, and the agents as the org chart takes
+ * them; and how much room text takes, a cell a character on the terminal and
+ * by the letter in a desktop's proportional face. The page's own helpers (web/app.js)
  * carried over, so the pane and the page always say the same.
  *
  * Pure: every function reads the state and the `now` it is handed.
@@ -123,14 +125,92 @@ export function plainTicks(text: string): string {
 /** One run of a line as `ticks` and `wrapTicks` give it: plain words, or a code span's. */
 export type TickPart = { text: string; isCode: boolean }
 
+// How much room text takes: a cell a character on the terminal, less in a desktop's proportional face.
+
+/** The cells one character takes where it is drawn. */
+export type Advance = (ch: string) => number
+
+/** A monospace surface's: a cell a character, as the terminal draws them. */
+export const monoAdvance: Advance = () => 1
+
+/** Code points a proportional face draws two cells wide: the wide East Asian scripts and the emoji. */
+function isWide(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  )
+}
+
+/**
+ * The desktop's UI face, Anthropic Sans at 13 px: each printable ASCII
+ * character's advance from " " to "~", in widths of its "0" (the desktop's
+ * cell, `1ch`), as measured from the face the Desktop app ships, each rounded up.
+ */
+const UI_ASCII =
+  '.36 .4 .68 1.06 .87 1.65 1.14 .4 .67 .67 .81 1.06 .4 .6 .4 .56 1 .62 .97 .93 1.02 .94 .95 .89 .93 .95 .4 .4 1.06 1.06 1.06 .9 1.45 1.22 1.09 1.27 1.23 1.06 .99 1.32 1.23 .46 .9 1.14 .96 1.56 1.31 1.36 1.02 1.36 1.13 .98 .96 1.21 1.22 1.68 1.12 1.13 1.1 .67 .56 .67 1.06 .83 .83 .91 1.03 .92 1.03 .96 .66 .92 .99 .42 .42 .94 .42 1.45 .99 .97 1.03 1.03 .67 .85 .66 .98 .94 1.37 .95 .95 .84 .67 .51 .67 1.06'
+    .split(' ')
+    .map(Number)
+
+/** The same for the marks the deck writes beyond ASCII. */
+const UI_MORE: Readonly<Record<string, number>> = { '·': 0.4, '→': 1.36, '←': 1.36, '…': 1.66, '—': 1.66, '–': 0.83, '◐': 1.41, '✕': 1.36, '✓': 1.24, '‖': 0.47, '•': 0.83, '●': 1, '−': 1.06, '“': 0.68, '”': 0.68, '’': 0.4, '‘': 0.4 }
+
+/**
+ * A desktop's: its UI face is proportional and its cell is that face's "0",
+ * so a space takes about a third of a cell and an m nearly one and a half; a
+ * line of prose about three quarters of a cell a character. ASCII and the
+ * deck's own marks as measured; East Asian scripts and emoji two cells; any
+ * other letter about one. A line a little long for its room is cut again by
+ * the desktop itself, with "…".
+ */
+export const uiAdvance: Advance = ch => {
+  const code = ch.codePointAt(0) ?? 0
+  if (code >= 32 && code < 127) return UI_ASCII[code - 32] ?? 1
+  return UI_MORE[ch] ?? (isWide(code) ? 2 : 1.05)
+}
+
+/** The same a little over, for text laid into lines: a line the desktop drew past its room would lose its last words, which the next line does not repeat. */
+export const uiWrapAdvance: Advance = ch => uiAdvance(ch) * 1.04
+
+/** The cells `text` takes, each character as `advance` has it. */
+export function cellsOf(text: string, advance: Advance = monoAdvance): number {
+  let cells = 0
+  for (const ch of Array.from(String(text ?? ''))) cells += advance(ch)
+  return cells
+}
+
+/** `text` cut with an ellipsis to fit `cells`, each character as `advance` has it; as `cut` on a monospace surface. */
+export function cutCells(text: string, cells: number, advance: Advance = monoAdvance): string {
+  if (cellsOf(text, advance) <= cells) return text
+  const chars = Array.from(text)
+  const dots = advance('…')
+  const kept: string[] = []
+  let used = 0
+  for (const ch of chars) {
+    const next = advance(ch)
+    if (used + next + dots > cells) break
+    kept.push(ch)
+    used += next
+  }
+  if (kept.length === 0) return used + dots <= cells ? '…' : ''
+  return `${kept.join('').trimEnd()}…`
+}
+
 /**
  * A line with `code` spans laid into at most `rows` lines of at most `room`
- * characters each, broken at spaces (a word longer than a line is cut
- * across it), each line its plain and code runs in order. When words are
- * left over, the last line ends in "…". [] for a blank text. A Button draws
- * one line, so a pressable text of two lines is two Buttons, one a line.
+ * cells each (a character a cell, or as `advance` has it), broken at spaces
+ * (a word longer than a line is cut across it), each line its plain and code
+ * runs in order. When words are left over, the last line ends in "…". [] for
+ * a blank text. A Button draws one line, so a pressable text of two lines is
+ * two Buttons, one a line.
  */
-export function wrapTicks(text: string, room: number, rows: number): TickPart[][] {
+export function wrapTicks(text: string, room: number, rows: number, advance: Advance = monoAdvance): TickPart[][] {
   const chars: string[] = []
   const code: boolean[] = []
   for (const part of ticks(flat(text))) {
@@ -139,6 +219,8 @@ export function wrapTicks(text: string, room: number, rows: number): TickPart[][
       code.push(part.isCode)
     }
   }
+  const sizes = chars.map(advance)
+  const across = (from: number, to: number) => sizes.slice(from, to).reduce((sum, one) => sum + one, 0)
   const width = Math.max(2, Math.floor(room))
   const spans: [number, number][] = []
   let at = 0
@@ -147,7 +229,11 @@ export function wrapTicks(text: string, room: number, rows: number): TickPart[][
   }
   skipSpaces()
   while (at < chars.length && spans.length < Math.max(1, rows)) {
-    let end = Math.min(chars.length, at + width)
+    // the furthest end whose characters fit the line, and at least one
+    let end = at
+    let used = 0
+    while (end < chars.length && used + (sizes[end] ?? 1) <= width) used += sizes[end++] ?? 1
+    if (end === at) end = at + 1
     if (end < chars.length && chars[end] !== ' ') {
       // back to the last space inside the line, so the word it splits starts the next one; a word
       // longer than a whole line (a long path) is cut where the line ends instead, rather than leave it short
@@ -155,20 +241,24 @@ export function wrapTicks(text: string, room: number, rows: number): TickPart[][
       while (space > at && chars[space] !== ' ') space--
       let wordEnd = space + 1
       while (wordEnd < chars.length && chars[wordEnd] !== ' ') wordEnd++
-      if (space > at && wordEnd - (space + 1) <= width) end = space
+      if (space > at && across(space + 1, wordEnd) <= width) end = space
     }
     spans.push([at, end])
     at = end
     skipSpaces()
   }
   const isCut = at < chars.length
+  const dots = advance('…')
   return spans.map(([from, to], i) => {
     const isLast = isCut && i === spans.length - 1
     let line = chars.slice(from, to)
     let lineCode = code.slice(from, to)
     if (isLast) {
-      line = line.slice(0, width - 1)
-      lineCode = lineCode.slice(0, width - 1)
+      // room for the "…" at its end
+      while (line.length > 0 && across(from, from + line.length) + dots > width) {
+        line = line.slice(0, -1)
+        lineCode = lineCode.slice(0, -1)
+      }
     }
     while (line.length > 0 && line[line.length - 1] === ' ') {
       line = line.slice(0, -1)
@@ -236,6 +326,74 @@ export function nowLine(agent: WebAgent): string {
   const said = flat(agent.now)
   if (said !== '') return said
   return isRunning(agent.status) ? 'Working' : ''
+}
+
+// An agent card, as the web's `RunCard` draws it.
+
+/** The narrowest an agent card is drawn, in cells: the web grid's 244 px minimum with its 16 px gap, at a desktop's cell of about 7.85 px (the same 13 px face). */
+export const CARD_MIN = 32
+
+/** The most cards a row holds: six, as the web's grid shows at the pane's widest. */
+export const CARDS_MAX = 6
+
+/**
+ * Agent cards a row across `columns` cells (the tab's, a cell under the
+ * pane's), as the web grid's auto-fill lays them: as many as fit at CARD_MIN
+ * cells or more with a cell between them, one to six. So in a pane of 66
+ * cells or more two (its usual 68 to 84), from 99 three, from 132 four, from
+ * 165 five, from 198 six.
+ */
+export function cardsPerRow(columns: number): number {
+  return Math.max(1, Math.min(CARDS_MAX, Math.floor((columns + 1) / (CARD_MIN + 1))))
+}
+
+/** How a card's step box marks its words: done, in hand, failed, waiting on you, or idle (the web's GLYPH names). */
+export type ChipGlyph = 'done' | 'active' | 'failed' | 'waiting' | 'idle'
+
+/** What a card's step box says: its glyph, its words, and the steps done of all ("1/3"; '' with none). */
+export type Chip = { text: string; glyph: ChipGlyph; n: string }
+
+/**
+ * A card's step box, as the web's `chipOf`: an agent's scope, else its
+ * task's first line, else its type, with its checklist's count; the
+ * Orchestrator's place in the plan (the step in hand, else "Plan done" or
+ * "2 of 5 steps done") with the plan's count, as the goal it would repeat
+ * stands right above it.
+ */
+export function chipOf(state: WebState, agent: WebAgent): Chip {
+  const steps = state.plan.steps
+  if (agent.kind === 'orchestrator' && steps.length > 0) {
+    const done = steps.filter(step => step.status === 'done').length
+    const isAllDone = done === steps.length
+    const text = flat(state.summary.stepText ?? '') || (isAllDone ? 'Plan done' : `${done} of ${steps.length} steps done`)
+    const glyph: ChipGlyph = isAllDone ? 'done' : state.agents.some(one => isRunning(one.status)) ? 'active' : 'idle'
+    return { text, glyph, n: `${done}/${steps.length}` }
+  }
+  const list = agent.checklist
+  const glyph: ChipGlyph = agent.status === 'waiting' ? 'waiting' : agent.status === 'failed' ? 'failed' : agent.status === 'done' ? 'done' : agent.status === 'idle' ? 'idle' : 'active'
+  const total = list?.total ?? 0
+  return { text: flat(agent.scope) || firstLine(agent.task) || agent.type, glyph, n: total > 0 ? `${list?.done ?? 0}/${total}` : '' }
+}
+
+/** A card's body, as the web's: its now line, never the step box's words again ("Working" while it runs), else its result. */
+export function cardLine(agent: WebAgent, chip: string): string {
+  const said = flat(agent.now)
+  if (said !== '' && said !== chip) return said
+  if (isRunning(agent.status)) return 'Working'
+  return said || firstLine(agent.result)
+}
+
+/** When it ran, as the web's card foot says it: "Started 4m ago", "Finished 2m ago", "Failed 1h ago", "Waiting · 12m". */
+export function runTitle(agent: WebAgent, now: number): string {
+  const said = runTime(agent, now)
+  return `${said.charAt(0).toUpperCase()}${said.slice(1)}`
+}
+
+/** The same in fewer words, for a narrow card: "4m ago", "just now", "12m" while it waits. */
+export function runShort(agent: WebAgent, now: number): string {
+  if (agent.status === 'waiting') return span(now - agent.startedAt)
+  const isOver = agent.status === 'done' || agent.status === 'failed'
+  return agoText(isOver ? agent.endedAt || agent.startedAt : agent.startedAt, now)
 }
 
 /** The cards the dashboard shows at most; past it, the Orchestrator and the newest. */
