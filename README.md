@@ -55,7 +55,7 @@ A sidebar lists the pages and every agent, with live and waiting dots.
 - **Dashboard:** drawn from the same state as the web page, so the two always agree.
   - **What needs you:** a question Claude asks shows its options as buttons, each with its description under it. One question with one answer sends on a press; several questions, or one with checkboxes, send with **Submit**; **Other…** takes your own words. The answer goes through the same path as the web page's. A permission prompt shows the exact command, to allow or deny in Claude Code.
   - **Goal:** the headline and its words, "Step n of m" and the plan's bar.
-  - **Agents:** a card each (two a row in the docked pane), with its avatar, status, what it is doing now, and its model, tokens and age. Press a name to open the agent.
+  - **Agents:** a card each, as many a row as fit (two in the docked pane, up to six when it is wide), with its avatar, status pill, an inner box with the step it is on, what it is doing now, and its model, tokens and age. Press any line of a card to open the agent. Recent activity and Files sit in bordered lists, side by side from 120 cells; files outside the repo fold into one row.
   - **Figures:** agents running, plan steps, session spend, waiting on you. Then the recent activity; a row opens its agent.
   - **Open in browser** starts `/deck web`.
 - **Org:** the org chart, cards over connectors. Click a card to open its agent; drag or the arrow keys pan a big chart. VS Code and mobile list the agents as an indented tree.
