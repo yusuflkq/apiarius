@@ -9,9 +9,22 @@
  *   wider or taller than its region (shift for a card at a time); Home centres it again.
  * - The card under a resting pointer takes a tint; the selected one (props) a brighter border.
  *
+ * Sized by its props (orgPropsOf), never by `surface.rows`: the views give the
+ * Client `height: rows` and laid the chart out in `columns`, and it draws
+ * those rows. On the desktop `surface.rows` is how tall the instance last
+ * drew (the region's holder fits what is drawn in it; the Client's height
+ * sizes the box around that), so it reads 1 on a fresh mount: a chart drawn
+ * to it drew one row, the pan hint alone, each time the tab opened in a pane
+ * on screen and after each reload.
+ *
+ * Bounded: the desktop draws nothing of a tree of 2000 elements or more, so a
+ * drawing keeps to MAX_NODES (cards first, a card past it counted in "+N
+ * more"); only what shows in the region is drawn, a connector run as one
+ * Text (a run down one Text of lines), a run across cut at its junctions.
+ *
  * Pan, hover and a drag under way live in `surface.state`, written only from
  * the input handlers, so a redraw (each new state of the deck hands new
- * props) keeps them. Only what shows in the region is drawn.
+ * props) keeps them.
  *
  * Self-contained: it runs on the drawing thread, with no `$` and nothing of
  * the plugin's but its props and the pure layout it imports.
@@ -22,11 +35,14 @@ import {
   CARD_W,
   GAP_X,
   GAP_Y,
+  MAX_NODES,
   MAX_ROWS,
+  NODES,
   orgCardAt,
   orgCardLinesOf,
   orgCardsIn,
   orgLayoutOf,
+  orgPiecesOf,
   orgSegmentIn,
   orgSizeOfLayout,
   orgViewOf,
@@ -82,8 +98,10 @@ const STEP_Y = 2
 const FAR_X = CARD_W + GAP_X
 const FAR_Y = CARD_H + GAP_Y
 
-/** The width laid out for before the region's first layout (it reads 0 across until then). */
+/** The width laid out for when neither the props nor the region say (the region reads 0 across before its first layout). */
 const FIRST_COLUMNS = 80
+/** The most rows drawn, whatever the props say. */
+const MOST_ROWS = 200
 
 /** A pointer held down: where it went down, the pan then, whether it has left that cell, and whether its up may open a card. */
 type Drag = { x: number; y: number; panX: number; panY: number; moved: boolean; opens: boolean }
@@ -100,6 +118,9 @@ type OrgState = {
 const FIRST: OrgState = { panX: 0, panY: 0, hover: null, drag: null }
 
 type ViewAt = (panX: number, panY: number) => OrgView
+
+/** A count from the props: a positive whole number, else 0. */
+const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0)
 
 /** Each instance's last layout, by its surface: a redraw from its own input (same props, same width) lays nothing out again. */
 const layouts = new WeakMap<object, { agents: unknown; columns: number; layout: OrgLayout }>()
@@ -187,33 +208,24 @@ function onKey(surface: ClientSurface<OrgState>, event: ClientKeyEvent, viewAt: 
   if (next.panX !== now.panX || next.panY !== now.panY) surface.setState({ ...now, panX: next.panX, panY: next.panY })
 }
 
-/** One card: the status dot and bold name, the dim type, the dim model and tokens, the now line. */
-function cardOf(
-  { Box, Text }: Pick<ClientElements, 'Box' | 'Text'>,
-  agent: OrgAgent,
-  left: number,
-  top: number,
-  isSelected: boolean,
-  isHovered: boolean,
-): RenderElement {
+type Elements = Pick<ClientElements, 'Box' | 'Text'>
+
+/**
+ * One card (NODES.card elements): the status dot and bold name, the dim type,
+ * the dim model and tokens, the now line. One the chart's bottom edge cuts
+ * (`shows` rows of it on the chart, fewer than CARD_H) is drawn inside a box
+ * of those rows that clips it (NODES.cutCard), so the note's row under the
+ * chart stays clear: the desktop clips nothing absolute at the chart's edge.
+ */
+function cardOf({ Box, Text }: Elements, agent: OrgAgent, left: number, top: number, shows: number, isSelected: boolean, isHovered: boolean): RenderElement {
   const lines = orgCardLinesOf(agent)
   const base = BORDER[agent.status]
   const border = isSelected ? BORDER_SELECTED[agent.status] : isHovered && base === GREY ? HOVER_BORDER : base
   const fill = isHovered ? { backgroundColor: HOVER_FILL } : {}
-  return (
-    <Box
-      key={`card:${agent.id}`}
-      position="absolute"
-      left={left}
-      top={top}
-      width={CARD_W}
-      height={CARD_H}
-      flexDirection="column"
-      paddingX={1}
-      borderStyle="round"
-      borderColor={border}
-      {...fill}
-    >
+  const isCut = shows < CARD_H
+  const at = isCut ? { flexShrink: 0 } : { key: `card:${agent.id}`, position: 'absolute' as const, left, top }
+  const card = (
+    <Box {...at} width={CARD_W} height={CARD_H} flexDirection="column" paddingX={1} borderStyle="round" borderColor={border} {...fill}>
       <Text wrap="truncate-end">
         <Text color={DOT[agent.status]}>●</Text>
         <Text bold>{` ${lines.name}`}</Text>
@@ -227,18 +239,108 @@ function cardOf(
       <Text wrap="truncate-end">{lines.now}</Text>
     </Box>
   )
+  if (!isCut) return card
+  return (
+    <Box key={`card:${agent.id}`} position="absolute" left={left} top={top} width={CARD_W} height={shows} overflow="hidden">
+      {card}
+    </Box>
+  )
+}
+
+/**
+ * The connectors that show in the view, in at most `room` elements: a run
+ * down one Text of one glyph a line (NODES.down); a run across in pieces
+ * (orgPiecesOf), each junction one glyph on its cell (NODES.glyph) and each
+ * stretch of `─` one Text clipped to its cells (NODES.stretch), drawn in a
+ * box twice as wide as its cells so it never wraps.
+ */
+function wiresOf({ Box, Text }: Elements, layout: OrgLayout, view: OrgView, room: number): RenderElement[] {
+  const parts: RenderElement[] = []
+  let left = room
+  for (const segment of layout.segments) {
+    const shown = orgSegmentIn(segment, view)
+    if (!shown) continue
+    const color = WIRE[segment.heat]
+    if (shown.down) {
+      if (left < NODES.down) return parts
+      left -= NODES.down
+      parts.push(
+        <Box position="absolute" left={shown.x} top={shown.y}>
+          <Text color={color}>{Array.from(shown.glyphs).join('\n')}</Text>
+        </Box>,
+      )
+      continue
+    }
+    for (const piece of orgPiecesOf(shown.glyphs)) {
+      const length = Array.from(piece.glyphs).length
+      const cost = length > 1 ? NODES.stretch : NODES.glyph
+      if (left < cost) return parts
+      left -= cost
+      parts.push(
+        length > 1 ? (
+          <Box position="absolute" left={shown.x + piece.at} top={shown.y} width={length} height={1} overflow="hidden">
+            <Box width={length * 2} flexShrink={0}>
+              <Text color={color}>{piece.glyphs}</Text>
+            </Box>
+          </Box>
+        ) : (
+          <Box position="absolute" left={shown.x + piece.at} top={shown.y}>
+            <Text color={color}>{piece.glyphs}</Text>
+          </Box>
+        ),
+      )
+    }
+  }
+  return parts
+}
+
+/**
+ * What shows in the view, MAX_NODES at most with the frame: the cards on it
+ * first (a card past the bound left out and counted in `left`), the
+ * connectors in what room is left, drawn under the cards.
+ */
+function partsOf(elements: Elements, layout: OrgLayout, view: OrgView, selected: string | null, hover: string | null): { parts: RenderElement[]; left: number } {
+  let room = MAX_NODES - NODES.frame
+  let left = 0
+  const cards: RenderElement[] = []
+  for (const card of orgCardsIn(layout, view)) {
+    const x = view.x + card.x
+    const y = view.y + card.y
+    const shows = Math.min(CARD_H, view.rows - y)
+    const cost = shows < CARD_H ? NODES.cutCard : NODES.card
+    if (cost > room) {
+      left += 1
+      continue
+    }
+    room -= cost
+    cards.push(cardOf(elements, card.agent, x, y, shows, card.agent.id === selected, card.agent.id === hover))
+  }
+  return { parts: [...wiresOf(elements, layout, view, room), ...cards], left }
 }
 
 const Org: ClientModule<OrgProps, OrgState> = (props, surface) => {
   const { Box, Text } = surface.elements
   const given: Partial<OrgProps> = props !== null && typeof props === 'object' ? props : {}
   const selected = typeof given.selected === 'string' ? given.selected : null
-  const columns = surface.columns > 0 ? surface.columns : FIRST_COLUMNS
-  const layout = layoutFor(surface, given.agents, columns)
-  const rows = surface.rows > 0 ? surface.rows : Math.min(MAX_ROWS, orgSizeOfLayout(layout, columns).rows)
-  const viewAt: ViewAt = (panX, panY) => orgViewOf(layout, columns, rows, { x: panX, y: panY })
+  // laid out in the columns the views sized the region for; drawn across the region (those columns before its first layout)
+  const laidIn = count(given.columns)
+  const columns = surface.columns > 0 ? surface.columns : laidIn || FIRST_COLUMNS
+  const layout = layoutFor(surface, given.agents, laidIn || columns)
+  let more = count(given.more)
+  // the rows the views gave the region; never surface.rows (see the head of this file)
+  const rows = Math.min(MOST_ROWS, count(given.rows) || Math.min(MAX_ROWS, orgSizeOfLayout(layout, laidIn || columns, more).rows))
   const state = surface.state ?? FIRST
-  const view = viewAt(state.panX, state.panY)
+  const pan = { x: state.panX, y: state.panY }
+
+  let view = orgViewOf(layout, columns, rows, pan, more)
+  let drawn = partsOf({ Box, Text }, layout, view, selected, state.hover)
+  if (drawn.left > 0) {
+    // past MAX_NODES: the cards left out count in "+N more", whose row the note takes
+    more += drawn.left
+    view = orgViewOf(layout, columns, rows, pan, more)
+    drawn = partsOf({ Box, Text }, layout, view, selected, state.hover)
+  }
+  const viewAt: ViewAt = (panX, panY) => orgViewOf(layout, columns, rows, { x: panX, y: panY }, more)
 
   // each listener reads the state as it is when the input comes, and this call's layout and region
   surface.onPointer(event => onPointer(surface, event, layout, viewAt))
@@ -252,35 +354,10 @@ const Org: ClientModule<OrgProps, OrgState> = (props, surface) => {
     )
   }
 
-  // the connectors first, the cards over them: only what shows in the region
-  const parts: RenderElement[] = []
-  for (const segment of layout.segments) {
-    const shown = orgSegmentIn(segment, view)
-    if (!shown) continue
-    const color = WIRE[segment.heat]
-    // a run down is a column of one-glyph lines: no newline inside a Text for a surface to read its own way
-    parts.push(
-      shown.down ? (
-        <Box position="absolute" left={shown.x} top={shown.y} flexDirection="column">
-          {Array.from(shown.glyphs, glyph => (
-            <Text color={color}>{glyph}</Text>
-          ))}
-        </Box>
-      ) : (
-        <Box position="absolute" left={shown.x} top={shown.y}>
-          <Text color={color}>{shown.glyphs}</Text>
-        </Box>
-      ),
-    )
-  }
-  for (const card of orgCardsIn(layout, view)) {
-    parts.push(cardOf({ Box, Text }, card.agent, view.x + card.x, view.y + card.y, card.agent.id === selected, card.agent.id === state.hover))
-  }
-
   return (
     <Box flexDirection="column" width={columns} height={rows}>
       <Box width={columns} height={view.rows} overflow="hidden">
-        {parts}
+        {drawn.parts}
       </Box>
       {view.note ? (
         <Text dimColor wrap="truncate-end">

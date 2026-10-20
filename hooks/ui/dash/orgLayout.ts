@@ -9,7 +9,8 @@
  * - a chart still too wide starts at the Orchestrator, and the person pans.
  *
  * Pure: no `$`, nothing of the engine's. The surface module (./org.client.tsx)
- * draws it on the drawing thread; the deck's views size the Client with `orgSizeOf`.
+ * draws it on the drawing thread; the deck's views make its props, and size
+ * its Client, with `orgPropsOf`.
  */
 
 export type OrgStatus = 'starting' | 'running' | 'waiting' | 'done' | 'failed' | 'idle'
@@ -30,8 +31,24 @@ export type OrgAgent = {
   parent: string | null
 }
 
-/** The Client's props. */
-export type OrgProps = { agents: OrgAgent[]; selected: string | null }
+/**
+ * The Client's props, as `orgPropsOf` makes them: the agents, the one
+ * selected, and the region the deck's views gave the Client.
+ */
+export type OrgProps = {
+  agents: OrgAgent[]
+  selected: string | null
+  /**
+   * The rows the Client's region takes (its `height`): what the chart draws
+   * to. Never `surface.rows`, which on the desktop is how tall the instance
+   * last drew (1 on a fresh mount), not how tall its region is.
+   */
+  rows?: number
+  /** The columns the views laid the chart out in to size those rows: the chart lays out in them too. */
+  columns?: number
+  /** Agents left out of `agents` (past MAX_AGENTS), shown as "+N more". */
+  more?: number
+}
 
 /** A card's cells across and down: a round border around four lines (name, type, model and tokens, now). */
 export const CARD_W = 25
@@ -46,6 +63,20 @@ export const ROOT_GAP = 6
 export const MAX_AGENTS = 60
 /** The most rows the deck's views give the Client. */
 export const MAX_ROWS = 40
+/** The most characters a string of an agent's props keeps: more than a card shows, so the props stay small. */
+export const PROP_TEXT = 48
+/**
+ * The most elements one drawing of the chart holds, its strings counted as
+ * the desktop counts them: the desktop draws nothing of a tree of 2000 or
+ * more. A card past it is left out and counted in "+N more".
+ */
+export const MAX_NODES = 1200
+/**
+ * What each part of a drawing costs in that count: the frame (the region,
+ * the chart and the note), a card, a card clipped at the chart's bottom edge,
+ * a stretch of `─` clipped to its cells, one glyph, a run down.
+ */
+export const NODES = { frame: 4, card: 12, cutCard: 13, stretch: 4, glyph: 3, down: 3 } as const
 /** Columns inside a card's border and its one cell of padding each side. */
 export const CARD_TEXT = CARD_W - 4
 
@@ -428,10 +459,10 @@ export function orgLayoutOf(agents: readonly OrgAgent[], columns: number): OrgLa
   }
 }
 
-/** The size a laid out chart asks of its region (orgSizeOf). */
-export function orgSizeOfLayout(layout: OrgLayout, columns: number): { columns: number; rows: number } {
+/** The size a laid out chart asks of its region (orgSizeOf), `more` agents left out before it was laid out. */
+export function orgSizeOfLayout(layout: OrgLayout, columns: number, more = 0): { columns: number; rows: number } {
   const across = columns > 0 ? columns : Math.max(1, layout.width)
-  const hasNote = layout.hidden > 0 || layout.width > across
+  const hasNote = layout.hidden + more > 0 || layout.width > across
   return { columns: across, rows: Math.max(1, layout.height + (hasNote ? 1 : 0)) }
 }
 
@@ -444,6 +475,37 @@ export function orgSizeOfLayout(layout: OrgLayout, columns: number): { columns: 
  */
 export function orgSizeOf(agents: readonly OrgAgent[], columns: number): { columns: number; rows: number } {
   return orgSizeOfLayout(orgLayoutOf(agents, columns), columns)
+}
+
+/** One line of at most PROP_TEXT characters: what the props keep of a string. */
+function clip(text: string): string {
+  const line = oneLine(text)
+  const chars = Array.from(line)
+  return chars.length <= PROP_TEXT ? line : chars.slice(0, PROP_TEXT).join('')
+}
+
+/**
+ * The Client's props for these agents in a region `columns` wide (the deck's
+ * views hand them over, and give the Client `rows` as its height):
+ *
+ * - the agents the chart draws, the first MAX_AGENTS breadth first, the rest
+ *   counted in `more`; each string one line of PROP_TEXT at most, so the
+ *   props stay small however many agents run or however much they say;
+ * - the rows the chart takes (orgSizeOf, the note's row counted), MAX_ROWS at most;
+ * - the columns it was laid out in, which the chart lays out in too, so the
+ *   rows it draws are the rows it was given.
+ */
+export function orgPropsOf(agents: readonly OrgAgent[], selected: string | null, columns: number): Required<OrgProps> {
+  const all = orgAgentsOf(agents)
+  const tree = treeOf(all)
+  const kept = new Set(tree.roots.map(r => r.id))
+  for (const list of tree.kids.values()) for (const k of list) kept.add(k.id)
+  const shown = all
+    .filter(a => kept.has(a.id))
+    .map(a => ({ ...a, label: clip(a.label), type: clip(a.type), model: clip(a.model), tokens: clip(a.tokens), now: clip(a.now) }))
+  const across = columns > 0 ? Math.floor(columns) : 0
+  const rows = Math.min(MAX_ROWS, orgSizeOfLayout(orgLayoutOf(shown, across), across, tree.hidden).rows)
+  return { agents: shown, selected, rows, columns: across, more: tree.hidden }
 }
 
 // --------------------------------------------------------------- the view
@@ -459,11 +521,13 @@ const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(l
  * - from its top row.
  *
  * An axis the chart fits on does not pan. The pan comes back clamped, so a
- * drag past an edge stops there.
+ * drag past an edge stops there. `more`: agents left out before the layout,
+ * counted in the note's "+N more" with the layout's own.
  */
-export function orgViewOf(layout: OrgLayout, columns: number, rows: number, pan: { x: number; y: number } = { x: 0, y: 0 }): OrgView {
+export function orgViewOf(layout: OrgLayout, columns: number, rows: number, pan: { x: number; y: number } = { x: 0, y: 0 }, more = 0): OrgView {
+  const hidden = layout.hidden + Math.max(0, more)
   const isWide = layout.width > columns
-  const hasNote = layout.hidden > 0 || isWide || layout.height > rows
+  const hasNote = hidden > 0 || isWide || layout.height > rows
   const chartRows = Math.max(0, rows - (hasNote ? 1 : 0))
   const isTall = layout.height > chartRows
 
@@ -482,7 +546,7 @@ export function orgViewOf(layout: OrgLayout, columns: number, rows: number, pan:
   }
 
   const notes: string[] = []
-  if (layout.hidden > 0) notes.push(`+${layout.hidden} more`)
+  if (hidden > 0) notes.push(`+${hidden} more`)
   if (isWide || isTall) notes.push('drag or arrow keys to pan, Home centres')
   return { x, y, columns, rows: chartRows, panX, panY, note: notes.join(' · ') }
 }
@@ -525,6 +589,26 @@ export function orgSegmentIn(segment: OrgSegment, view: OrgView): { x: number; y
   const from = Math.max(0, -y)
   const to = Math.min(length, view.rows - y)
   return to > from ? { x, y: y + from, glyphs: segment.glyphs.slice(from, to), down: true } : null
+}
+
+/**
+ * A run of connector glyphs across, cut into pieces each drawn from its own
+ * cell (`at`, from the run's first): every stretch of straight `─` one
+ * piece, every other glyph (a corner, a tee, a crossing) one of its own.
+ *
+ * A surface whose box-drawing glyphs are wider than its cells (the
+ * desktop's are about 1.17 cells) would draw a whole run longer than its
+ * cells, its junctions off the cards' centres; drawn so, each junction sits
+ * on its cell, and each stretch, clipped to its cells, ends where it should.
+ */
+export function orgPiecesOf(glyphs: string): { at: number; glyphs: string }[] {
+  const pieces: { at: number; glyphs: string }[] = []
+  Array.from(glyphs).forEach((glyph, at) => {
+    const last = pieces[pieces.length - 1]
+    if (glyph === '─' && last && last.glyphs.startsWith('─') && last.at + last.glyphs.length === at) last.glyphs += glyph
+    else pieces.push({ at, glyphs: glyph })
+  })
+  return pieces
 }
 
 // -------------------------------------------------------------- the cards

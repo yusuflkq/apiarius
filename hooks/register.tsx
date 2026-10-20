@@ -77,8 +77,19 @@ let gitKeyMemo: { of: G.GitState; key: string } | null = null
  */
 const demo: { state: W.WebState | null; data: DeckData | null; note: string; version: number } = { state: null, data: null, note: '', version: 0 }
 
-/** The surfaces whose org chart Client failed (`ui.fault`): their Org tab lists the agents as a tree until /deck opens again. */
+/**
+ * The surfaces whose org chart Client failed (`ui.fault`): their Org tab lists
+ * the agents as a tree while it stays open. A drawing of anything else (another
+ * tab, an agent's page) clears its surface, so the chart is tried again the
+ * next time the Org tab shows; /deck clears them all.
+ */
 const orgDown = new Set<RenderSurface>()
+
+/** Whether this surface's Org tab lists the agents instead of its chart: the chart failed there and the tab has not been left since. */
+function isOrgDownOn(surface: RenderSurface): boolean {
+  if (view.tab !== 'org' || view.page !== '') orgDown.delete(surface)
+  return orgDown.has(surface)
+}
 
 /** The agent whose page was opened last: the org chart marks it. */
 let lastAgent: string | null = null
@@ -1994,7 +2005,7 @@ function dashOf(now: number, surface: RenderSurface): DashModel {
     isDemo,
     demoNote: demo.note,
     paneData: isDemo && demo.data ? demo.data : data,
-    isOrgDown: orgDown.has(surface),
+    isOrgDown: isOrgDownOn(surface),
     selected: lastAgent,
   }
 }
@@ -3315,7 +3326,7 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // the org chart's Client failed: that surface's Org tab lists the agents as a tree until /deck opens again
+  // the org chart's Client failed: that surface's Org tab lists the agents as a tree until the tab is left (or /deck opens)
   on('ui.fault', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     orgDown.add(e.surface)
     redraw($)

@@ -32,6 +32,7 @@ import {
   type OrgAgent,
   type OrgCard,
   type OrgLayout,
+  type OrgProps,
   type OrgStatus,
 } from '../hooks/ui/dash/orgLayout'
 
@@ -189,7 +190,7 @@ const tag =
   }
 const ELEMENTS = { Box: tag('Box'), Text: tag('Text'), Button: tag('Button'), Input: tag('Input'), Select: tag('Select'), Link: tag('Link'), Code: tag('Code'), Markdown: tag('Markdown') }
 
-type Props = { agents: OrgAgent[]; selected: string | null }
+type Props = OrgProps
 type Surface = Parameters<typeof Org>[1]
 
 /**
@@ -197,9 +198,13 @@ type Surface = Parameters<typeof Org>[1]
  * size; each pointer or key event handed to the listener the last drawing
  * set, then drawn again when it set state; new props or a resize draw again,
  * the state kept; what it posts, kept.
+ *
+ * The region's rows reach it as the deck's views hand them, in its props
+ * (`rows`, unless the test's props say), and as its surface measures them.
  */
 function mount(first: Props, columns: number, rows: number) {
-  let props = first
+  const sized = (given: Props): Props => (given !== null && typeof given === 'object' && given.rows === undefined ? { ...given, rows } : given)
+  let props = sized(first)
   let size = { columns, rows }
   let state: unknown
   let dirty = false
@@ -256,7 +261,7 @@ function mount(first: Props, columns: number, rows: number) {
       settle()
     },
     props(next: Props) {
-      props = next
+      props = sized(next)
       tree = draw()
     },
     resize(across: number, down: number) {
@@ -699,8 +704,10 @@ describe('org.client', () => {
       const left = part.props.left as number
       const top = part.props.top as number
       if (typeof part.props.key === 'string') continue
-      const across = part.props.flexDirection === 'column' ? 1 : textOf(part).length
-      const down = part.props.flexDirection === 'column' ? part.children.length : 1
+      // a stretch across clipped to its cells, else one glyph, or a run down one glyph a line
+      const lines = textOf(part).split('\n')
+      const across = typeof part.props.width === 'number' ? part.props.width : Math.max(...lines.map(line => Array.from(line).length))
+      const down = lines.length
       expect(left >= 0 && left + across <= 68 && top >= 0 && top + down <= 30, `a connector at ${left},${top}`).toBe(true)
     }
     expect(drawnCards(ui.tree).length).toBe(8)
@@ -716,7 +723,7 @@ describe('org.client', () => {
     expect(drawnCards(ui.tree)).toContain('main')
   })
 
-  test('no agents, or props that are not the shape: a dim line, never a throw; before its first layout it draws 80 across', () => {
+  test('no agents, or props that are not the shape: a dim line, never a throw; before its first layout it draws 80 across, or the columns it was laid out in', () => {
     expect(textOf(mount({ agents: [], selected: null }, 84, 10).tree)).toBe('No agents yet.')
     expect(textOf(mount(null as unknown as Props, 84, 10).tree)).toBe('No agents yet.')
     expect(textOf(mount({ agents: 'x', selected: 3 } as unknown as Props, 84, 10).tree)).toBe('No agents yet.')
@@ -725,5 +732,6 @@ describe('org.client', () => {
     expect(ui.tree.props).toMatchObject({ width: 80, height: 22 })
     ui.resize(84, 22)
     expect(placed(ui.tree, 'main').left).toBe(29)
+    expect(mount({ agents: [MAIN, ...team(4)], selected: null, columns: 95 }, 0, 0).tree.props).toMatchObject({ width: 95, height: 22 })
   })
 })
