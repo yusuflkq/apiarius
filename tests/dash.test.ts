@@ -424,16 +424,14 @@ test('in the sample an answer stays in the sample, Talk sends nothing, and the t
   expect(w.submitted.filter(one => one.text === 'hello')).toEqual([])
   await press(ui, 'detail:edits')
 
-  // Changes, Stats and Classic are this session's: the sample says so
-  for (const tab of ['changes', 'stats', 'agents']) {
-    await press(ui, `tab:${tab}`)
-    expect(await ui.find({ type: 'Text', text: /^The sample covers the Dashboard, Org, Plan and the agent pages\./ })).toBeDefined()
-  }
+  // Changes is this session's: the sample says so
+  await press(ui, 'tab:changes')
+  expect(await ui.find({ type: 'Text', text: "The sample covers the Dashboard, Org, Plan and the agent pages. Back to this chat shows this session's Changes." })).toBeDefined()
 
   // Back to this chat: this session's Dashboard, its scout among the cards
   await press(ui, 'demo:back')
   expect(await ui.find({ key: 'demo:back' })).toBeUndefined()
-  expect((await ui.find({ key: 'tab:agents' }))?.props.dimColor).toBe(false)
+  expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)
   await press(ui, 'tab:dashboard')
   expect(await ui.find({ key: 'card:agent-x1' })).toBeDefined()
 
@@ -462,7 +460,7 @@ test('a sample that cannot be read says so where the Dashboard would be, and /de
   await ui.unmount()
 })
 
-test('the tab row switches tabs: Org draws the chart Client sized to the chart, Changes, Stats and Classic stay as they were; a tab pressed on an agent page leaves it', async ($, on) => {
+test('the tab row switches tabs: Org draws the chart Client sized to the chart, Changes stays as it was; a tab pressed on an agent page leaves it', async ($, on) => {
   await opened($, on)
   const state = W.webStateOf(sessionData(), M.defaultView(), emptyGit(), null, NOW, 's', '/repo')
   for (const surface of SURFACES) {
@@ -485,16 +483,15 @@ test('the tab row switches tabs: Org draws the chart Client sized to the chart, 
 
     await press(ui, 'tab:changes')
     expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ dimColor: false, hotkey: '4' })
-    await press(ui, 'tab:stats')
-    expect((await ui.find({ key: 'tab:stats' }))?.props).toMatchObject({ dimColor: false, hotkey: '5' })
-    await press(ui, 'tab:agents')
-    expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Open dashboard')
+    // four tabs: Stats and Classic are off the row
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key).filter(key => key?.startsWith('tab:'))).toEqual(['tab:dashboard', 'tab:org', 'tab:plan', 'tab:changes'])
     // an agent page over the Dashboard; a tab pressed there opens that tab
     await press(ui, 'tab:dashboard')
     await press(ui, 'dash:agent:agent-fixer')
     expect(await ui.find({ key: 'page:back' })).toBeDefined()
-    await press(ui, 'tab:stats')
+    await press(ui, 'tab:plan')
     expect(await ui.find({ key: 'page:back' })).toBeUndefined()
+    expect((await ui.find({ key: 'tab:plan' }))?.props.dimColor).toBe(false)
     await press(ui, 'tab:dashboard')
     await ui.unmount()
   }

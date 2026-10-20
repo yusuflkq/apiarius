@@ -973,8 +973,9 @@ test('through the deck pane: the outline picks fixer and the detail follows, Tal
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
+    // Classic is off the tab row: /deck classic opens it again
+    await $.command.run(deck('classic'))
     const ui = await $.ui.mount(pane(surface))
-    await ui.press({ key: 'tab:agents' })
     await ui.press({ key: 'agent:agent-fixer' })
     await ui.press({ key: 'detail:edits' })
 

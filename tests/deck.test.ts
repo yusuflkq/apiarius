@@ -116,7 +116,7 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
-test('/deck opens the pane on the Dashboard; the tab row reaches Changes (a file diff, the commit log), Stats and Classic on each surface', async ($, on) => {
+test('/deck opens the pane on the Dashboard; the tab row reaches Changes (a file diff, the commit log), and /deck stats and /deck classic the views off it, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -146,13 +146,21 @@ test('/deck opens the pane on the Dashboard; the tab row reaches Changes (a file
     expect(await ui.find({ key: `review-commit:${HASH}` })).toBeDefined()
     await ui.press({ key: `commit:${HASH}` })
 
-    await ui.press({ key: 'tab:stats' })
-    expect((await ui.find({ key: 'tab:stats' }))?.props.dimColor).toBe(false)
+    // Stats and Classic are off the tab row, which lights none of its tabs over them
+    expect(await ui.find({ key: 'tab:stats' })).toBeUndefined()
+    expect(await ui.find({ key: 'tab:agents' })).toBeUndefined()
+    const lit = async () => (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('tab:') && button.props.dimColor === false).map(button => button.key)
+    await $.command.run(deck('stats'))
+    await ui.redraw()
+    expect(await lit()).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /No history yet/ })).toBeDefined()
     // Classic: the Agents tab of earlier builds, before the first prompt one quiet line
-    await ui.press({ key: 'tab:agents' })
-    expect((await ui.find({ key: 'tab:agents' }))?.props).toMatchObject({ label: 'Classic', dimColor: false })
+    await $.command.run(deck('classic'))
+    await ui.redraw()
+    expect(await lit()).toEqual([])
     expect(await ui.find({ type: 'Text', text: /^No goal yet: your next prompt sets it/ })).toBeDefined()
     await ui.press({ key: 'tab:dashboard' })
+    expect(await lit()).toEqual(['tab:dashboard'])
     await ui.unmount()
   }
 })

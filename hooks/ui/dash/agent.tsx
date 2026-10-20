@@ -41,8 +41,8 @@ import { P, barSvg, mix, toneOf, type IconName } from './palette'
 import { AVATAR, CARD_CHROME, avatar, icon, notePagePane, openAgentPage, pill, quiet, svgOf, tickTexts, widthFor } from './parts'
 import { talkTab } from './talk'
 
-/** The tab names Back says it returns to. */
-const TAB_NAME: Readonly<Record<DeckTab, string>> = { dashboard: 'Dashboard', org: 'Org', plan: 'Plan', agents: 'Classic', changes: 'Changes', stats: 'Stats' }
+/** The names Back says it returns to: the tab row's, and Stats and Classic, off it but still opened by /deck stats and /deck classic. */
+const TAB_NAME: Readonly<Record<DeckTab, string>> = { dashboard: 'Dashboard', org: 'Org', plan: 'Plan', changes: 'Changes', stats: 'Stats', agents: 'Classic' }
 
 /** From this many cells (the pane at its widest, 84, less the cell the deck keeps) the four figures share a row and the checklist stands beside the task. */
 export const PAGE_WIDE = 83

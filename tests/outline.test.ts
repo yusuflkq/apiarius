@@ -680,7 +680,7 @@ test('before the first prompt the whole tab is one quiet line', async ($, on) =>
     // nothing else of the tab: no needs-you line, no goal, no Files, no detail; the tab row stays
     for (const text of ['Nothing needs you', 'Goal', 'Files', 'No agents yet']) expect(await ui.find({ type: 'Text', text })).toBeUndefined()
     expect((await ui.findAll({ type: 'Text' })).filter(one => one.props.italic === true).length).toBe(1)
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:dashboard', 'tab:org', 'tab:plan', 'tab:changes', 'tab:stats', 'tab:agents', 'web:open'])
+    expect((await ui.findAll({ type: 'Button' })).map(button => button.key)).toEqual(['tab:dashboard', 'tab:org', 'tab:plan', 'tab:changes', 'web:open'])
     expect((await ui.findAll({ type: 'Box' })).some(hasRail)).toBe(false)
     await ui.unmount()
   }

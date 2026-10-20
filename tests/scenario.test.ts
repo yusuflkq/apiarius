@@ -330,8 +330,9 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
+    // Classic is off the tab row: /deck classic opens it
+    await $.command.run(deck('classic'))
     const ui = await $.ui.mount(pane(surface))
-    await ui.press({ key: 'tab:agents' })
     await ui.press({ key: 'agent:main' })
 
     // all done: the line says what is left to review, and nobody runs
@@ -396,7 +397,7 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     expect(opened.props.format).toBe('diff')
     expect(opened.text).toContain(FIX_LINE)
     await ui.press({ key: 'file:src/token.js' })
-    await ui.press({ key: 'tab:agents' })
+    await $.command.run(deck('classic'))
     await ui.unmount()
   }
 

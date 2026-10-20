@@ -356,9 +356,10 @@ async function textOf(ui: { find: (query: { key: string }) => Promise<{ text: st
   return (await ui.find({ key }))?.text ?? ''
 }
 
-test('the Plan tab is key 3 of six: /deck plan (or /deck p) opens it; Changes, Stats and Classic follow on 4, 5 and 6', async ($, on) => {
+test('the Plan tab is key 3 of four: /deck plan (or /deck p) opens it; Changes follows on 4, and Stats and Classic are off the row', async ($, on) => {
   const { state } = await live($, on, 'plan')
-  expect(M.TABS).toEqual(['dashboard', 'org', 'plan', 'changes', 'stats', 'agents'])
+  expect(M.TABS).toEqual(['dashboard', 'org', 'plan', 'changes'])
+  expect(M.UNLISTED_TABS).toEqual(['stats', 'agents'])
   expect(M.tabFor('p')).toBe('plan')
   for (const surface of [...SURFACES, 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount(pane(surface))
@@ -368,8 +369,6 @@ test('the Plan tab is key 3 of six: /deck plan (or /deck p) opens it; Changes, S
       ['tab:org', 'Org', '2'],
       ['tab:plan', 'Plan', '3'],
       ['tab:changes', 'Changes', '4'],
-      ['tab:stats', 'Stats', '5'],
-      ['tab:agents', 'Classic', '6'],
     ])
     expect((await ui.find({ key: 'tab:plan' }))?.props.dimColor).toBe(false)
     // this session's own plan: its goal and a row a step of its todo list

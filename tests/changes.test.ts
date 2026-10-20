@@ -661,7 +661,9 @@ test('through the pane: Stats draws the session cards on each surface, a strip o
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    expect((await ui.find({ key: 'tab:stats' }))?.props.dimColor).toBe(false)
+    // off the tab row: no tab of it lit over Stats
+    expect(await ui.find({ key: 'tab:stats' })).toBeUndefined()
+    expect((await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('tab:') && button.props.dimColor === false)).toEqual([])
     await shown(ui, { type: 'Text', text: /No history yet/ })
     if (surface === 'desktop') {
       const [strip, activity] = (await ui.findAll({ type: 'Svg' })).map(svg => String(svg.props.source))

@@ -2621,7 +2621,8 @@ export const register: Register = on => {
       await $.command.register({
         name: 'deck',
         description: 'Open Agent Deck: the dashboard of your agents (what needs you, the goal, each agent, the figures, the activity), the org chart, the plan, the diffs they make (/deck demo: sample data; /deck web: in the Browser pane)',
-        argumentHint: '[dashboard|org|plan [step]|changes|stats|classic|details|demo|web|web stop|band|close|probe]',
+        // stats, classic and details still open the views off the tab row, unlisted
+        argumentHint: '[dashboard|org|plan [step]|changes|demo|web|web stop|band|close|probe]',
         immediate: true,
       })
     } catch (error) {

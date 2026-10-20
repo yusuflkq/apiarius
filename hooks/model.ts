@@ -47,15 +47,25 @@ export const ORCHESTRATOR = 'Orchestrator'
  */
 export const SNAPSHOT_VERSION = 2
 
-/** The pane's tabs, in the order the tab row draws them; `agents` is Classic, the summary and outline of earlier builds. */
-export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'plan', 'changes', 'stats', 'agents']
+/** The pane's tabs, in the order the tab row draws them (keys 1 to 4). */
+export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'plan', 'changes']
+
+/**
+ * The views off the tab row, kept so nothing is lost: Stats, and Classic
+ * (`agents`: the summary and outline of earlier builds). `/deck stats` and
+ * `/deck classic` still open them, and a saved view on one keeps it.
+ */
+export const UNLISTED_TABS: readonly DeckTab[] = ['stats', 'agents']
+
+/** Every tab a view may be on: the tab row's, then the unlisted. */
+const ALL_TABS: readonly DeckTab[] = [...TABS, ...UNLISTED_TABS]
 export const AGENT_PANES: readonly DeckAgentPane[] = ['activity', 'edits', 'chat']
 export const MAP_VIEWS: readonly DeckMapView[] = ['tree', 'wire']
 
 /**
  * Earlier builds' tabs, by the tab that took each one's place, so a saved
- * view or a typed `/deck overview` still lands; and `classic`, the tab row's
- * name for the Agents tab.
+ * view or a typed `/deck overview` still lands; and `classic`, the name the
+ * Agents tab went by on the tab row.
  */
 export const OLD_TABS: ReadonlyMap<string, DeckTab> = new Map<string, DeckTab>([
   ['overview', 'stats'],
@@ -66,17 +76,17 @@ export const OLD_TABS: ReadonlyMap<string, DeckTab> = new Map<string, DeckTab>([
   ['classic', 'agents'],
 ])
 
-/** The tab `name` is: one of TABS, or the one an earlier build's name became; undefined for anything else. */
+/** The tab `name` is: one of the tab row's or the unlisted, or the one an earlier build's name became; undefined for anything else. */
 export function tabNamed(name: unknown): DeckTab | undefined {
   if (typeof name !== 'string') return undefined
-  return TABS.find(tab => tab === name) ?? OLD_TABS.get(name)
+  return ALL_TABS.find(tab => tab === name) ?? OLD_TABS.get(name)
 }
 
-/** The tab a `/deck` argument asks for: a tab's name or its start (`c`), today's names before earlier builds'. */
+/** The tab a `/deck` argument asks for: a tab's name or its start (`c`), the tab row's before the unlisted, today's names before earlier builds'. */
 export function tabFor(arg: string): DeckTab | undefined {
   const wanted = arg.trim().toLowerCase()
   if (wanted === '') return undefined
-  const tab = TABS.find(one => one.startsWith(wanted))
+  const tab = ALL_TABS.find(one => one.startsWith(wanted))
   if (tab) return tab
   for (const [old, now] of OLD_TABS) if (old.startsWith(wanted)) return now
   return undefined

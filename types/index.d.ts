@@ -337,8 +337,9 @@ export type DeckData = {
 }
 
 /**
- * The pane's tabs: the Dashboard, the org chart, the Plan, Changes, Stats,
- * and Classic (`agents`: the summary and the full outline of earlier builds).
+ * The pane's tabs: the Dashboard, the org chart, the Plan and Changes on the
+ * tab row; Stats and Classic (`agents`: the summary and the full outline of
+ * earlier builds) off it, opened by `/deck stats` and `/deck classic`.
  * Older builds' names (overview, diffs, commits, graph, flow) and `classic`
  * are read as these by `tabNamed`.
  */
