@@ -136,6 +136,13 @@ export type DashActions = Actions & {
    * stays so through redraws and reloads.
    */
   togglePlan: (id: string) => void
+  /**
+   * Folds a section to its heading and a one-line summary, or opens it again,
+   * by its `DeckView.collapsed` id (dashModel's FOLD): the Dashboard's goal,
+   * agents, figures, activity and files; an agent page's task and checklist;
+   * the Plan tab's goal. It stays so through redraws, live updates and reloads.
+   */
+  toggleSection: (id: string) => void
   /** Leaves the agent page for the tab it was opened from. */
   back: () => void
   /**

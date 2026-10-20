@@ -4,10 +4,12 @@
  * the page words them, what waits on you, the agents in card order, how many
  * cards a row and what a card says (its step box, its line, when it ran), the
  * KPI figures, the activity rows, the files grouped as the web's FILES card,
- * the goal's words after its headline, and the agents as the org chart takes
- * them; and how much room text takes, a cell a character on the terminal and
- * by the letter in a desktop's proportional face. The page's own helpers (web/app.js)
- * carried over, so the pane and the page always say the same.
+ * the goal's words after its headline, the agents as the org chart takes
+ * them, and the one line a folded section says (`FOLD`, its ids in the
+ * view's `collapsed`); and how much room text takes, a cell a character on
+ * the terminal and by the letter in a desktop's proportional face. The
+ * page's own helpers (web/app.js) carried over, so the pane and the page
+ * always say the same.
  *
  * Pure: every function reads the state and the `now` it is handed.
  */
@@ -790,4 +792,84 @@ export function fitPath(dir: string, name: string, room: number, advance: Advanc
   let used = nameCells + dots
   while (keep < dirChars.length && used + advance(dirChars[dirChars.length - 1 - keep] ?? '') <= room) used += advance(dirChars[dirChars.length - 1 - keep++] ?? '')
   return { dir: keep > 0 ? `…${dirChars.slice(dirChars.length - keep).join('')}` : '', name }
+}
+
+// Folded sections.
+
+/**
+ * The ids of the sections a press on their head folds to it and a one-line
+ * summary (`DeckView.collapsed`): the Dashboard's goal, agents, figures,
+ * recent activity and files; an agent page's task and checklist; the Plan
+ * tab's goal.
+ */
+export const FOLD = {
+  goal: 'dash:goal',
+  agents: 'dash:agents',
+  figures: 'dash:figures',
+  activity: 'dash:activity',
+  files: 'dash:files',
+  task: 'page:task',
+  checklist: 'page:checklist',
+  planGoal: 'plan:goal',
+} as const
+
+/** A folded section's line: its parts joined by " · ", the empty ones left out. */
+function foldLine(parts: readonly string[]): string {
+  return parts.filter(part => part !== '').join(' · ')
+}
+
+/** The characters of a headline a folded goal keeps, so where the plan stands still shows after it. */
+const FOLD_HEADLINE = 48
+
+/** The Dashboard's goal folded: its headline, then where the plan stands ("Step 2 of 5"); "No goal yet" before the first prompt. */
+export function goalFoldOf(state: WebState): string {
+  const goal = state.goal
+  if (!goal) return 'No goal yet'
+  return foldLine([cut(goal.headline || firstLine(goal.text), FOLD_HEADLINE), stepLineOf(state)?.lead ?? ''])
+}
+
+/** The agents folded: how many run, wait on you, failed, sit idle and are done, those with none left out ("2 running · 1 waiting"). */
+export function agentsFoldOf(state: WebState): string {
+  const c = countsOf(state.agents)
+  const said = foldLine([
+    c.running ? `${c.running} running` : '',
+    c.waiting ? `${c.waiting} waiting` : '',
+    c.failed ? `${c.failed} failed` : '',
+    c.idle ? `${c.idle} idle` : '',
+    c.done ? `${c.done} done` : '',
+  ])
+  return said || (state.agents.length === 0 ? 'none yet' : '')
+}
+
+/** The figures folded: each one's value in a few words ("2 running · 1/3 steps · $0.42 · 1 waiting on you"). */
+export function figuresFoldOf(state: WebState): string {
+  const by = new Map(kpisOf(state).map(kpi => [kpi.key, kpi.value]))
+  const plan = by.get('plan') ?? '—'
+  return foldLine([`${by.get('running') ?? '0'} running`, plan === '—' ? 'no plan yet' : `${plan} steps`, by.get('spend') ?? '—', `${by.get('waiting') ?? '0'} waiting on you`])
+}
+
+/** Recent activity folded: how many of its newest `most` calls still run or wait, then the newest call and its age ("fixer ran npm test · 2m"). */
+export function activityFoldOf(state: WebState, now: number, most = 10): string {
+  const rows = activityRows(state, most)
+  const newest = rows[0]
+  if (!newest) return 'No tool calls yet'
+  const live = rows.filter(row => row.outcome.tone === 'live' || row.outcome.tone === 'wait').length
+  const call = [newest.name, newest.verb, cut(newest.target, 60)].filter(Boolean).join(' ')
+  return foldLine([live ? `${live} running` : '', call, ago(newest.at, now)])
+}
+
+/** Files folded: of the repository's, how many more than one agent edited and how many an agent is on, their lines +a −r, and how many lie outside the repo ("3 shared · +120 −40"). */
+export function filesFoldOf(state: WebState): string {
+  if (state.files.length === 0) return 'No files touched yet'
+  const groups = fileGroupsOf(state, Number.POSITIVE_INFINITY)
+  const shared = groups.inside.filter(row => row.isShared).length
+  const live = groups.inside.filter(row => row.live).length
+  const added = groups.inside.reduce((sum, row) => sum + row.added, 0)
+  const removed = groups.inside.reduce((sum, row) => sum + row.removed, 0)
+  return foldLine([
+    shared ? `${shared} shared` : '',
+    live ? `${live} live` : '',
+    groups.inside.length > 0 ? `+${added} −${removed}` : '',
+    groups.outside.length > 0 ? `${groups.outside.length} outside the repo` : '',
+  ])
 }

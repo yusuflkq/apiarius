@@ -389,6 +389,14 @@ export type DeckView = {
    * result. Oldest first, at most 100; everything else stays folded.
    */
   planOpen: string[]
+  /**
+   * The sections folded to their heading and a one-line summary, by their id
+   * (the dashboard's `FOLD`): the Dashboard's `dash:goal`, `dash:agents`,
+   * `dash:figures`, `dash:activity` and `dash:files`; an agent page's
+   * `page:task` and `page:checklist`; the Plan tab's `plan:goal`. Oldest
+   * first, at most 50; everything else stays open.
+   */
+  collapsed: string[]
 }
 
 export type DeckSnapshot = {

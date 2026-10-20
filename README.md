@@ -57,6 +57,7 @@ A sidebar lists the pages and every agent, with live and waiting dots.
   - **Agents:** a card each, as many a row as fit (two in the docked pane, up to six when it is wide), with its avatar, status pill, an inner box with the step it is on, what it is doing now, and its model, tokens and age. Press any line of a card to open the agent. Recent activity and Files sit in bordered lists, side by side from 120 cells; files outside the repo fold into one row.
   - **Figures:** agents running, plan steps, session spend, waiting on you. Then the recent activity; a row opens its agent.
   - **Open in browser** starts `/deck web`.
+  - **Folding:** press a section's heading (**▾ AGENTS 7**) to fold it to one line of what it holds (**▸ AGENTS 7** · 2 running · 1 waiting), and again to open it. The goal, agents, figures, recent activity and files fold one by one, as do an agent page's Task and Checklist and the Plan tab's goal. What you fold stays folded through live updates and reloads of the mod.
 - **Org:** the org chart, cards over connectors. Click a card to open its agent; drag or the arrow keys pan a big chart. VS Code and mobile list the agents as an indented tree.
 - **Plan:** the goal and its follow-ups; how far the plan is (steps done, in progress and failed), where it came from, and its bar; then a row for each step with its status, its words, who works on it, and whether it needs you. Click a row to open it: a card for each agent on the step (with the agents it started under it), showing what it is doing now, its checklist, its last three tool calls, the files it touched, its result and anything it waits on you for, then **Open agent →** and **Talk →**. A step the Orchestrator does itself shows its checklist item and what it just did. Open steps stay open while the pane updates.
 - **Agent page:** its avatar, name, type, who it reports to and status; four boxes for its model, tokens, lines changed and tool calls; its Now line, its task beside its checklist, what it waits on you for and its result. Then Diffs (its exact patches), Activity (each tool call with its description, how long it took and when) and Talk (chat bubbles, each of your messages with its delivery status, and a box to message it). Back returns to the tab you came from.
@@ -79,7 +80,7 @@ The pane also works in a terminal session, where Stats draws its charts as text.
 
 ```bash
 claude plugin validate .
-claude plugin test .     # 244 tests
+claude plugin test .     # 250 tests
 node --test web/test/    # 42 server and page tests
 node web/dev.js          # serves the dashboard on the sample data in web/fixtures and prints the URL
 ```

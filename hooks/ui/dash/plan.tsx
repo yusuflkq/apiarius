@@ -3,7 +3,9 @@
  * `StepRow`, `StepAgent`, `SelfStep`), top to bottom:
  *
  * - the goal: its headline, its words (folded past five lines, Show more
- *   for the rest) and each follow-up typed since, with its age;
+ *   for the rest) and each follow-up typed since, with its age; a press on
+ *   its head ("▾ GOAL") folds it to the head and its headline, as the view
+ *   keeps (`DeckView.collapsed`);
  * - the progress card: "x/n done · n in progress · n failed", where the
  *   plan came from ("from the todo list", "inferred from the agents"), and
  *   the steps as one segmented bar (an Svg where it draws, cells elsewhere);
@@ -31,10 +33,10 @@ import { baseName, clean } from '../../format'
 import { cutMarkdown, type WebAgent, type WebState } from '../../web'
 import { fitsTree } from '../common'
 import type { DashActions, Kit } from '../types'
-import { activityRows, agentOf, ago, cut, firstLine, flat, goalRest, isRunning, nameOf, nowLine, type ActivityRow } from './dashModel'
+import { FOLD, activityRows, agentOf, ago, cut, firstLine, flat, goalRest, isRunning, nameOf, nowLine, type ActivityRow } from './dashModel'
 import { needsCards } from './needs'
 import { P, STEP_HUE, mix, stepsSvg, toneOf } from './palette'
-import { AVATAR, CARD_CHROME, avatar, icon, pill, quiet, sectionHead, svgOf, tickTexts } from './parts'
+import { AVATAR, CARD_CHROME, avatar, foldHead, icon, pill, quiet, sectionFold, svgOf, tickTexts, type Fold } from './parts'
 
 type Step = WebState['plan']['steps'][number]
 
@@ -137,17 +139,18 @@ function shownAt(view: DeckView, level: number): Shown {
 
 /** The tab: the goal, the progress card and the steps; drawn leaner while it would not fit the pane's bounds. */
 export function planTab(kit: Kit, state: WebState, view: DeckView, actions: DashActions, now: number): RenderElement {
-  let tree = drawPlan(kit, state, shownAt(view, 0), actions, now)
-  for (let level = 1; level <= 3 && !fitsTree(tree); level++) tree = drawPlan(kit, state, shownAt(view, level), actions, now)
+  const goal = sectionFold(view.collapsed, FOLD.planGoal, state.goal ? cut(state.goal.headline || firstLine(state.goal.text), 80) : '')
+  let tree = drawPlan(kit, state, shownAt(view, 0), goal, actions, now)
+  for (let level = 1; level <= 3 && !fitsTree(tree); level++) tree = drawPlan(kit, state, shownAt(view, level), goal, actions, now)
   return tree
 }
 
-function drawPlan(kit: Kit, state: WebState, shown: Shown, actions: DashActions, now: number): RenderElement {
+function drawPlan(kit: Kit, state: WebState, shown: Shown, goal: Fold, actions: DashActions, now: number): RenderElement {
   const { Box } = kit
   const steps = state.plan.steps
   return (
     <Box key="plan" flexDirection="column" gap={1}>
-      {state.goal ? goalBlock(kit, state.goal, shown, actions, now) : null}
+      {state.goal ? goalBlock(kit, state.goal, shown, goal, actions, now) : null}
       {steps.length === 0 ? emptyPlan(kit) : progressCard(kit, state)}
       {steps.length > 0 ? stepsCard(kit, state, shown, actions, now) : null}
       {shown.note ? quiet(kit, shown.note) : null}
@@ -162,9 +165,17 @@ function linesOf(text: string, room: number): number {
   return text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(Array.from(line).length / Math.max(1, room))), 0)
 }
 
-/** Its headline, its words after it (five lines, then Show more), each follow-up with its age. */
-function goalBlock(kit: Kit, goal: NonNullable<WebState['goal']>, shown: Shown, actions: DashActions, now: number): RenderElement {
+/** Its head ("▾ GOAL", its age at the right; a press folds it to the head and its headline), its headline, its words after it (five lines, then Show more), each follow-up with its age. */
+function goalBlock(kit: Kit, goal: NonNullable<WebState['goal']>, shown: Shown, fold: Fold, actions: DashActions, now: number): RenderElement {
   const { Box, Text, Button } = kit
+  const head = foldHead(kit, fold, 'Goal', null, actions, <Text color={P.muted2}>{ago(goal.at, now)}</Text>)
+  if (!fold.isOpen) {
+    return (
+      <Box key="plan:goal" flexDirection="column">
+        {head}
+      </Box>
+    )
+  }
   const rest = clean(goalRest(goal))
     .split('\n')
     .map(line => line.trimEnd())
@@ -180,7 +191,7 @@ function goalBlock(kit: Kit, goal: NonNullable<WebState['goal']>, shown: Shown, 
   )
   return (
     <Box key="plan:goal" flexDirection="column">
-      {sectionHead(kit, 'Goal', null, <Text color={P.muted2}>{ago(goal.at, now)}</Text>)}
+      {head}
       <Text bold color={P.text} wrap="wrap">
         {goal.headline || firstLine(goal.text)}
       </Text>

@@ -345,7 +345,7 @@ test('the files outside the repository fold into one dim row after the repositor
   await started($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface, 84))
-    expect((await ui.find({ key: 'dash:files' }))?.text).toContain('FILES  2')
+    expect((await ui.find({ key: 'dash:files' }))?.text).toContain('▾ FILES 2')
     const files = () => ui.findAll({ type: 'Button' }).then(buttons => buttons.map(button => button.key ?? '').filter(key => key.startsWith('dash:file:')))
     expect(await files()).toEqual(['dash:file:src/token.ts', 'dash:file:src/auth.ts'])
     const fold = await ui.find({ key: 'dash:files:outside' })
@@ -371,7 +371,7 @@ test('the files outside the repository fold into one dim row after the repositor
   where.state = stateOf()
   const ui = await $.ui.mount(pane('desktop', 84))
   expect(await ui.find({ key: 'dash:files:outside' })).toBeUndefined()
-  expect((await ui.find({ key: 'dash:files' }))?.text).toContain('FILES  2')
+  expect((await ui.find({ key: 'dash:files' }))?.text).toContain('▾ FILES 2')
   await ui.unmount()
   expect(shortPath('C:/Users/me/scratchpad/talk/msg2.txt')).toEqual({ dir: '…/talk/', name: 'msg2.txt' })
   expect(shortPath('/tmp/a.txt')).toEqual({ dir: '/tmp/', name: 'a.txt' })

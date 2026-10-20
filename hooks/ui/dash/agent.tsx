@@ -13,7 +13,9 @@
  * - its task, folded to about four rows (Show more for the rest), and its
  *   checklist (done of total, a bar, each item, the one in hand in its own
  *   words under it): side by side at 84 cells, the checklist under the task
- *   below that;
+ *   below that. A press on either's title ("▾ Task") folds the card to it
+ *   and one dim line, for every agent's page, as the view keeps
+ *   (`DeckView.collapsed`);
  * - what it waits on you for, answerable here (./needs);
  * - its result once it ended (the Orchestrator's: its latest answer to you);
  * - its Diffs · Activity · Talk in the web deck's names and order, a count
@@ -35,10 +37,10 @@ import type { WebAgent, WebState } from '../../web'
 import { agentDiffsBlock } from '../detail'
 import type { DashActions, Kit } from '../types'
 import { activityTab } from './activity'
-import { agentOf, ago, agoText, cut, flat, foldText, isLive, isRunning, nowLine, num, plural, reportsTo, span, tokensOf } from './dashModel'
+import { FOLD, agentOf, ago, agoText, cut, firstLine, flat, foldText, isLive, isRunning, nowLine, num, plural, reportsTo, span, tokensOf } from './dashModel'
 import { needsCards } from './needs'
 import { P, barSvg, mix, toneOf, type IconName } from './palette'
-import { AVATAR, CARD_CHROME, avatar, icon, notePagePane, openAgentPage, pill, quiet, svgOf, tickTexts, widthFor } from './parts'
+import { AVATAR, CARD_CHROME, avatar, foldTitle, icon, notePagePane, openAgentPage, pill, quiet, sectionFold, svgOf, tickTexts, widthFor, type Fold } from './parts'
 import { talkTab } from './talk'
 
 /** The names Back says it returns to: the tab row's, and Stats and Classic, off it but still opened by /deck stats and /deck classic. */
@@ -77,7 +79,7 @@ export function agentPage(kit: Kit, state: WebState, data: DeckData, view: DeckV
       {header(kit, state, agent, actions, now)}
       {nowStrip(kit, agent, now)}
       {statsRow(kit, agent)}
-      {workBlock(kit, agent, actions)}
+      {workBlock(kit, agent, actions, view.collapsed)}
       {needsCards(kit, state, actions, now, 'agent', agent.id)}
       {resultBlock(kit, agent, actions, now)}
       {panesBlock(kit, state, data, view, agent, actions, now)}
@@ -303,37 +305,43 @@ function cardProps(width: number | undefined, edge: string = P.border): BoxProps
   return { flexDirection: 'column', borderStyle: 'round', borderColor: edge, paddingX: 1, ...(width === undefined ? {} : { width }) }
 }
 
-/** The task: "Task" and its scope, then what it was given, folded to about four rows with Show more; the Orchestrator's is the goal, or your prompts. */
-function taskCard(kit: Kit, agent: WebAgent, actions: DashActions, width: number | undefined): RenderElement {
+/** What a task says where none was recorded: the Orchestrator's are your prompts. */
+function noTask(agent: WebAgent): string {
+  return agent.kind === 'orchestrator' ? 'Your prompts in the Claude Code conversation.' : 'No task recorded.'
+}
+
+/**
+ * The task: "▾ Task" (a press folds the card to it) and its scope, then what
+ * it was given, folded to about four rows with Show more; the Orchestrator's
+ * is the goal, or your prompts. Folded, its scope and its first line, dim.
+ */
+function taskCard(kit: Kit, agent: WebAgent, actions: DashActions, width: number | undefined, card: Fold): RenderElement {
   const { Box, Text } = kit
   const text = clean(String(agent.task || '')).trim()
   const scope = flat(agent.scope || '')
   const key = `task:${agent.id}`
   const fold = foldText(text, (width ?? kit.columns) - CARD_CHROME, TASK_ROWS)
+  const beside = card.isOpen ? scope : [scope, text ? firstLine(text) : noTask(agent)].filter(Boolean).join(' · ')
   return (
     <Box key="page:task" {...cardProps(width)}>
-      <Box flexDirection="row" columnGap={2}>
-        <Box flexShrink={0}>
-          <Text bold color={P.text}>
-            Task
-          </Text>
-        </Box>
-        {scope ? (
-          <Box flexShrink={1}>
+      <Box flexDirection="row" columnGap={2} alignItems="center">
+        <Box flexShrink={0}>{foldTitle(kit, card, 'Task', actions)}</Box>
+        {beside ? (
+          <Box flexShrink={1} minWidth={0}>
             <Text color={P.muted2} wrap="truncate-end">
-              {scope}
+              {beside}
             </Text>
           </Box>
         ) : null}
       </Box>
-      {text ? (
+      {!card.isOpen ? null : text ? (
         <Text color={P.fg2} wrap="wrap">
           {opened.has(key) ? cut(text, LONG) : fold.text}
         </Text>
       ) : (
-        quiet(kit, agent.kind === 'orchestrator' ? 'Your prompts in the Claude Code conversation.' : 'No task recorded.')
+        quiet(kit, noTask(agent))
       )}
-      {text && fold.isCut ? moreButton(kit, key, actions) : null}
+      {card.isOpen && text && fold.isCut ? moreButton(kit, key, actions) : null}
     </Box>
   )
 }
@@ -367,22 +375,42 @@ function progressBar(kit: Kit, done: number, total: number, cells: number): Rend
   )
 }
 
-/** The checklist: "Checklist" and done of total, the bar, then each item with its mark, the one in hand bold with what it is doing under it. */
-function checklistCard(kit: Kit, agent: WebAgent, width: number | undefined): RenderElement | null {
+/** A folded checklist's line: the item in hand, else whether all are done or none started. */
+function checklistLine(agent: WebAgent): string {
+  const list = agent.checklist
+  const active = list.items.find(item => item.status === 'active')
+  if (active) return flat(active.text)
+  if (list.total > 0 && list.done >= list.total) return 'All done'
+  return list.done === 0 ? 'Not started' : `${list.total - list.done} to go`
+}
+
+/**
+ * The checklist: "▾ Checklist" (a press folds the card to it) and done of
+ * total, the bar, then each item with its mark, the one in hand bold with
+ * what it is doing under it. Folded, the item in hand, dim, beside its title.
+ */
+function checklistCard(kit: Kit, agent: WebAgent, actions: DashActions, width: number | undefined, card: Fold): RenderElement | null {
   const { Box, Text } = kit
   const list = agent.checklist
   if (!list || list.items.length === 0) return null
   const inner = Math.max(8, (width ?? kit.columns) - CARD_CHROME)
   return (
     <Box key="page:checklist" {...cardProps(width)}>
-      <Box flexDirection="row" justifyContent="space-between" columnGap={1}>
-        <Text bold color={P.text}>
-          Checklist
-        </Text>
-        <Text color={P.muted}>{`${list.done}/${list.total}`}</Text>
+      <Box flexDirection="row" columnGap={1} alignItems="center">
+        <Box flexShrink={0}>{foldTitle(kit, card, 'Checklist', actions)}</Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          {card.isOpen ? null : (
+            <Text color={P.muted2} wrap="truncate-end">
+              {checklistLine(agent)}
+            </Text>
+          )}
+        </Box>
+        <Box flexShrink={0}>
+          <Text color={P.muted}>{`${list.done}/${list.total}`}</Text>
+        </Box>
       </Box>
-      {list.total > 0 ? progressBar(kit, list.done, list.total, inner) : null}
-      {list.items.map((item, i) => (
+      {card.isOpen && list.total > 0 ? progressBar(kit, list.done, list.total, inner) : null}
+      {!card.isOpen ? null : list.items.map((item, i) => (
         <Box key={`check:${i}`} flexDirection="row" columnGap={1}>
           <Box flexShrink={0}>{itemMark(kit, agent, item.status)}</Box>
           <Box flexDirection="column" flexGrow={1} flexShrink={1}>
@@ -401,23 +429,30 @@ function checklistCard(kit: Kit, agent: WebAgent, width: number | undefined): Re
   )
 }
 
-/** The task and the checklist: side by side at the pane's widest (the task the wider, as the web's), the checklist under the task below that; the task alone while there is no checklist. */
-function workBlock(kit: Kit, agent: WebAgent, actions: DashActions): RenderElement {
+/**
+ * The task and the checklist: side by side at the pane's widest (the task the
+ * wider, as the web's), the checklist under the task below that; the task
+ * alone while there is no checklist. Each folds by its title on its own, as
+ * `collapsed` (the view's) holds it.
+ */
+function workBlock(kit: Kit, agent: WebAgent, actions: DashActions, collapsed: readonly string[]): RenderElement {
   const { Box } = kit
-  if (agent.checklist.items.length === 0) return taskCard(kit, agent, actions, undefined)
+  const task = sectionFold(collapsed, FOLD.task, '')
+  const list = sectionFold(collapsed, FOLD.checklist, '')
+  if (agent.checklist.items.length === 0) return taskCard(kit, agent, actions, undefined, task)
   if (kit.columns >= PAGE_WIDE) {
     const taskWidth = Math.round(((kit.columns - 1) * 1.4) / 2.4)
     return (
       <Box key="page:work" flexDirection="row" columnGap={1} alignItems="flex-start">
-        {taskCard(kit, agent, actions, taskWidth)}
-        {checklistCard(kit, agent, kit.columns - 1 - taskWidth)}
+        {taskCard(kit, agent, actions, taskWidth, task)}
+        {checklistCard(kit, agent, actions, kit.columns - 1 - taskWidth, list)}
       </Box>
     )
   }
   return (
     <Box key="page:work" flexDirection="column" gap={1}>
-      {taskCard(kit, agent, actions, undefined)}
-      {checklistCard(kit, agent, undefined)}
+      {taskCard(kit, agent, actions, undefined, task)}
+      {checklistCard(kit, agent, actions, undefined, list)}
     </Box>
   )
 }

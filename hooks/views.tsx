@@ -51,7 +51,7 @@ function bodyOf(kit: Kit, model: DeckModel, actions: DashActions, dash: DashMode
   const state = dash.state
   if (state === null) return quiet(kit, dash.demoNote || 'Reading the sample…')
   if (view.page !== '') return agentPage(kit, state, dash.paneData, view, actions, now)
-  if (view.tab === 'dashboard') return dashboardTab(kit, state, actions, now, dash.isDemo ? null : (model.web ?? null))
+  if (view.tab === 'dashboard') return dashboardTab(kit, state, actions, now, dash.isDemo ? null : (model.web ?? null), view.collapsed)
   if (view.tab === 'org') return orgTab(kit, state, actions, dash)
   if (view.tab === 'plan') return planTab(kit, state, view, actions, now)
   if (dash.isDemo) return quiet(kit, "The sample covers the Dashboard, Org, Plan and the agent pages. Back to this chat shows this session's Changes.")

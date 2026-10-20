@@ -2,7 +2,8 @@
  * The pieces every part of the native dashboard draws the same way: an
  * agent's avatar (a small static Svg of the web's gradient face where the
  * surface draws Svg, a dot in its colour on the terminal), an icon, a status
- * pill (the word on a dark tint of its hue), a section's head, a line whose
+ * pill (the word on a dark tint of its hue), a section's head (`foldHead`:
+ * a press folds the section to it and a one-line summary), a line whose
  * code spans read as code, a bordered card, the quiet line where content
  * will be, and the pressable lines and "Open →" that every card and row a
  * press opens an agent from is made of; and `openAgentPage`, which opens an
@@ -206,6 +207,76 @@ export function sectionHead(kit: Kit, title: string, count: number | null, right
       </Text>
       {right ? <Box flexShrink={0}>{right}</Box> : null}
     </Box>
+  )
+}
+
+/** The chevron of a section's head: ▾ while the section is open, ▸ while it is folded. */
+export function chevronOf(isOpen: boolean): string {
+  return isOpen ? '▾' : '▸'
+}
+
+/** The words of a section's head that folds: "▾ AGENTS 7" while open, "▸ AGENTS 7" folded; no count where `count` is null. */
+export function foldLabel(title: string, count: number | null, isOpen: boolean): string {
+  return `${chevronOf(isOpen)} ${title.toUpperCase()}${count !== null ? ` ${count}` : ''}`
+}
+
+/** A section that folds as its head draws it: its id in `DeckView.collapsed` (dashModel's FOLD), whether it is open, and what its one line says while it is folded. */
+export type Fold = { id: string; isOpen: boolean; summary: string }
+
+/** The fold of section `id`, open unless `collapsed` (the view's) holds it; `summary` its one line while folded. */
+export function sectionFold(collapsed: readonly string[], id: string, summary: string): Fold {
+  return { id, isOpen: !collapsed.includes(id), summary }
+}
+
+/**
+ * A section's head that folds it: one plain Button keyed `fold:<id>` whose
+ * label is "▾ AGENTS 7" while the section is open and "▸ AGENTS 7" while it
+ * is folded (a desktop draws the label alone, dim; the terminal draws its
+ * Text, the title bold), a press folding or opening it at once
+ * (`toggleSection`). While folded, its one-line summary, dim, beside it
+ * ("· 2 running · 1 waiting"), cut to the line; a control at the right
+ * either way. The Button's key stays as it folds, so nothing flashes.
+ */
+export function foldHead(kit: Kit, fold: Fold, title: string, count: number | null, actions: DashActions, right: RenderElement | null = null): RenderElement {
+  const { Box, Text, Button } = kit
+  return (
+    <Box flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexShrink={0}>
+        <Button key={`fold:${fold.id}`} label={foldLabel(title, count, fold.isOpen)} plain dimColor={kit.surface !== 'terminal'} onPress={() => actions.toggleSection(fold.id)}>
+          <Text color={P.muted2}>{`${chevronOf(fold.isOpen)} `}</Text>
+          <Text bold color={P.muted}>
+            {title.toUpperCase()}
+          </Text>
+          {count !== null ? <Text color={P.muted2}>{` ${count}`}</Text> : null}
+        </Button>
+      </Box>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        {!fold.isOpen && fold.summary ? (
+          <Text color={P.muted2} wrap="truncate-end">
+            {`· ${fold.summary}`}
+          </Text>
+        ) : null}
+      </Box>
+      {right ? <Box flexShrink={0}>{right}</Box> : null}
+    </Box>
+  )
+}
+
+/**
+ * A card's title that folds the card, as an agent page's Task and Checklist
+ * draw it: one plain Button keyed `fold:<id>`, "▾ Task" while open and
+ * "▸ Task" folded (the terminal draws the title bold), a press folding or
+ * opening it at once.
+ */
+export function foldTitle(kit: Kit, fold: Fold, title: string, actions: DashActions): RenderElement {
+  const { Text, Button } = kit
+  return (
+    <Button key={`fold:${fold.id}`} label={`${chevronOf(fold.isOpen)} ${title}`} plain onPress={() => actions.toggleSection(fold.id)}>
+      <Text color={P.muted2}>{`${chevronOf(fold.isOpen)} `}</Text>
+      <Text bold color={P.text}>
+        {title}
+      </Text>
+    </Button>
   )
 }
 

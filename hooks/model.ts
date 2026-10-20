@@ -219,6 +219,7 @@ export function defaultView(): DeckView {
     page: '',
     isDemo: false,
     planOpen: [],
+    collapsed: [],
   }
 }
 
@@ -237,6 +238,21 @@ export function planOpenWith(open: readonly string[], id: string, isOpen?: boole
   const rest = open.filter(one => one !== id)
   const isWanted = isOpen ?? !open.includes(id)
   return (isWanted && id !== '' ? [...rest, id] : rest).slice(-PLAN_OPEN_KEPT)
+}
+
+/** The sections `view.collapsed` keeps folded at most, the oldest dropped first. */
+const COLLAPSED_KEPT = 50
+
+/**
+ * The sections folded to their heading (`view.collapsed`) with `id` folded,
+ * or opened again when `isFolded` is false; toggled when it is left out. A
+ * section folded again moves to the end, so the oldest go first past
+ * COLLAPSED_KEPT.
+ */
+export function collapsedWith(collapsed: readonly string[], id: string, isFolded?: boolean): string[] {
+  const rest = collapsed.filter(one => one !== id)
+  const isWanted = isFolded ?? !collapsed.includes(id)
+  return (isWanted && id !== '' ? [...rest, id] : rest).slice(-COLLAPSED_KEPT)
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -276,6 +292,8 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     isDemo: flag(v.isDemo, base.isDemo),
     // the Plan tab's open rows and texts: strings only, each once, the newest kept
     planOpen: Array.isArray(v.planOpen) ? [...new Set(v.planOpen.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-PLAN_OPEN_KEPT) : base.planOpen,
+    // the sections folded to their heading: strings only, each once, the newest kept
+    collapsed: Array.isArray(v.collapsed) ? [...new Set(v.collapsed.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-COLLAPSED_KEPT) : base.collapsed,
   }
   if (data) {
     const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)

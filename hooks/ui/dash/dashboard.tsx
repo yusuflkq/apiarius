@@ -32,6 +32,13 @@
  *   temp files, each by its last two parts);
  * - Open in browser, the web deck one press away (not in the sample).
  *
+ * Each of the goal, the agents, the figures, recent activity and files sits
+ * under a head that folds it (`foldHead`: "▾ AGENTS 7", a plain Button): a
+ * press folds the section to its head and one dim line of what it holds
+ * ("▸ AGENTS 7 · 2 running · 1 waiting"), another opens it again. What is
+ * folded lives in the deck's view (`DeckView.collapsed`, toggled by
+ * `toggleSection`), so redraws, live updates and reloads keep it.
+ *
  * A desktop draws a plain Button's label alone, in its own ink, so the
  * colours and weights the web gives its words sit on Text and images beside
  * the pressable words, not in them, and a line the web draws dim is a dim
@@ -50,8 +57,11 @@ import type { WebAgent, WebState } from '../../web'
 import { webLine } from '../slim'
 import type { DashActions, Kit, WebPane } from '../types'
 import {
+  FOLD,
+  activityFoldOf,
   activityRows,
   agentOf,
+  agentsFoldOf,
   ago,
   cardLine,
   cardsPerRow,
@@ -61,9 +71,12 @@ import {
   cutCells,
   dashAgents,
   fileGroupsOf,
+  filesFoldOf,
+  figuresFoldOf,
   firstLine,
   fitPath,
   flat,
+  goalFoldOf,
   goalRest,
   kpisOf,
   modelLine,
@@ -92,6 +105,7 @@ import {
   edgesOf,
   faces,
   facesCells,
+  foldHead,
   glyph,
   glyphCells,
   icon,
@@ -103,7 +117,7 @@ import {
   pressText,
   quiet,
   rule,
-  sectionHead,
+  sectionFold,
   statusPill,
   svgOf,
   tag,
@@ -112,6 +126,7 @@ import {
   tickTexts,
   widthFor,
   wrapAdvanceOf,
+  type Fold,
 } from './parts'
 
 /** From this many cells the KPI boxes go four a row; two below. */
@@ -130,20 +145,40 @@ function isAiry(kit: Kit): boolean {
   return kit.surface !== 'terminal'
 }
 
-/** The tab: what needs you, the goal, the agents, the figures, the activity and the files; and the web deck's button. */
-export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, now: number, web: WebPane | null): RenderElement {
+/**
+ * The tab: what needs you, the goal, the agents, the figures, the activity
+ * and the files, each folded to its head where `collapsed` (the view's
+ * `DeckView.collapsed`) holds its FOLD id; and the web deck's button.
+ */
+export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, now: number, web: WebPane | null, collapsed: readonly string[] = []): RenderElement {
   const { Box } = kit
   return (
     <Box flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
       {needsCards(kit, state, actions, now, 'dash')}
       {needsBanner(kit, state, actions)}
-      {goalCard(kit, state, now, actions)}
-      {agentsSection(kit, state, actions, now)}
-      {kpiStrip(kit, state)}
-      {listsOf(kit, state, actions, now, web !== null)}
+      {goalSection(kit, state, now, actions, sectionFold(collapsed, FOLD.goal, goalFoldOf(state)))}
+      {agentsSection(kit, state, actions, now, sectionFold(collapsed, FOLD.agents, agentsFoldOf(state)))}
+      {figuresSection(kit, state, actions, sectionFold(collapsed, FOLD.figures, figuresFoldOf(state)))}
+      {listsOf(kit, state, actions, now, web !== null, collapsed)}
       {web ? webBlock(kit, web, actions) : null}
     </Box>
   )
+}
+
+/** A section as the Dashboard stacks it: its head, then (while open) what it holds, half a line apart where the surface lays gaps out in half lines. */
+function section(kit: Kit, key: string, head: RenderElement, body: RenderElement | null, width?: number): RenderElement {
+  const { Box } = kit
+  return (
+    <Box key={key} flexDirection="column" rowGap={isAiry(kit) ? 1 : 0} {...(width === undefined ? {} : { width })}>
+      {head}
+      {body}
+    </Box>
+  )
+}
+
+/** The goal under its head, "▾ GOAL"; folded, the head and "· <headline> · Step 2 of 5". */
+function goalSection(kit: Kit, state: WebState, now: number, actions: DashActions, fold: Fold): RenderElement {
+  return section(kit, 'dash:goal:section', foldHead(kit, fold, 'Goal', null, actions), fold.isOpen ? goalCard(kit, state, now, actions) : null)
 }
 
 /** The plan's bar: the steps as one rounded segment each where Svg draws (the slot's width), else a run of cells a step in its colour. */
@@ -254,11 +289,12 @@ function cardOf(kit: Kit, state: WebState, agent: WebAgent, width: number): Card
 }
 
 /**
- * The agents: their count and the way to the org chart, then their cards in
+ * The agents: their head ("▾ AGENTS 7", a press folds them to it and how
+ * many run, wait and so on) and the way to the org chart, then their cards in
  * rows of as many as fit (`cardsPerRow`), every card in a row as wide, and as
  * tall: each body padded to the row's longest, one line or two.
  */
-function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: number): RenderElement {
+function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: number, fold: Fold): RenderElement {
   const { Box, Button } = kit
   const { shown, hidden } = dashAgents(state)
   const perRow = cardsPerRow(kit.columns)
@@ -267,9 +303,11 @@ function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: num
   const cards = shown.map(agent => cardOf(kit, state, agent, width))
   const rows: CardModel[][] = []
   for (let i = 0; i < cards.length; i += perRow) rows.push(cards.slice(i, i + perRow))
+  const head = foldHead(kit, fold, 'Agents', state.agents.length, actions, link)
+  if (!fold.isOpen) return section(kit, 'dash:agents', head, null)
   return (
     <Box key="dash:agents" flexDirection="column" rowGap={isAiry(kit) ? 1 : 0}>
-      {sectionHead(kit, 'Agents', state.agents.length, link)}
+      {head}
       {shown.length === 0 ? (
         quiet(kit, 'No agents yet: when Claude Code starts working, the Orchestrator and the agents it delegates to show up here.')
       ) : (
@@ -435,6 +473,11 @@ function cardFoot(kit: Kit, agent: WebAgent, inner: number, now: number, open: (
 const KPI_ICON: Readonly<Record<string, IconName>> = { running: 'bot', plan: 'listChecks', spend: 'dollar', waiting: 'hand' }
 const KPI_HUE = mix(P.muted, P.card, 0.5)
 
+/** The figures under their head, "▾ FIGURES"; folded, the head and each one's value in a few words. */
+function figuresSection(kit: Kit, state: WebState, actions: DashActions, fold: Fold): RenderElement {
+  return section(kit, 'dash:figures', foldHead(kit, fold, 'Figures', null, actions), fold.isOpen ? kpiStrip(kit, state) : null)
+}
+
 /** The four figures, each in a bordered box: four a row where the pane is wide enough, else two. */
 function kpiStrip(kit: Kit, state: WebState): RenderElement {
   const { Box, Text } = kit
@@ -464,22 +507,24 @@ function kpiStrip(kit: Kit, state: WebState): RenderElement {
 
 // Recent activity and Files.
 
-/** Recent activity and Files: side by side in a pane of SIDE_BY_SIDE cells or more, each half of it, as the web's two columns; one under the other below. */
-function listsOf(kit: Kit, state: WebState, actions: DashActions, now: number, hasChanges: boolean): RenderElement {
+/** Recent activity and Files: side by side in a pane of SIDE_BY_SIDE cells or more, each half of it, as the web's two columns; one under the other below. Each folds by its head on its own. */
+function listsOf(kit: Kit, state: WebState, actions: DashActions, now: number, hasChanges: boolean, collapsed: readonly string[]): RenderElement {
   const { Box } = kit
+  const activity = sectionFold(collapsed, FOLD.activity, activityFoldOf(state, now, MOST_CALLS))
+  const files = sectionFold(collapsed, FOLD.files, filesFoldOf(state))
   if (kit.columns + 1 >= SIDE_BY_SIDE) {
     const half = Math.floor((kit.columns - 2) / 2)
     return (
       <Box flexDirection="row" columnGap={2} alignItems="flex-start">
-        {activitySection(kit, state, actions, now, half)}
-        {filesSection(kit, state, actions, hasChanges, half)}
+        {activitySection(kit, state, actions, now, half, activity)}
+        {filesSection(kit, state, actions, hasChanges, half, files)}
       </Box>
     )
   }
   return (
     <Box flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
-      {activitySection(kit, state, actions, now, kit.columns)}
-      {filesSection(kit, state, actions, hasChanges, kit.columns)}
+      {activitySection(kit, state, actions, now, kit.columns, activity)}
+      {filesSection(kit, state, actions, hasChanges, kit.columns, files)}
     </Box>
   )
 }
@@ -514,22 +559,20 @@ const OUTCOME_HUE: Readonly<Record<ActivityRow['outcome']['tone'], string>> = { 
 const OUTCOME = 9
 const TIME = 4
 
-/** Recent activity: the newest ten calls of every agent, newest first, in a bordered list. */
-function activitySection(kit: Kit, state: WebState, actions: DashActions, now: number, width: number): RenderElement {
-  const { Box } = kit
+/** Recent activity: the newest ten calls of every agent, newest first, in a bordered list; folded, its head and the newest call. */
+function activitySection(kit: Kit, state: WebState, actions: DashActions, now: number, width: number, fold: Fold): RenderElement {
+  const head = foldHead(kit, fold, 'Recent activity', null, actions)
+  if (!fold.isOpen) return section(kit, 'dash:activity', head, null, width)
   const rows = activityRows(state, MOST_CALLS)
-  return (
-    <Box key="dash:activity" flexDirection="column" width={width} rowGap={isAiry(kit) ? 1 : 0}>
-      {sectionHead(kit, 'Recent activity', null)}
-      {rows.length === 0
-        ? quiet(kit, "No tool calls yet: every agent's tool calls show here as they happen.")
-        : listBox(
-            kit,
-            'dash:calls',
-            rows.flatMap((row, i) => [i > 0 ? rule(kit) : null, activityRow(kit, state, row, actions, now, width)]),
-          )}
-    </Box>
-  )
+  const body =
+    rows.length === 0
+      ? quiet(kit, "No tool calls yet: every agent's tool calls show here as they happen.")
+      : listBox(
+          kit,
+          'dash:calls',
+          rows.flatMap((row, i) => [i > 0 ? rule(kit) : null, activityRow(kit, state, row, actions, now, width)]),
+        )
+  return section(kit, 'dash:activity', head, body, width)
 }
 
 /**
@@ -599,12 +642,15 @@ const outsideRow = { isOpen: false }
  * Files, as the web's FILES card: its count the repository's files, and
  * "Changes →" beside its head where this session's Changes tab can show them
  * (`hasChanges`: not in the sample). The ten of the repository edited last,
- * then one dim row, "n files outside the repo", that opens on those.
+ * then one dim row, "n files outside the repo", that opens on those. Folded,
+ * its head and how many are shared, its lines, how many lie outside.
  */
-function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChanges: boolean, width: number): RenderElement {
-  const { Box, Button } = kit
+function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChanges: boolean, width: number, fold: Fold): RenderElement {
+  const { Button } = kit
   const groups = fileGroupsOf(state, MOST_FILES)
   const link = hasChanges && state.files.length > 0 ? <Button key="dash:changes" label="Changes →" plain dimColor onPress={() => actions.setTab('changes')} /> : null
+  const head = foldHead(kit, fold, 'Files', groups.insideCount > 0 ? groups.insideCount : null, actions, link)
+  if (!fold.isOpen) return section(kit, 'dash:files', head, null, width)
   const rows: (RenderElement | null)[] = []
   const add = (row: RenderElement) => {
     if (rows.length > 0) rows.push(rule(kit))
@@ -619,11 +665,12 @@ function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChange
       if (more > 0) add(outsideMore(kit, more))
     }
   }
-  return (
-    <Box key="dash:files" flexDirection="column" width={width} rowGap={isAiry(kit) ? 1 : 0}>
-      {sectionHead(kit, 'Files', groups.insideCount > 0 ? groups.insideCount : null, link)}
-      {state.files.length === 0 ? quiet(kit, 'No files touched yet: the files agents edit show here, with who is on each.') : listBox(kit, 'dash:filelist', rows)}
-    </Box>
+  return section(
+    kit,
+    'dash:files',
+    head,
+    state.files.length === 0 ? quiet(kit, 'No files touched yet: the files agents edit show here, with who is on each.') : listBox(kit, 'dash:filelist', rows),
+    width,
   )
 }
 

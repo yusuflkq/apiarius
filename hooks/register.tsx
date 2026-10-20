@@ -1856,6 +1856,11 @@ function actionsFor($: EngineInterface): DashActions {
       view.planOpen = M.planOpenWith(view.planOpen, id)
       changed($)
     },
+    // a section's head: folded to it and its summary, or open again, drawn at once
+    toggleSection: id => {
+      view.collapsed = M.collapsedWith(view.collapsed, id)
+      changed($)
+    },
     back: () => {
       view.page = ''
       changed($)
