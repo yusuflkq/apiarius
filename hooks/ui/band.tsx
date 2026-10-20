@@ -15,9 +15,8 @@
 import type { RenderElement } from 'claude-code'
 
 import * as F from '../format'
-import { isLive, isShownAgent, labelOf, scopeOf, stepOf, waitPhraseOf, waitsOnYou } from '../model'
+import { isLive, isShownAgent, labelOf, scopeOf, shownStatusOf, stepOf, waitPhraseOf, waitsOnYou } from '../model'
 import { square } from './common'
-import { shownStatusOf } from './outlineModel'
 import { T } from './theme'
 import type { Actions, DeckModel, Kit } from './types'
 

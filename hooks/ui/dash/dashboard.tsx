@@ -54,7 +54,6 @@
 import type { RenderElement } from 'claude-code'
 
 import type { WebAgent, WebState } from '../../web'
-import { webLine } from '../slim'
 import type { DashActions, Kit, WebPane } from '../types'
 import {
   FOLD,
@@ -125,6 +124,7 @@ import {
   tickParts,
   tickTexts,
   widthFor,
+  webLine,
   wrapAdvanceOf,
   type Fold,
 } from './parts'

@@ -97,14 +97,9 @@ export function waitsOnYou(data: DeckData, id: string, isIdleCounted = true): bo
   return M.waitsOnYou(data, id, isIdleCounted)
 }
 
-/** `status` (the agent's `statusOf`) as the deck draws it: a wait on anything but you is work going on, so it runs. */
-function shownOf(data: DeckData, agent: DeckAgent, status: DeckShownStatus): DeckShownStatus {
-  return status === 'waiting' && !waitsOnYou(data, agent.id) ? 'running' : status
-}
-
-/** The status the deck draws for `agent`: `statusOf`, save that waiting (ochre) is only ever the one that waits on you. */
+/** The status the deck draws for `agent` (the model's own, `M.shownStatusOf`): waiting only ever for the one that waits on you. */
 export function shownStatusOf(agent: DeckAgent, data: DeckData): DeckShownStatus {
-  return shownOf(data, agent, M.statusOf(agent, data))
+  return M.shownStatusOf(agent, data)
 }
 
 /**
@@ -461,7 +456,7 @@ function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected
   if (node.kind === 'orchestrator') {
     const main = node.agent
     const status = main ? statusIn(main, data) : 'idle'
-    return { ...base, status: main ? shownOf(data, main, status) : status, label: M.ORCHESTRATOR, ...orchestratorNoteOf(data, node, main, status) }
+    return { ...base, status: main ? shownStatusOf(main, data) : status, label: M.ORCHESTRATOR, ...orchestratorNoteOf(data, node, main, status) }
   }
   if (node.kind === 'step' && node.step) {
     return { ...base, status: STEP_STATUS[node.step.status], label: F.trunc(F.oneLine(node.step.text), STEP_CHARS) }
@@ -477,7 +472,7 @@ function rowOf(data: DeckData, shape: Shape, node: Node, depth: number, selected
   const list = checklistCountOf(agent, data)
   return {
     ...base,
-    status: shownOf(data, agent, status),
+    status: shownStatusOf(agent, data),
     label: labelTextOf(agent),
     count: status === 'done' ? 'done' : list ? `${list.done}/${list.total}` : '',
     minutes: minutesOf(agent, status, now),

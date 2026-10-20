@@ -13,7 +13,6 @@ import type { DeckAgent, DeckData, DeckMessageKind, DeckPending, DeckStepStatus,
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
-import { shownStatusOf } from './ui/outlineModel'
 import type { UsageInfo } from './ui/types'
 
 // The state file (web/CONTRACT.md, v1).
@@ -232,7 +231,7 @@ function kindOf(agent: DeckAgent): WebKind {
 /** The status the page draws: the pane's own (a wait on anything but you is work going on), with a placeholder `starting`. */
 function statusOf(agent: DeckAgent, data: DeckData): WebStatus {
   if (agent.status === 'starting') return 'starting'
-  return shownStatusOf(agent, data)
+  return M.shownStatusOf(agent, data)
 }
 
 /**

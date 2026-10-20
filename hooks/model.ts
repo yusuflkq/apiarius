@@ -1597,6 +1597,16 @@ export function waitsOnYou(data: DeckData, id: string, isIdleCounted = true): bo
   return needs !== undefined && (needs.agent ?? MAIN) === id && (isIdleCounted || needs.kind !== 'idle_prompt')
 }
 
+/**
+ * The status every screen draws for `agent`: `statusOf`, save that waiting
+ * (amber) is only ever the one the engine waits on you for. A loop held on
+ * anything else (its own background work) is work going on: it runs.
+ */
+export function shownStatusOf(agent: DeckAgent, data: DeckData): DeckShownStatus {
+  const status = statusOf(agent, data)
+  return status === 'waiting' && !waitsOnYou(data, agent.id) ? 'running' : status
+}
+
 /** An AskUserQuestion call's questions as one message: each its own paragraph. */
 export function questionsTextOf(questions: readonly DeckQuestion[]): string {
   return questions

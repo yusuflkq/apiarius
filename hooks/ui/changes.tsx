@@ -11,15 +11,50 @@
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckEdit } from '../../types'
+import type { DeckData, DeckEdit } from '../../types'
 import { codeSourcesOf, filePatchesOf, hunksOf, type Hunk } from '../diff'
 import * as F from '../format'
 import type { Commit, CommitDetail, FileCode, FileRow, GitRepo } from '../git'
-import { agentOf, editorsOf, labelOf } from '../model'
+import { MAIN, ORCHESTRATOR, agentOf, editorsOf, labelOf } from '../model'
 import { delta, square } from './common'
-import { editorsText } from './files'
 import { NATIVE_TEXT, T } from './theme'
 import type { Actions, DeckModel, Kit } from './types'
+
+// Editors: who edited something, said the same everywhere (Files, a step's files, Changes).
+
+/** The label the deck gives an editor: its agent's, the Orchestrator's, else a short form of the id. */
+export function editorLabel(data: DeckData, id: string): string {
+  const agent = agentOf(data, id)
+  if (agent) return labelOf(agent)
+  if (id === MAIN) return ORCHESTRATOR
+  return F.trunc(id.replace(/^peer:/, ''), 18)
+}
+
+/**
+ * Labels joined with " + ", a leading word they all share said once
+ * ("Phase B", "Phase C" is "Phase B + C"); past three, "+N".
+ */
+export function joinLabels(labels: readonly string[]): string {
+  const shown = labels.slice(0, 3)
+  const extra = labels.length - shown.length
+  const words = shown.map(label => label.split(' '))
+  const first = words[0] ?? []
+  let common = 0
+  while (shown.length > 1 && words.every(one => one.length > common + 1 && one[common] === first[common])) common += 1
+  const parts = shown.map((label, i) => (i === 0 || common === 0 ? label : (words[i] ?? []).slice(common).join(' ')))
+  return `${parts.join(' + ')}${extra > 0 ? ` +${extra}` : ''}`
+}
+
+/**
+ * Who edited something, as every list of editors says it (Files, a step's
+ * files, Changes): the editors in spawn order (the outline's), each once,
+ * joined by `joinLabels`.
+ */
+export function editorsText(data: DeckData, ids: readonly string[]): string {
+  const order = new Map(data.agents.map((agent, i) => [agent.id, i] as const))
+  const ranked = [...new Set(ids)].map((id, i) => ({ id, rank: order.get(id) ?? data.agents.length + i }))
+  return joinLabels(ranked.sort((a, b) => a.rank - b.rank).map(one => editorLabel(data, one.id)))
+}
 
 /** How much one drawing shows: diff characters (the open file's and the open commit's together) and rows of each list. */
 type Limits = { diffChars: number; files: number; commits: number; commitFiles: number; edits: number }

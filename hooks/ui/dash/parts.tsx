@@ -24,7 +24,8 @@ import type { RenderElement } from 'claude-code'
 
 import type { DeckAgentPane } from '../../../types'
 import type { WebState } from '../../web'
-import type { DashActions, Kit } from '../types'
+import { T } from '../theme'
+import type { DashActions, Kit, WebPane } from '../types'
 import { firstPaneOf, monoAdvance, ticks, uiAdvance, uiWrapAdvance, type Advance, type TickPart } from './dashModel'
 import { P, PILL_HEIGHT, avatarColor, avatarSvg, glyphOf, iconSvg, pillSvg, pillWidth, ruleSvg, stackSvg, stackWidth, tagSvg, tagWidth, toneOf, type IconName } from './palette'
 
@@ -424,4 +425,20 @@ export function pressLine(kit: Kit, key: string, parts: RenderElement[], onPress
       </Box>
     </Box>
   )
+}
+
+/** The web deck's state in one line: nothing while it is off (the Dashboard's Open in browser shows it too). */
+export function webLine(kit: Kit, web: WebPane): RenderElement | null {
+  const { Text, Markdown } = kit
+  if (web.status === 'starting') return <Text dimColor>Starting the dashboard…</Text>
+  if (web.status === 'failed') {
+    return (
+      <Text color={T.err} wrap="wrap">
+        {web.note || 'The dashboard could not start.'}
+      </Text>
+    )
+  }
+  if (web.status !== 'running' || web.url === '') return null
+  if (web.opened === 'opened') return <Text dimColor>Open in the Browser pane · /deck web stop ends it</Text>
+  return <Markdown key="web:link" text={`[Open Agent Deck](${web.url}) in the Browser pane`} />
 }

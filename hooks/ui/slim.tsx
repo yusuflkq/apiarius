@@ -19,6 +19,7 @@ import { agentLineOf } from '../web'
 import { emptyLine, square } from './common'
 import { goalChars, needsLine } from './outline'
 import { headerOf, shownStatusOf, type HeaderVM } from './outlineModel'
+import { webLine } from './dash/parts'
 import { T } from './theme'
 import type { Actions, DeckModel, Kit, WebPane } from './types'
 
@@ -171,18 +172,3 @@ export function dashboardBlock(kit: Kit, web: WebPane | undefined, actions: Acti
   )
 }
 
-/** The web deck's state in one line: nothing while it is off (the Dashboard's Open in browser shows it too). */
-export function webLine(kit: Kit, web: WebPane): RenderElement | null {
-  const { Text, Markdown } = kit
-  if (web.status === 'starting') return <Text dimColor>Starting the dashboard…</Text>
-  if (web.status === 'failed') {
-    return (
-      <Text color={T.err} wrap="wrap">
-        {web.note || 'The dashboard could not start.'}
-      </Text>
-    )
-  }
-  if (web.status !== 'running' || web.url === '') return null
-  if (web.opened === 'opened') return <Text dimColor>Open in the Browser pane · /deck web stop ends it</Text>
-  return <Markdown key="web:link" text={`[Open Agent Deck](${web.url}) in the Browser pane`} />
-}

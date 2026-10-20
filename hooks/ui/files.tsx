@@ -31,10 +31,13 @@ import type { DeckData, DeckShownStatus } from '../../types'
 import * as F from '../format'
 import type { GitState } from '../git'
 import * as M from '../model'
+import { editorLabel, editorsText, joinLabels } from './changes'
 import { delta, rail, square } from './common'
 import { waitsOnYou } from './outlineModel'
 import { T } from './theme'
 import type { Actions, Kit } from './types'
+
+export { editorLabel, editorsText, joinLabels }
 
 /** The most file rows the section shows; the rest are counted, and Changes lists them all. */
 export const ROWS = 6
@@ -129,40 +132,6 @@ export function isEditOf(edit: { path: string; abs: string }, path: string, abs 
 }
 
 // 2. The rows.
-
-/** The label the deck gives an editor: its agent's, the Orchestrator's, else a short form of the id. */
-export function editorLabel(data: DeckData, id: string): string {
-  const agent = M.agentOf(data, id)
-  if (agent) return M.labelOf(agent)
-  if (id === M.MAIN) return M.ORCHESTRATOR
-  return F.trunc(id.replace(/^peer:/, ''), 18)
-}
-
-/**
- * Labels joined with " + ", a leading word they all share said once
- * ("Phase B", "Phase C" is "Phase B + C"); past three, "+N".
- */
-export function joinLabels(labels: readonly string[]): string {
-  const shown = labels.slice(0, 3)
-  const extra = labels.length - shown.length
-  const words = shown.map(label => label.split(' '))
-  const first = words[0] ?? []
-  let common = 0
-  while (shown.length > 1 && words.every(one => one.length > common + 1 && one[common] === first[common])) common += 1
-  const parts = shown.map((label, i) => (i === 0 || common === 0 ? label : (words[i] ?? []).slice(common).join(' ')))
-  return `${parts.join(' + ')}${extra > 0 ? ` +${extra}` : ''}`
-}
-
-/**
- * Who edited something, as every list of editors says it (Files, a step's
- * files, Changes): the editors in spawn order (the outline's), each once,
- * joined by `joinLabels`.
- */
-export function editorsText(data: DeckData, ids: readonly string[]): string {
-  const order = new Map(data.agents.map((agent, i) => [agent.id, i] as const))
-  const ranked = [...new Set(ids)].map((id, i) => ({ id, rank: order.get(id) ?? data.agents.length + i }))
-  return joinLabels(ranked.sort((a, b) => a.rank - b.rank).map(one => editorLabel(data, one.id)))
-}
 
 /** The square a file shows: waiting while the agent on it waits on you, running while one is at work; null while none is on it. */
 export function fileStatusOf(data: DeckData, live: readonly string[]): DeckShownStatus | null {
