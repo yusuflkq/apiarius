@@ -20,15 +20,16 @@
  *   in its hue under the pointer, "Open →" lit with it;
  * - the KPI strip: agents running, plan steps, session spend, waiting on you;
  * - recent activity and files, each a bordered list with a rule between its
- *   rows. The newest ten calls: the agent's face and name, the verb dim, the
- *   target; how it went and when in columns at the right; a press opens the
- *   agent on its Activity. The ten files of the repository edited last: the
- *   folder dim and the name bright, a live dot, "shared", the editors' faces,
- *   +a −r; a press opens the file in Changes where Changes lists it, else the
- *   Diffs of the agent that edited it last (always so in the sample, which
- *   has no Changes of its own). Then one dim row, "n files outside the
- *   repo", that opens on those (`isOutside`: mostly scratch and temp files,
- *   each by its last two parts);
+ *   rows, side by side from 120 cells as the web's two columns, one under the
+ *   other below. The newest ten calls: the agent's face and name, the verb
+ *   dim, the target; how it went and when in columns at the right; a press
+ *   opens the agent on its Activity. The ten files of the repository edited
+ *   last: the folder dim and the name bright, a live dot, "shared", the
+ *   editors' faces, +a −r; a press opens the file in Changes where Changes
+ *   lists it, else the Diffs of the agent that edited it last (always so in
+ *   the sample, which has no Changes of its own). Then one dim row, "n files
+ *   outside the repo", that opens on those (`isOutside`: mostly scratch and
+ *   temp files, each by its last two parts);
  * - Open in browser, the web deck one press away (not in the sample).
  *
  * A desktop draws a plain Button's label alone, in its own ink, so the
@@ -116,6 +117,9 @@ import {
 /** From this many cells the KPI boxes go four a row; two below. */
 export const WIDE = 60
 
+/** From a pane this many cells wide (the tab drawn a cell narrower) Recent activity and Files sit side by side, as the web's two columns; one under the other below. */
+export const SIDE_BY_SIDE = 120
+
 /**
  * Whether `kit` lays its gaps out in half lines (a desktop: a gap of one is
  * half a line, about the web's 10 to 12 px), so cards and lists may breathe
@@ -130,14 +134,13 @@ function isAiry(kit: Kit): boolean {
 export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, now: number, web: WebPane | null): RenderElement {
   const { Box } = kit
   return (
-    <Box flexDirection="column" gap={1}>
+    <Box flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
       {needsCards(kit, state, actions, now, 'dash')}
       {needsBanner(kit, state, actions)}
       {goalCard(kit, state, now, actions)}
       {agentsSection(kit, state, actions, now)}
       {kpiStrip(kit, state)}
-      {activitySection(kit, state, actions, now, kit.columns)}
-      {filesSection(kit, state, actions, web !== null, kit.columns)}
+      {listsOf(kit, state, actions, now, web !== null)}
       {web ? webBlock(kit, web, actions) : null}
     </Box>
   )
@@ -265,7 +268,7 @@ function agentsSection(kit: Kit, state: WebState, actions: DashActions, now: num
   const rows: CardModel[][] = []
   for (let i = 0; i < cards.length; i += perRow) rows.push(cards.slice(i, i + perRow))
   return (
-    <Box key="dash:agents" flexDirection="column">
+    <Box key="dash:agents" flexDirection="column" rowGap={isAiry(kit) ? 1 : 0}>
       {sectionHead(kit, 'Agents', state.agents.length, link)}
       {shown.length === 0 ? (
         quiet(kit, 'No agents yet: when Claude Code starts working, the Orchestrator and the agents it delegates to show up here.')
@@ -461,6 +464,26 @@ function kpiStrip(kit: Kit, state: WebState): RenderElement {
 
 // Recent activity and Files.
 
+/** Recent activity and Files: side by side in a pane of SIDE_BY_SIDE cells or more, each half of it, as the web's two columns; one under the other below. */
+function listsOf(kit: Kit, state: WebState, actions: DashActions, now: number, hasChanges: boolean): RenderElement {
+  const { Box } = kit
+  if (kit.columns + 1 >= SIDE_BY_SIDE) {
+    const half = Math.floor((kit.columns - 2) / 2)
+    return (
+      <Box flexDirection="row" columnGap={2} alignItems="flex-start">
+        {activitySection(kit, state, actions, now, half)}
+        {filesSection(kit, state, actions, hasChanges, half)}
+      </Box>
+    )
+  }
+  return (
+    <Box flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
+      {activitySection(kit, state, actions, now, kit.columns)}
+      {filesSection(kit, state, actions, hasChanges, kit.columns)}
+    </Box>
+  )
+}
+
 /** A list as the web's `.card.list`: a bordered box its rows fill edge to edge (each row its own padding, so its hover wash reaches the edge), a rule between them. */
 function listBox(kit: Kit, key: string, rows: readonly (RenderElement | null)[]): RenderElement {
   const { Box } = kit
@@ -496,7 +519,7 @@ function activitySection(kit: Kit, state: WebState, actions: DashActions, now: n
   const { Box } = kit
   const rows = activityRows(state, MOST_CALLS)
   return (
-    <Box key="dash:activity" flexDirection="column" width={width}>
+    <Box key="dash:activity" flexDirection="column" width={width} rowGap={isAiry(kit) ? 1 : 0}>
       {sectionHead(kit, 'Recent activity', null)}
       {rows.length === 0
         ? quiet(kit, "No tool calls yet: every agent's tool calls show here as they happen.")
@@ -597,7 +620,7 @@ function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChange
     }
   }
   return (
-    <Box key="dash:files" flexDirection="column" width={width}>
+    <Box key="dash:files" flexDirection="column" width={width} rowGap={isAiry(kit) ? 1 : 0}>
       {sectionHead(kit, 'Files', groups.insideCount > 0 ? groups.insideCount : null, link)}
       {state.files.length === 0 ? quiet(kit, 'No files touched yet: the files agents edit show here, with who is on each.') : listBox(kit, 'dash:filelist', rows)}
     </Box>

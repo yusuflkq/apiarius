@@ -3,9 +3,11 @@
  * `Dashboard`): agent cards in rows of as many as fit (two at the docked
  * pane's 68 to 84 cells, up to six), each row's cards as wide and as tall;
  * a card as the web's run card (its head, its step box, its now line, its
- * foot); Recent activity and Files as bordered lists; the files outside the
- * repository folded into one dim row. A desktop's text is fitted in its own
- * proportional face, so the width model is checked too.
+ * foot); Recent activity and Files as bordered lists, side by side from a
+ * 120-cell pane; the files outside the repository folded into one dim row;
+ * and the whole within what a desktop draws (it drops a drawing of 2000
+ * elements or more). A desktop's text is fitted in its own proportional
+ * face, so the width model is checked too.
  */
 import type { On, RenderElement } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -373,6 +375,64 @@ test('the files outside the repository fold into one dim row after the repositor
   await ui.unmount()
   expect(shortPath('C:/Users/me/scratchpad/talk/msg2.txt')).toEqual({ dir: '…/talk/', name: 'msg2.txt' })
   expect(shortPath('/tmp/a.txt')).toEqual({ dir: '/tmp/', name: 'a.txt' })
+})
+
+test('Recent activity and Files sit side by side from a 120-cell pane, each half of it, as the web`s two columns; one under the other below', async ($, on) => {
+  const state = stateOf()
+  probe(on, kit => dashboardTab(kit, state, noting([]), NOW, null))
+  await started($, on)
+  for (const surface of SURFACES) {
+    for (const paneCells of [84, 119, 120, 160]) {
+      const ui = await $.ui.mount(pane(surface, paneCells))
+      const drawn = await ui.drawn()
+      const activity = keyed(drawn, 'dash:activity')
+      const files = keyed(drawn, 'dash:files')
+      const parent = allOf(drawn, 'Box').find(box => kids(box).includes(activity as Element))
+      expect(kids(parent).includes(files as Element)).toBe(true)
+      const isSide = paneCells >= 120
+      expect(parent?.props?.flexDirection).toBe(isSide ? 'row' : 'column')
+      const width = isSide ? Math.floor((paneCells - 1 - 2) / 2) : paneCells - 1
+      expect([activity?.props?.width, files?.props?.width]).toEqual([width, width])
+      await ui.unmount()
+    }
+  }
+})
+
+/** What a desktop counts of a drawn tree before it draws it: every element and string a node, the deepest path, every character of strings and props. */
+function budgetOf(tree: unknown): { nodes: number; depth: number; chars: number } {
+  if (typeof tree === 'string') return { nodes: 1, depth: 1, chars: tree.length }
+  if (!tree || typeof tree !== 'object') return { nodes: 1, depth: 1, chars: 0 }
+  const node = tree as Element
+  let nodes = 1
+  let depth = 1
+  let chars = JSON.stringify(node.props ?? {}).length + JSON.stringify(node.hover ?? {}).length
+  for (const child of node.children ?? []) {
+    const one = budgetOf(child)
+    nodes += one.nodes
+    depth = Math.max(depth, one.depth + 1)
+    chars += one.chars
+  }
+  return { nodes, depth, chars }
+}
+
+test('the Dashboard stays well inside what a desktop draws (it drops a drawing of 2000 elements, 32 deep or 262144 characters): twelve agents, ten calls, ten files and the twenty newest of forty outside the repository open', async ($, on) => {
+  const data = lookData(12)
+  for (let i = 0; i < 12; i++) M.addEdit(data, M.agentOf(data, 'agent-fixer')!, { id: `x${i}`, agent: 'agent-fixer', tool: 'Edit', path: `src/deep/folder/file${i}.ts`, abs: `/repo/src/deep/folder/file${i}.ts`, at: NOW - 90_000 + i * 1000, added: i + 1, removed: i, patch: '@@ -1 +1 @@\n-a\n+b', isNew: false })
+  const state = withOutside(stateOf(data), 40)
+  probe(on, kit => dashboardTab(kit, state, noting([]), NOW, null))
+  await started($, on)
+  for (const paneCells of [68, 244]) {
+    const ui = await $.ui.mount(pane('desktop', paneCells))
+    await ui.press({ plugin: 'test', key: 'dash:files:outside' })
+    await ui.redraw()
+    expect((await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('dash:file:')).length).toBe(30)
+    const budget = budgetOf(await ui.drawn())
+    expect(budget.nodes < 1600).toBe(true)
+    expect(budget.depth < 20).toBe(true)
+    expect(budget.chars < 200_000).toBe(true)
+    await ui.press({ plugin: 'test', key: 'dash:files:outside' })
+    await ui.unmount()
+  }
 })
 
 test('a desktop`s text is fitted in its own face: Anthropic Sans at 13 px, a cell its "0"; cut and laid into lines by it, never past the room; the terminal a cell a character', () => {
