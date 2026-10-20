@@ -3,8 +3,9 @@
  * (web/app.css, web/app.js) so the pane and the page look alike: neutral
  * greys for structure, colour only for status, tinted pills, the status
  * glyphs, and the ten gradient persona avatars (a gumdrop with a small face,
- * indexed by `WebAgent.avatar`); and the web's status pill as an SVG document
- * a desktop draws as an image.
+ * indexed by `WebAgent.avatar`); and the web's small shapes as SVG documents
+ * a desktop draws as images: a status pill, the amber tag, a stack of faces,
+ * a list's 1 px rule.
  *
  * Native Text and Box take these hex values as given. Nothing here paints
  * the pane's own background: the host's dark theme shows through.
@@ -44,11 +45,13 @@ export const P = {
   waitNote: '#fde68a',
   /** A question's header chip. */
   chip: '#262626',
-  /** The pane's own ground as the desktop's dark theme draws it: for mixing only (the idle glyph's grey). */
+  /** The pane's own ground as the desktop's dark theme draws it: for mixing only (the idle glyph's grey, a face's ring in a stack). */
   ground: '#1a1a1a',
   /** An agent card's step box: a shade lighter than the pane, and its soft edge. */
   stepBox: '#212121',
   stepEdge: '#2e2e2e',
+  /** A list row under the pointer: the web's hover wash over the pane. */
+  rowHover: '#222222',
   /** An idle agent's status dot (the web's `.avd-dot.hue-idle`). */
   idleDot: '#6b7075',
 } as const
@@ -181,7 +184,7 @@ export function avatarSvg(avatar: number, px: number, dot?: string): string {
   return svg
 }
 
-// The web's status pill as an image.
+// The web's small shapes as images: a status pill, a tag, a stack of faces, a row's divider.
 
 const shapeMemo = new Map<string, string>()
 
@@ -226,6 +229,72 @@ export function pillSvg(word: string, hue: string): string {
       '</svg>',
     ].join(''),
   )
+}
+
+/** The px a tag of `word` takes across: its words at 11 px and 8 px either side, as the web's `.tag`. */
+export function tagWidth(word: string): number {
+  return Math.round(Array.from(word).length * 6.4 + 18)
+}
+
+/** A tag as the web's `.tag-wait` (a file more than one agent edited, "shared"): its word in amber on a 12% amber wash, fully rounded, 20 px high. */
+export function tagSvg(word: string): string {
+  const width = tagWidth(word)
+  const height = 20
+  return memo(`tag|${word}`, () =>
+    [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<rect width="${width}" height="${height}" rx="${height / 2}" fill="${P.wait}" fill-opacity=".12"/>`,
+      `<text x="${width / 2}" y="14" text-anchor="middle" font-size="11" font-weight="500" fill="${P.waitText}">${esc(word)}</text>`,
+      '</svg>',
+    ].join(''),
+  )
+}
+
+/** The px a stack of `n` faces `px` square takes across: each after the first 5 px over the one before. */
+export function stackWidth(n: number, px: number): number {
+  return n <= 0 ? 0 : px + (n - 1) * (px - 5)
+}
+
+/**
+ * The editors' faces stacked as the web's `.stack`: each `px` square, each
+ * after the first 5 px over the one before, ringed in the pane's ground so
+ * they read apart; an editor the state does not hold (null) a grey disc, as
+ * the web's ghost. One document, a gradient a face.
+ */
+export function stackSvg(avatars: readonly (number | null)[], px: number): string {
+  const indices = avatars.map(one => (one === null ? null : avatarIndex(one)))
+  return memo(`stack|${px}|${indices.map(i => i ?? '-').join(',')}`, () => {
+    const width = stackWidth(indices.length, px)
+    const scale = px / 32
+    const ring = (3 / scale).toFixed(2)
+    const stops = indices.map((i, j) => {
+      const [top, bottom] = (i === null ? undefined : AVATARS[i]) ?? ['#888888', '#444444']
+      return `<linearGradient id="g${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`
+    })
+    const faces = indices.map((i, j) => {
+      if (i === null) return `<g transform="translate(${j * (px - 5)} 0) scale(${scale})"><circle cx="16" cy="16" r="12.4" fill="#262626" stroke="${P.ground}" stroke-width="${ring}" paint-order="stroke"/></g>`
+      const [top, bottom] = AVATARS[i] ?? ['#888888', '#444444']
+      const ink = (luminance(top) + luminance(bottom)) / 2 < 0.18 ? 'rgba(255,255,255,.92)' : 'rgba(23,23,28,.82)'
+      return [
+        `<g transform="translate(${j * (px - 5)} 0) scale(${scale})">`,
+        `<path d="${BLOB}" fill="url(#g${j})" stroke="${P.ground}" stroke-width="${ring}" paint-order="stroke"/><path d="${BLOB}" fill="url(#s)"/>`,
+        `<circle cx="12.3" cy="16.4" r="1.45" fill="${ink}"/><circle cx="19.7" cy="16.4" r="1.45" fill="${ink}"/>`,
+        `<path d="M14.3 20.3q1.7 1.3 3.4 0" fill="none" stroke="${ink}" stroke-width="1.2" stroke-linecap="round"/>`,
+        '</g>',
+      ].join('')
+    })
+    return [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${px}" viewBox="0 0 ${width} ${px}">`,
+      `<defs>${stops.join('')}<linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>`,
+      faces.join(''),
+      '</svg>',
+    ].join('')
+  })
+}
+
+/** A divider between a list's rows, as the web's `.list` rule: a line 1 px high in `color`, drawn wider than any slot so it fills the one it is given. */
+export function ruleSvg(color: string): string {
+  return memo(`rule|${color}`, () => `<svg xmlns="http://www.w3.org/2000/svg" width="4096" height="1" viewBox="0 0 4096 1" preserveAspectRatio="none"><rect width="4096" height="1" fill="${color}"/></svg>`)
 }
 
 /**
@@ -290,6 +359,9 @@ const ICONS: Readonly<Record<string, string>> = {
   circleDashed:
     '<path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/>',
   progress: '<circle cx="12" cy="12" r="10" pathLength="100" stroke-dasharray="78 22"/>',
+  // the Files card's row of files outside the repository: shut, and open
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
 }
 
 /** The icon names the dashboard draws. */
@@ -314,6 +386,8 @@ export type IconName =
   | 'circlePause'
   | 'circleDashed'
   | 'progress'
+  | 'chevronRight'
+  | 'chevronDown'
 
 const iconMemo = new Map<string, string>()
 

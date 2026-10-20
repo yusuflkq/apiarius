@@ -237,9 +237,12 @@ test('the Dashboard`s Recent activity stays as it was: the agent`s name, the ver
   await started($, on, sessionData())
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
+    // each row's words: the name and the target the presses, the verb between them
+    const words = (await ui.findAll({ type: 'Box' })).filter(box => box.key?.startsWith('act:')).map(box => box.text)
+    expect(words[0]).toContain('fixer edited src/token.ts')
+    expect(words[1]).toContain('fixer read src/b.ts')
     const rows = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('dash:act:'))
-    expect(rows[0]?.text).toBe('fixer edited src/token.ts')
-    expect(rows[1]?.text).toBe('fixer read src/b.ts')
+    expect(rows.map(row => row.text).slice(0, 2)).toEqual(['fixer', 'fixer'])
     await ui.press({ key: rows[0]?.key ?? '' })
     await ui.redraw()
     expect((await ui.find({ key: 'detail:activity' }))?.props.dimColor).toBe(false)

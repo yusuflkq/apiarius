@@ -625,7 +625,19 @@ function filesData(): DeckData {
 
 const LIVE_WEB = { status: 'off' as const, url: '', opened: '' as const, note: '' }
 
-test('the Dashboard`s Files: the eight edited last under Recent activity, each its path (folder dim, name bright), a live dot, "shared", its editors` faces and +a −r; "Changes →" beside the head where Changes can show them', async ($, on) => {
+/** Every element of `type` in a drawn tree, depth first. */
+function allOf(tree: unknown, type: string): Element[] {
+  if (!tree || typeof tree !== 'object') return []
+  const node = tree as Element
+  return [...(node.type === type ? [node] : []), ...(node.children ?? []).flatMap(child => allOf(child, type))]
+}
+
+/** Each Text in a drawn tree as its colour and its own words. */
+function textsOf(tree: unknown): [unknown, string][] {
+  return allOf(tree, 'Text').map(text => [text.props?.color, (text.children ?? []).filter(child => typeof child === 'string').join('')])
+}
+
+test('the Dashboard`s Files, as the web`s FILES card: the ten edited last under Recent activity in a bordered list, each its path (its folder dim, its name bright and pressed), a live dot, "shared", its editors` faces and +a −r in green and red; "Changes →" beside the head where Changes can show them', async ($, on) => {
   const state = stateOf(filesData())
   const shared = state.files.find(file => file.path === 'src/shared.ts')!
   // the panel draws what the state says of a file: shared, and an agent at it now
@@ -638,34 +650,37 @@ test('the Dashboard`s Files: the eight edited last under Recent activity, each i
     where.web = LIVE_WEB
     const ui = await $.ui.mount(pane(surface, 84, PROBE))
     const drawn = await ui.drawn()
-    // under Recent activity
-    const tab = keyed(drawn, 'dash:files')
-    expect(tab).toBeDefined()
+    // under Recent activity, in a bordered list
+    expect(keyed(drawn, 'dash:files')).toBeDefined()
     const order = (await ui.findAll({ type: 'Box' })).map(box => box.key)
     expect(order.indexOf('dash:files') > order.findIndex(key => key?.startsWith('act:'))).toBe(true)
-    // the eight edited last, newest first
+    expect((await ui.find({ key: 'dash:filelist' }))?.props).toMatchObject({ borderStyle: 'round', borderColor: P.border })
+    // the ten edited last, newest first
     const rows = (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith('dash:file:'))
-    expect(rows).toEqual(['dash:file:src/shared.ts', 'dash:file:src/deep/folder/file9.ts', 'dash:file:src/token.ts', 'dash:file:src/deep/folder/file8.ts', 'dash:file:src/deep/folder/file7.ts', 'dash:file:src/auth.ts', 'dash:file:src/deep/folder/file6.ts', 'dash:file:src/deep/folder/file5.ts'])
+    expect(rows).toEqual(['src/shared.ts', 'src/deep/folder/file9.ts', 'src/token.ts', 'src/deep/folder/file8.ts', 'src/deep/folder/file7.ts', 'src/auth.ts', 'src/deep/folder/file6.ts', 'src/deep/folder/file5.ts', 'src/deep/folder/file4.ts', 'src/deep/folder/file3.ts'].map(path => `dash:file:${path}`))
     expect((await ui.find({ key: 'dash:files' }))?.text).toContain('FILES')
     expect((await ui.find({ key: 'dash:changes' }))?.props).toMatchObject({ label: 'Changes →', plain: true })
-    // the path: its folder dim, its name bright
-    const path = keyed(drawn, 'dash:file:src/deep/folder/file9.ts')
-    expect((path?.children ?? []).map(child => [(child as Element).props?.color, ((child as Element).children ?? []).join('')])).toEqual([
-      [P.muted2, 'src/deep/folder/'],
-      [P.fg2, 'file9.ts'],
-    ])
+    // the path: its folder dim, its name bright and the press
+    expect(textsOf(keyed(drawn, 'files:src/deep/folder/file9.ts'))).toContainEqual([P.muted2, 'src/deep/folder/'])
+    const name = await ui.find({ key: 'dash:file:src/deep/folder/file9.ts' })
+    expect(name?.text).toBe('file9.ts')
+    expect(name?.props.plain).toBe(true)
     // shared: the tag, a live dot, both editors' faces, its counts green and red
-    const row = await ui.find({ key: 'files:src/shared.ts' })
-    expect(row?.text).toContain(' shared ')
-    expect(row?.text).toContain('●')
-    expect(row?.text).toContain('+5')
-    expect(row?.text).toContain('−1')
+    const row = keyed(drawn, 'files:src/shared.ts')
+    const said = (await ui.find({ key: 'files:src/shared.ts' }))?.text
+    if (surface === 'terminal') expect(said).toContain(' shared ')
+    else expect(allOf(row, 'Svg').map(svg => svg.props?.alt)).toContain('shared')
+    expect(said).toContain('●')
+    expect(textsOf(row)).toContainEqual([P.doneText, '+5'])
+    expect(textsOf(row)).toContainEqual([P.failText, ' −1'])
     expect((await ui.find({ key: 'files:src/token.ts' }))?.text).not.toContain('shared')
-    const stat = keyed(drawn, 'dash:filestat:src/shared.ts')
-    expect((stat?.children ?? []).map(child => (child as Element).props?.color)).toEqual([P.doneText, undefined, P.failText])
     if (surface === 'desktop') {
-      const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar') && svg.props.width === 16)
-      expect(faces.length).toBe(9)
+      // the editors' faces stacked in one image a row, as the web's; the shared file's two in its own
+      const stacks = allOf(keyed(drawn, 'dash:filelist'), 'Svg').filter(svg => svg.props?.height === 16)
+      expect(stacks.length).toBe(10)
+      const faces = allOf(row, 'Svg').find(svg => svg.props?.height === 16)
+      expect(String(faces?.props?.alt)).toContain('helper')
+      expect(String(faces?.props?.alt)).toContain('fixer')
     }
     await ui.unmount()
 
@@ -694,7 +709,6 @@ test('a press on a file opens it in Changes where Changes lists it (git`s uncomm
   // outside a repository: Changes lists every file agents edited; none open first, so a second press never folds it
   const opensInChanges = ['selectFile:""', 'setTab:"changes"', 'selectFile:"src/token.ts"']
   expect(await pressed('dash:file:src/token.ts')).toEqual(opensInChanges)
-  expect(await pressed('dash:filestat:src/token.ts')).toEqual(opensInChanges)
   // in a repository: git's uncommitted files open in Changes; one it no longer lists opens its last editor's Diffs
   state.repo = { name: 'repo', root: '/repo', branch: 'main', ahead: 0, behind: 0, head: 'abc1234' }
   state.changes = [{ path: 'src/token.ts', code: 'M', added: 2, removed: 0, editors: ['agent-fixer'] }]
@@ -704,7 +718,7 @@ test('a press on a file opens it in Changes where Changes lists it (git`s uncomm
   where.web = null
   state.repo = null
   expect(await pressed('dash:file:src/token.ts')).toEqual(['openAgent:"agent-fixer","edits"'])
-  expect(await pressed('dash:filestat:src/shared.ts')).toEqual(['openAgent:"agent-fixer","edits"'])
+  expect(await pressed('dash:file:src/shared.ts')).toEqual(['openAgent:"agent-fixer","edits"'])
 })
 
 test('end to end: a file pressed on the Dashboard opens in Changes, open there each time; in /deck demo it opens the Diffs of the agent that edited it last', async ($, on) => {

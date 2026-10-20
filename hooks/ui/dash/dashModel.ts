@@ -3,7 +3,8 @@
  * `webStateOf` builds it for the page): coarse times and counts worded as
  * the page words them, what waits on you, the agents in card order, how many
  * cards a row and what a card says (its step box, its line, when it ran), the
- * KPI figures, the activity rows, the goal's words after its headline, and the agents as the org chart takes
+ * KPI figures, the activity rows, the files grouped as the web's FILES card,
+ * the goal's words after its headline, and the agents as the org chart takes
  * them; and how much room text takes, a cell a character on the terminal and
  * by the letter in a desktop's proportional face. The page's own helpers (web/app.js)
  * carried over, so the pane and the page always say the same.
@@ -638,8 +639,8 @@ export function verbOf(tool: string, hasTarget: boolean): string {
   return TOOL_VERB[tool] ?? `used ${tool.startsWith('mcp__') ? 'an MCP tool' : tool}${hasTarget ? ' on' : ''}`
 }
 
-/** How a call stands, beside its row: running, waiting on you, failed, or how long it took. */
-export type Outcome = { text: string; tone: 'live' | 'wait' | 'fail' | 'quiet' }
+/** How a call stands, beside its row: running, waiting on you, failed, or how long it took; and the mark before the word, as the agent page's Activity draws it ('' for none). */
+export type Outcome = { text: string; tone: 'live' | 'wait' | 'fail' | 'quiet'; mark: string }
 
 /** One row of Recent activity: who, what it did to what, how it went, when. */
 export type ActivityRow = { key: string; agent: string; name: string; avatar: number | null; verb: string; target: string; isCode: boolean; outcome: Outcome; at: number }
@@ -647,12 +648,12 @@ export type ActivityRow = { key: string; agent: string; name: string; avatar: nu
 function outcomeOf(state: WebState, x: WebState['activity'][number]): Outcome {
   if (x.ok === null || x.ok === undefined) {
     const agent = agentOf(state, x.agent)
-    if (agent?.status === 'waiting') return { text: 'waiting', tone: 'wait' }
-    if (agent && !isLive(agent.status)) return { text: '—', tone: 'quiet' }
-    return { text: 'running', tone: 'live' }
+    if (agent?.status === 'waiting') return { text: 'waiting', tone: 'wait', mark: '◐' }
+    if (agent && !isLive(agent.status)) return { text: '—', tone: 'quiet', mark: '' }
+    return { text: 'running', tone: 'live', mark: '◐' }
   }
-  if (x.ok === false) return { text: 'failed', tone: 'fail' }
-  return { text: msText(x.ms) || 'ok', tone: 'quiet' }
+  if (x.ok === false) return { text: 'failed', tone: 'fail', mark: '✕' }
+  return { text: msText(x.ms) || 'ok', tone: 'quiet', mark: '' }
 }
 
 /** The newest `most` tool calls of every agent, newest first, each keyed by its time, agent and call so a row keeps its key as rows arrive. */
@@ -704,45 +705,89 @@ export type FileRow = {
   lastAt: number
   /** Changes lists it, so a press can open it there: one of git's uncommitted files in a repository; outside one, any file agents edited. */
   inChanges: boolean
+  /** Outside the repository, as the state marks it (`isOutside`): a scratch or temp file. */
+  isOutside: boolean
 }
 
 /** The files agents edited, the one edited last first (ties in the state's order), at most `most`: as the Files panel rows them. */
 export function fileRows(state: WebState, most = 8): FileRow[] {
   const listed = state.repo ? new Set(state.changes.map(change => pathKey(change.path))) : null
+  // who edited each file last, read once: the edits are oldest first
+  const lastEditor = new Map<string, string>()
+  for (const edit of state.edits) lastEditor.set(pathKey(edit.path), edit.agent)
   return state.files
     .map((file, i) => ({ file, i }))
     .sort((a, b) => (b.file.lastAt || 0) - (a.file.lastAt || 0) || a.i - b.i)
     .slice(0, Math.max(0, most))
     .map(({ file }) => {
       const key = pathKey(file.path)
-      const newest = [...state.edits].reverse().find(edit => pathKey(edit.path) === key)
-      const at = Math.max(file.path.lastIndexOf('/'), file.path.lastIndexOf('\\'))
       return {
         path: file.path,
-        dir: at >= 0 ? file.path.slice(0, at + 1) : '',
-        name: at >= 0 ? file.path.slice(at + 1) : file.path,
+        ...splitPath(file.path),
         editors: [...file.editors],
-        editor: newest?.agent ?? file.editors[file.editors.length - 1] ?? '',
+        editor: lastEditor.get(key) ?? file.editors[file.editors.length - 1] ?? '',
         live: file.live === true,
         isShared: file.isShared === true,
         added: file.added || 0,
         removed: file.removed || 0,
         lastAt: file.lastAt || 0,
         inChanges: listed === null || listed.has(key),
+        isOutside: file.isOutside === true,
       }
     })
 }
 
+/** A path split at its last slash: its folder (with the slash; '' at the top) and its name. */
+function splitPath(path: string): { dir: string; name: string } {
+  const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return { dir: at >= 0 ? path.slice(0, at + 1) : '', name: at >= 0 ? path.slice(at + 1) : path }
+}
+
+/** A path outside the repository as the web's `shortPath` shows it: its last two parts after "…/" ("…/talk/msg2.txt"), one of two parts or fewer whole; split as a row shows it. */
+export function shortPath(path: string): { dir: string; name: string } {
+  const parts = String(path ?? '')
+    .split(/[\\/]+/)
+    .filter(part => part !== '')
+  return splitPath(parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : String(path ?? ''))
+}
+
+/** The Files panel's rows as the web's FILES card groups them: the repository's own files, and apart from them those outside it (`isOutside`: mostly scratch and temp files). */
+export type FileGroups = {
+  /** The repository's files, the newest `most`; with no repository, every file agents edited. */
+  inside: FileRow[]
+  /** How many the repository's are: the state's `filesInRepo`, else the rows without `isOutside`. */
+  insideCount: number
+  /** Every file outside the repository, the one edited last first, its path shortened to its last two parts; none with no repository. */
+  outside: FileRow[]
+}
+
+/** The files agents edited, as the Files panel groups them: the repository's own first, those the state marks `isOutside` apart (none with no repository); each the one edited last first. */
+export function fileGroupsOf(state: WebState, most = 10): FileGroups {
+  const all = fileRows(state, Number.POSITIVE_INFINITY)
+  const inside = all.filter(row => !row.isOutside)
+  const filesInRepo = state.summary.filesInRepo
+  return {
+    inside: inside.slice(0, Math.max(0, most)),
+    insideCount: typeof filesInRepo === 'number' ? filesInRepo : inside.length,
+    outside: all.filter(row => row.isOutside).map(row => ({ ...row, ...shortPath(row.path) })),
+  }
+}
+
 /**
- * A row's path fitted to `room` characters: the name whole where it fits,
+ * A row's path fitted to `room` cells (a character each, or as `advance`
+ * has them): the name whole where it fits,
  * its folder cut from the start ("…/stores/") to make room; a name too long
  * on its own cut at its end, with no folder.
  */
-export function fitPath(dir: string, name: string, room: number): { dir: string; name: string } {
-  const nameLength = Array.from(name).length
+export function fitPath(dir: string, name: string, room: number, advance: Advance = monoAdvance): { dir: string; name: string } {
+  const nameCells = cellsOf(name, advance)
   const dirChars = Array.from(dir)
-  if (dirChars.length + nameLength <= room) return { dir, name }
-  if (nameLength >= room - 1) return { dir: '', name: cut(name, Math.max(2, room)) }
-  const keep = room - nameLength - 1
+  const dots = advance('…')
+  if (cellsOf(dir, advance) + nameCells <= room) return { dir, name }
+  if (nameCells >= room - dots) return { dir: '', name: cutCells(name, Math.max(2, room), advance) }
+  // the folder's tail that fits beside the name, after a "…"
+  let keep = 0
+  let used = nameCells + dots
+  while (keep < dirChars.length && used + advance(dirChars[dirChars.length - 1 - keep] ?? '') <= room) used += advance(dirChars[dirChars.length - 1 - keep++] ?? '')
   return { dir: keep > 0 ? `…${dirChars.slice(dirChars.length - keep).join('')}` : '', name }
 }

@@ -19,23 +19,29 @@
  *   page; the edge in the status's hue while it runs, waits or failed, and
  *   in its hue under the pointer, "Open →" lit with it;
  * - the KPI strip: agents running, plan steps, session spend, waiting on you;
- * - recent activity: the newest eight calls, a press opening the agent on
- *   its Activity;
- * - files: the eight edited last, as the web's FILES panel: the path (its
- *   folder dim, its name bright), a live dot, "shared" where two agents
- *   edit it, the editors' faces, +a −r; a press opens the file in Changes
- *   where Changes lists it, else the Diffs of the agent that edited it last
- *   (always so in the sample, which has no Changes of its own);
+ * - recent activity and files, each a bordered list with a rule between its
+ *   rows. The newest ten calls: the agent's face and name, the verb dim, the
+ *   target; how it went and when in columns at the right; a press opens the
+ *   agent on its Activity. The ten files of the repository edited last: the
+ *   folder dim and the name bright, a live dot, "shared", the editors' faces,
+ *   +a −r; a press opens the file in Changes where Changes lists it, else the
+ *   Diffs of the agent that edited it last (always so in the sample, which
+ *   has no Changes of its own). Then one dim row, "n files outside the
+ *   repo", that opens on those (`isOutside`: mostly scratch and temp files,
+ *   each by its last two parts);
  * - Open in browser, the web deck one press away (not in the sample).
  *
  * A desktop draws a plain Button's label alone, in its own ink, so the
- * colours and weights the web gives a card's words sit on Text and images
- * beside the pressable words, not in them, and a line the web draws dim is a
- * dim Button there; its gaps are half lines, so a card breathes as the web's
- * does, where the terminal keeps its lines close. Every time is coarse
+ * colours and weights the web gives its words sit on Text and images beside
+ * the pressable words, not in them, and a line the web draws dim is a dim
+ * Button there. Its gaps are half lines, so cards and lists breathe as the
+ * web's do, where the terminal keeps its lines close; and it draws no tree
+ * of 2000 elements or more, so its lists stay short. Every time is coarse
  * ("4m"), so a redraw a minute is the most time alone asks.
  *
- * Pure: Kit, the state and DashActions come from the hooks module.
+ * Pure but for whether the Files list's row of files outside the repository
+ * is open, kept here while the module lives: Kit, the state and DashActions
+ * come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
@@ -53,7 +59,7 @@ import {
   cut,
   cutCells,
   dashAgents,
-  fileRows,
+  fileGroupsOf,
   firstLine,
   fitPath,
   flat,
@@ -61,6 +67,7 @@ import {
   kpisOf,
   modelLine,
   nameOf,
+  plural,
   runShort,
   runTitle,
   stepLineOf,
@@ -71,7 +78,7 @@ import {
   type TickPart,
 } from './dashModel'
 import { needsBanner, needsCards } from './needs'
-import { P, STEP_HUE, TONE, mix, stepsSvg, toneOf, type IconName } from './palette'
+import { P, STEP_HUE, mix, stepsSvg, toneOf, type IconName } from './palette'
 import {
   AVATAR,
   CARD_CHROME,
@@ -81,6 +88,9 @@ import {
   buttonSlack,
   cellsForPx,
   chromeOf,
+  edgesOf,
+  faces,
+  facesCells,
   glyph,
   glyphCells,
   icon,
@@ -91,9 +101,12 @@ import {
   pressLine,
   pressText,
   quiet,
+  rule,
   sectionHead,
   statusPill,
   svgOf,
+  tag,
+  tagCells,
   tickParts,
   tickTexts,
   widthFor,
@@ -123,8 +136,8 @@ export function dashboardTab(kit: Kit, state: WebState, actions: DashActions, no
       {goalCard(kit, state, now, actions)}
       {agentsSection(kit, state, actions, now)}
       {kpiStrip(kit, state)}
-      {activitySection(kit, state, actions, now)}
-      {filesSection(kit, state, actions, web !== null)}
+      {activitySection(kit, state, actions, now, kit.columns)}
+      {filesSection(kit, state, actions, web !== null, kit.columns)}
       {web ? webBlock(kit, web, actions) : null}
     </Box>
   )
@@ -446,99 +459,187 @@ function kpiStrip(kit: Kit, state: WebState): RenderElement {
   )
 }
 
+// Recent activity and Files.
+
+/** A list as the web's `.card.list`: a bordered box its rows fill edge to edge (each row its own padding, so its hover wash reaches the edge), a rule between them. */
+function listBox(kit: Kit, key: string, rows: readonly (RenderElement | null)[]): RenderElement {
+  const { Box } = kit
+  return (
+    <Box key={key} flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={0} paddingY={0} overflow="hidden">
+      {rows}
+    </Box>
+  )
+}
+
+/** A list's row: its parts in a line, padded so a desktop gives it the web's 48 px, washed under the pointer as the web's rows are. */
+function listRow(kit: Kit, key: string, parts: readonly (RenderElement | null)[]): RenderElement {
+  const { Box } = kit
+  return (
+    <Box key={key} flexDirection="row" columnGap={1} alignItems="center" paddingX={1} paddingY={isAiry(kit) ? 1 : 0} hover={{ backgroundColor: P.rowHover }}>
+      {parts}
+    </Box>
+  )
+}
+
+/** The calls Recent activity shows: the newest ten, as the web's. */
+const MOST_CALLS = 10
+
 /** How a call stands, in its hue: running blue, waiting amber, failed red, the rest dim. */
 const OUTCOME_HUE: Readonly<Record<ActivityRow['outcome']['tone'], string>> = { live: P.runText, wait: P.waitText, fail: P.failText, quiet: P.muted2 }
 
-/** The cells an activity row's outcome and time take at its right. */
-const OUTCOME = 8
+/** The cells an activity row's outcome ("◐ running", "837ms") and age ("12m") take at its right, as the agent page's Activity. */
+const OUTCOME = 9
 const TIME = 4
 
-/** Recent activity: the newest eight calls of every agent, newest first. */
-function activitySection(kit: Kit, state: WebState, actions: DashActions, now: number): RenderElement {
+/** Recent activity: the newest ten calls of every agent, newest first, in a bordered list. */
+function activitySection(kit: Kit, state: WebState, actions: DashActions, now: number, width: number): RenderElement {
   const { Box } = kit
-  const rows = activityRows(state, 8)
+  const rows = activityRows(state, MOST_CALLS)
   return (
-    <Box flexDirection="column">
+    <Box key="dash:activity" flexDirection="column" width={width}>
       {sectionHead(kit, 'Recent activity', null)}
-      {rows.length === 0 ? (
-        quiet(kit, "No tool calls yet: every agent's tool calls show here as they happen.")
-      ) : (
-        <Box flexDirection="column">{rows.map(row => activityRow(kit, state, row, actions, now))}</Box>
-      )}
+      {rows.length === 0
+        ? quiet(kit, "No tool calls yet: every agent's tool calls show here as they happen.")
+        : listBox(
+            kit,
+            'dash:calls',
+            rows.flatMap((row, i) => [i > 0 ? rule(kit) : null, activityRow(kit, state, row, actions, now, width)]),
+          )}
     </Box>
   )
 }
 
-/** One call: the agent's avatar, then its name, the verb and the target as one press that opens the agent; how it went and when at the right. */
-function activityRow(kit: Kit, state: WebState, row: ActivityRow, actions: DashActions, now: number): RenderElement {
+/**
+ * One call, as the web's row: the agent's face, its name (bold where the
+ * surface draws a Button's Text), the verb dim, the target; how it went and
+ * when, dim, in fixed columns at the right. The name and the target are
+ * plain Buttons that open the agent on its Activity.
+ */
+function activityRow(kit: Kit, state: WebState, row: ActivityRow, actions: DashActions, now: number, width: number): RenderElement {
   const { Box, Text, Button } = kit
-  const room = Math.max(16, kit.columns - 3 - OUTCOME - TIME - 3)
-  const name = cut(row.name, 18)
-  const verb = row.verb
-  const targetRoom = Math.max(8, room - Array.from(name).length - Array.from(verb).length - 2)
-  const words = [
-    <Text bold color={P.text}>
-      {name}
-    </Text>,
-    <Text color={P.muted}>{` ${verb}`}</Text>,
-    ...(row.target ? [<Text color={P.fg2}>{` ${cut(row.target, targetRoom)}`}</Text>] : []),
-  ]
-  return (
-    <Box key={`act:${row.key}`} flexDirection="row" columnGap={1} alignItems="center">
-      <Box flexShrink={0}>{avatar(kit, row.avatar, AVATAR.row, row.name)}</Box>
-      <Box flexGrow={1} flexShrink={1}>
-        <Button key={`dash:act:${row.key}`} plain onPress={() => openAgentPage(actions, state, row.agent, 'activity')}>
-          {words}
+  const adv = advanceOf(kit)
+  const slack = plainSlack(kit)
+  const open = () => openAgentPage(actions, state, row.agent, 'activity')
+  const face = svgOf(kit) ? cellsForPx(AVATAR.row) : 1
+  // the words' room: the row inside the list's edges and its own padding, less the face, the outcome, the age and the gaps
+  const room = Math.max(12, width - edgesOf(kit) - 2 - face - 1 - 1 - OUTCOME - 1 - TIME)
+  const name = cutCells(row.name, Math.min(22, Math.max(6, room * 0.45)), adv)
+  const verb = ` ${row.verb} `
+  const target = row.target ? cutCells(row.target, Math.max(4, room - cellsOf(name, adv) - cellsOf(verb, adv) - 2 * slack), adv) : ''
+  const said = row.outcome.mark ? `${row.outcome.mark} ${row.outcome.text}` : row.outcome.text
+  return listRow(kit, `act:${row.key}`, [
+    <Box flexShrink={0}>{avatar(kit, row.avatar, AVATAR.row, row.name)}</Box>,
+    <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" alignItems="center">
+      <Box flexShrink={0}>
+        <Button key={`dash:act:${row.key}`} label={name} plain onPress={open}>
+          <Text bold color={P.text}>
+            {name}
+          </Text>
         </Button>
       </Box>
-      <Box flexShrink={0} width={OUTCOME} justifyContent="flex-end">
-        <Text color={OUTCOME_HUE[row.outcome.tone]}>{row.outcome.text}</Text>
+      <Box flexShrink={0}>
+        <Text color={P.muted}>{verb}</Text>
       </Box>
-      <Box flexShrink={0} width={TIME} justifyContent="flex-end">
-        <Text color={P.muted2}>{ago(row.at, now)}</Text>
-      </Box>
-    </Box>
-  )
+      {target ? (
+        <Box flexShrink={1} minWidth={0}>
+          <Button key={`dash:acttarget:${row.key}`} label={target} plain onPress={open}>
+            <Text color={P.fg2}>{target}</Text>
+          </Button>
+        </Box>
+      ) : null}
+    </Box>,
+    <Box flexShrink={0} width={OUTCOME} justifyContent="flex-end">
+      <Text color={OUTCOME_HUE[row.outcome.tone]}>{said}</Text>
+    </Box>,
+    <Box flexShrink={0} width={TIME} justifyContent="flex-end">
+      <Text color={P.muted2}>{ago(row.at, now)}</Text>
+    </Box>,
+  ])
 }
 
-/** The files the panel shows at most. */
-const MOST_FILES = 8
+/** The repository's files the list shows: the ten edited last, as the web's. */
+const MOST_FILES = 10
+/** The files outside the repository its open row shows at most, the newest first: a desktop draws no tree of 2000 elements or more, and these are mostly scratch files. */
+const MOST_OUTSIDE = 20
 /** The tag on a file more than one agent edited, as the web's amber "shared". */
-const SHARED = ' shared '
+const SHARED = 'shared'
 /** The editors' faces a file row shows at most, and each face's size in px. */
 const MOST_FACES = 3
 const FACE = 16
+/** The file icon's size in px. */
+const FILE_ICON = 14
+
+/** Whether the Files list's row of files outside the repository is open: kept while the module lives, as the web page keeps its own. */
+const outsideRow = { isOpen: false }
 
 /**
- * Files: the eight agents edited last, as the web's FILES panel, "Changes →"
- * beside the head where this session's Changes tab can show them (`hasChanges`:
- * not in the sample). Each row is a press on its path and on its +a −r.
+ * Files, as the web's FILES card: its count the repository's files, and
+ * "Changes →" beside its head where this session's Changes tab can show them
+ * (`hasChanges`: not in the sample). The ten of the repository edited last,
+ * then one dim row, "n files outside the repo", that opens on those.
  */
-function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChanges: boolean): RenderElement {
+function filesSection(kit: Kit, state: WebState, actions: DashActions, hasChanges: boolean, width: number): RenderElement {
   const { Box, Button } = kit
-  const rows = fileRows(state, MOST_FILES)
-  const link = hasChanges && rows.length > 0 ? <Button key="dash:changes" label="Changes →" plain dimColor onPress={() => actions.setTab('changes')} /> : null
+  const groups = fileGroupsOf(state, MOST_FILES)
+  const link = hasChanges && state.files.length > 0 ? <Button key="dash:changes" label="Changes →" plain dimColor onPress={() => actions.setTab('changes')} /> : null
+  const rows: (RenderElement | null)[] = []
+  const add = (row: RenderElement) => {
+    if (rows.length > 0) rows.push(rule(kit))
+    rows.push(row)
+  }
+  for (const row of groups.inside) add(fileRow(kit, state, row, actions, hasChanges, width))
+  if (groups.outside.length > 0) {
+    add(outsideToggle(kit, groups.outside.length, actions))
+    if (outsideRow.isOpen) {
+      for (const row of groups.outside.slice(0, MOST_OUTSIDE)) add(fileRow(kit, state, row, actions, hasChanges, width))
+      const more = groups.outside.length - MOST_OUTSIDE
+      if (more > 0) add(outsideMore(kit, more))
+    }
+  }
   return (
-    <Box key="dash:files" flexDirection="column">
-      {sectionHead(kit, 'Files', state.files.length > 0 ? state.files.length : null, link)}
-      {rows.length === 0 ? (
-        quiet(kit, 'No files touched yet: the files agents edit show here, with who is on each.')
-      ) : (
-        <Box flexDirection="column">{rows.map(row => fileRow(kit, state, row, actions, hasChanges))}</Box>
-      )}
+    <Box key="dash:files" flexDirection="column" width={width}>
+      {sectionHead(kit, 'Files', groups.insideCount > 0 ? groups.insideCount : null, link)}
+      {state.files.length === 0 ? quiet(kit, 'No files touched yet: the files agents edit show here, with who is on each.') : listBox(kit, 'dash:filelist', rows)}
     </Box>
   )
 }
 
+/** The row of files outside the repository, as the web's: a chevron and "n files outside the repo", dim; a press opens it on them, or shuts it. */
+function outsideToggle(kit: Kit, n: number, actions: DashActions): RenderElement {
+  const { Box, Button, Text } = kit
+  const isOpen = outsideRow.isOpen
+  const chevron = icon(kit, isOpen ? 'chevronDown' : 'chevronRight', P.muted2, FILE_ICON) ?? <Text color={P.muted2}>{isOpen ? '▾' : '▸'}</Text>
+  const flip = () => {
+    outsideRow.isOpen = !outsideRow.isOpen
+    actions.redraw()
+  }
+  return listRow(kit, 'files:outside', [
+    <Box flexShrink={0}>{chevron}</Box>,
+    <Box flexShrink={1} minWidth={0}>
+      <Button key="dash:files:outside" label={`${plural(n, 'file')} outside the repo`} plain dimColor onPress={flip} />
+    </Box>,
+  ])
+}
+
+/** Past the open list's last row: how many more files outside the repository there are, dim. */
+function outsideMore(kit: Kit, more: number): RenderElement {
+  const { Box, Text } = kit
+  return listRow(kit, 'files:outside:more', [
+    <Box flexShrink={0} width={svgOf(kit) ? Math.ceil(cellsForPx(FILE_ICON)) : 1} />,
+    <Text color={P.muted2} wrap="truncate-end">{`and ${plural(more, 'more file')} outside the repo`}</Text>,
+  ])
+}
+
 /**
- * One file: its icon, its path (the folder dim, the name bright), a live dot
- * while an agent is on it, "shared" when more than one edited it, the
- * editors' faces, +a −r. A press on the path or the counts opens the file in
- * the Changes tab where Changes lists it (its own diff open there), else
- * the Diffs of the agent that edited it last.
+ * One file, as the web's row: its icon, its folder dim and its name bright
+ * (a plain Button), a live dot while an agent is on it, "shared" when more
+ * than one edited it, the editors' faces, +a −r in green and red. A press on
+ * its name opens the file in the Changes tab where Changes lists it (its own
+ * diff open there), else the Diffs of the agent that edited it last.
  */
-function fileRow(kit: Kit, state: WebState, row: FileRow, actions: DashActions, hasChanges: boolean): RenderElement {
+function fileRow(kit: Kit, state: WebState, row: FileRow, actions: DashActions, hasChanges: boolean, width: number): RenderElement {
   const { Box, Text, Button } = kit
+  const adv = advanceOf(kit)
   const open = () => {
     if (hasChanges && row.inChanges) {
       // a file already open there would fold at a second press: none open first, then this one
@@ -549,53 +650,58 @@ function fileRow(kit: Kit, state: WebState, row: FileRow, actions: DashActions, 
     }
     if (row.editor) actions.openAgent(row.editor, 'edits')
   }
-  const slack = buttonSlack(kit)
-  const faces = row.editors.slice(0, MOST_FACES)
-  const more = row.editors.length - faces.length
-  const stat = `+${row.added} −${row.removed}`
-  // the path's room: the row less the icon, the dot, the tag, the faces, the counts, their gaps and the buttons' chrome
-  const taken = 3 + (row.live ? 2 : 0) + (row.isShared ? SHARED.length + 1 : 0) + faces.length * 2 + (more > 0 ? String(more).length + 2 : 0) + 1 + stat.length + slack + 1 + slack
-  const path = fitPath(row.dir, row.name, Math.max(8, kit.columns - taken))
-  const pathParts = [
-    ...(path.dir ? [<Text color={P.muted2}>{path.dir}</Text>] : []),
-    <Text color={P.fg2}>{path.name}</Text>,
-  ]
-  return (
-    <Box key={`files:${row.path}`} flexDirection="row" columnGap={1} alignItems="center">
-      <Box flexShrink={0}>{icon(kit, 'file', P.muted2, 14) ?? <Text color={P.muted3}>·</Text>}</Box>
-      <Box flexGrow={1} flexShrink={1}>
-        <Button key={`dash:file:${row.path}`} plain onPress={open}>
-          {pathParts}
+  const added = `+${row.added}`
+  const removed = ` −${row.removed}`
+  const iconCells = svgOf(kit) ? cellsForPx(FILE_ICON) : 1
+  // the path's room: the row inside the list's edge and its own padding, less the icon, the name's chrome, the dot, the tag, the faces, the counts and the gaps
+  const taken =
+    edgesOf(kit) +
+    2 +
+    iconCells +
+    1 +
+    plainSlack(kit) +
+    (row.live ? 2 : 0) +
+    (row.isShared ? tagCells(kit, SHARED) + 1 : 0) +
+    (row.editors.length > 0 ? facesCells(kit, row.editors.length, FACE, MOST_FACES) + 1 : 0) +
+    cellsOf(added + removed, adv) +
+    1
+  const path = fitPath(row.dir, row.name, Math.max(8, width - taken), adv)
+  return listRow(kit, `files:${row.path}`, [
+    <Box flexShrink={0}>{icon(kit, 'file', P.muted2, FILE_ICON) ?? <Text color={P.muted3}>·</Text>}</Box>,
+    <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" alignItems="center">
+      {path.dir ? (
+        <Text color={P.muted2} wrap="truncate-end">
+          {path.dir}
+        </Text>
+      ) : null}
+      <Box flexShrink={1} minWidth={0}>
+        <Button key={`dash:file:${row.path}`} label={path.name} plain onPress={open}>
+          <Text color={P.fg2}>{path.name}</Text>
         </Button>
       </Box>
-      {row.live ? (
-        <Box flexShrink={0}>
-          <Text color={P.run}>●</Text>
-        </Box>
-      ) : null}
-      {row.isShared ? (
-        <Box flexShrink={0}>
-          <Text color={TONE.waiting.pillFg} backgroundColor={TONE.waiting.pillBg}>
-            {SHARED}
-          </Text>
-        </Box>
-      ) : null}
-      <Box flexShrink={0} flexDirection="row">
-        {faces.map(id => {
-          const agent = agentOf(state, id)
-          return avatar(kit, agent ? agent.avatar : null, FACE, nameOf(state, id))
-        })}
-        {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
-      </Box>
+    </Box>,
+    row.live ? (
       <Box flexShrink={0}>
-        <Button key={`dash:filestat:${row.path}`} plain onPress={open}>
-          <Text color={P.doneText}>{`+${row.added}`}</Text>
-          <Text> </Text>
-          <Text color={P.failText}>{`−${row.removed}`}</Text>
-        </Button>
+        <Text color={P.run}>●</Text>
       </Box>
-    </Box>
-  )
+    ) : null,
+    row.isShared ? <Box flexShrink={0}>{tag(kit, SHARED)}</Box> : null,
+    row.editors.length > 0 ? (
+      <Box flexShrink={0}>
+        {faces(
+          kit,
+          row.editors.map(id => agentOf(state, id)?.avatar ?? null),
+          FACE,
+          row.editors.map(id => nameOf(state, id)),
+          MOST_FACES,
+        )}
+      </Box>
+    ) : null,
+    <Box flexShrink={0}>
+      <Text color={P.doneText}>{added}</Text>
+      <Text color={P.failText}>{removed}</Text>
+    </Box>,
+  ])
 }
 
 /** Open in browser: the web deck (`/deck web`) one press away, and how it stands once asked for. */

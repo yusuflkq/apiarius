@@ -230,8 +230,8 @@ test('/deck opens the Dashboard, drawn from the web deck`s own state: what needs
     expect(kpis[3]?.text).toContain('Orchestrator asks: Which library should we use for dates?')
 
     // the activity: fixer's call, worded as the page words it (a shell call's target is what it says it does)
-    const call = (await ui.findAll({ type: 'Button' })).find(button => button.key?.startsWith('dash:act:') && button.text.includes('fixer'))
-    expect(call?.text).toBe('fixer ran Run the unit tests')
+    const call = (await ui.findAll({ type: 'Box' })).find(box => box.key?.startsWith('act:') && box.text.includes('fixer'))
+    expect(call?.text).toContain('fixer ran Run the unit tests')
 
     // avatars: the gradient faces as images where Svg draws, a dot of their colour on the terminal
     const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar'))

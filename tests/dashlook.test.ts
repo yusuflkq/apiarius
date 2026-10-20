@@ -1,10 +1,11 @@
 /**
- * The native Dashboard's agent cards laid out as the web deck's page
- * (web/app.js `Dashboard`): in rows of as many as fit (two at the docked
- * pane's 68 to 84 cells, up to six), each row's cards as wide and as tall; a
- * card as the web's run card (its head, its step box, its now line, its
- * foot). A desktop's text is fitted in its own proportional face, so the
- * width model is checked too.
+ * The native Dashboard laid out as the web deck's page (web/app.js
+ * `Dashboard`): agent cards in rows of as many as fit (two at the docked
+ * pane's 68 to 84 cells, up to six), each row's cards as wide and as tall;
+ * a card as the web's run card (its head, its step box, its now line, its
+ * foot); Recent activity and Files as bordered lists; the files outside the
+ * repository folded into one dim row. A desktop's text is fitted in its own
+ * proportional face, so the width model is checked too.
  */
 import type { On, RenderElement } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -12,7 +13,7 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
 import { dashboardTab } from '../hooks/ui/dash/dashboard'
-import { cardsPerRow, cellsOf, chipOf, cutCells, monoAdvance, runShort, runTitle, uiAdvance, uiWrapAdvance, wrapTicks } from '../hooks/ui/dash/dashModel'
+import { cardsPerRow, cellsOf, chipOf, cutCells, monoAdvance, runShort, runTitle, shortPath, uiAdvance, uiWrapAdvance, wrapTicks } from '../hooks/ui/dash/dashModel'
 import { P, TONE, pillWidth } from '../hooks/ui/dash/palette'
 import { widthFor } from '../hooks/ui/dash/parts'
 import type { DashActions, Kit } from '../hooks/ui/types'
@@ -166,6 +167,24 @@ function stateOf(data: DeckData = lookData()): W.WebState {
   return W.webStateOf(data, M.defaultView(), emptyGit(), null, NOW, 's', '/repo')
 }
 
+/** The state in a repository, with `n` scratch files outside it (the newest first), as `webStateOf` marks them. */
+function withOutside(state: W.WebState, n: number): W.WebState {
+  state.repo = { name: 'repo', root: '/repo', branch: 'main', ahead: 0, behind: 0, head: 'abc1234' }
+  const scratch = Array.from({ length: n }, (_, i) => ({
+    path: `C:/Users/me/AppData/Local/Temp/claude/session/scratchpad/talk${i % 3}/msg${i}.txt`,
+    editors: ['agent-fixer'],
+    live: false,
+    isShared: false,
+    added: i + 1,
+    removed: 0,
+    lastAt: NOW - 1_000 * (i + 1),
+    isOutside: true as const,
+  }))
+  state.files = [...state.files.filter(file => !file.isOutside), ...scratch]
+  state.summary.filesInRepo = state.files.filter(file => !file.isOutside).length
+  return state
+}
+
 test('cards a row as the web grid`s auto-fill lays them, at 32 cells or more: one below a 66-cell pane, two at its usual 68 to 84, three at 120, four at 160, up to six at its widest', () => {
   // the pane's cells; the tab draws a cell narrower
   const rows = [56, 65, 66, 68, 84, 98, 99, 120, 160, 165, 198, 244, 400].map(paneCells => cardsPerRow(paneCells - 1))
@@ -273,6 +292,87 @@ test('the step box says what the web`s chip says: the Orchestrator`s step in han
   expect(runShort(agent('agent-helper'), NOW)).toBe('3m ago')
   agent('agent-fixer').status = 'running'
   expect(runTitle(agent('agent-fixer'), NOW)).toBe('Started 6m ago')
+})
+
+test('Recent activity as the web`s list: a bordered box, a 1 px rule between rows where a desktop draws one, each row the face, the name (bold where a Button`s Text draws), the verb dim, the target; how it went and when in fixed columns; the name and the target open the agent on its Activity', async ($, on) => {
+  const calls: string[] = []
+  const state = stateOf()
+  probe(on, kit => dashboardTab(kit, state, noting(calls), NOW, null))
+  await started($, on)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface, 84))
+    const drawn = await ui.drawn()
+    const list = keyed(drawn, 'dash:calls')
+    expect(list?.props).toMatchObject({ borderStyle: 'round', borderColor: P.border })
+    const rows = kids(list).filter(row => String(row.props?.key).startsWith('act:'))
+    expect(rows.length).toBe(state.activity.length)
+    // the rules: one between each two rows on a desktop, none on the terminal
+    const rules = allOf(list, 'Svg').filter(svg => svg.props?.alt === 'Divider')
+    expect(rules.length).toBe(surface === 'desktop' ? rows.length - 1 : 0)
+    // fixer's call in flight: its words, its outcome in blue, its age
+    const first = rows[0]
+    expect(first?.hover).toEqual({ backgroundColor: P.rowHover })
+    const [, words, outcome, age] = kids(first)
+    expect(wordsOf(words)).toBe('fixer ran Run the unit tests')
+    const [name, verb, target] = kids(words)
+    expect(kids(kids(name)[0])[0]?.props).toMatchObject({ bold: true, color: P.text })
+    expect(kids(verb)[0]?.props?.color).toBe(P.muted)
+    expect(kids(target)[0]?.type).toBe('Button')
+    expect(outcome?.props?.width).toBe(9)
+    expect(age?.props?.width).toBe(4)
+    expect(wordsOf(outcome)).toBe('◐ running')
+    expect(kids(outcome)[0]?.props?.color).toBe(P.runText)
+    expect(wordsOf(age)).toBe('now')
+    // the failed edit: ✕ in red
+    const failed = rows.find(row => wordsOf(row).includes('edited'))
+    expect(wordsOf(kids(failed)[2])).toBe('✕ failed')
+    // a press on the name or the target opens fixer on its Activity
+    for (const key of [`dash:act:${String(first?.props?.key).slice('act:'.length)}`, `dash:acttarget:${String(first?.props?.key).slice('act:'.length)}`]) {
+      calls.length = 0
+      await ui.press({ plugin: 'test', key })
+      expect(calls).toEqual(['setAgentPane:"activity"', 'openAgent:"agent-fixer"'])
+    }
+    await ui.unmount()
+  }
+})
+
+test('the files outside the repository fold into one dim row after the repository`s own: FILES counts the state`s filesInRepo, a press opens them by their last two parts (the newest twenty, then how many more), another shuts them; with no repository nothing folds', async ($, on) => {
+  const calls: string[] = []
+  const where: { state: W.WebState } = { state: withOutside(stateOf(), 25) }
+  probe(on, kit => dashboardTab(kit, where.state, noting(calls), NOW, null))
+  await started($, on)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface, 84))
+    expect((await ui.find({ key: 'dash:files' }))?.text).toContain('FILES  2')
+    const files = () => ui.findAll({ type: 'Button' }).then(buttons => buttons.map(button => button.key ?? '').filter(key => key.startsWith('dash:file:')))
+    expect(await files()).toEqual(['dash:file:src/token.ts', 'dash:file:src/auth.ts'])
+    const fold = await ui.find({ key: 'dash:files:outside' })
+    expect(fold?.props).toMatchObject({ label: '25 files outside the repo', plain: true, dimColor: true })
+    // open: the newest twenty, by their last two parts, then how many more
+    calls.length = 0
+    await ui.press({ plugin: 'test', key: 'dash:files:outside' })
+    expect(calls).toEqual(['redraw:'])
+    await ui.redraw()
+    const open = await files()
+    expect(open.length).toBe(2 + 20)
+    expect(open[2]).toBe('dash:file:C:/Users/me/AppData/Local/Temp/claude/session/scratchpad/talk0/msg0.txt')
+    expect((await ui.find({ key: open[2] ?? '' }))?.text).toBe('msg0.txt')
+    expect((await ui.find({ key: 'files:C:/Users/me/AppData/Local/Temp/claude/session/scratchpad/talk0/msg0.txt' }))?.text).toContain('…/talk0/')
+    expect((await ui.find({ key: 'files:outside:more' }))?.text).toBe('and 5 more files outside the repo')
+    // shut again
+    await ui.press({ plugin: 'test', key: 'dash:files:outside' })
+    await ui.redraw()
+    expect((await files()).length).toBe(2)
+    await ui.unmount()
+  }
+  // with no repository the state marks nothing outside: every file is listed, nothing folds
+  where.state = stateOf()
+  const ui = await $.ui.mount(pane('desktop', 84))
+  expect(await ui.find({ key: 'dash:files:outside' })).toBeUndefined()
+  expect((await ui.find({ key: 'dash:files' }))?.text).toContain('FILES  2')
+  await ui.unmount()
+  expect(shortPath('C:/Users/me/scratchpad/talk/msg2.txt')).toEqual({ dir: '…/talk/', name: 'msg2.txt' })
+  expect(shortPath('/tmp/a.txt')).toEqual({ dir: '/tmp/', name: 'a.txt' })
 })
 
 test('a desktop`s text is fitted in its own face: Anthropic Sans at 13 px, a cell its "0"; cut and laid into lines by it, never past the room; the terminal a cell a character', () => {

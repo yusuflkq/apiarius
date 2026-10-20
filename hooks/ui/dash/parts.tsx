@@ -9,8 +9,8 @@
  * agent's page on the pane it showed last.
  *
  * Where the surface draws Svg (the desktop), the web's small shapes are
- * images as the page draws them: a status pill rounded and ringed, and a
- * status glyph. A
+ * images as the page draws them: a status pill rounded and ringed, a status
+ * glyph, the amber "shared" tag, a stack of faces, a list's 1 px divider. A
  * desktop draws a plain Button's label alone, in its own ink (the Text in it
  * keeps neither colour nor weight), so what carries colour beside a pressable
  * line is Text or an image of its own; and it draws text in a proportional
@@ -25,7 +25,7 @@ import type { DeckAgentPane } from '../../../types'
 import type { WebState } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { firstPaneOf, monoAdvance, ticks, uiAdvance, uiWrapAdvance, type Advance, type TickPart } from './dashModel'
-import { P, PILL_HEIGHT, avatarColor, avatarSvg, glyphOf, iconSvg, pillSvg, pillWidth, toneOf, type IconName } from './palette'
+import { P, PILL_HEIGHT, avatarColor, avatarSvg, glyphOf, iconSvg, pillSvg, pillWidth, ruleSvg, stackSvg, stackWidth, tagSvg, tagWidth, toneOf, type IconName } from './palette'
 
 /** The Svg element where the surface draws one as an image: every table but the terminal's, which answers to Svg with an empty box. */
 export function svgOf(kit: Kit): Kit['Svg'] {
@@ -84,6 +84,8 @@ const ICON_ALT: Readonly<Record<IconName, string>> = {
   circlePause: 'Waiting on you',
   circleDashed: 'Idle',
   progress: 'In progress',
+  chevronRight: 'Shut',
+  chevronDown: 'Open',
 }
 
 /** An icon where the surface draws Svg; null elsewhere (the terminal draws its text alone). */
@@ -138,6 +140,57 @@ export function glyph(kit: Kit, name: string, px = 15): RenderElement {
 /** The cells `glyph` takes. */
 export function glyphCells(kit: Kit, px = 15): number {
   return svgOf(kit) ? cellsForPx(px) : 1
+}
+
+/** A tag as the web's amber `.tag-wait` (a file more than one agent edited, "shared"): an image where Svg draws, else its word on the amber tint. */
+export function tag(kit: Kit, word: string): RenderElement {
+  const { Text } = kit
+  const Svg = svgOf(kit)
+  if (Svg) return <Svg source={tagSvg(word)} alt={word} width={tagWidth(word)} height={20} />
+  const tone = toneOf('waiting')
+  return <Text color={tone.pillFg} backgroundColor={tone.pillBg}>{` ${word} `}</Text>
+}
+
+/** The cells `tag` takes. */
+export function tagCells(kit: Kit, word: string): number {
+  return svgOf(kit) ? cellsForPx(tagWidth(word)) : Array.from(word).length + 2
+}
+
+/** The editors' faces, `px` square: one stacked image as the web's where Svg draws, else a dot each in its colour; at most `most`, then "+n". */
+export function faces(kit: Kit, avatars: readonly (number | null)[], px: number, names: readonly string[], most = 3): RenderElement {
+  const { Box, Text } = kit
+  const shown = avatars.slice(0, most)
+  const more = avatars.length - shown.length
+  const Svg = svgOf(kit)
+  return (
+    <Box flexDirection="row" alignItems="center">
+      {Svg && shown.length > 0 ? (
+        <Svg source={stackSvg(shown, px)} alt={names.slice(0, most).join(', ')} width={stackWidth(shown.length, px)} height={px} />
+      ) : (
+        shown.map(one => <Text color={one === null ? P.muted3 : avatarColor(one)}>●</Text>)
+      )}
+      {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
+    </Box>
+  )
+}
+
+/** The cells `faces` takes for `n` editors. */
+export function facesCells(kit: Kit, n: number, px: number, most = 3): number {
+  const shown = Math.min(n, most)
+  const more = n > most ? String(n - most).length + 2 : 0
+  return (svgOf(kit) ? cellsForPx(stackWidth(shown, px)) : shown) + more
+}
+
+/** The rule between a list's rows where Svg draws (1 px, in the card's edge, as the web's `.list`); nothing on the terminal, whose rows need none. */
+export function rule(kit: Kit): RenderElement | null {
+  const { Box } = kit
+  const Svg = svgOf(kit)
+  if (!Svg) return null
+  return (
+    <Box flexDirection="column">
+      <Svg source={ruleSvg(P.border)} alt="Divider" height={1} />
+    </Box>
+  )
 }
 
 /** A section's head: its title in muted capitals, a count after it, and a control at the right. */
