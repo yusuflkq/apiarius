@@ -59,16 +59,25 @@ export function avatarAgentOf(row: Face): AV.AvatarAgent {
 
 /**
  * An agent's avatar in the deck's style (web/avatars.mjs), `px` square, with
- * its status dot when `dot`, its status's motion when `animated`, where Svg
- * draws: an image, as the web page draws it. The terminal draws its glyph in
+ * its status dot when `dot`, where Svg draws. The terminal draws its glyph in
  * its colour, and with `dot` its status mark after it.
+ *
+ * Still, it is an image. With `animated` it moves as its status does, in an
+ * interactive Svg (a sandboxed frame): the Desktop builds every element of
+ * the pane afresh on each redraw and keeps only a frame whose source is the
+ * same (its renderer's `Ko`), so an image's motion would start over at every
+ * redraw (a robot's one-time settle would play again and again) where a
+ * frame's runs on. Its source changes only with its status or the style, so
+ * it loads again only then. A frame with no control in it takes no Tab stop.
  */
 export function avatar(kit: Kit, row: Face, px: number, opts: { dot?: boolean; animated?: boolean } = {}): RenderElement {
   const { Text } = kit
   const Svg = svgOf(kit)
   const agent = avatarAgentOf(row)
   if (Svg) {
-    const source = AV.avatarSvg(avatarStyleOf(kit), agent, { size: px, dot: opts.dot === true, animated: opts.animated === true, ground: P.ground })
+    const isAnimated = opts.animated === true
+    const source = AV.avatarSvg(avatarStyleOf(kit), agent, { size: px, dot: opts.dot === true, animated: isAnimated, ground: P.ground })
+    if (isAnimated) return <Svg source={source} alt={`${row.title}'s avatar`} width={px} height={px} isInteractive />
     return <Svg source={source} alt={`${row.title}'s avatar`} width={px} height={px} />
   }
   const face = AV.terminalFace(agent)

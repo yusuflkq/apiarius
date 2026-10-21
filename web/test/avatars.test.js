@@ -197,3 +197,51 @@ test('the terminal draws no SVG: an agent`s glyph from ◆●▲■✦⬢★◉ 
   assert.deepEqual(['starting', 'running', 'waiting', 'done', 'failed', 'idle', 'stopped'].map(status => A.terminalFace({ id: 'x', status }).mark), ['◐', '◐', '‖', '✓', '✕', '◌', '◌'])
   assert.equal(A.terminalFace({ id: 'x', status: 'failed' }).markColor, A.LOOK_HUE.failed)
 })
+
+test('a robot moves as its status does, only when animated: scanning eyes, a blinking light and a bob at work; a pulsing amber light and a hop waiting; one settle done; one shake failed; a slow breath idle', () => {
+  const robot = (status, animated = true) => A.avatarSvg('robot', { id: 'b81c6f3e2a9d4c17', name: 'builder', status }, { size: 22, dot: true, animated })
+  const styleOf = svg => /<style>(.*)<[/]style>/.exec(svg)?.[1] ?? ''
+  const prefix = svg => /^<svg [^>]*class="([^"]+)"/.exec(svg)[1]
+  const rules = {
+    running: ['-bob{animation:', '-eyes{animation:', '-scan 2.8s ease-in-out infinite', '-lt{animation:', '-blink 1.2s linear infinite', 'translateX(-2.6px)', 'translateY(-1.2px)'],
+    starting: ['-scan 2.8s ease-in-out infinite', '-blink 1.2s linear infinite'],
+    waiting: ['-hop 3.2s ease-in-out infinite', '-look 3.2s', '-pulse 1.6s ease-in-out infinite', '-halo{animation:', '-glow 1.6s'],
+    done: ['-settle .9s ease-out 1 both'],
+    failed: ['-shake .6s ease-in-out 1}'],
+    idle: ['-breathe 4.8s ease-in-out infinite'],
+    stopped: ['-breathe 4.8s ease-in-out infinite'],
+  }
+  for (const [status, wants] of Object.entries(rules)) {
+    const svg = robot(status)
+    const css = styleOf(svg)
+    const u = prefix(svg)
+    for (const want of wants) assert.ok(css.includes(want), `${status}: ${want}`)
+    // every class and keyframe under the document's own prefix, and none of it under reduced motion
+    for (const m of css.matchAll(/(?:^|[{}])[.]([\w-]+)|@keyframes ([\w-]+)/g)) {
+      const name = m[1] ?? m[2]
+      assert.ok(name.startsWith(`${u}-`) || name === u, `${status}: ${name} is under ${u}`)
+    }
+    assert.ok(css.endsWith(`@media (prefers-reduced-motion:reduce){.${u} *{animation:none!important}}`), `${status}: still under reduced motion`)
+    // still: the same face, no rules at all
+    assert.ok(!robot(status, false).includes('<style>'), `${status} still`)
+    assert.equal(robot(status, false).replace(/class="av\w+/g, ''), svg.replace(/<style>.*<[/]style>/, '').replace(/class="av\w+/g, ''), `${status}: motion is all the difference`)
+  }
+  // the one-time motions play once; the loops loop
+  assert.ok(!styleOf(robot('done')).includes('infinite'))
+  assert.ok(!styleOf(robot('failed')).includes('infinite'))
+})
+
+test('the other styles move lightly, only when animated: their status dot pulses while at work, and a progress ring with no progress to show spins', () => {
+  for (const style of A.STYLE_IDS.filter(one => one !== 'robot')) {
+    for (const status of ['waiting', 'done', 'failed', 'idle']) {
+      const svg = A.avatarSvg(style, { id: 'q', name: 'q', status }, { dot: true, animated: true })
+      assert.ok(!svg.includes('<style>'), `${style} ${status} is still`)
+    }
+    const running = A.avatarSvg(style, { id: 'q', name: 'q', status: 'running' }, { dot: true, animated: true })
+    const isDotted = style !== 'mood' && style !== 'ring'
+    assert.equal(running.includes('-ping 1.8s ease-in-out infinite'), isDotted, `${style}: its dot pulses`)
+    assert.ok(!A.avatarSvg(style, { id: 'q', name: 'q', status: 'running' }, { dot: true }).includes('<style>'), `${style} still unless animated`)
+  }
+  assert.ok(A.avatarSvg('ring', { id: 'q', name: 'q', status: 'running' }, { animated: true }).includes('-spin 1.6s linear infinite'))
+  assert.ok(!A.avatarSvg('ring', { id: 'q', name: 'q', status: 'running', progress: 0.25 }, { animated: true }).includes('<style>'), 'a ring with progress to show holds still')
+})

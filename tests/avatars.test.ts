@@ -80,14 +80,24 @@ test('a desktop draws each agent`s face as the library`s own document, robots by
     expect(faces[i]?.props.alt).toBe(`${row.title}'s avatar`)
     expect(faces[i]?.props.source).toBe(faceOf(row, 22, { dot: true, animated: true }))
     expect(faces[i]?.props).toMatchObject({ width: 22, height: 22 })
+    // moving, it is drawn in a frame the Desktop keeps across redraws (an image's motion would start over at each)
+    expect(faces[i]?.props.isInteractive).toBe(true)
+    expect(String(faces[i]?.props.source)).toContain('@keyframes')
   }
+
   // a stopped agent looks idle; the Orchestrator is `main`
   const scout = rows.find(row => row.id === IDS.scout)!
   expect(scout.isStopped).toBe(true)
   expect(faces.some(svg => svg.props.source === faceOf(scout, 22, { dot: true, animated: true }))).toBe(true)
   // Recent activity's rows: the agent's face, still, no dot
   const builder = rows.find(row => row.id === IDS.builder)!
-  expect(faces.some(svg => svg.props.source === faceOf(builder, 20))).toBe(true)
+  const listed = faces.filter(svg => svg.props.source === faceOf(builder, 20))
+  expect(listed.length).toBeGreaterThan(0)
+  for (const one of listed) {
+    expect(one.props.isInteractive).toBeUndefined()
+    expect(String(one.props.source)).not.toContain('<style>')
+  }
+
   // Files: a file's editors as one stacked image of the library's faces
   const file = state.files.find(one => one.editors.length > 1)!
   const editors = file.editors.map(id => rows.find(row => row.id === id)!)
@@ -97,6 +107,7 @@ test('a desktop draws each agent`s face as the library`s own document, robots by
   await press(ui, W.agentKeyOf(IDS.builder))
   const head = (await ui.findAll({ type: 'Svg' })).find(svg => svg.props.alt === "builder's avatar")
   expect(head?.props.source).toBe(faceOf(builder, 32, { dot: true, animated: true }))
+  expect(head?.props.isInteractive).toBe(true)
   await press(ui, 'key:b')
   await ui.unmount()
 })

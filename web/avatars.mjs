@@ -8,6 +8,16 @@
  * says its status with the ring), every id in it its own, nothing outside it
  * referenced. A robot's and a mood face's expression follow the status.
  *
+ * With `animated`, a robot moves as its status does (CSS keyframes in the
+ * document's own <style>, every name under its own prefix, all of it still
+ * under prefers-reduced-motion): at work its visor eyes scan, its antenna
+ * light blinks and it bobs; waiting on you its light pulses amber and it
+ * looks up with a little hop every few seconds; done it settles once,
+ * happy; failed it shakes once under its red visor; idle it breathes,
+ * slow and dim. The other styles pulse their status dot while at work, and
+ * a progress ring with no progress to show spins.
+ *
+
  * Who draws it:
  * - the web page imports this module (web/app.js) and shows each document
  *   as an image;
@@ -176,8 +186,48 @@ function idOf(value) {
 //
 // Each draws one face on the 40 grid from `c`: { c1, c2, seed, h (the seed's
 // hash), look, name, role, progress, u (the document's own id prefix), animated },
-// as { defs, body, isDotted }: its gradients and clips, its shapes, and whether
-// the status dot goes on it.
+// as { defs, body, isDotted, css, isSpun }: its gradients and clips, its shapes,
+// whether the status dot goes on it, its own motion's rules (when animated), and
+// whether a ring spins.
+
+/**
+ * A robot's motion for its look: its rules and keyframes, every name under
+ * the document's prefix `u` (the classes the robot's groups carry: `-bob`
+ * the whole robot, `-eyes`, `-lt` its antenna lights, `-halo` their glow).
+ */
+function robotMotion(u, look) {
+  const at = name => `${u}-${name}`
+  if (look === 'running') {
+    return [
+      `.${at('bob')}{animation:${at('bob')} 1.4s ease-in-out infinite}`,
+      `.${at('eyes')}{animation:${at('scan')} 2.8s ease-in-out infinite}`,
+      `.${at('lt')}{animation:${at('blink')} 1.2s linear infinite}`,
+      `@keyframes ${at('bob')}{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.2px)}}`,
+      `@keyframes ${at('scan')}{0%,100%{transform:translateX(0)}25%{transform:translateX(-2.6px)}75%{transform:translateX(2.6px)}}`,
+      `@keyframes ${at('blink')}{0%,49%{opacity:1}50%,100%{opacity:.25}}`,
+    ].join('')
+  }
+  if (look === 'waiting') {
+    return [
+      `.${at('bob')}{animation:${at('hop')} 3.2s ease-in-out infinite}`,
+      `.${at('eyes')}{animation:${at('look')} 3.2s ease-in-out infinite}`,
+      `.${at('lt')}{animation:${at('pulse')} 1.6s ease-in-out infinite}`,
+      `.${at('halo')}{animation:${at('glow')} 1.6s ease-in-out infinite}`,
+      `@keyframes ${at('hop')}{0%,70%,100%{transform:translateY(0)}77%{transform:translateY(-2.2px)}84%{transform:translateY(0)}90%{transform:translateY(-1px)}96%{transform:translateY(0)}}`,
+      `@keyframes ${at('look')}{0%,68%,100%{transform:translateY(0)}76%,90%{transform:translateY(-1px)}}`,
+      `@keyframes ${at('pulse')}{0%,100%{opacity:1}50%{opacity:.45}}`,
+      `@keyframes ${at('glow')}{0%,100%{opacity:.08}50%{opacity:.6}}`,
+    ].join('')
+  }
+  if (look === 'done') {
+    return `.${at('bob')}{animation:${at('settle')} .9s ease-out 1 both}@keyframes ${at('settle')}{0%{transform:translateY(-2.4px)}55%{transform:translateY(.6px)}100%{transform:translateY(0)}}`
+  }
+  if (look === 'failed') {
+    return `.${at('bob')}{animation:${at('shake')} .6s ease-in-out 1}@keyframes ${at('shake')}{0%,100%{transform:translateX(0)}20%{transform:translateX(-1.6px)}40%{transform:translateX(1.6px)}60%{transform:translateX(-1px)}80%{transform:translateX(.8px)}}`
+  }
+  return `.${at('bob')}{animation:${at('breathe')} 4.8s ease-in-out infinite}@keyframes ${at('breathe')}{0%,100%{opacity:.8;transform:translateY(0)}50%{opacity:.6;transform:translateY(.7px)}}`
+}
+
 
 /** The robot's eyes, open, as its seed has them: two bars or two round lamps. */
 function robotEyes(c2, isBar) {
@@ -224,8 +274,9 @@ function robot(c) {
     `<g class="${u}-eyes">${eyes}</g>`,
     '<rect x="15" y="27" width="10" height="2" rx="1" fill="#111" opacity=".5"/>',
   ].join('')
-  return { body: `<g class="${u}-bob"${look === 'idle' ? ' opacity=".8"' : ''}>${parts}</g>`, isDotted: true }
+  return { body: `<g class="${u}-bob"${look === 'idle' ? ' opacity=".8"' : ''}>${parts}</g>`, isDotted: true, css: c.animated ? robotMotion(u, look) : '' }
 }
+
 
 function mood(c) {
   const { c1, c2, look } = c
@@ -339,7 +390,9 @@ function ring(c) {
   return {
     body: `<circle cx="20" cy="20" r="15" fill="#1f1f1f" stroke="#333" stroke-width="3.5"/>${arc}<text x="20" y="25" text-anchor="middle" font-size="13" font-weight="500" fill="${c1}" font-family="sans-serif">${esc(initial.toUpperCase())}</text>`,
     isDotted: false,
+    isSpun: !known && look === 'running',
   }
+
 }
 
 function glyph(c) {
@@ -380,8 +433,20 @@ function partsOf(style, agent, opts) {
   const u = opts.id ? idOf(opts.id) : `av${hash([which, seed, look, which === 'mono' || which === 'ring' ? name : '', role, progress ?? '', size, animated, isDotted, ground].join('|')).toString(36)}`
   const c = { c1, c2, seed, h, look, name, role, progress, u, animated }
   const drawn = DRAW[which](c)
-  return { ...drawn, c, isDotted: isDotted && drawn.isDotted, ground, size }
+  const dotted = isDotted && drawn.isDotted
+  // the other styles' light motion: a dot that pulses while at work, a ring with no progress to show that spins
+  const extra = !animated
+    ? ''
+    : [
+        dotted && look === 'running' && which !== 'robot' ? `.${u}-dot{animation:${u}-ping 1.8s ease-in-out infinite}@keyframes ${u}-ping{0%,100%{fill-opacity:1}50%{fill-opacity:.4}}` : '',
+        drawn.isSpun ? `.${u}-spin{transform-origin:20px 20px;animation:${u}-spin 1.6s linear infinite}@keyframes ${u}-spin{to{transform:rotate(360deg)}}` : '',
+      ].join('')
+  const motion = (drawn.css ?? '') + extra
+  // asked for less motion, the reader gets none: every animation in the document stops
+  const css = motion ? `${motion}@media (prefers-reduced-motion:reduce){.${u} *{animation:none!important}}` : ''
+  return { ...drawn, c, isDotted: dotted, ground, size, css }
 }
+
 
 /** The status dot, as the gallery drew it: at the face's foot, ringed in the ground. */
 function dotOf(c, ground) {
@@ -420,6 +485,7 @@ export function avatarSvg(style, agent, opts = {}) {
     const p = partsOf(style, agent, options)
     return [
       `<svg xmlns="http://www.w3.org/2000/svg" class="${p.c.u}" width="${n2(p.size)}" height="${n2(p.size)}" viewBox="0 0 40 40">`,
+      p.css ? `<style>${p.css}</style>` : '',
       p.defs ? `<defs>${p.defs}</defs>` : '',
       p.body,
       p.isDotted ? dotOf(p.c, p.ground) : '',
