@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
-import * as O from '../hooks/ui/outlineModel'
+import * as W from '../hooks/web'
 import type { DeckSnapshot } from '../types'
 
 /**
@@ -87,12 +87,13 @@ test('Live QA 1: an agent the engine lists as waiting while its foreground child
   // the tick folds the list in (2.5 s), and the snapshot keeps it (1.5 s later)
   await clock.advance(4500)
 
-  const { data, view } = lastOf(saved)
+  const { data } = lastOf(saved)
   const fixer = M.agentOf(data, 'agent-fixer')
   expect(fixer?.status).toBe('waiting')
   expect(M.statusOf(fixer!, data)).toBe('running')
-  const row = O.outlineOf(data, view, NOW + 4500).rows.find(one => one.id === 'agent-fixer')
-  expect(row).toMatchObject({ status: 'running', note: 'fix the bug and test it', noteTone: 'dim' })
+  // its row in the deck's tree: at work, nothing of its waiting on you
+  const row = W.agentRowsOf(data, NOW + 4500).find(one => one.row === 'agent' && one.id === 'agent-fixer')
+  expect(row).toMatchObject({ status: 'running', needs: 0 })
   expect(M.summaryOf(data, emptyGit(), NOW + 4500)).toMatchObject({ running: 2, waiting: 0 })
   expect(M.needsOf(data, emptyGit()).kind).toBe('none')
 })
