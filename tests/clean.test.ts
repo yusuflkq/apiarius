@@ -117,7 +117,7 @@ test('through the hooks: the prompt you submit is the goal, the Orchestrator`s t
   expect(JSON.stringify(state)).not.toMatch(/pasted_content|command-name|local-command-caveat|system-reminder/)
 })
 
-test('restored: a snapshot an earlier build kept with the tags reads as you wrote it (the goal, its follow-ups, your prompts in Talk), an echo kept as a prompt goes, and words with no tags stay exactly', () => {
+test('restored: a snapshot an earlier build kept with the tags reads as you wrote it (the goal, its follow-ups, your prompts in Talk), an echo kept as a prompt is the command you ran, and words with no tags stay exactly', () => {
   const raw = M.emptyData(NOW)
   raw.goals = [
     {
@@ -139,9 +139,10 @@ test('restored: a snapshot an earlier build kept with the tags reads as you wrot
   ]
   const data = M.healData(M.copyOf(raw), NOW)
   expect(data.goals[0]).toMatchObject({ headline: '[pasted text, 2 lines]', text: '[pasted text, 2 lines]\nfix this', followUps: [{ text: 'and [pasted text] too', at: NOW + 1 }] })
-  expect(data.messages.map(one => [one.id, one.text])).toEqual([
-    ['m1', 'fix this\n[pasted text, 2 lines]'],
-    ['m3', 'Kept <pasted_content> as it came'],
+  expect(data.messages.map(one => [one.id, one.kind, one.to, one.text])).toEqual([
+    ['m1', 'prompt', M.MAIN, 'fix this\n[pasted text, 2 lines]'],
+    ['m2', 'command', '', '/deck web'],
+    ['m3', 'answer', M.YOU, 'Kept <pasted_content> as it came'],
   ])
 
   const plain = M.emptyData(NOW)
@@ -151,6 +152,31 @@ test('restored: a snapshot an earlier build kept with the tags reads as you wrot
   const healed = M.healData(M.copyOf(plain), NOW)
   expect(healed.goals).toEqual(plain.goals)
   expect(healed.messages).toEqual(plain.messages)
+})
+
+test('a slash command run alone is the command you ran, no words of yours: no goal, a `command` row to nobody ("/login"), never a prompt; a command with words of yours around it stays your prompt', () => {
+  expect(M.commandLineOf('/login')).toBe('/login')
+  expect(M.commandLineOf('  /plugin:skill \n')).toBe('/plugin:skill')
+  expect(M.commandLineOf(`${CAVEAT}\n${ECHO}`)).toBe('/deck web')
+  expect(M.commandLineOf(`${ECHO}\n${STDOUT}`)).toBe('/deck web')
+  for (const words of ['/review the diff', '/tmp/out.txt is empty', 'please /login again', 'login', REMINDER, '']) expect(M.commandLineOf(words), words).toBe('')
+  expect(M.commandOf({ name: 'review', args: ' the \n diff ' })).toBe('/review the diff')
+  expect(M.commandOf({ name: 'login', args: '' })).toBe('/login')
+
+  const data = M.emptyData(NOW)
+  expect(M.promptKindOf(data, { origin: { kind: 'composer' }, text: '/login' })).toBe('event')
+  expect(M.promptKindOf(data, { origin: { kind: 'composer' }, text: '/review the diff' })).toBe('goal')
+  M.addPrompt(data, { text: '/login', at: NOW })
+  M.addPrompt(data, { text: `${CAVEAT}\n${ECHO}`, at: NOW + 1 })
+  // the engine says the prompt runs a command: whatever its words, the command as typed
+  M.addPrompt(data, { text: 'Review the changes for bugs.', at: NOW + 2, command: '/review the diff' })
+  M.addPrompt(data, { text: 'fix the /login page', at: NOW + 3 })
+  expect(data.messages.map(one => [one.from, one.to, one.kind, one.text])).toEqual([
+    [M.YOU, '', 'command', '/login'],
+    [M.YOU, '', 'command', '/deck web'],
+    [M.YOU, '', 'command', '/review the diff'],
+    [M.YOU, M.MAIN, 'prompt', 'fix the /login page'],
+  ])
 })
 
 test('recovered: the transcript`s newest prompt reads as a live goal does, and a reminder beside your words leaves them yours', () => {

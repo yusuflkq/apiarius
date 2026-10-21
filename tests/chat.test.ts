@@ -265,6 +265,20 @@ test('Claude Code`s notices are centred, small and dim; a question held on you i
   await ui.unmount()
 })
 
+test('a slash command you ran alone is a small line in the middle, "You ran /login", never a bubble of yours', async ($, on) => {
+  await demo($, on, newWorld(), state => ({ ...state, chat: [...state.chat, { id: 'mcmd', at: SAMPLE_NOW - 60_000, from: 'you', to: null, who: 'You', kind: 'command', text: '/login' }] }))
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await press(ui, 'tab:chat')
+    const line = await ui.find({ key: 'msg:mcmd' })
+    expect(line?.props.justifyContent).toBe('center')
+    expect(line?.text).toMatch(/^You ran \/login · \d+m$/)
+    expect(under(line, node => node.type === 'Box' && node.props?.backgroundColor === BLUE).length).toBe(0)
+    expect(await ui.find({ key: 'grp:msg:mcmd' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
 test('under your message, what came of it and when: Not delivered, Queued, Delivered (dim once the agent spoke after it); over it, whom it went to when that is not the Orchestrator', async ($, on) => {
   const { v2 } = await demo($, on)
   const failed = v2.chat.find(row => row.ackId === 'c-1')!

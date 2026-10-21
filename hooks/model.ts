@@ -1189,6 +1189,13 @@ function healMessage(value: Record<string, unknown>): DeckMessage {
   if (typeof value.full !== 'string') delete message.full
   if (value.isSaved !== true) delete message.isSaved
   for (const field of ['ackId', 'callId', 'title', 'agent'] as const) if (typeof value[field] !== 'string') delete message[field]
+  // a slash command run alone that an earlier build kept as your words ("/login"): the command you ran
+  const line = isYourPrompt(message) && typeof value.text === 'string' ? commandLineOf(message.full ?? value.text) : ''
+  if (line) {
+    message.kind = 'command'
+    message.to = ''
+    setMessageText(message, line)
+  }
   if (isYourPrompt(message) && typeof value.text === 'string') {
     const kept = message.full ?? value.text
     const words = cleanPrompt(kept)
@@ -2505,6 +2512,44 @@ function isYourPrompt(message: Pick<DeckMessage, 'from' | 'kind'>): boolean {
   return message.from === YOU && message.kind === 'prompt'
 }
 
+/** A local command's echo: the command's name (`<command-name>/login</command-name>`) and its arguments. */
+const ECHO_NAME = /<command-name>\s*\/?([^<\s]+)\s*<\/command-name>/
+const ECHO_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
+/** A slash command typed alone, no words after it: "/login", "/plugin:skill". */
+const BARE_COMMAND = /^\/[A-Za-z][\w:.-]*$/
+
+/** A slash command as the engine names it (`prompt.submit`'s `command`), as it was typed: "/review the diff". */
+export function commandOf(command: { name: string; args: string }): string {
+  const args = oneLine(command.args)
+  return `/${command.name.replace(/^\//, '')}${args ? ` ${args}` : ''}`
+}
+
+/**
+ * The slash command a prompt is and nothing else, as typed ("/login"): a
+ * command typed alone, or a local command's echo (`<command-name>`,
+ * `<command-args>`) with none of your words beside it. '' for a prompt with
+ * any words of yours, one that starts with a command among them.
+ */
+export function commandLineOf(text: string): string {
+  const said = cleanPrompt(text)
+  if (said !== '') return BARE_COMMAND.test(said) ? said : ''
+  const name = ECHO_NAME.exec(text)?.[1]
+  return name ? commandOf({ name, args: ECHO_ARGS.exec(text)?.[1] ?? '' }) : ''
+}
+
+/**
+ * Logs a prompt of yours to the Orchestrator. A slash command run alone
+ * (`commandLineOf`, or the one the engine says the prompt runs: `command`,
+ * as typed) is the command you ran (`command`, "/login", to nobody in
+ * particular), which the chat draws as a small line of its own, never a
+ * bubble of yours; anything else is your words, as `addMessage` logs them.
+ */
+export function addPrompt(data: DeckData, prompt: { text: string; at: number; command?: string }): DeckMessage {
+  const line = prompt.command || commandLineOf(prompt.text)
+  if (line) return addMessage(data, { from: YOU, to: '', kind: 'command', text: line, at: prompt.at })
+  return addMessage(data, { from: YOU, to: MAIN, kind: 'prompt', text: prompt.text, at: prompt.at })
+}
+
 // Goals: what the person asked for.
 
 /** Whether a prompt is the person's own words: typed (composer), from a Remote Control client (bridge), the SDK host's, or a plugin's sent as theirs. */
@@ -2525,6 +2570,8 @@ export type PromptKind = 'goal' | 'followUp' | 'event'
 export function promptKindOf(data: DeckData, prompt: { origin: { kind: string; asUser?: unknown }; turnId?: string; text?: string }): PromptKind {
   if (!isUsersWords(prompt.origin)) return 'event'
   if (prompt.text !== undefined && cleanPrompt(prompt.text) === '') return 'event'
+  // a slash command typed alone ("/login") asks Claude for nothing
+  if (prompt.text !== undefined && commandLineOf(prompt.text) !== '') return 'event'
   const last = goalOf(data)
   if (!last || data.isNewGoalNext === true) return 'goal'
   if (prompt.turnId !== undefined) return 'followUp'

@@ -277,6 +277,32 @@ test('your prompt after an interrupted notification`s turn is yours: each prompt
   expect(data.messages.some(one => one.from === M.YOU && one.text.includes('hand-back'))).toBe(false)
 })
 
+test('/login run alone is the command you ran, a row of its own and never a prompt of yours or a goal, whether a turn starts with it or it was typed over a running one', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  world(on, saved)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+
+  await submitStarting($, clock, typed('hi spin up an orchestrator and 3 agents'), 't1', 'answer')
+  // "Login expired · Please run /login": the command, then the turn the engine runs again with it
+  await submitStarting($, clock, { ...typed('/login'), command: { name: 'login', args: '' } } as never, 't2', 'answer')
+  // typed over a running turn, the engine naming the command
+  await submitStarting($, clock, typed('now the real work'), 't3', 'answer')
+  await $.turn.start({ text: 'and go on', turnId: 't4' })
+  await $.prompt.submit({ ...typed('/model opus', 't4'), command: { name: 'model', args: 'opus' } } as never)
+  await clock.advance(2000)
+
+  const data = lastOf(saved)
+  expect(data.messages.filter(one => one.from === M.YOU).map(one => [one.kind, one.to, one.text])).toEqual([
+    ['prompt', M.MAIN, 'hi spin up an orchestrator and 3 agents'],
+    ['command', '', '/login'],
+    ['prompt', M.MAIN, 'now the real work'],
+    ['prompt', M.MAIN, 'and go on'],
+    ['command', '', '/model opus'],
+  ])
+  expect(data.goals.map(goal => goal.text)).toEqual(['hi spin up an orchestrator and 3 agents', 'now the real work'])
+})
+
 test('Claude Code`s notifications are rows from Claude Code to you, as it sent them (a type the deck does not know too); those that ask something are needs, each taken down when what it waits on moves', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []

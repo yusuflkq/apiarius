@@ -787,6 +787,9 @@ span.cg-av { cursor: default; }
 .notice-who { font-weight: 500; color: var(--muted); }
 .notice-time { font: 11px var(--mono); }
 .notice .party { display: inline-flex; color: var(--muted); }
+/* a slash command you ran alone: "You ran /login · 5m" */
+.notice-command .notice-text { font: 12px var(--mono); color: var(--muted); }
+.notice-command > .notice-text::before { content: none; margin-right: 0; }
 
 .composer { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .composer-chat { position: sticky; bottom: 0; z-index: 4; padding: 10px 0 16px; background: linear-gradient(180deg, rgba(14, 14, 14, 0), var(--bg) 12px); }

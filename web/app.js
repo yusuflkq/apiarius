@@ -2134,8 +2134,8 @@ function Members(f) {
     membersOf().map(a => MemberButton(a, f === a.id)));
 }
 
-/** Where a message stands: yours at the right, others' at the left, Claude Code's own in the middle. */
-const sideOf = m => (m.from === 'you' ? 'mine' : m.from === 'engine' ? 'notice' : 'theirs');
+/** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone) in the middle. */
+const sideOf = m => (m.kind === 'command' || m.from === 'engine' ? 'notice' : m.from === 'you' ? 'mine' : 'theirs');
 
 /** A send from here not in the chat yet (or refused): drawn as the row it becomes, so it turns into it in place. */
 const pendingRow = o => ({ id: o.id, at: o.at, from: 'you', to: o.agentId, who: `You → ${o.title}`, kind: 'chat', title: '', text: o.text, ackId: o.id });
@@ -2278,14 +2278,14 @@ function Bubble(e, showTo) {
   note && h('p', { class: 'b-note' }, StatusNote(note)));
 }
 
-/** Claude Code's own notice, in the middle, small and dim: "Claude Code · Agent "X" completed · 12m"; the agent a notification is about opens. */
+/** Claude Code's own notice, in the middle, small and dim: "Claude Code · Agent "X" completed · 12m"; the agent a notification is about opens. A slash command you ran alone: "You ran /login · 12m". */
 function Notice(e) {
   const m = e.m;
   const said = oneLine(m.text) || oneLine(m.title);
   const words = said.length > 200 ? `${said.slice(0, 199)}…` : said;
   const about = m.kind === 'notification' && m.agent && m.agent !== 'main' && IX.byId.has(m.agent) && !said.includes(nameOf(m.agent)) ? m.agent : null;
-  return h('div', { key: e.key, class: 'notice', 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
-    h('span', { class: 'notice-who' }, 'Claude Code'),
+  return h('div', { key: e.key, class: `notice${m.kind === 'command' ? ' notice-command' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
+    h('span', { class: 'notice-who' }, m.kind === 'command' ? 'You ran' : 'Claude Code'),
     h('span', { class: 'notice-text' }, words),
     about && h('span', { class: 'notice-about' }, Party(about, 14)),
     h('span', { class: 'notice-time' }, ageOf(m.at)));

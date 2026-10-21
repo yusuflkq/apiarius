@@ -171,9 +171,11 @@ export type DeckAgent = {
  * `question` an agent's question to you (AskUserQuestion), `choice` how it
  * was answered, `notification` Claude Code's notification to you
  * (classic Notification, from `engine`), `task` a background task's
- * notification to the main loop (`<task-notification>`, from `engine`).
+ * notification to the main loop (`<task-notification>`, from `engine`),
+ * `command` a slash command you ran alone ("/login", from `you` to nobody
+ * in particular): no words of yours, so no bubble, a line of its own.
  */
-export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task'
+export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task' | 'command'
 
 export type DeckMessage = {
   /** `[A-Za-z0-9_]` and `-` only: the web deck serves it as a file name. */

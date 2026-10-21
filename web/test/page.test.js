@@ -680,6 +680,15 @@ test('Chat is a group chat: others` bubbles at the left under their avatar and n
   assert.deepEqual({ ...p.run('ui.scrollTo'), until: 0 }, { id: `need-${ASK_ONE}`, on: 'now', until: 0, focus: true })
 })
 
+test('a slash command you ran alone is a small line in the middle, "You ran /login", never a bubble of yours', () => {
+  const p = page({ hash: '#/chat' })
+  p.load(sample(s => s.chat.push({ id: 'mcmd', at: NOW - MIN, from: 'you', to: null, who: 'You', kind: 'command', text: '/login' })))
+  const line = groupsIn(p.view('ChatPage()')).find(g => g.k === 'mcmd')
+  assert.equal(line.p.class, 'notice notice-command')
+  assert.equal(flat(textOf(line)), 'You ran /login 1m')
+  assert.equal(find(p.view('ChatPage()'), 'cgroup').filter(g => flat(textOf(g)).includes('/login')).length, 0)
+})
+
 test('every agent a message names opens its drawer: the sender`s avatar and name, the recipient in "to X", the agent a notice is about', () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)

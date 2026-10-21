@@ -27,7 +27,8 @@
  *   delivered; dimmer once the one it went to spoke after it) and when. How
  *   you answered a question ("You answered: …") is a bubble of yours too.
  * - Claude Code's own notices (`engine`: its notifications, a task's end)
- *   centred, small and dim: "Claude Code · Agent "X" completed · 12m".
+ *   centred, small and dim: "Claude Code · Agent "X" completed · 12m". A
+ *   slash command you ran alone sits there too: "You ran /login · 12m".
  * - A question held on you: its bubble edged amber, and "Answer on Now →",
  *   which takes Now's card for it into view, the focus on it.
  * - A long message shows about six lines, then Show more opens it in place,
@@ -265,6 +266,8 @@ export function ackLine(ack: WebAck): { mark: string; hue: string; text: string 
 }
 
 function sideOf(row: V2ChatRow): Side {
+  // a slash command you ran alone is no words of yours: a line in the middle
+  if (row.kind === 'command') return 'notice'
   if (row.from === 'you') return 'mine'
   if (row.from === 'engine') return 'notice'
   return 'theirs'
@@ -870,14 +873,17 @@ function mineOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
   )
 }
 
-/** Claude Code's own notice, centred, small and dim: "Claude Code · Agent "X" completed · 12m". */
+/** Claude Code's own notice, centred, small and dim: "Claude Code · Agent "X" completed · 12m"; a slash command you ran alone, "You ran /login · 12m". */
 function noticeOf(ctx: Ctx, entry: Entry): RenderElement {
   const { kit, state } = ctx
   const { Box, Text } = kit
   const row = entry.row
   const words = cut(flat(clean(row.text)), NOTICE_MOST)
   const about = row.kind === 'notification' && row.agent && row.agent !== MAIN ? partyName(state, row.agent, '') : ''
-  const parts = ['Claude Code', words || flat(clean(row.title ?? '')), about && !words.includes(about) ? about : '', ago(row.at, state.now)].filter(Boolean)
+  const parts =
+    row.kind === 'command'
+      ? [`You ran ${words}`, ago(row.at, state.now)]
+      : ['Claude Code', words || flat(clean(row.title ?? '')), about && !words.includes(about) ? about : '', ago(row.at, state.now)].filter(Boolean)
   return (
     <Box key={entry.key} flexDirection="row" justifyContent="center">
       <Box flexShrink={1} minWidth={0}>

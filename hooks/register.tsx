@@ -272,8 +272,13 @@ async function respell($: EngineInterface, activity: DeckActivity, tool: string,
 /** A slash command's expansion (classic UserPromptExpansion), held for the prompt it becomes: its headline. */
 let expansion: { headline: string; at: number } | null = null
 
-/** A prompt gone in whose turn may start yet: its words, whether they are the person's own, whether it came over a running turn, whether its submit has resolved. */
-type Submitted = { text: string; isTheirs: boolean; isQueued: boolean; isSettled: boolean }
+/**
+ * A prompt gone in whose turn may start yet: its words, whether they are the
+ * person's own, whether it came over a running turn, whether its submit has
+ * resolved, and the slash command it runs as typed ("/review the diff"), when
+ * the engine said it runs one.
+ */
+type Submitted = { text: string; isTheirs: boolean; isQueued: boolean; isSettled: boolean; command?: string }
 
 /**
  * The prompts submitted whose turn may start yet, newest last (at most 20).
@@ -286,9 +291,9 @@ type Submitted = { text: string; isTheirs: boolean; isQueued: boolean; isSettled
 const submitted: Submitted[] = []
 
 /** Notes a prompt going in, before its turn can start. One submitted while the session is idle starts its turn at once, so any other such left (a local command's, which starts none) is let go. */
-function noteSubmitted(text: string, isTheirs: boolean, isQueued: boolean): Submitted {
+function noteSubmitted(text: string, isTheirs: boolean, isQueued: boolean, command: string): Submitted {
   if (!isQueued) for (let i = submitted.length - 1; i >= 0; i--) if (submitted[i]?.isQueued === false) submitted.splice(i, 1)
-  const entry: Submitted = { text: text.trim(), isTheirs, isQueued, isSettled: false }
+  const entry: Submitted = { text: text.trim(), isTheirs, isQueued, isSettled: false, ...(command ? { command } : {}) }
   submitted.push(entry)
   if (submitted.length > 20) submitted.splice(0, submitted.length - 20)
   return entry
@@ -3081,7 +3086,8 @@ export const register: Register = on => {
     // the deck's prompt asking the Orchestrator to pass your words to a subagent is no goal of yours, nor a follow-up
     if (isDecks && isRelayPrompt(e.text)) kind = 'event'
     // the turn it starts begins inside next(e): noted first, so that turn knows whose words it starts with
-    const entry = noteSubmitted(e.text, M.isUsersWords(e.origin), e.turnId !== undefined)
+    const command = e.command ? M.commandOf(e.command) : ''
+    const entry = noteSubmitted(e.text, M.isUsersWords(e.origin), e.turnId !== undefined, command)
     const result = await next(e)
     if (result.drop !== undefined) dropSubmitted(entry)
     else entry.isSettled = true
@@ -3097,10 +3103,10 @@ export const register: Register = on => {
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
         expansion = null
         if (kind !== 'event') isChanged = M.noteGoal(data, kind, { text: e.text, origin: e.origin.kind, at: now, ...(kind === 'goal' && said ? { headline: said } : {}) }) !== undefined
-        // typed over the running turn: logged now, as it went in, and by the turn it may start no second time
+        // typed over the running turn: logged now, as it went in, and by the turn it may start no second time (a slash command run alone as the command you ran)
         if (e.turnId !== undefined && !isDecks && M.isUsersWords(e.origin)) {
           const words = 'text' in result && typeof result.text === 'string' ? result.text : e.text
-          const logged = M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: words, at: now })
+          const logged = M.addPrompt(data, { text: words, at: now, ...(command ? { command } : {}) })
           if (data.messages.includes(logged)) {
             noteTypedMidTurn(words)
             isChanged = true
@@ -3162,7 +3168,8 @@ export const register: Register = on => {
       const isDecks = takeRelayTurn(e.text, e.turnId) !== undefined || takeDeckPrompt(e.text)
       // a prompt you typed over the turn before was logged as you typed it
       const isTyped = isTheirs && !isDecks && takeTypedMidTurn(e.text)
-      if (e.text.trim() && isTheirs && !isDecks && !isTyped) M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: e.text, at: now })
+      // a slash command run alone ("/login") is the command you ran, not words of yours
+      if (e.text.trim() && isTheirs && !isDecks && !isTyped) M.addPrompt(data, { text: e.text, at: now, ...(prompt?.command ? { command: prompt.command } : {}) })
       // a turn the engine starts with a background task's notification, no prompt.submit before it: Claude Code's row, once
       if (M.isNoticeText(e.text)) M.noteTaskNotices(data, e.text, now)
       // a new turn: no call of the Orchestrator's last one is held on you any more
