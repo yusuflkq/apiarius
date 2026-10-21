@@ -29,15 +29,12 @@ import * as F from './format'
 import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
-import { bandView } from './ui/band'
 import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
-import { stepOpenId, stepRowKey } from './ui/dash/plan'
-import { talkEndOf } from './ui/dash/talk'
 import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
-import type { ChatLine, DashActions, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
+import type { ChatLine, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { newRenderMemo } from './renderMemo'
-import { deckView } from './views'
+import { bandOf, deckView, type DeckActions } from './views'
 import * as W from './web'
 
 const PANE = 'agent-deck'
@@ -1836,7 +1833,7 @@ function followTalk($: EngineInterface) {
  */
 function keepTalk($: EngineInterface, state: W.WebState | null) {
   const id = state && view.page !== '' && view.agentPane === 'chat' ? view.page : ''
-  const end = state && id !== '' ? talkEndOf(state, id) : ''
+  const end = state && id !== '' ? W.threadEndOf(state, id) : ''
   if (id === '' || id !== talkView.agent) {
     talkView.agent = id
     talkView.isAtEnd = false
@@ -1883,9 +1880,9 @@ async function readMessage($: EngineInterface, id: string, onRead: (text: string
 function showStep($: EngineInterface, key: string) {
   view.tab = 'plan'
   view.page = ''
-  view.planOpen = M.planOpenWith(view.planOpen, stepOpenId(key), true)
+  view.planOpen = M.planOpenWith(view.planOpen, M.stepOpenId(key), true)
   changed($)
-  scrollTo($, stepRowKey(key))
+  scrollTo($, M.stepRowKey(key))
 }
 
 /** The key of this session's plan step numbered `n` (1 for the first, as the Plan tab numbers them); '' for none. */
@@ -1901,8 +1898,14 @@ function pickAgent($: EngineInterface, id: string) {
   if (view.agentPane === 'chat') void loadChat($, id)
 }
 
-/** The closures the views' buttons and fields run. */
-function actionsFor($: EngineInterface): DashActions {
+/** The outline's folds and zoom as a press handed them over (views.tsx works them out): copies, so the view holds its own. */
+function setOutlineTo(outline: { folded?: readonly string[]; zoom?: string }) {
+  if (outline.folded) view.folded = outline.folded.filter(one => typeof one === 'string')
+  if (typeof outline.zoom === 'string') view.zoom = outline.zoom
+}
+
+/** The closures the views' buttons and fields run (views.tsx makes Classic's select, fold, zoom and Details of `pick`, `setOutline` and `openDetails`). */
+function actionsFor($: EngineInterface): DeckActions {
   return {
     setTab: tab => {
       view.tab = tab
@@ -1949,25 +1952,14 @@ function actionsFor($: EngineInterface): DashActions {
       view.page = ''
       changed($)
     },
-    select: id => {
+    // a row picked; with `outline`, the outline as it shows that row (Classic's select)
+    pick: (id, outline) => {
       pickAgent($, id)
-      // the outline shows what was picked: out of a zoom it lies outside, the branches above it opened
-      const shown = O.revealed(data, view, id)
-      view.folded = shown.folded
-      view.zoom = shown.zoom
+      if (outline) setOutlineTo(outline)
       changed($)
     },
-    toggleFold: id => {
-      view.folded = O.foldToggled(data, view, id)
-      changed($)
-    },
-    zoomTo: id => {
-      // zooming on the branch already zoomed comes back out: the detail's Zoom and the outline's z both toggle
-      view.zoom = id !== '' && id === view.zoom ? '' : O.zoomFor(data, view, id)
-      changed($)
-    },
-    selectAgent: id => {
-      pickAgent($, id)
+    setOutline: outline => {
+      setOutlineTo(outline)
       changed($)
     },
     selectRepo: root => void chooseRepo($, root),
@@ -2025,13 +2017,11 @@ function actionsFor($: EngineInterface): DashActions {
       view.isDetailsOpen = !view.isDetailsOpen
       changed($)
     },
-    showDetails: id => {
+    openDetails: (id, outline) => {
       view.isDetailsOpen = true
       if (id !== '') {
         pickAgent($, id)
-        const shown = O.revealed(data, view, id)
-        view.folded = shown.folded
-        view.zoom = shown.zoom
+        if (outline) setOutlineTo(outline)
       }
       changed($)
     },
@@ -3440,7 +3430,7 @@ export const register: Register = on => {
     if (!isPaneOpen) shownKey = key
     return drawn.of(`band:${e.surface}`, [e.props.bodyColumns, key, view, theirs], () => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
-      return bandView(kit, modelOf(now), actionsFor($), theirs) ?? theirs
+      return bandOf(kit, modelOf(now), actionsFor($), theirs) ?? theirs
     })
   })
 

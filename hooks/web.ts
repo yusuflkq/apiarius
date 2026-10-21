@@ -527,6 +527,21 @@ export function newPatchesOf(data: DeckData, written: ReadonlySet<string>): { id
   return out
 }
 
+/**
+ * What agent `agentId`'s thread in a v1 state ends with, as one string (its
+ * length, its last message and the last word on that one's command): a
+ * change says something new came at its end. The pane's Talk keeps to its
+ * end with it.
+ */
+export function threadEndOf(state: WebState, agentId: string): string {
+  const thread = state.messages.filter(message => message.from === agentId || message.to === agentId)
+  const last = thread[thread.length - 1]
+  if (!last) return ''
+  let ack: WebAck | undefined
+  for (let i = state.acks.length - 1; i >= 0 && last.ackId && !ack; i--) if (state.acks[i]?.id === last.ackId) ack = state.acks[i]
+  return `${thread.length}|${last.id}|${ack ? `${ack.status}:${ack.text}` : ''}`
+}
+
 // The server: how it is started, and what it prints back.
 
 /** The page's address: the server's port on 127.0.0.1, the token as `t`. */

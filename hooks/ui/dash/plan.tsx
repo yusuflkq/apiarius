@@ -30,6 +30,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { DeckStepStatus, DeckView } from '../../../types'
 import { baseName, clean } from '../../format'
+import { stepOpenId, stepRowKey } from '../../model'
 import { cutMarkdown, type WebAgent, type WebState } from '../../web'
 import { fitsTree } from '../common'
 import type { DashActions, Kit } from '../types'
@@ -40,15 +41,8 @@ import { AVATAR, CARD_CHROME, avatar, foldHead, icon, pill, quiet, sectionFold, 
 
 type Step = WebState['plan']['steps'][number]
 
-/** A step's id in `DeckView.planOpen`. */
-export function stepOpenId(key: string): string {
-  return `step:${key}`
-}
-
-/** The key of a step's row in the drawing: what `openStep` scrolls to. */
-export function stepRowKey(key: string): string {
-  return `plan:step:${key}`
-}
+/** A step's id in `DeckView.planOpen`, and the key of its row in the drawing (what `openStep` scrolls to): the model's, so the hooks module names them without this file. */
+export { stepOpenId, stepRowKey }
 
 /** The goal's whole words' id in `DeckView.planOpen`. */
 export const GOAL_OPEN = 'goal'

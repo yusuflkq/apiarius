@@ -8,12 +8,16 @@
  * of earlier builds), off the tab row now but still opened by `/deck stats`
  * and `/deck classic`. The band above the prompt is `./ui/band`.
  *
- * Pure: Kit, DeckModel, DashModel and DashActions come from the hooks module.
+ * Pure: Kit, DeckModel, DashModel and DeckActions come from the hooks module,
+ * which works out no outline: Classic's select, fold, zoom and Details are
+ * made here of its `pick`, `setOutline` and `openDetails`
+ * (`classicActionsOf`).
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckTab } from '../types'
+import type { DeckTab, DeckView } from '../types'
 import { agentsTab } from './ui/agents'
+import { bandView } from './ui/band'
 import { changesTab } from './ui/changes'
 import { toggles, type ToggleItem } from './ui/common'
 import { agentPage } from './ui/dash/agent'
@@ -22,8 +26,54 @@ import { orgTab } from './ui/dash/org'
 import { P } from './ui/dash/palette'
 import { quiet } from './ui/dash/parts'
 import { planTab } from './ui/dash/plan'
+import * as O from './ui/outlineModel'
 import { statsTab } from './ui/stats'
 import type { DashActions, DashModel, DeckModel, Kit } from './ui/types'
+
+/** The outline's folds and zoom, as `DeckView` keeps them. */
+export type OutlineSpot = Pick<DeckView, 'folded' | 'zoom'>
+
+/**
+ * What the hooks module's presses run (its `actionsFor`): the deck's own,
+ * with the outline's folds and zoom set as they are handed over, never
+ * worked out there. `classicActionsOf` makes Classic's select, fold, zoom
+ * and Details of them.
+ */
+export type DeckActions = Omit<DashActions, 'select' | 'toggleFold' | 'zoomTo' | 'selectAgent' | 'showDetails'> & {
+  /** Opens row `id` in the detail block (an agent's id, a plan step's key, `file:` and a path); with `outline`, the outline's folds and zoom become it. */
+  pick: (id: string, outline?: OutlineSpot) => void
+  /** Sets the outline's folds, its zoom, or both; what is left out stays. */
+  setOutline: (outline: Partial<OutlineSpot>) => void
+  /** Shows the Agents tab's full outline (Details); with `id` ('' for none), that row picked as `pick` picks it. */
+  openDetails: (id: string, outline?: OutlineSpot) => void
+}
+
+/**
+ * The actions Classic's screens press, made of the hooks module's: a row
+ * picked shows in the outline (out of a zoom it lies outside, the branches
+ * folded above it opened: `O.revealed`), a fold toggles (`O.foldToggled`), a
+ * zoom re-roots it or, on the branch already zoomed, comes back out
+ * (`O.zoomFor`). Each works on `model`'s data and view, the hooks module's
+ * own, as they stand when the press runs.
+ */
+export function classicActionsOf(model: Pick<DeckModel, 'data' | 'view'>, actions: DeckActions): DashActions {
+  const { data, view } = model
+  const { pick, setOutline, openDetails, ...rest } = actions
+  return {
+    ...rest,
+    select: id => pick(id, O.revealed(data, view, id)),
+    selectAgent: id => pick(id),
+    toggleFold: id => setOutline({ folded: O.foldToggled(data, view, id) }),
+    // zooming on the branch already zoomed comes back out: the detail's Zoom and the outline's z both toggle
+    zoomTo: id => setOutline({ zoom: id !== '' && id === view.zoom ? '' : O.zoomFor(data, view, id) }),
+    showDetails: id => openDetails(id, id !== '' ? O.revealed(data, view, id) : undefined),
+  }
+}
+
+/** The band above the prompt (./ui/band), its presses Classic's: null when it has nothing to say. */
+export function bandOf(kit: Kit, model: DeckModel, actions: DeckActions, theirs: RenderElement | null): RenderElement | null {
+  return bandView(kit, model, classicActionsOf(model, actions), theirs)
+}
 
 /** The tab row. Stats and Classic (`agents`) are off it: `/deck stats` and `/deck classic` open them, and no tab shows lit there. */
 export const TABS: readonly ToggleItem<DeckTab>[] = [
@@ -34,8 +84,9 @@ export const TABS: readonly ToggleItem<DeckTab>[] = [
 ]
 
 /** The whole pane: the sample's header when it shows, the tab row, then the open tab or the agent page over it. */
-export function deckView(kit: Kit, model: DeckModel, actions: DashActions, dash: DashModel): RenderElement {
+export function deckView(kit: Kit, model: DeckModel, deckActions: DeckActions, dash: DashModel): RenderElement {
   const { Box } = kit
+  const actions = classicActionsOf(model, deckActions)
   return (
     <Box flexDirection="column" gap={1}>
       {dash.isDemo ? demoHeader(kit, actions) : null}

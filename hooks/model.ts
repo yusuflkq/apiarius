@@ -249,6 +249,16 @@ export function planOpenWith(open: readonly string[], id: string, isOpen?: boole
   return (isWanted && id !== '' ? [...rest, id] : rest).slice(-PLAN_OPEN_KEPT)
 }
 
+/** A plan step's id in `DeckView.planOpen`. */
+export function stepOpenId(key: string): string {
+  return `step:${key}`
+}
+
+/** The key of a plan step's row in the Plan tab's drawing: what `openStep` scrolls to. */
+export function stepRowKey(key: string): string {
+  return `plan:step:${key}`
+}
+
 /** The sections `view.collapsed` keeps folded at most, the oldest dropped first. */
 const COLLAPSED_KEPT = 50
 
