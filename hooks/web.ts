@@ -735,6 +735,60 @@ export type V2Inspect = {
   agents: { id: string; title: string; model: string; tokens: { in: number; out: number; cacheRead: number }; requests: number; tools: number; errors: number }[]
 }
 
+/** One tool call of any agent's, as Now's Recent activity lists it. */
+export type V2Activity = {
+  /** The call's tool_use_id, `webIdOf`'d. */
+  id: string
+  /** When it started. */
+  at: number
+  /** Whose: `main`, or an agent's id. */
+  agent: string
+  /** Its row's title in `agents` ("Orchestrator" for the main loop), cut after a word at 40 characters. */
+  agentName: string
+  tool: string
+  /** The call's own description (a shell call's), else what it was aimed at (a file, a pattern, a URL, a question), verbatim as the deck kept it. */
+  text: string
+  /** How it went; null while it runs (and for one whose end never came). */
+  ok: boolean | null
+  /** How long it took; null until it ends. */
+  ms: number | null
+}
+
+/** One file the agents edited, as Now's Files lists it: who edited it and how much, nothing read into it. */
+export type V2File = {
+  /** Repository-relative, or absolute for a file outside the repository (`isOutside`). */
+  path: string
+  /** The agents that edited it (`main` or an agent's id), in the order of their first edit of it. */
+  editors: string[]
+  /** All its edits' lines added and removed. */
+  added: number
+  removed: number
+  /** When it was edited last. */
+  lastAt: number
+  /** Not under the repository's root: its path stayed absolute (a scratch or temp file). Never set with no repository. */
+  isOutside?: true
+}
+
+/** The figures strip of Now: counts of what is in the state, the plan's only from Claude's own lists, and the spend. */
+export type V2Figures = {
+  /** The agent rows, but the Orchestrator's and Claude Code's own loops: starting or running, waiting on you, done, failed (not stopped), and stopped. An idle one counts for none. */
+  running: number
+  waiting: number
+  done: number
+  failed: number
+  stopped: number
+  /** Claude's task board's tasks done of all; with no board, the Orchestrator's TodoWrite items done of all; null with neither (an approved plan or a Workflow's phases have no statuses to count). */
+  plan: { done: number; total: number } | null
+  costUsd: number | null
+  /** Every agent's tokens (the Orchestrator's too): in + out + cache reads. */
+  tokens: number
+  contextPercent: number | null
+  /** Whole minutes since the goal began, to `now` while work goes on, else to its last news; with no goal, since the session started. */
+  minutes: number
+  /** How many things need you: `needs`' length. */
+  needs: number
+}
+
 /** The state every surface draws (web/CONTRACT.md, v2). */
 export type WebStateV2 = {
   v: 2
@@ -746,6 +800,11 @@ export type WebStateV2 = {
   needs: V2Need[]
   /** The tree of who started whom, as rows: the Orchestrator first, each agent under the one that started it (spawn order), the ones at work first and then their parent's fold row and its members. */
   agents: V2Row[]
+  /** Every agent's latest tool calls (the newest 14 of each the deck keeps), the newest 40 of them, newest first. */
+  activity: V2Activity[]
+  /** Every file the agents edited: the repository's first, then those outside it, each list the one edited last first. */
+  files: V2File[]
+  figures: V2Figures
   plan: V2Plan | null
   /** The newest 200 messages, oldest first. */
   chat: V2ChatRow[]
@@ -770,8 +829,8 @@ export type V2AgentFile = {
   edits: string[]
 }
 
-/** v2's sizes: the chat rows kept, a text's characters in the state, the edits, commits and acks kept, a title's and a name's characters. */
-export const V2_CAPS = { chat: 200, text: 600, edits: 300, commits: 20, acks: 50, title: 60, name: 40 } as const
+/** v2's sizes: the chat rows kept, a text's characters in the state, the edits, commits and acks kept, a title's and a name's characters, the tool calls in `activity`. */
+export const V2_CAPS = { chat: 200, text: 600, edits: 300, commits: 20, acks: 50, title: 60, name: 40, activity: 40 } as const
 
 const STATE_TEXT: Readonly<Record<V2Header['state'], string>> = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' }
 
@@ -1067,6 +1126,82 @@ export function planOfV2(data: DeckData): V2Plan | null {
   return { board, todos: items.length > 0 ? { items, at: main?.todosAt ?? 0 } : null, approved, workflows }
 }
 
+/**
+ * Every agent's latest tool calls, the newest 40, newest first: the deck's
+ * own record of each (`recent`, its newest 14 per agent), its words as kept:
+ * a shell call's description, else what the call was aimed at.
+ */
+export function activityListOf(data: DeckData): V2Activity[] {
+  const calls = data.agents.filter(isTreeAgent).flatMap(agent => {
+    const agentName = partyOf(data, agent.id, true)
+    return agent.recent.map(call => ({ id: webIdOf(call.id), at: call.at, agent: agent.id, agentName, tool: call.tool, text: call.description || call.target, ok: call.ok ?? null, ms: call.ms ?? null }))
+  })
+  // newest first; of two at the same moment, the one recorded later first
+  return calls
+    .map((call, seq) => ({ call, seq }))
+    .sort((a, b) => b.call.at - a.call.at || b.seq - a.seq)
+    .slice(0, V2_CAPS.activity)
+    .map(one => one.call)
+}
+
+/**
+ * Every file the agents edited (the deck's own record, `data.files`): its
+ * editors in the order of their first edit, its lines, when it was edited
+ * last. The repository's first, then those outside it (`isOutside`: its
+ * path stayed absolute as the deck made it relative to `root`; none with no
+ * root), each the one edited last first.
+ */
+export function editedFilesOf(data: DeckData, root: string): V2File[] {
+  const files: V2File[] = Object.values(data.files)
+    .map(file => ({
+      path: file.path,
+      editors: file.editors.map(editor => editor.agent),
+      added: file.added,
+      removed: file.removed,
+      lastAt: file.lastAt,
+      ...(root !== '' && ABSOLUTE.test(file.path) ? { isOutside: true as const } : {}),
+    }))
+    .sort((a, b) => b.lastAt - a.lastAt || a.path.localeCompare(b.path))
+  return [...files.filter(file => !file.isOutside), ...files.filter(file => file.isOutside)]
+}
+
+/** The figures' agent counts, over the agent rows but the Orchestrator's and Claude Code's own loops: a stopped one is stopped, never failed; an idle one counts for none. */
+function rowCountsOf(rows: readonly V2Row[]): Pick<V2Figures, 'running' | 'waiting' | 'done' | 'failed' | 'stopped'> {
+  const counts = { running: 0, waiting: 0, done: 0, failed: 0, stopped: 0 }
+  for (const row of rows) {
+    if (row.row !== 'agent' || row.kind === 'orchestrator' || row.kind === 'engine') continue
+    if (row.isStopped) counts.stopped += 1
+    else if (row.status === 'running' || row.status === 'starting') counts.running += 1
+    else if (row.status === 'waiting') counts.waiting += 1
+    else if (row.status === 'done') counts.done += 1
+    else if (row.status === 'failed') counts.failed += 1
+  }
+  return counts
+}
+
+/** The plan's figure, only from a list of Claude's with statuses: its board's tasks done of all, else the Orchestrator's TodoWrite items; null otherwise. */
+function planFigureOf(plan: V2Plan | null): V2Figures['plan'] {
+  if (!plan) return null
+  if (plan.board.length > 0) return { done: plan.board.filter(task => task.status === 'done').length, total: plan.board.length }
+  const items = plan.todos?.items ?? []
+  if (items.length > 0) return { done: items.filter(item => item.status === 'done').length, total: items.length }
+  return null
+}
+
+/** Now's figures strip, from the rows and the plan built already: the agents by status, the plan's count, the spend, the tokens, the minutes and the needs. */
+function figuresOf(data: DeckData, rows: readonly V2Row[], plan: V2Plan | null, needs: number, usage: UsageInfo | null, now: number): V2Figures {
+  const tokens = data.agents.filter(isTreeAgent).reduce((sum, agent) => sum + agent.tokensIn + agent.tokensOut + agent.cacheRead, 0)
+  return {
+    ...rowCountsOf(rows),
+    plan: planFigureOf(plan),
+    costUsd: usage?.costUsd ?? null,
+    tokens,
+    contextPercent: usage?.contextPercent ?? null,
+    minutes: M.goalOf(data) ? M.goalMinutesOf(data, now) : Math.max(0, Math.floor((now - data.startedAt) / 60_000)),
+    needs,
+  }
+}
+
 /** The header's line: "opus-5.5 · context 41% · $4.12", each part left out while unknown. */
 function headerLineOf(model: string, usage: UsageInfo | null): string {
   const percent = usage?.contextPercent
@@ -1103,6 +1238,8 @@ export function deckStateOf(
   const model = shortModel(main?.model)
   const turnId = data.mainTurnId
   const edits = data.edits.slice(-V2_CAPS.edits)
+  const rows = agentRowsOf(data, now, needsBy)
+  const plan = planOfV2(data)
   return {
     v: 2,
     now,
@@ -1118,8 +1255,11 @@ export function deckStateOf(
       turn: turnId !== undefined ? { id: turnId, at: data.mainTurnAt ?? null } : null,
     },
     needs,
-    agents: agentRowsOf(data, now, needsBy),
-    plan: planOfV2(data),
+    agents: rows,
+    activity: activityListOf(data),
+    files: editedFilesOf(data, root),
+    figures: figuresOf(data, rows, plan, needs.length, usage, now),
+    plan,
     // oldest first by when each was said: a word recorded late (a result, a choice) still sits where it was said
     chat: data.messages
       .slice(-V2_CAPS.chat)
@@ -1302,7 +1442,8 @@ export function fileKeyOf(path: string): string {
  * in the order the screen draws them. Now: each need (`needKeyOf`), then
  * the tree's rows: each agent row drawn (`agentKeyOf`; a fold's member only
  * while that fold is open) and each fold row (its id). Changes: git's files
- * (`fileKeyOf`). None on Chat, an agent's page (`page` its id) or Inspect.
+ * (`fileKeyOf`). None on Chat, Org (its screen passes its own keys to
+ * `focusNext`), an agent's page (`page` its id) or Inspect.
  */
 export function focusKeysOf(state: Pick<WebStateV2, 'needs' | 'agents' | 'changes'>, view2: Pick<DeckView2, 'tab' | 'openFolds' | 'isInspectOpen'>, page: string): string[] {
   if (page !== '' || view2.isInspectOpen) return []
@@ -1382,13 +1523,14 @@ export function answeredInSample(state: WebStateV2, callId: string, answers: Rea
   const isWorking = agents.some(row => row.row === 'agent' && (row.status === 'running' || row.status === 'starting'))
   const word: V2Header['state'] = needs.length > 0 ? 'waiting' : isWorking ? 'working' : 'idle'
   const header = { ...state.header, state: word, stateText: STATE_TEXT[word] }
-  return { state: { ...state, header, needs, agents, chat: [...state.chat, choice].slice(-V2_CAPS.chat) }, words }
+  const figures = { ...state.figures, ...rowCountsOf(agents), needs: needs.length }
+  return { state: { ...state, header, needs, agents, figures, chat: [...state.chat, choice].slice(-V2_CAPS.chat) }, words }
 }
 
 /** The fields of a v2 state, or of its agent files, that hold a time: moved together when a recorded state is shown now. */
-const TIME_KEYS: ReadonlySet<string> = new Set(['now', 'at', 'startedAt', 'endedAt'])
+const TIME_KEYS: ReadonlySet<string> = new Set(['now', 'at', 'startedAt', 'endedAt', 'lastAt'])
 
-/** `value` (a v2 state, or an agent file) with every time in it (`now`, `at`, `startedAt`, `endedAt`, past 2001) moved by `by` ms. */
+/** `value` (a v2 state, or an agent file) with every time in it (`now`, `at`, `startedAt`, `endedAt`, `lastAt`, past 2001) moved by `by` ms. */
 export function v2TimesMoved<T>(value: T, by: number): T {
   const move = (one: unknown): unknown => {
     if (Array.isArray(one)) return one.map(move)
@@ -1410,6 +1552,7 @@ export function v2StateFromText(text: string, now: number): WebStateV2 | null {
   }
   if (!isRecord(value) || value.v !== 2 || typeof value.now !== 'number' || !Array.isArray(value.agents) || !Array.isArray(value.chat) || !Array.isArray(value.needs) || !Array.isArray(value.acks)) return null
   if (!isRecord(value.header) || !isRecord(value.changes) || !isRecord(value.inspect) || !isRecord(value.session)) return null
+  if (!Array.isArray(value.activity) || !Array.isArray(value.files) || !isRecord(value.figures)) return null
   return v2TimesMoved(value as unknown as WebStateV2, now - value.now)
 }
 

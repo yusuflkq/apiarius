@@ -15,7 +15,11 @@
  * Orchestrator asks a single-choice one, and the github MCP server's
  * notification waits on you. builder and reviewer message each other, and
  * builder writes to ops-bot, a name no agent carries. Three sends from the
- * deck: delivered, queued, failed.
+ * deck: delivered, queued, failed. Five files edited: src/rateLimit.ts by
+ * builder and then tester (its off-by-one fixed, so git still counts the
+ * file builder wrote), and builder's bench script outside the repository;
+ * 15 tool calls, the linter's eslint call failed, builder's `npm test` and
+ * the two questions still running.
  *
  * Plain TypeScript that Node runs as it is (no `claude-code` import), so the
  * fixture's generator can load it.
@@ -94,11 +98,11 @@ Two things are open: which store backs production, and which routes skip the lim
 
 ${'Next, builder runs the limiter tests, which need your OK to run. '.repeat(3)}`
 
-function patchOf(path: string, lines: string[], isNew = false): string {
+function patchOf(path: string, lines: string[], isNew = false, start = 1): string {
   // the hunk's counts as git writes them: the old side its context and removed lines, the new side its context and added lines
   const before = lines.filter(line => !line.startsWith('+')).length
   const after = lines.filter(line => !line.startsWith('-')).length
-  const head = isNew ? `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` : `--- a/${path}\n+++ b/${path}\n@@ -1,${before} +1,${after} @@\n`
+  const head = isNew ? `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` : `--- a/${path}\n+++ b/${path}\n@@ -${start},${before} +${start},${after} @@\n`
   return `${head}${lines.join('\n')}\n`
 }
 
@@ -213,7 +217,8 @@ export function v2Session(): V2Session {
     added: 6,
     removed: 0,
     isNew: true,
-    patch: patchOf('src/rateLimit.ts', ['+export type Store = { hit(key: string, now: number): Promise<number> }', '+', '+export function limiter(store: Store, perMinute = 100) {', '+  return async (key: string, now = Date.now()) => (await store.hit(key, now)) <= perMinute', '+}', '+'], true),
+    // with an off-by-one tester's tests find: `<` refuses the 100th request
+    patch: patchOf('src/rateLimit.ts', ['+export type Store = { hit(key: string, now: number): Promise<number> }', '+', '+export function limiter(store: Store, perMinute = 100) {', '+  return async (key: string, now = Date.now()) => (await store.hit(key, now)) < perMinute', '+}', '+'], true),
   })
   call(data, builder, 'toolu_01BldE1', 'Edit', { file_path: `${ROOT}\\src\\app.ts` }, ago(24), 300)
   edit(data, builder, {
@@ -260,6 +265,27 @@ export function v2Session(): V2Session {
     removed: 0,
     isNew: true,
     patch: patchOf('tests/rateLimit.test.ts', ["+import { limiter } from '../src/rateLimit'", "+test('a burst past the limit is refused', async () => {", '+  expect(await burst(101)).toBe(false)', '+})'], true),
+  })
+  // its tests found builder's off-by-one: tester fixes it in builder's file, which two agents have edited since
+  call(data, tester, 'toolu_01TstE1', 'Edit', { file_path: `${ROOT}\\src\\rateLimit.ts` }, ago(19), 250)
+  edit(data, tester, {
+    id: 'toolu_01TstE1',
+    tool: 'Edit',
+    path: 'src/rateLimit.ts',
+    at: ago(19),
+    added: 1,
+    removed: 1,
+    patch: patchOf(
+      'src/rateLimit.ts',
+      [
+        ' export function limiter(store: Store, perMinute = 100) {',
+        '-  return async (key: string, now = Date.now()) => (await store.hit(key, now)) < perMinute',
+        '+  return async (key: string, now = Date.now()) => (await store.hit(key, now)) <= perMinute',
+        ' }',
+      ],
+      false,
+      3,
+    ),
   })
   call(data, tester, 'toolu_01TstB1', 'Bash', { command: 'npm test -- rateLimit --runInBand', description: 'Run the limiter tests' }, ago(16), 8_400)
   M.noteResult(data, tester, 'Wrote 6 tests in `tests/rateLimit.test.ts`; all pass against the in-memory store.', ago(12), 'handback')
@@ -337,6 +363,7 @@ export function v2Session(): V2Session {
     at: ago(10),
   })
   Object.assign(reviewer, { tokensIn: 30_000, tokensOut: 2_200, cacheRead: 64_000, requests: 4 })
+
   M.addMessage(data, { from: IDS.builder, to: IDS.reviewer, kind: 'message', title: 'Limiter ready for review', text: '`src/rateLimit.ts` and both stores are in. The tests pass against the in-memory store; the Redis one needs a server.', at: ago(9), isDelivered: true })
   M.addMessage(data, { from: IDS.reviewer, to: IDS.builder, kind: 'message', title: 'Two questions on the window', text: 'Why a sliding log rather than a sliding-window counter? And does `Retry-After` round up?', at: ago(7), isDelivered: true })
   M.addMessage(data, { from: IDS.builder, to: 'ops-bot', kind: 'message', title: 'A Redis for CI', text: 'Can CI start a Redis service for the limiter tests?', at: ago(6) })

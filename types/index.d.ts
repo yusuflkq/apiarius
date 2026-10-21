@@ -388,11 +388,11 @@ export type DeckMapView = 'tree' | 'wire'
 
 /**
  * What the v2 screens (web/CONTRACT.md v2) keep of their own in the pane:
- * the tab open (Now, Chat, Changes; keys 1 to 3), the fold rows opened,
+ * the tab open (Now, Chat, Org, Changes; keys 1 to 4), the fold rows opened,
  * Chat's filter and whether Inspect shows. The agent page open is `page`.
  */
 export type DeckView2 = {
-  tab: 'now' | 'chat' | 'changes'
+  tab: 'now' | 'chat' | 'org' | 'changes'
   /** The fold rows opened, by their id (`fold:` and the parent's id); oldest first, at most 50. Every other stays folded. */
   openFolds: string[]
   /** Chat's filter: '' for all, `you` (yours and what came to you), `between` (agent to agent), or an agent's id. */

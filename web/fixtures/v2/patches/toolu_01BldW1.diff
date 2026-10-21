@@ -4,6 +4,6 @@
 +export type Store = { hit(key: string, now: number): Promise<number> }
 +
 +export function limiter(store: Store, perMinute = 100) {
-+  return async (key: string, now = Date.now()) => (await store.hit(key, now)) <= perMinute
++  return async (key: string, now = Date.now()) => (await store.hit(key, now)) < perMinute
 +}
 +

@@ -1,0 +1,7 @@
+--- a/src/rateLimit.ts
++++ b/src/rateLimit.ts
+@@ -3,3 +3,3 @@
+ export function limiter(store: Store, perMinute = 100) {
+-  return async (key: string, now = Date.now()) => (await store.hit(key, now)) < perMinute
++  return async (key: string, now = Date.now()) => (await store.hit(key, now)) <= perMinute
+ }

@@ -426,10 +426,27 @@ test('the v2 sample (web/fixtures/state.v2.json) holds every part the screens dr
   expect(state.chat.some(row => row.isCut)).toBe(true)
   // the plan from all four sources; edits, git files with and without them, an edit outside the repository; acks of each outcome
   expect([state.plan?.board.length, state.plan?.todos?.items.length, state.plan?.approved?.markdown.startsWith('# Rate limiting'), state.plan?.workflows.length]).toEqual([3, 4, true, 1])
-  expect(state.changes.files.map(file => file.edits.length)).toEqual([1, 1, 1, 1, 0])
+  expect(state.changes.files.map(file => file.edits.length)).toEqual([1, 2, 1, 1, 0])
   expect(state.changes.edits.filter(one => one.isOutside).length).toBe(1)
   expect(state.acks.map(ack => ack.status)).toEqual(['failed', 'delivered', 'queued'])
   expect(rowOf(state, IDS.builder)).toMatchObject({ background: true, status: 'waiting', live: { tool: 'Bash', text: 'npm test -- rateLimit' } })
+  // Now's activity, files and figures: calls still running and one that failed; a file two agents edited, one outside the repository
+  expect(state.activity.length).toBeGreaterThanOrEqual(12)
+  expect(state.activity.filter(one => one.ok === null).map(one => [one.agentName, one.tool, one.text])).toEqual([
+    ['reviewer', 'AskUserQuestion', 'Which routes should skip the limiter?'],
+    ['builder', 'Bash', 'Run the limiter tests'],
+    ['Orchestrator', 'AskUserQuestion', 'Which store should back the limiter in production?'],
+  ])
+  expect(state.activity.filter(one => one.ok === false).map(one => [one.agentName, one.tool, one.text, one.ms])).toEqual([['Lint the new files', 'Bash', 'Lint the new files', 2100]])
+  expect(state.files.map(file => [file.path, file.editors, file.added, file.removed, file.isOutside ?? false])).toEqual([
+    ['src/rateLimit.ts', [IDS.builder, IDS.tester], 7, 1, false],
+    ['tests/rateLimit.test.ts', [IDS.tester], 4, 0, false],
+    ['docs/api.md', [IDS.docs], 3, 1, false],
+    ['src/app.ts', [IDS.builder], 2, 1, false],
+
+    ['C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js', [IDS.builder], 3, 0, true],
+  ])
+  expect(state.figures).toEqual({ running: 0, waiting: 2, done: 3, failed: 1, stopped: 1, plan: { done: 1, total: 3 }, costUsd: 4.12, tokens: 2_305_400, contextPercent: 41, minutes: 40, needs: 4 })
 })
 
 test('a recorded v2 state shown now: every time in it moved together, its agent files too; text that is no v2 state reads as none', () => {
@@ -446,12 +463,17 @@ test('a recorded v2 state shown now: every time in it moved together, its agent 
   // the ages and counts as they were worded: only the times move
   expect(shown.needs.map(need => need.age)).toEqual(state.needs.map(need => need.age))
   expect(shown.agents.map(row => (row.row === 'agent' ? row.endedAt : null))).toEqual(state.agents.map(row => (row.row === 'agent' && row.endedAt !== null ? row.endedAt + 86_400_000 : null)))
+  expect(shown.activity.map(one => one.at)).toEqual(state.activity.map(one => one.at + 86_400_000))
+  expect(shown.files.map(file => file.lastAt)).toEqual(state.files.map(file => file.lastAt + 86_400_000))
+  expect([shown.figures, shown.activity.map(one => one.ms)]).toEqual([state.figures, state.activity.map(one => one.ms)])
   const file = JSON.parse(W.agentFilesOf(session.data)[0]!.text) as W.V2AgentFile
   expect(W.v2TimesMoved(file, 1000).activity.map(one => one.at)).toEqual(file.activity.map(one => one.at + 1000))
 
   expect(W.v2StateFromText('{"v":1,"now":1}', later)).toBeNull()
   expect(W.v2StateFromText('not json', later)).toBeNull()
   expect(W.v2StateFromText(JSON.stringify({ ...state, chat: null }), later)).toBeNull()
+  // a state of a build before Now's activity, files and figures reads as none: the screens draw them
+  for (const key of ['activity', 'files', 'figures'] as const) expect(W.v2StateFromText(JSON.stringify({ ...state, [key]: undefined }), later)).toBeNull()
 })
 
 test('the composer: @name sends to that agent (its name, else its short id, any case), words with no @ go to the Orchestrator', () => {
@@ -648,6 +670,12 @@ test('an answer in the sample stays there: its need goes, a choice row from you 
   // reviewer's one question answered: reviewer works again
   const two = W.answeredInSample(one.state, many!.id, { [many!.questions![0]!.question]: '/health, /metrics' }, at + 1000)!
   expect([two.words, rowOf(two.state, IDS.reviewer).needs, rowOf(two.state, IDS.reviewer).status]).toEqual(['/health, /metrics', 0, 'running'])
+  // the figures follow: a need fewer each time, and reviewer at work again
+  expect([state.figures, one.state.figures, two.state.figures].map(figures => [figures.running, figures.waiting, figures.needs])).toEqual([
+    [0, 2, 4],
+    [0, 2, 3],
+    [1, 1, 2],
+  ])
   // the sample itself is left as it was; a permission, a need it does not hold, or an answer of nothing is no answer
   expect(state.needs).toHaveLength(4)
   expect([W.answeredInSample(state, state.needs[1]!.id, { x: 'y' }, at), W.answeredInSample(state, 'nobody', { x: 'y' }, at), W.answeredInSample(state, first!.id, {}, at)]).toEqual([null, null, null])
@@ -663,14 +691,16 @@ test('an answer in the sample stays there: its need goes, a choice row from you 
   expect([done.state.header.state, done.state.header.stateText, rowOf(done.state, M.MAIN).status, done.state.needs]).toEqual(['working', 'Working', 'running', []])
 })
 
-test('/deck`s v2 tabs: now, chat and changes, or the start of one; an earlier build`s tab lands on the one it folded into', () => {
-  expect([M.v2TabFor('now'), M.v2TabFor('n'), M.v2TabFor('c'), M.v2TabFor('chat'), M.v2TabFor('chan'), M.v2TabFor(' Changes ')]).toEqual(['now', 'now', 'chat', 'chat', 'changes', 'changes'])
-  expect([M.v2TabFor('dashboard'), M.v2TabFor('org'), M.v2TabFor('plan'), M.v2TabFor('stats'), M.v2TabFor('classic'), M.v2TabFor('diffs')]).toEqual(['now', 'now', 'now', 'now', 'now', 'changes'])
+test('/deck`s v2 tabs: now, chat, org and changes, or the start of one; an earlier build`s tab lands on the one it folded into', () => {
+  expect(M.V2_TABS).toEqual(['now', 'chat', 'org', 'changes'])
+  expect([M.v2TabFor('now'), M.v2TabFor('n'), M.v2TabFor('c'), M.v2TabFor('chat'), M.v2TabFor('chan'), M.v2TabFor(' Changes '), M.v2TabFor('o'), M.v2TabFor('Org')]).toEqual(['now', 'now', 'chat', 'chat', 'changes', 'changes', 'org', 'org'])
+  expect([M.v2TabFor('dashboard'), M.v2TabFor('org'), M.v2TabFor('plan'), M.v2TabFor('stats'), M.v2TabFor('classic'), M.v2TabFor('diffs')]).toEqual(['now', 'org', 'now', 'now', 'now', 'changes'])
   expect([M.v2TabFor(''), M.v2TabFor('web'), M.v2TabFor('demo'), M.v2TabFor('inspect')]).toEqual([undefined, undefined, undefined, undefined])
-  expect([M.v2TabOf('dashboard'), M.v2TabOf('changes'), M.v2TabOf('chat'), M.v2TabOf('stats')]).toEqual(['now', 'changes', 'chat', 'now'])
+  expect([M.v2TabOf('dashboard'), M.v2TabOf('changes'), M.v2TabOf('chat'), M.v2TabOf('stats'), M.v2TabOf('org'), M.v2TabOf('plan')]).toEqual(['now', 'changes', 'chat', 'now', 'org', 'now'])
+  expect([M.view2With(M.defaultView2(), { tab: 'org' }).tab, M.view2With(M.defaultView2(), { tab: 'plan' }).tab]).toEqual(['org', 'now'])
 })
 
-test('/deck now, chat and changes open the pane on that v2 tab, /deck inspect (or stats) on Now with Inspect open, and /deck alone on Now; each choice is kept', async ($, on) => {
+test('/deck now, chat, org and changes open the pane on that v2 tab, /deck inspect (or stats) on Now with Inspect open, and /deck alone on Now; each choice is kept', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -692,7 +722,8 @@ test('/deck now, chat and changes open the pane on that v2 tab, /deck inspect (o
   expect(await v2After('stats')).toMatchObject({ tab: 'now', isInspectOpen: true })
   expect(await v2After('')).toMatchObject({ tab: 'now', isInspectOpen: false })
   expect(await v2After('changes')).toMatchObject({ tab: 'changes' })
-  expect(await v2After('org')).toMatchObject({ tab: 'now' })
+  expect(await v2After('org')).toMatchObject({ tab: 'org' })
+  expect(await v2After('dashboard')).toMatchObject({ tab: 'now' })
   expect(await v2After('now')).toMatchObject({ tab: 'now' })
 })
 
@@ -774,4 +805,118 @@ test('while the web deck is on, the mod reads git`s diff of each uncommitted fil
   const changed = appText.replace('+const b = 3', '+const b = 4')
   expect(written().slice(before)).toEqual([changed])
   expect(idsOf()['src/app.ts']).toBe(W.gitDiffIdOf('src/app.ts', changed))
+})
+
+// ---------------------------------------------------------------------------
+// Now's Recent activity, Files and figures: the deck's own records, nothing read into them.
+
+test('activity: every agent`s latest calls, the newest 40 of them, newest first; each one`s own description, else its target, verbatim; ok and ms null while it runs', () => {
+  const data = M.emptyData(NOW - 600_000)
+  const main = M.agentOf(data, M.MAIN)!
+  const fixer = agent(data, 'agent-fixer', 'fixer')
+  const said = 'Run the tests: `npm test`, "all" of them — 100% <fast>'
+  M.beginTool(data, fixer, M.activityOf('toolu_b', 'Bash', { command: 'npm test', description: said }, '/repo', NOW - 40_000))
+  M.endTool(fixer, 'toolu_b', false, NOW - 38_000)
+  M.beginTool(data, fixer, M.activityOf('toolu_c', 'Bash', { command: 'git status --short' }, '/repo', NOW - 30_000))
+  M.endTool(fixer, 'toolu_c', true, NOW - 29_900)
+  M.beginTool(data, main, M.activityOf('toolu_g', 'Grep', { pattern: 'TODO\\(.*\\)', path: '/repo/src' }, '/repo', NOW - 20_000))
+  M.endTool(main, 'toolu_g', true, NOW - 19_500)
+  M.beginTool(data, fixer, M.activityOf('toolu_e:1', 'Edit', { file_path: '/repo/src/a b.ts' }, '/repo', NOW - 10_000))
+  const [bash, shell, edit] = fixer.recent
+  const grep = main.recent[0]!
+
+  const state = stateOf(data)
+  expect(state.activity).toEqual([
+    { id: W.webIdOf('toolu_e:1'), at: NOW - 10_000, agent: 'agent-fixer', agentName: 'fixer', tool: 'Edit', text: edit!.target, ok: null, ms: null },
+    { id: 'toolu_g', at: NOW - 20_000, agent: M.MAIN, agentName: 'Orchestrator', tool: 'Grep', text: grep.target, ok: true, ms: 500 },
+    { id: 'toolu_c', at: NOW - 30_000, agent: 'agent-fixer', agentName: 'fixer', tool: 'Bash', text: shell!.target, ok: true, ms: 100 },
+    { id: 'toolu_b', at: NOW - 40_000, agent: 'agent-fixer', agentName: 'fixer', tool: 'Bash', text: said, ok: false, ms: 2000 },
+  ])
+  // verbatim: the description as the call gave it, else what it was aimed at, with no tool's name or words of the deck's in front
+  expect([bash!.description, state.activity.map(one => one.text)]).toEqual([said, ['src/a b.ts', grep.target, 'git status --short', said]])
+  expect(state.activity.every(one => !one.text.startsWith(one.tool))).toBe(true)
+
+  // three agents' 14 calls each: the newest 40 of the 42, newest first
+  const many = M.emptyData(NOW - 600_000)
+  for (const [n, name] of ['a', 'b', 'c'].entries()) {
+    const one = agent(many, `agent-${name}`, name)
+    for (let i = 0; i < 14; i++) {
+      const at = NOW - 100_000 + i * 1000 + n * 100
+      M.beginTool(many, one, M.activityOf(`toolu_${name}${i}`, 'Read', { file_path: `/repo/${name}${i}.ts` }, '/repo', at))
+      M.endTool(one, `toolu_${name}${i}`, true, at + 50)
+    }
+  }
+  const listed = stateOf(many).activity
+  expect(listed).toHaveLength(40)
+  expect(listed[0]).toMatchObject({ id: 'toolu_c13', agent: 'agent-c', text: 'c13.ts', ok: true, ms: 50 })
+  expect(listed.map(one => one.at)).toEqual(listed.map(one => one.at).sort((x, y) => y - x))
+  expect(listed.some(one => one.id === 'toolu_a0' || one.id === 'toolu_b0')).toBe(false)
+  expect(stateOf(M.emptyData(NOW)).activity).toEqual([])
+})
+
+test('files: every file the agents edited, its editors in the order they first edited it and its lines; the repository`s first, each the one edited last first; nothing read into it', () => {
+  const data = M.emptyData(NOW - 600_000)
+  const a = agent(data, 'agent-a', 'a')
+  const b = agent(data, 'agent-b', 'b')
+  const editOf = (who: DeckAgent, id: string, path: string, at: number, added: number, removed: number) =>
+    M.addEdit(data, who, { id, agent: who.id, tool: 'Edit', path, abs: path.startsWith('C:') ? path : `C:/repo/${path}`, at, added, removed, patch: '', isNew: false })
+  editOf(b, 'e1', 'src/a.ts', NOW - 50_000, 3, 1)
+  editOf(a, 'e2', 'src/a.ts', NOW - 40_000, 2, 0)
+  editOf(b, 'e3', 'src/a.ts', NOW - 30_000, 1, 1)
+  editOf(a, 'e4', 'C:/Users/sam/AppData/Local/Temp/x.js', NOW - 5_000, 4, 0)
+  editOf(a, 'e5', 'docs/b.md', NOW - 20_000, 1, 0)
+
+  // both editors at work on one file: no "live" or "shared" word is added, only who and how much
+  const git: GitState = { ...emptyGit(), isRepo: true, root: 'C:/repo' }
+  expect(stateOf(data, { git }).files).toEqual([
+    { path: 'docs/b.md', editors: ['agent-a'], added: 1, removed: 0, lastAt: NOW - 20_000 },
+    { path: 'src/a.ts', editors: ['agent-b', 'agent-a'], added: 6, removed: 2, lastAt: NOW - 30_000 },
+    { path: 'C:/Users/sam/AppData/Local/Temp/x.js', editors: ['agent-a'], added: 4, removed: 0, lastAt: NOW - 5_000, isOutside: true },
+  ])
+  // with no repository none is outside: every path is as the deck kept it
+  expect(stateOf(data).files.map(file => [file.path, file.isOutside ?? false])).toEqual([
+    ['C:/Users/sam/AppData/Local/Temp/x.js', false],
+    ['docs/b.md', false],
+    ['src/a.ts', false],
+  ])
+  expect(stateOf(M.emptyData(NOW)).files).toEqual([])
+})
+
+test('figures: the agents by status (the Orchestrator and Claude Code`s own loops count for none), the plan only from Claude`s board or todos, the spend, the tokens, the minutes and the needs', () => {
+  const data = M.emptyData(NOW - 600_000)
+  M.noteGoal(data, 'goal', { text: 'Add rate limiting to the API', origin: 'composer', at: NOW - 500_000 })
+  const goal = data.goals[0]?.id
+  M.agentOf(data, M.MAIN)!.tokensIn = 1000
+  const scout = agent(data, 'agent-scout', 'scout', { goal, tokensIn: 10, tokensOut: 5, cacheRead: 100 })
+  agent(data, 'agent-done', 'done', { goal, status: 'completed', endedAt: NOW - 60_000 })
+  agent(data, 'agent-failed', 'failed', { goal, status: 'failed', endedAt: NOW - 60_000 })
+  agent(data, 'agent-stopped', 'stopped', { goal, status: 'killed', endedAt: NOW - 60_000 })
+  agent(data, 'agent-idle', 'idle', { goal, status: 'idle' })
+  agent(data, 'agent-compact', '', { origin: 'engine', type: 'compact' })
+  // no plan Claude made with statuses: a subagent's own list, an approved plan and a Workflow's phases count for none
+  M.noteTodos(scout, [{ content: 'Read src/app.ts', status: 'completed', activeForm: 'Reading src/app.ts' }], NOW - 100_000)
+  M.noteApproved(data, '# Rate limiting\n\n1. Map the routes.\n2. Write the limiter.', M.MAIN, NOW - 400_000)
+  M.noteWorkflow(data, { id: 'wf-1', caller: M.MAIN, name: 'release-check', phases: ['Lint', 'Test'], at: NOW - 50_000 })
+  const state = stateOf(data)
+  expect(state.plan).not.toBeNull()
+  expect(state.figures).toEqual({ running: 1, waiting: 0, done: 1, failed: 1, stopped: 1, plan: null, costUsd: null, tokens: 1115, contextPercent: null, minutes: 8, needs: 0 })
+  expect(stateOf(M.emptyData(NOW - 600_000)).figures).toEqual({ running: 0, waiting: 0, done: 0, failed: 0, stopped: 0, plan: null, costUsd: null, tokens: 0, contextPercent: null, minutes: 10, needs: 0 })
+
+  // what waits on you: the agent waits (the Orchestrator counts for no agent), and each need counts; the spend as /cost says it
+  const question = { question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'Redis', description: '' }] }
+  M.notePending(data, { id: 'toolu_p', agentId: 'agent-scout', kind: 'permission', tool: 'Bash', at: NOW - 10_000, command: 'npm test' })
+  M.notePending(data, { id: 'toolu_q', agentId: M.MAIN, kind: 'question', tool: 'AskUserQuestion', at: NOW - 5000, questions: [question] })
+  const usage = { startedAt: NOW - 600_000, contextPercent: 41, costUsd: 4.12, limits: [] }
+  expect(W.deckStateOf(data, emptyGit(), usage, NOW, 's', '/repo').figures).toMatchObject({ running: 0, waiting: 1, needs: 2, costUsd: 4.12, contextPercent: 41, plan: null })
+
+  // the plan's count: the board's tasks done of all, even beside the Orchestrator's list; else that list's items
+  const board = M.emptyData(NOW - 600_000)
+  const main = M.agentOf(board, M.MAIN)!
+  for (const id of ['1', '2', '3']) M.noteBoard(board, main, 'TaskCreate', { subject: `Task ${id}` }, { task: { id } }, NOW - 400_000)
+  M.noteBoard(board, main, 'TaskUpdate', { taskId: '1', status: 'completed' }, { success: true }, NOW - 300_000)
+  M.noteTodos(main, [{ content: 'One', status: 'completed' }, { content: 'Two', status: 'completed' }], NOW - 200_000)
+  expect(stateOf(board).figures.plan).toEqual({ done: 1, total: 3 })
+  const todos = M.emptyData(NOW - 600_000)
+  M.noteTodos(M.agentOf(todos, M.MAIN)!, [{ content: 'One', status: 'completed' }, { content: 'Two', status: 'in_progress' }, { content: 'Three', status: 'pending' }], NOW - 200_000)
+  expect(stateOf(todos).figures.plan).toEqual({ done: 1, total: 3 })
 })
