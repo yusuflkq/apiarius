@@ -1,8 +1,8 @@
 /**
- * The Agent Deck web server: serves the dashboard page, the session's state,
- * its patches and the whole text of messages cut for the state, live updates
- * over SSE, and turns the page's commands into stdout lines for the mod.
- * web/CONTRACT.md is the spec.
+ * The Agent Deck web server: serves the page, the session's state, its
+ * patches, the whole text of messages cut for the state and the agents' page
+ * files, live updates over SSE, and turns the page's commands into stdout
+ * lines for the mod. web/CONTRACT.md is the spec.
  *
  *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid>
  *
@@ -23,9 +23,10 @@ const MAX_BODY = 16 * 1024
 const MAX_TEXT = 4000
 const MAX_ANSWERS = 4 // AskUserQuestion asks 1 to 4 questions at once
 const MAX_ANSWER = 2000 // a question's text, and an answer's
-const FILE_ID = /^[A-Za-z0-9_-]{1,128}$/ // a patch's or a message's file name: never a path
+const FILE_ID = /^[A-Za-z0-9_-]{1,128}$/ // a patch's, a message's or an agent file's name: never a path
 const CMD_ID = /^[A-Za-z0-9_-]{1,40}$/ // the page's id for a command, which the mod's ack names again
 const CALL_ID = /^[A-Za-z0-9_-]{1,100}$/ // a tool call's tool_use_id
+const TURN_ID = /^[A-Za-z0-9_-]{1,100}$/ // the main loop's running turn (abortTurn's)
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never open them as files
 const JSON_TYPE = 'application/json; charset=utf-8'
 const TEXT_TYPE = 'text/plain; charset=utf-8'
@@ -160,13 +161,15 @@ function events(req, res) {
 }
 
 /**
- * A file the mod wrote once beside the state, by id: `patches/<id>.diff` for
+ * A file the mod wrote beside the state, by id: `patches/<id>.diff` for
  * /patch/<id>, `messages/<id>.md` (a cut message's whole text) for
- * /message/<id>. Ids are [A-Za-z0-9_-] only, so a request never names a path.
+ * /message/<id>, and `agents/<fileId>.json` (an agent's page detail, written
+ * again when it changes) for /agent/<fileId>. Ids are [A-Za-z0-9_-] only, so
+ * a request never names a path.
  */
-function written(res, id, folder, ext, what) {
+function written(res, id, folder, ext, what, type = TEXT_TYPE) {
   if (!FILE_ID.test(id) || DEVICE.test(id)) return send(res, 400, `bad ${what} id\n`)
-  fs.readFile(path.join(dir, folder, `${id}${ext}`), 'utf8', (err, text) => (err ? send(res, 404, `no such ${what}\n`) : send(res, 200, text)))
+  fs.readFile(path.join(dir, folder, `${id}${ext}`), 'utf8', (err, text) => (err ? send(res, 404, `no such ${what}\n`) : send(res, 200, text, type)))
 }
 
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -183,7 +186,8 @@ function answersOf(value) {
 /**
  * The command a body holds, rebuilt from exactly its known keys; null for any
  * other shape. Every command may carry the page's `id`, which the mod's ack
- * names again; it stays optional.
+ * names again; it stays optional. `stopAgent` names its agent; `abortTurn`
+ * may name the running turn it means.
  */
 function commandOf(value) {
   if (!isRecord(value)) return null
@@ -196,6 +200,9 @@ function commandOf(value) {
   if (value.cmd === 'ping' && keys === 'cmd') return { cmd: 'ping', ...id }
   if (value.cmd === 'review' && keys === 'cmd,text' && isText(value.text)) return { cmd: 'review', ...id, text: value.text }
   if (value.cmd === 'chat' && keys === 'agentId,cmd,text' && isAgent(value.agentId) && isText(value.text)) return { cmd: 'chat', ...id, agentId: value.agentId, text: value.text }
+  if (value.cmd === 'stopAgent' && keys === 'agentId,cmd' && isAgent(value.agentId)) return { cmd: 'stopAgent', ...id, agentId: value.agentId }
+  if (value.cmd === 'abortTurn' && keys === 'cmd') return { cmd: 'abortTurn', ...id }
+  if (value.cmd === 'abortTurn' && keys === 'cmd,turnId' && typeof value.turnId === 'string' && TURN_ID.test(value.turnId)) return { cmd: 'abortTurn', ...id, turnId: value.turnId }
   if (value.cmd === 'answer' && keys === 'answers,callId,cmd' && typeof value.callId === 'string' && CALL_ID.test(value.callId)) {
     const answers = answersOf(value.answers)
     if (answers) return { cmd: 'answer', ...id, callId: value.callId, answers }
@@ -252,6 +259,7 @@ function handle(req, res) {
   if (route === '/events') return events(req, res)
   if (route.startsWith('/patch/')) return written(res, route.slice('/patch/'.length), 'patches', '.diff', 'patch')
   if (route.startsWith('/message/')) return written(res, route.slice('/message/'.length), 'messages', '.md', 'message')
+  if (route.startsWith('/agent/')) return written(res, route.slice('/agent/'.length), 'agents', '.json', 'agent file', JSON_TYPE)
   if (route === '/favicon.ico') return res.writeHead(204).end()
   send(res, 404, 'not found\n')
 }

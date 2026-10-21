@@ -132,14 +132,19 @@ let main = null
 const writeState = value => fs.writeFileSync(path.join(dir, 'state.json'), typeof value === 'string' ? value : JSON.stringify(value, null, 2))
 
 const ANSWER = '**Done.** The limiter is in `src/middleware/rateLimit.ts`.\n\n- 100 requests a minute\n- 429 with Retry-After\n'
+const AGENT_FILE = `${JSON.stringify({ v: 2, id: 'b81c6f3e2a9d4c17', task: 'Write the limiter.', result: '', todos: [], activity: [{ id: 'toolu_01BldB2', at: 1, tool: 'Bash', target: 'Run the limiter tests', command: 'npm test -- rateLimit', ok: null, ms: null }], edits: ['toolu_01BldW1'] }, null, 2)}\n`
 
 before(async () => {
   const root = tempDir()
   dir = path.join(root, 'session')
   fs.mkdirSync(path.join(dir, 'patches'), { recursive: true })
   fs.mkdirSync(path.join(dir, 'messages'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'agents'), { recursive: true })
   fs.writeFileSync(path.join(root, 'secret.diff'), 'SECRET')
   fs.writeFileSync(path.join(root, 'secret.md'), 'SECRET')
+  fs.writeFileSync(path.join(root, 'secret.json'), 'SECRET')
+  fs.writeFileSync(path.join(dir, 'agents', 'b81c6f3e2a9d4c17.json'), AGENT_FILE)
+  fs.writeFileSync(path.join(dir, 'agents', 'main.json'), '{"v":2,"id":"main","task":"","result":"","todos":[],"activity":[],"edits":[]}\n')
   fs.writeFileSync(path.join(dir, 'patches', 'toolu_01Abc-d_9.diff'), '@@ -1,1 +1,1 @@\n-old\n+new\n')
   fs.writeFileSync(path.join(dir, 'messages', '1791970900000-14-main-you.md'), ANSWER)
   writeState(STATE)
@@ -169,7 +174,7 @@ test('prints the ready line first, with the port it listens on', async () => {
 })
 
 test('refuses every route without the token (403), and answers with it', async () => {
-  for (const target of ['/', '/app.js', '/app.css', '/state', '/events', '/patch/toolu_01Abc-d_9', '/nope']) {
+  for (const target of ['/', '/app.js', '/app.css', '/state', '/events', '/patch/toolu_01Abc-d_9', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
     assert.equal((await request(main.port, { path: target })).status, 403, target)
     assert.equal((await request(main.port, { path: target, headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403, target)
   }
@@ -290,6 +295,65 @@ test('/message serves a cut message`s whole text by id, with the token only, and
     assert.ok([400, 404].includes(refused.status), `${target} -> ${refused.status}`)
     assert.doesNotMatch(refused.body, /SECRET/)
   }
+})
+
+test('/agent serves an agent`s page file by id as JSON, with the token only, and refuses anything else', async () => {
+  const auth = { 'X-Deck-Token': TOKEN }
+  assert.equal((await request(main.port, { path: '/agent/b81c6f3e2a9d4c17' })).status, 403)
+  const res = await request(main.port, { path: '/agent/b81c6f3e2a9d4c17', headers: auth })
+  assert.equal(res.status, 200)
+  assert.equal(res.headers['content-type'], 'application/json; charset=utf-8')
+  assert.equal(res.headers['cache-control'], 'no-store')
+  assert.equal(res.headers['x-content-type-options'], 'nosniff')
+  assert.equal(res.body, AGENT_FILE)
+  assert.equal(JSON.parse((await request(main.port, { path: '/agent/main', headers: auth })).body).id, 'main')
+  assert.equal((await request(main.port, { path: '/agent/a3f9c2e1b7d4058e', headers: auth })).status, 404)
+  for (const target of ['/agent/..%2Fsecret', '/agent/..%5Csecret', '/agent/%2e%2e%2fsecret', '/agent/..\\secret', '/agent/main.json', '/agent/', '/agent/AUX', '/agent/../../secret', `/agent/${'a'.repeat(129)}`]) {
+    const refused = await request(main.port, { path: target, headers: auth })
+    assert.ok([400, 404].includes(refused.status), `${target} -> ${refused.status}`)
+    assert.doesNotMatch(refused.body, /SECRET/)
+  }
+  // rewritten as the agent works: each read has what is on disk now
+  const next = AGENT_FILE.replace('"result": ""', '"result": "Done."')
+  fs.writeFileSync(path.join(dir, 'agents', 'b81c6f3e2a9d4c17.json'), next)
+  assert.equal((await request(main.port, { path: '/agent/b81c6f3e2a9d4c17', headers: auth })).body, next)
+})
+
+test('POST /cmd passes stopAgent and abortTurn on in exactly their shapes, with the page`s id', async () => {
+  const count = main.lines.length
+  const good = [
+    { cmd: 'stopAgent', id: 's-1', agentId: 'b81c6f3e2a9d4c17' },
+    { cmd: 'stopAgent', agentId: 'main' },
+    { cmd: 'abortTurn', id: 't-1' },
+    { cmd: 'abortTurn', id: 't-2', turnId: 'turn-7c1e' },
+    { turnId: 'turn_8', cmd: 'abortTurn' },
+  ]
+  for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const bad = [
+    { cmd: 'stopAgent' },
+    { cmd: 'stopAgent', agentId: '' },
+    { cmd: 'stopAgent', agentId: 42 },
+    { cmd: 'stopAgent', agentId: 'ma\nin' },
+    { cmd: 'stopAgent', agentId: 'x'.repeat(201) },
+    { cmd: 'stopAgent', agentId: 'main', text: 'now' },
+    { cmd: 'stopAgent', id: 'bad id', agentId: 'main' },
+    { cmd: 'abortTurn', turnId: '' },
+    { cmd: 'abortTurn', turnId: 'turn 7' },
+    { cmd: 'abortTurn', turnId: '../turn' },
+    { cmd: 'abortTurn', turnId: 'x'.repeat(101) },
+    { cmd: 'abortTurn', turnId: 7 },
+    { cmd: 'abortTurn', turnId: null },
+    { cmd: 'abortTurn', agentId: 'main' },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
+  await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), [
+    '{"cmd":"stopAgent","id":"s-1","agentId":"b81c6f3e2a9d4c17"}',
+    '{"cmd":"stopAgent","agentId":"main"}',
+    '{"cmd":"abortTurn","id":"t-1"}',
+    '{"cmd":"abortTurn","id":"t-2","turnId":"turn-7c1e"}',
+    '{"cmd":"abortTurn","turnId":"turn_8"}',
+  ])
 })
 
 test('POST /cmd: every command may carry the page`s id, which is printed with it; a bad id is refused', async () => {
