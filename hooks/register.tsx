@@ -113,6 +113,23 @@ let gitDiffs: W.GitDiffs = new Map()
 /** The key of the Button the pane's focus ring is on, as `ui.focus` last landed it ('' for none, or one of the engine's own stops): where `j`, `k` and `n` move it from. */
 let paneFocus = ''
 
+/**
+ * The surfaces whose Org chart Client failed (`ui.fault`): their Org lists
+ * the agents as a tree while it stays open. A drawing of anything else
+ * (another tab, an agent's page, Inspect) clears its surface, so the chart
+ * is tried again the next time Org shows; /deck clears them all.
+ */
+const orgDown = new Set<RenderSurface>()
+
+/** Whether this surface's Org lists the agents instead of its chart: the chart failed there and Org has not been left since. */
+function isOrgDownOn(surface: RenderSurface): boolean {
+  if (view.v2.tab !== 'org' || view.page !== '' || view.v2.isInspectOpen) orgDown.delete(surface)
+  return orgDown.has(surface)
+}
+
+/** The agent whose page was opened last: Org's chart marks it. */
+let lastAgent: string | null = null
+
 /** Draws every site of this plugin again; the engine folds calls to ten a second. Events that change the data call it. */
 function redraw($: EngineInterface) {
   drawn.clear()
@@ -1857,6 +1874,7 @@ function actionsFor($: EngineInterface): DeckActions {
   return {
     openAgent: id => {
       view.page = id
+      lastAgent = id
       changed($)
     },
     back: () => {
@@ -1934,18 +1952,38 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
     ...('Select' in ui ? { Select: ui.Select } : {}),
     // the terminal's table answers to Svg but draws nothing for it: there the screens draw text
     ...('Svg' in ui && surface !== 'terminal' ? { Svg: ui.Svg } : {}),
+    // a table answers to every element name: only the terminal and the desktop run a surface module (Org's chart)
+    ...('Client' in ui && (surface === 'terminal' || surface === 'desktop') ? { Client: ui.Client } : {}),
   }
 }
 
-/** What the pane draws from: this session's v2 state and its lazy files, or the sample's while it shows. */
-function dashOf(now: number): DashModel {
+/** What the pane draws from: this session's v2 state and its lazy files, or the sample's while it shows; whether Org's chart failed on `surface`, and the agent it marks. */
+function dashOf(now: number, surface: RenderSurface): DashModel {
   const isDemo = view.isDemo
   return {
     v2: isDemo ? demo.v2 : v2Of(now),
     v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data, gitDiffs),
     isDemo,
     demoNote: demo.note,
+    isOrgDown: isOrgDownOn(surface),
+    selected: lastAgent,
   }
+}
+
+/**
+ * What Org's chart Client posted: `{ type: 'open', id }` for a card clicked
+ * opens that agent's page, when the pane shows that agent (this session's,
+ * or the sample's). Anything else is let go: it came from code.
+ */
+async function openFromChart($: EngineInterface, posted: unknown): Promise<void> {
+  if (typeof posted !== 'object' || posted === null) return
+  const { type, id } = posted as { type?: unknown; id?: unknown }
+  if (type !== 'open' || typeof id !== 'string') return
+  const state = shownV2Of(await $.clock.now())
+  if (!state?.agents.some(row => row.row === 'agent' && row.id === id)) return
+  view.page = id
+  lastAgent = id
+  changed($)
 }
 
 /** Leaves the sample: the pane shows this session again. */
@@ -2588,9 +2626,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck now, chat or changes; /deck inspect; /deck demo: sample data; /deck web: in the Browser pane)',
+        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck now, chat, org or changes; /deck inspect; /deck demo: sample data; /deck web: in the Browser pane)',
         // an earlier build's tabs (dashboard, org, plan, stats, classic, details) still open, unlisted: on Now, or the view they were
-        argumentHint: '[now|chat|changes|inspect|demo|web|web stop|band|close|probe]',
+        argumentHint: '[now|chat|org|changes|inspect|demo|web|web stop|band|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2630,6 +2668,8 @@ export const register: Register = on => {
       if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Agent Deck web stopped.' : 'Agent Deck web was not running.' }
       return openWeb($)
     }
+    // an Org chart Client that failed is tried again whenever /deck opens
+    orgDown.clear()
     // the sample: the deck drawn from the v2 sample
     if (arg === 'demo' || arg === 'sample') {
       const why = await loadDemo($, true)
@@ -2638,7 +2678,7 @@ export const register: Register = on => {
       if (why) return { text: why }
       return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
     }
-    // anything else is this session's deck: /deck alone Now; now, chat or changes (or an earlier build's tab, on the one it folded into); inspect (or stats) Now with Inspect open
+    // anything else is this session's deck: /deck alone Now; now, chat, org or changes (or an earlier build's tab, on the one it folded into); inspect (or stats) Now with Inspect open
     leaveDemo()
     view.page = ''
     const isInspect = words[0] === 'inspect' || words[0] === 'stats'
@@ -3279,8 +3319,21 @@ export const register: Register = on => {
     shownKey = screenKey(now)
     return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, shownKey, view], () => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
-      return deckView(kit, modelOf(now), actionsFor($), dashOf(now))
+      return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface))
     })
+  })
+
+  // what Org's chart Client posts: a card clicked opens that agent's page
+  on('ui.message', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    await openFromChart($, e.data)
+    return next(e)
+  })
+
+  // Org's chart Client failed: that surface's Org lists the agents as a tree until Org is left (or /deck opens)
+  on('ui.fault', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    orgDown.add(e.surface)
+    redraw($)
+    return next(e)
   })
 
   // the pane's focus ring, wherever it moved (your Tab, arrows or click; the deck's j, k and n): where they move it from next

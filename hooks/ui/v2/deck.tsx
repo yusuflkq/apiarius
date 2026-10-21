@@ -5,10 +5,10 @@
  * - the header: the session's state in one word, your latest request in
  *   your words, `model · context % · $cost`, and `n` (the next thing that
  *   needs you, while something does), `i` (Inspect) and `h` (help);
- * - the tabs, `1` Now · `2` Chat · `3` Changes, and `m` (message), `j` and
- *   `k` (the focus down and up);
- * - under them the open tab (./now, ./chat, ./changes), or over it an
- *   agent's page (./page), Inspect or help (./inspect), `b` going back.
+ * - the tabs, `1` Now · `2` Chat · `3` Org · `4` Changes, and `m`
+ *   (message), `j` and `k` (the focus down and up);
+ * - under them the open tab (./now, ./chat, ./org, ./changes), or over it
+ *   an agent's page (./page), Inspect or help (./inspect), `b` going back.
  *
  * Every key is a Button's hotkey: one digit or one lowercase letter, so it
  * presses while the pane has the keyboard; Enter presses the focused one.
@@ -28,6 +28,7 @@ import { chatTab, composerKey, draftFor, handleOf } from './chat'
 import { helpPage, inspectPage } from './inspect'
 import { keyButton } from './look'
 import { nowFocusKeys, nowTab } from './now'
+import { orgFocusKeys, orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
 import { P } from './palette'
 
@@ -38,18 +39,22 @@ let isHelpOpen = false
 export const TABS: readonly { id: DeckView2['tab']; label: string; hotkey: string }[] = [
   { id: 'now', label: 'Now', hotkey: '1' },
   { id: 'chat', label: 'Chat', hotkey: '2' },
-  { id: 'changes', label: 'Changes', hotkey: '3' },
+  { id: 'org', label: 'Org', hotkey: '3' },
+  { id: 'changes', label: 'Changes', hotkey: '4' },
 ]
 
-/** The whole v2 pane: the header, the tabs, and the tab or the page over it. */
-export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean): RenderElement {
+/** How Org stands when the hooks module says nothing of it: its chart not failed, no agent marked. */
+const ORG_FRESH: OrgSpot = { isDown: false, selected: null }
+
+/** The whole v2 pane: the header, the tabs, and the tab or the page over it; `org` how Org's chart stands on this surface. */
+export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot = ORG_FRESH): RenderElement {
   const { Box } = kit
   return (
     <Box key="deck" flexDirection="column" gap={1}>
       {header(kit, state, model.view.v2, actions)}
       {model.web ? webLine(kit, model.web) : null}
-      {tabRow(kit, state, model, actions)}
-      {bodyOf(kit, state, files, model, actions, isDemo)}
+      {tabRow(kit, state, model, actions, org)}
+      {bodyOf(kit, state, files, model, actions, isDemo, org)}
     </Box>
   )
 }
@@ -124,8 +129,8 @@ function webLine(kit: Kit, web: WebPane): RenderElement | null {
   return <Markdown key="web:link" text={`[Open Agent Deck](${web.url}) in the Browser pane`} />
 }
 
-/** The tabs (1 Now · 2 Chat · 3 Changes, the open one lit), then m, j and k at the right. A tab pressed on a page leaves it for that tab. */
-function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActions): RenderElement {
+/** The tabs (1 Now · 2 Chat · 3 Org · 4 Changes, the open one lit), then m, j and k at the right. A tab pressed on a page leaves it for that tab. */
+function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActions, org: OrgSpot): RenderElement {
   const { Box, Button } = kit
   const { view } = model
   const v2 = view.v2
@@ -155,22 +160,24 @@ function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
       </Box>
       <Box flexShrink={0} flexDirection="row" columnGap={2}>
         {keyButton(kit, 'key:m', 'm', 'Message', message)}
-        {keyButton(kit, 'key:j', 'j', '↓', () => actions.focusNext(1, focusKeysOf(state, model)))}
-        {keyButton(kit, 'key:k', 'k', '↑', () => actions.focusNext(-1, focusKeysOf(state, model)))}
+        {keyButton(kit, 'key:j', 'j', '↓', () => actions.focusNext(1, focusKeysOf(kit, state, model, org)))}
+        {keyButton(kit, 'key:k', 'k', '↑', () => actions.focusNext(-1, focusKeysOf(kit, state, model, org)))}
       </Box>
     </Box>
   )
 }
 
-/** The rows `j` and `k` move among: Now's own (its needs, then its cards); left out elsewhere, the v2 screen's own (W.focusKeysOf). */
-function focusKeysOf(state: WebStateV2, model: DeckModel): readonly string[] | undefined {
+/** The rows `j` and `k` move among: Now's own (its needs, then its cards), Org's (the tree's agents; none over the chart); left out elsewhere, the v2 screen's own (W.focusKeysOf). */
+function focusKeysOf(kit: Kit, state: WebStateV2, model: DeckModel, org: OrgSpot): readonly string[] | undefined {
   const { view } = model
-  if (isHelpOpen || view.page !== '' || view.v2.isInspectOpen || view.v2.tab !== 'now') return undefined
-  return nowFocusKeys(state, view.collapsed)
+  if (isHelpOpen || view.page !== '' || view.v2.isInspectOpen) return undefined
+  if (view.v2.tab === 'now') return nowFocusKeys(state, view.collapsed)
+  if (view.v2.tab === 'org') return orgFocusKeys(kit, state, org)
+  return undefined
 }
 
 /** Help, else Inspect, else an agent's page, else the open tab. */
-function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean): RenderElement {
+function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot): RenderElement {
   const { view } = model
   const v2 = view.v2
   if (isHelpOpen) {
@@ -183,5 +190,6 @@ function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, a
   if (view.page !== '') return agentPage(kit, state, files, view.page, actions)
   if (v2.tab === 'chat') return chatTab(kit, state, files, v2, actions, isDemo)
   if (v2.tab === 'changes') return changesTab(kit, state, files, model, actions, isDemo)
-  return nowTab(kit, state, view.collapsed, actions)
+  if (v2.tab === 'org') return orgTab(kit, state, actions, org)
+  return nowTab(kit, state, view.collapsed, actions, () => actions.setV2View({ tab: 'org', isInspectOpen: false }))
 }

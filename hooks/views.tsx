@@ -3,8 +3,9 @@
  * the one state the web page, the Desktop pane and the terminal draw:
  *
  * - the pane (`deckView`): in the sample (`/deck demo`) a header saying so,
- *   then ./ui/v2: the header, the tabs (1 Now · 2 Chat · 3 Changes) and the
- *   open tab, or an agent's page, Inspect or help over it;
+ *   then ./ui/v2: the header, the tabs (1 Now · 2 Chat · 3 Org · 4 Changes)
+ *   and the open tab, or an agent's page, Inspect or help over it; Org's
+ *   chart as the surface's Client allows (`dash.isOrgDown`, `dash.selected`);
  * - the band above the prompt (`bandOf`): one line, ./ui/band.
  *
  * Pure: Kit, DeckModel, DashModel and DeckActions come from the hooks module.
@@ -32,7 +33,7 @@ export function deckView(kit: Kit, model: DeckModel, actions: DeckActions, dash:
   return (
     <Box flexDirection="column" gap={1}>
       {dash.isDemo ? demoHeader(kit, actions) : null}
-      {state ? v2Deck(kit, state, dash.v2Files, model, actions, dash.isDemo) : quiet(kit, dash.demoNote || 'Reading the sample…')}
+      {state ? v2Deck(kit, state, dash.v2Files, model, actions, dash.isDemo, { isDown: dash.isOrgDown, selected: dash.selected }) : quiet(kit, dash.demoNote || 'Reading the sample…')}
     </Box>
   )
 }

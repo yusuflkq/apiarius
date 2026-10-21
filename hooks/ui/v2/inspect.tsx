@@ -57,7 +57,7 @@ export function inspectPage(kit: Kit, state: WebStateV2, actions: DashActions): 
 
 /** The keys, as every surface has them. */
 const KEYS: readonly (readonly [string, string])[] = [
-  ['1 2 3', 'Now · Chat · Changes'],
+  ['1 2 3 4', 'Now · Chat · Org · Changes'],
   ['j k', 'move the focus down, up'],
   ['Enter', 'open what has the focus: an agent, a fold, a need, a file'],
   ['b', 'back, from an agent’s page, Inspect or this help'],

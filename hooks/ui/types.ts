@@ -21,6 +21,8 @@ export type Kit = {
   Input?: TerminalTable['Input']
   Select?: TerminalTable['Select']
   Svg?: Elements['desktop']['Svg']
+  /** Where the surface runs a plugin's surface module (the terminal and the desktop): Org's chart. */
+  Client?: Elements['desktop']['Client']
   columns: number
 }
 
@@ -155,4 +157,8 @@ export type DashModel = {
   isDemo: boolean
   /** Why the sample could not be read; '' otherwise. */
   demoNote: string
+  /** Org's chart Client failed on this surface: Org lists the agents as a tree instead, until Org is left (or /deck opens). */
+  isOrgDown: boolean
+  /** The agent Org's chart marks: the one whose page was opened last; null for none. */
+  selected: string | null
 }

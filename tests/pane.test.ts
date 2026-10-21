@@ -88,13 +88,14 @@ test('Now: the header says the state, your request and model · context · $; th
     expect(header?.text).toContain('Also exempt /health and /metrics from the limiter.')
     expect(header?.text).toContain(v2.header.line)
     expect(v2.header.line).toBe('opus-5.5 · context 41% · $4.12')
-    // the tabs: 1 Now · 2 Chat · 3 Changes, Now lit; Changes counts git's files
+    // the tabs: 1 Now · 2 Chat · 3 Org · 4 Changes, Now lit; Changes counts git's files
     expect((await ui.find({ key: 'tab:now' }))?.props).toMatchObject({ label: 'Now', hotkey: '1', plain: true, dimColor: false })
     expect((await ui.find({ key: 'tab:chat' }))?.props).toMatchObject({ label: 'Chat', hotkey: '2', dimColor: true })
-    expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ label: `Changes ${v2.changes.files.length}`, hotkey: '3' })
+    expect((await ui.find({ key: 'tab:org' }))?.props).toMatchObject({ label: 'Org', hotkey: '3', dimColor: true })
+    expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ label: `Changes ${v2.changes.files.length}`, hotkey: '4' })
     // every key a plain Button with its hotkey: n i h in the header, m j k beside the tabs
     const hotkeys = Object.fromEntries((await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined).map(one => [one.props.hotkey, one.key]))
-    expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:changes', n: 'key:n', i: 'key:i', h: 'key:h', m: 'key:m', j: 'key:j', k: 'key:k' })
+    expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:org', '4': 'tab:changes', n: 'key:n', i: 'key:i', h: 'key:h', m: 'key:m', j: 'key:j', k: 'key:k' })
     for (const key of Object.keys(hotkeys)) expect(key).toMatch(/^[0-9a-z]$/)
     // Now is the dashboard: a card an agent, the figures
     expect(await ui.find({ key: 'card:main' })).toBeDefined()
