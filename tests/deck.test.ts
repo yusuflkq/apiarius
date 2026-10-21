@@ -12,11 +12,11 @@ const PANE = {
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
-  scroll: { offset: 0, bodyRows: 60 },
+  scroll: { offset: 0, bodyRows: 400 },
   view: {},
 } as const
 
-const VIEWPORT = { columns: 100, rows: 50, isFullscreen: true }
+const VIEWPORT = { columns: 100, rows: 400, isFullscreen: true }
 
 /** /deck as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {

@@ -18,6 +18,12 @@
  * ./parts `foldHead`), what is folded kept in the deck's view
  * (`DeckView.collapsed`), so redraws, live updates and reloads keep it.
  *
+ * On the terminal Now keeps inside the rows it may take (`Kit.rows`): past
+ * them, the sections fold to their heads from the bottom up (Files, Recent
+ * activity, the plan, the figures), then the agents' cards are cut to the
+ * rows left, "N more in the org chart" saying how many. A press on a head
+ * folded so opens that section, the others folding to make room for it.
+ *
  * Pure: Kit, the state and DashActions come from the hooks module; the
  * approved plan's fold is this module's own.
  */
@@ -29,14 +35,24 @@ import { agentKeyOf, needKeyOf, type V2Plan, type V2Todo, type WebStateV2 } from
 import type { DashActions, Kit } from '../types'
 import { agentsSection, figuresSection, isAiry, listsOf } from './dash'
 import { FOLD, activityFoldOf, agentsFoldOf, cardAgentsOf, figuresFoldOf, filesFoldOf, planFoldOf } from './dashModel'
+import { rowsOf } from './fit'
 import { glyph, quiet } from './look'
-import { needsSection } from './needs'
+import { MOST_NEED_CARDS, needsSection } from './needs'
 import { P } from './palette'
 import { foldHead, sectionFold, type Fold } from './parts'
 import { ago, flat } from './text'
 
 /** The approved plans opened (by when each was approved), while the module lives. */
 const plansOpen = new Set<number>()
+
+/** On a terminal short of rows: the section whose folded head was pressed last, which gets the room first; '' for none. */
+const fit = { first: '' }
+
+/** An element's key, as a drawing holds it. */
+function keyOf(el: RenderElement): string {
+  const node = el as unknown as { key?: unknown; props?: { key?: unknown } }
+  return String(node.key ?? node.props?.key ?? '')
+}
 
 /**
  * Now: Needs you, the agents' cards, the figures, the plan, then Recent
@@ -48,14 +64,87 @@ const plansOpen = new Set<number>()
  */
 export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[], actions: DashActions, openOrg?: () => void, openFolds: readonly string[] = []): RenderElement {
   const { Box } = kit
-  const fold = (id: string, summary: string) => sectionFold(collapsed, id, summary)
+  const gap = isAiry(kit) ? 2 : 1
+  // the sections, those in `shut` folded to their heads to fit (a press on one makes room for it), the agents' cards cut to `agentRows`, `needCards` needs a card each and the rest a line
+  const build = (shut: ReadonlySet<string>, agentRows?: number, needCards?: number, needLines?: number): RenderElement[] => {
+    const fold = (id: string, summary: string) =>
+      shut.has(id)
+        ? {
+            id,
+            isOpen: false,
+            summary,
+            press: () => {
+              fit.first = id
+              actions.redraw()
+            },
+          }
+        : sectionFold(collapsed, id, summary)
+    const parts: { el: RenderElement | null; isShut: boolean }[] = [
+      { el: needsSection(kit, state, state.needs, actions, 'now', needCards, needLines), isShut: false },
+      { el: agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg, openFolds, agentRows), isShut: shut.has(FOLD.agents) },
+      { el: figuresSection(kit, state, actions, fold(FOLD.figures, figuresFoldOf(state))), isShut: shut.has(FOLD.figures) },
+      { el: state.plan ? planSection(kit, state.plan, state.now, actions, fold(FOLD.plan, planFoldOf(state))) : null, isShut: shut.has(FOLD.plan) },
+      { el: listsOf(kit, state, actions, fold(FOLD.activity, activityFoldOf(state)), fold(FOLD.files, filesFoldOf(state))), isShut: shut.has(FOLD.activity) && shut.has(FOLD.files) },
+    ]
+    // the heads folded to fit stand together, no gap between them
+    const out: RenderElement[] = []
+    let run: RenderElement[] = []
+    const flush = () => {
+      if (run.length === 1) out.push(run[0] as RenderElement)
+      else if (run.length > 1) {
+        out.push(
+          <Box key={`now:folded:${keyOf(run[0] as RenderElement)}`} flexDirection="column">
+            {run}
+          </Box>,
+        )
+      }
+      run = []
+    }
+    for (const part of parts) {
+      if (part.el === null) continue
+      if (part.isShut) {
+        run.push(part.el)
+        continue
+      }
+      flush()
+      out.push(part.el)
+    }
+    flush()
+    return out
+  }
+  const tallOf = (parts: readonly RenderElement[]) => rowsOf(parts, kit.columns) + gap * Math.max(0, parts.length - 1)
+  let parts = build(new Set())
+  const room = kit.rows
+  if (room !== undefined && tallOf(parts) > room) {
+    // the one pressed last first, then the agents, the figures, the plan, Recent activity and Files; folded from the last up until it fits
+    const order = [...new Set([fit.first, FOLD.agents, FOLD.figures, FOLD.plan, FOLD.activity, FOLD.files])].filter(id => id !== '' && !collapsed.includes(id))
+    const shut = new Set<string>()
+    for (const id of order.slice(1).reverse()) {
+      shut.add(id)
+      parts = build(shut)
+      if (tallOf(parts) <= room) break
+    }
+    // still past it: fewer needs drawn as cards, the rest a line each (a press opens the agent that asks)
+    let cards: number | undefined
+    for (let n = Math.min(state.needs.length, MOST_NEED_CARDS) - 1; tallOf(parts) > room && n >= 0; n--) {
+      cards = n
+      parts = build(shut, undefined, cards)
+    }
+    // and then the agents' cards cut to the rows the rest leaves them, and folded too where none is left
+    if (tallOf(parts) > room && !shut.has(FOLD.agents) && !collapsed.includes(FOLD.agents)) {
+      const agents = parts.find(one => keyOf(one) === 'now:agents') ?? null
+      parts = build(shut, room - (tallOf(parts) - rowsOf(agents, kit.columns)), cards)
+      if (tallOf(parts) > room) {
+        shut.add(FOLD.agents)
+        parts = build(shut, undefined, cards)
+      }
+    }
+    // last, fewer needs a line each, the rest counted
+    for (let n = state.needs.length - (cards ?? MOST_NEED_CARDS) - 1; tallOf(parts) > room && n >= 0; n--) parts = build(shut, undefined, cards, n)
+  }
   return (
-    <Box key="now" flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
-      {needsSection(kit, state, state.needs, actions, 'now')}
-      {agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg, openFolds)}
-      {figuresSection(kit, state, actions, fold(FOLD.figures, figuresFoldOf(state)))}
-      {state.plan ? planSection(kit, state.plan, state.now, actions, fold(FOLD.plan, planFoldOf(state))) : null}
-      {listsOf(kit, state, actions, fold(FOLD.activity, activityFoldOf(state)), fold(FOLD.files, filesFoldOf(state)))}
+    <Box key="now" flexDirection="column" gap={gap}>
+      {parts}
     </Box>
   )
 }

@@ -41,7 +41,9 @@
  *   its whole text read when the state cut it (`loadMessage`).
  * - A window: the newest messages only, "Show earlier" adding more, so the
  *   drawing keeps inside the pane's bounds (its elements and characters),
- *   the member list's share counted.
+ *   the member list's share counted. On the terminal it keeps inside the
+ *   rows it may take too (`Kit.rows`): the newest that fit between the
+ *   member list and the composer, "N earlier" over them.
  * - The composer: with an agent picked, words go to it by SendMessage, no @
  *   needed ("Message builder…"); with Everyone, words with no @ go to the
  *   Orchestrator and `@name` sends the rest to that agent (`W.recipientOf`).
@@ -68,6 +70,7 @@ import { clean } from '../../format'
 import { FINISHED_FOLD, MAIN, ORCHESTRATOR } from '../../model'
 import { isFinishedRow, needKeyOf, recipientOf, type V2AgentRow, type V2ChatRow, type V2Files, type V2Need, type WebAck, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
+import { rowsOf } from './fit'
 import { AVATAR, icon, quiet, svgOf } from './look'
 import { P, mix, toneOf } from './palette'
 import { chevronOf, face, finishedRow, openFoldsWith } from './parts'
@@ -421,9 +424,12 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   const picked = isAgentFilter(filter) ? filter : ''
   const ctx: Ctx = { kit, state, files, actions, held: new Map(state.needs.filter(need => need.kind === 'question').map(need => [need.id, need])), picked, openFolds: view2.openFolds }
   const members = memberList(ctx, filter)
+  const compose = composer(ctx, isDemo)
   const share = sizeOf(members)
   const roomNodes = ROW_NODES - Math.max(0, share.nodes - LIST_SHARE.nodes)
   const roomChars = ROW_CHARS - Math.max(0, share.chars - LIST_SHARE.chars)
+  // the terminal: the rows the member list, the composer, the "earlier" line and the gaps leave the messages
+  const roomRows = kit.rows === undefined ? Infinity : kit.rows - rowsOf(members, kit.columns) - rowsOf(compose, kit.columns) - 5
   const entries = entriesOf(state, filter)
   const want = Math.min(MOST, view.shown.get(filter) ?? PAGE)
   const draw = (i: number, isHead: boolean) => {
@@ -436,7 +442,10 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   const drawn: Drawn[] = []
   let nodes = 0
   let chars = 0
+  let rows = 0
   let isFull = false
+  // cut by the terminal's rows, not by the pane's bounds
+  let isShort = false
   for (let i = entries.length - 1; i >= 0 && drawn.length < want; i--) {
     const entry = entries[i] as Entry
     const isHead = !joins(entries[i - 1], entry)
@@ -444,12 +453,16 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
     const head = isHead ? headOf(ctx, entry) : null
     const size = sizeOf([el, head])
     const more = size.nodes + (head ? GROUP_FRAME : 0)
-    if ((nodes + more > roomNodes || chars + size.chars > roomChars) && drawn.length > 0) {
+    // its rows on the terminal: its own, its head's line, the gap over it
+    const tall = roomRows === Infinity ? 0 : rowsOf(el, kit.columns) + (head && head.length > 0 ? Math.max(1, rowsOf(head[head.length - 1], Math.max(1, kit.columns - 2))) : 0) + 1
+    if ((nodes + more > roomNodes || chars + size.chars > roomChars || rows + tall > roomRows) && drawn.length > 0) {
       isFull = true
+      isShort = nodes + more <= roomNodes && chars + size.chars <= roomChars
       break
     }
     nodes += more
     chars += size.chars
+    rows += tall
     drawn.unshift({ entry, el, head })
   }
   // the oldest drawn starts a group, with its head, though its sender spoke just before it
@@ -467,7 +480,7 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   return (
     <Box key="chat" flexDirection="column" gap={1}>
       {members}
-      {earlier > 0 && isFull ? quiet(kit, `${earlier} earlier: more than the pane holds. Pick an agent above, or read them all with /deck web.`) : null}
+      {earlier > 0 && isFull ? quiet(kit, !isShort ? `${earlier} earlier: more than the pane holds. Pick an agent above, or read them all with /deck web.` : `${earlier} earlier: more than the terminal holds. Pick an agent above, make the pane taller, or read them all with /deck web.`) : null}
       {earlier > 0 && !isFull ? (
         <Box flexDirection="row" justifyContent="center">
           <Button
@@ -484,7 +497,7 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
       ) : null}
       {drawn.length === 0 ? quiet(kit, empty) : null}
       {groupsOf(kit, drawn)}
-      {composer(ctx, isDemo)}
+      {compose}
     </Box>
   )
 }

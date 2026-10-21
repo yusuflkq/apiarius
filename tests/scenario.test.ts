@@ -28,11 +28,11 @@ const PANE = {
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
-  scroll: { offset: 0, bodyRows: 60 },
+  scroll: { offset: 0, bodyRows: 400 },
   view: {},
 } as const
 
-const VIEWPORT = { columns: 100, rows: 50, isFullscreen: true }
+const VIEWPORT = { columns: 100, rows: 400, isFullscreen: true }
 
 const PROMPT = 'Fix the token refresh bug in /repo'
 const FIXER_TASK = 'Fix needsRefresh() in src/token.js to refresh SKEW_MS before expiry, add two tests, and tell reviewer when the diff is ready.'

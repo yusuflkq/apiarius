@@ -24,6 +24,14 @@ export type Kit = {
   /** Where the surface runs a plugin's surface module (the terminal and the desktop): Org's chart. */
   Client?: Elements['desktop']['Client']
   columns: number
+  /**
+   * The terminal only: the rows the drawing may take (./v2/fit `paneRowsFor`:
+   * the pane's room, never past the terminal's height less what the rest of
+   * its screen needs). A screen that grows (Chat's messages, the Dashboard's
+   * sections) cuts itself to it. Absent elsewhere: the drawing takes what it
+   * needs, and the pane scrolls.
+   */
+  rows?: number
   /** The style the screens draw agents' avatars in (web/avatars.mjs `STYLE_IDS`): the deck's setting; absent, robots. */
   avatarStyle?: string
 }

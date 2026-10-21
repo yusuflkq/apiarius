@@ -27,15 +27,15 @@ import { deck, newWorld, NOW, work, world, type World } from './world'
 const SURFACES = ['terminal', 'desktop'] as const
 type Surface = 'terminal' | 'desktop'
 
-/** The deck's pane as a surface lays it out, `bodyColumns` across. */
-function pane(surface: Surface, bodyColumns = 84) {
+/** The deck's pane as a surface lays it out, `bodyColumns` across, on a terminal `rows` tall. */
+function pane(surface: Surface, bodyColumns = 84, rows = 400) {
   return {
     plugin: 'agent-deck',
     surface,
     component: 'Pane' as const,
     requestId: 'agent-deck',
-    viewport: { columns: bodyColumns + 4, rows: 60, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 60 }, view: {} },
+    viewport: { columns: bodyColumns + 4, rows, isFullscreen: true },
+    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: rows }, view: {} },
   }
 }
 
@@ -659,7 +659,8 @@ test('Chat draws a window of the newest messages, Show earlier adds more, and ev
   await $.command.run(deck('chat'))
   await clock.advance(1000)
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount(pane(surface))
+    // a terminal tall enough that its rows cut nothing here (tests/fit.test.ts cuts by them)
+    const ui = await $.ui.mount(pane(surface, 84, 5000))
     // what opening the pane started (git, the usage) draws again once it is read
     await clock.advance(1000)
     await ui.redraw()

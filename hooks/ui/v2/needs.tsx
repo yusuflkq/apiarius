@@ -32,6 +32,9 @@ import { cut, flat } from './text'
 
 /** The cards drawn whole at most; past them, a line each. */
 const MOST_CARDS = 4
+
+/** The needs drawn as cards at most; past them, a line each. */
+export const MOST_NEED_CARDS = MOST_CARDS
 /** The amber card's edge, its notes and its time, flattened from the web's translucent amber. */
 const EDGE = mix(P.wait, P.card, 0.45)
 const NOTE = mix(P.waitNote, P.card, 0.25)
@@ -40,17 +43,24 @@ const TIME = mix(P.waitNote, P.card, 0.45)
 /** Where the cards stand: Now, or an agent's page (that agent's alone). */
 export type NeedsWhere = 'now' | 'page'
 
-/** The section for `list` (the state's needs, or one agent's); null when it is empty. */
-export function needsSection(kit: Kit, state: WebStateV2, list: readonly V2Need[], actions: DashActions, where: NeedsWhere): RenderElement | null {
+/**
+ * The section for `list` (the state's needs, or one agent's); null when it
+ * is empty. The first `cards` (four at most) a card each, the rest a line
+ * each, `lines` of them at most and "and n more" past them: fewer where the
+ * terminal is short of rows.
+ */
+export function needsSection(kit: Kit, state: WebStateV2, list: readonly V2Need[], actions: DashActions, where: NeedsWhere, cards = MOST_CARDS, lines = Infinity): RenderElement | null {
   const { Box } = kit
   A.prune(new Set(state.needs.map(need => need.id)), state.now)
   if (list.length === 0) return null
-  const rest = list.slice(MOST_CARDS)
+  const most = Math.max(0, Math.min(MOST_CARDS, cards))
+  const rest = list.slice(most)
+  const shown = rest.slice(0, Math.max(0, lines))
   return (
     <Box key={`needs:${where}`} flexDirection="column" gap={1}>
       {sectionHead(kit, 'Needs you', list.length)}
-      {list.slice(0, MOST_CARDS).map(need => card(kit, state, need, actions))}
-      {rest.length > 0 ? moreLines(kit, rest, actions) : null}
+      {list.slice(0, most).map(need => card(kit, state, need, actions))}
+      {rest.length > 0 ? moreLines(kit, shown, actions, rest.length - shown.length) : null}
     </Box>
   )
 }
@@ -320,7 +330,7 @@ function notificationBody(kit: Kit, need: V2Need): RenderElement {
 }
 
 /** Past the cards: a line a need, its title and words as one Button (keyed as its card's would be) and its age. */
-function moreLines(kit: Kit, rest: readonly V2Need[], actions: DashActions): RenderElement {
+function moreLines(kit: Kit, rest: readonly V2Need[], actions: DashActions, past = 0): RenderElement {
   const { Box, Text, Button } = kit
   return (
     <Box key="needs:more" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
@@ -343,6 +353,7 @@ function moreLines(kit: Kit, rest: readonly V2Need[], actions: DashActions): Ren
           </Box>
         )
       })}
+      {past > 0 ? <Text color={P.muted2}>{rest.length > 0 ? `and ${past} more: answer ${past === 1 ? 'it' : 'them'} in Claude Code, or make the pane taller` : `Answer ${past === 1 ? 'it' : 'them'} in Claude Code, or make the pane taller`}</Text> : null}
     </Box>
   )
 }

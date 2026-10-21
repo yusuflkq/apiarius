@@ -65,6 +65,7 @@ import {
   type FileRow,
   type TickPart,
 } from './dashModel'
+import { rowsOf } from './fit'
 import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf } from './look'
 import { P, mix, toneOf, type IconName } from './palette'
 import {
@@ -137,30 +138,54 @@ function cardOf(kit: Kit, state: WebStateV2, row: V2AgentRow, width: number): Ca
  * `finished:now`), the finished ones' cards. The agents Clear finished hid
  * are left out.
  */
-export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions, fold: Fold, openOrg?: () => void, openFolds: readonly string[] = []): RenderElement {
+export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions, fold: Fold, openOrg?: () => void, openFolds: readonly string[] = [], maxRows?: number): RenderElement {
   const { Box, Button } = kit
   const isFinishedOpen = openFolds.includes(FINISHED_FOLD.now)
-  const { shown, finished, hidden, finishedCount } = cardAgentsOf(state, isFinishedOpen)
+  const { shown, finished, hidden: past, finishedCount } = cardAgentsOf(state, isFinishedOpen)
   const perRow = cardsPerRow(kit.columns)
   const width = widthFor(kit.columns, perRow)
-  const link = openOrg ? <Button key="now:org" label={hidden > 0 ? `${hidden} more in the org chart →` : 'Org chart →'} plain dimColor onPress={openOrg} /> : null
-  const head = foldHead(kit, fold, 'Agents', agentRowsOf(state).filter(row => !row.isCleared).length, actions, link)
-  if (!fold.isOpen) return section(kit, 'now:agents', head, null)
   const grid = (list: readonly V2AgentRow[]) => {
     const cards = list.map(row => cardOf(kit, state, row, width))
     const rows: CardModel[][] = []
     for (let i = 0; i < cards.length; i += perRow) rows.push(cards.slice(i, i + perRow))
     return rows.map(row => {
       const lines = Math.max(1, ...row.map(card => card.lines.length))
-      return (
-        <Box key={`cards:${row[0]?.row.id ?? ''}`} flexDirection="row" columnGap={1}>
-          {row.map(card => agentCard(kit, state, card, width, lines, actions))}
-        </Box>
-      )
+      return {
+        cards: row.length,
+        el: (
+          <Box key={`cards:${row[0]?.row.id ?? ''}`} flexDirection="row" columnGap={1}>
+            {row.map(card => agentCard(kit, state, card, width, lines, actions))}
+          </Box>
+        ),
+      }
     })
   }
   const toggle = () => actions.setV2View({ openFolds: openFoldsWith(openFolds, FINISHED_FOLD.now) })
   const fin = finishedRow(kit, FINISHED_FOLD.now, finishedCount, isFinishedOpen, state.cleared?.count ?? 0, actions, toggle)
+  let front = fold.isOpen ? grid(shown) : []
+  let behind = fold.isOpen ? grid(finished) : []
+  // the terminal, short of rows (`maxRows`): the rows of cards that fit under the head, the finished row kept; the rest counted in the link to Org
+  let cut = 0
+  if (maxRows !== undefined && fold.isOpen) {
+    let left = maxRows - 1 - (fin ? rowsOf(fin, kit.columns) + 1 : 0)
+    const keep = (rows: { cards: number; el: RenderElement }[]) =>
+      rows.filter(row => {
+        const tall = rowsOf(row.el, kit.columns) + 1
+        if (tall > left) {
+          cut += row.cards
+          left = 0
+          return false
+        }
+        left -= tall
+        return true
+      })
+    front = keep(front)
+    behind = keep(behind)
+  }
+  const hidden = past + cut
+  const link = openOrg ? <Button key="now:org" label={hidden > 0 ? `${hidden} more in the org chart →` : 'Org chart →'} plain dimColor onPress={openOrg} /> : null
+  const head = foldHead(kit, fold, 'Agents', agentRowsOf(state).filter(row => !row.isCleared).length, actions, link)
+  if (!fold.isOpen) return section(kit, 'now:agents', head, null)
   return (
     <Box key="now:agents" flexDirection="column" rowGap={isAiry(kit) ? 1 : 0}>
       {head}
@@ -168,9 +193,9 @@ export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions,
         quiet(kit, 'No agents yet: when Claude Code starts working, the Orchestrator and the agents it starts show up here.')
       ) : (
         <Box flexDirection="column" rowGap={1}>
-          {grid(shown)}
+          {front.map(row => row.el)}
           {fin}
-          {finished.length > 0 ? grid(finished) : null}
+          {behind.map(row => row.el)}
           {hidden > 0 && !openOrg ? quiet(kit, `${plural(hidden, 'more agent')}: more than the Dashboard shows. /deck web lists them all.`) : null}
         </Box>
       )}
@@ -374,8 +399,9 @@ export function listsOf(kit: Kit, state: WebStateV2, actions: DashActions, activ
       </Box>
     )
   }
+  // both folded on the terminal: their heads one under the other, no line between
   return (
-    <Box key="now:lists" flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
+    <Box key="now:lists" flexDirection="column" gap={isAiry(kit) ? 2 : !activity.isOpen && !files.isOpen ? 0 : 1}>
       {activitySection(kit, state, actions, kit.columns, activity)}
       {filesSection(kit, state, actions, kit.columns, files)}
     </Box>

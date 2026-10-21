@@ -32,6 +32,7 @@ import * as M from './model'
 import * as R from './repos'
 import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from './ui/v2/chat'
+import { openRowsFor, paneRowsFor } from './ui/v2/fit'
 import { newRenderMemo } from './renderMemo'
 import { bandOf, deckView, type DeckActions } from './views'
 import * as W from './web'
@@ -1916,8 +1917,18 @@ async function tick($: EngineInterface): Promise<void> {
   if (isPaneOpen || isAnyLive || web.isOn) redrawIfChanged($, now)
 }
 
+/** The terminal's height as its last drawing of the deck (the pane or the band) measured it; 0 until one has. */
+let screenRows = 0
+
+/** Keeps the terminal's height a drawing on the terminal measured. */
+function noteScreen(surface: RenderSurface, viewport: { rows: number } | undefined) {
+  if (surface === 'terminal' && viewport && viewport.rows > 0) screenRows = viewport.rows
+}
+
 async function openPane($: EngineInterface): Promise<boolean> {
-  const opened = await $.ui.open({ id: PANE, title: 'Agent Deck', focus: true, columns: 84 })
+  // on a terminal of known height, an inline pane no taller than it leaves room for (`openRowsFor`): past the terminal's height, every redraw leaves stray lines
+  const rows = openRowsFor(screenRows)
+  const opened = await $.ui.open({ id: PANE, title: 'Agent Deck', focus: true, columns: 84, ...(rows !== undefined ? { rows } : {}) })
   isPaneOpen = true
   void refreshGit($, true)
   void loadUsage($)
@@ -2156,9 +2167,10 @@ function actionsFor($: EngineInterface): DeckActions {
   }
 }
 
-function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['surface'], columns: number): Kit {
+function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['surface'], columns: number, rows?: number): Kit {
   return {
     surface,
+    ...(rows !== undefined ? { rows } : {}),
     Box: ui.Box,
     Text: ui.Text,
     Button: ui.Button,
@@ -3576,8 +3588,11 @@ export const register: Register = on => {
     const now = await $.clock.now()
     shownKey = screenKey(now)
     keepChat($, now)
-    return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, shownKey, view], () => {
-      const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
+    noteScreen(e.surface, e.viewport)
+    // the terminal: the drawing no taller than the pane's room and the terminal allow (`paneRowsFor`), Chat's newest messages and the Dashboard's sections cut to fit
+    const rows = e.surface === 'terminal' ? paneRowsFor(e.props.scroll.bodyRows, e.viewport?.rows) : undefined
+    return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, rows ?? 0, shownKey, view], () => {
+      const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1), rows)
       return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface))
     })
   })
@@ -3610,6 +3625,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    noteScreen(e.surface, e.viewport)
     if (view.isBandHidden || e.props.hasSurvey) return next(e)
     const now = await $.clock.now()
     // one line, this session's: only while an agent is at work or something needs you (`W.bandOf`); Claude Code's own loops raise none

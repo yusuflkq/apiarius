@@ -15,6 +15,7 @@ import type { RenderElement } from 'claude-code'
 import { bandView } from './ui/band'
 import type { DashActions, DashModel, DeckModel, Kit } from './ui/types'
 import { v2Deck } from './ui/v2/deck'
+import { rowsOf } from './ui/v2/fit'
 import { quiet } from './ui/v2/look'
 import { P } from './ui/v2/palette'
 
@@ -30,10 +31,13 @@ export function bandOf(kit: Kit, model: DeckModel, actions: DeckActions, theirs:
 export function deckView(kit: Kit, model: DeckModel, actions: DeckActions, dash: DashModel): RenderElement {
   const { Box } = kit
   const state = dash.v2
+  const head = dash.isDemo ? demoHeader(kit, actions) : null
+  // the terminal: the deck gets the rows the sample's header and its gap leave
+  const deck = head && kit.rows !== undefined ? { ...kit, rows: Math.max(1, kit.rows - rowsOf(head, kit.columns) - 1) } : kit
   return (
     <Box flexDirection="column" gap={1}>
-      {dash.isDemo ? demoHeader(kit, actions) : null}
-      {state ? v2Deck(kit, state, dash.v2Files, model, actions, dash.isDemo, { isDown: dash.isOrgDown, selected: dash.selected }) : quiet(kit, dash.demoNote || 'Reading the sample…')}
+      {head}
+      {state ? v2Deck(deck, state, dash.v2Files, model, actions, dash.isDemo, { isDown: dash.isOrgDown, selected: dash.selected }) : quiet(kit, dash.demoNote || 'Reading the sample…')}
     </Box>
   )
 }

@@ -24,6 +24,7 @@ import type { V2Files, WebStateV2 } from '../../web'
 import type { DashActions, DeckModel, Kit, WebPane } from '../types'
 import { changesTab } from './changes'
 import { chatTab } from './chat'
+import { FEWEST_ROWS, rowsOf } from './fit'
 import { nowTab } from './now'
 import { orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
@@ -45,12 +46,13 @@ const ORG_FRESH: OrgSpot = { isDown: false, selected: null }
 /** The whole v2 pane: the header, the tabs, and the tab or the page over it; `org` how Org's chart stands on this surface. */
 export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot = ORG_FRESH): RenderElement {
   const { Box } = kit
+  const top = [header(kit, state), model.web ? webLine(kit, model.web) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
+  // the terminal: the tab gets the rows the header, the tabs and the gaps between leave it
+  const rows = kit.rows === undefined ? undefined : Math.max(FEWEST_ROWS / 2, kit.rows - rowsOf(top, kit.columns) - top.length)
   return (
     <Box key="deck" flexDirection="column" gap={1}>
-      {header(kit, state)}
-      {model.web ? webLine(kit, model.web) : null}
-      {tabRow(kit, state, model, actions)}
-      {bodyOf(kit, state, files, model, actions, isDemo, org)}
+      {top}
+      {bodyOf(rows === undefined ? kit : { ...kit, rows }, state, files, model, actions, isDemo, org)}
     </Box>
   )
 }

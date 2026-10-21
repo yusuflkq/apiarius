@@ -355,8 +355,8 @@ function pane<S extends 'terminal' | 'desktop'>(surface: S, bodyColumns = 96) {
     surface,
     component: 'Pane' as const,
     requestId: 'agent-deck',
-    viewport: { columns: bodyColumns + 4, rows: 60, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 60 }, view: {} },
+    viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
+    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 

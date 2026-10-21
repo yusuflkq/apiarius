@@ -153,8 +153,13 @@ export function finishedRow(kit: Kit, key: string, count: number, isOpen: boolea
   )
 }
 
-/** A section that folds: its id in `DeckView.collapsed` (dashModel's FOLD), whether it is open, and what its one line says while it is folded. */
-export type Fold = { id: string; isOpen: boolean; summary: string }
+/**
+ * A section that folds: its id in `DeckView.collapsed` (dashModel's FOLD),
+ * whether it is open, and what its one line says while it is folded; `press`
+ * where its head does something else than fold or open it (a section the
+ * terminal folded to fit, which a press makes room for).
+ */
+export type Fold = { id: string; isOpen: boolean; summary: string; press?: () => void }
 
 /** The fold of section `id`, open unless `collapsed` (the view's) holds it; `summary` its one line while folded. */
 export function sectionFold(collapsed: readonly string[], id: string, summary: string): Fold {
@@ -175,7 +180,7 @@ export function foldHead(kit: Kit, fold: Fold, title: string, count: number | nu
   return (
     <Box flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>
-        <Button key={`fold:${fold.id}`} label={foldLabel(title, count, fold.isOpen)} plain dimColor={kit.surface !== 'terminal'} onPress={() => actions.toggleSection(fold.id)}>
+        <Button key={`fold:${fold.id}`} label={foldLabel(title, count, fold.isOpen)} plain dimColor={kit.surface !== 'terminal'} onPress={() => (fold.press ? fold.press() : actions.toggleSection(fold.id))}>
           <Text color={P.muted2}>{`${chevronOf(fold.isOpen)} `}</Text>
           <Text bold color={P.muted}>
             {title.toUpperCase()}

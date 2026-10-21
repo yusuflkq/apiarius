@@ -53,6 +53,8 @@ export type World = {
   files?: Readonly<Record<string, string>>
   /** The plugin's own store (`$.store`: the person's prefs), when the test reads it back; left out, the testing kit's store in memory. */
   store?: Map<string, unknown>
+  /** Each pane opened (`$.ui.open`), as asked: its id, and the body rows it asked for. */
+  opens: { id: string; rows?: number }[]
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -72,6 +74,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     steps: [],
     verdict: 'ask',
     isDecided: false,
+    opens: [],
     ...extra,
   }
 }
@@ -94,7 +97,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.panes', () => ({ value: [] }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', ($, e) => {
+    w.opens.push({ id: e.id, ...(e.rows !== undefined ? { rows: e.rows } : {}) })
+    return { value: { isPlaced: true } }
+  })
   on('ui.close', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
