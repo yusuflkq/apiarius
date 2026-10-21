@@ -201,7 +201,11 @@ test('a subagent shows as a card, its page has its task and the Orchestrator`s p
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it: b was 2.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-x1' })
   const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-  // done: its card says so and what it handed back, and opens its page
+  // done: behind "1 finished ▸", which opens on its card; the card says so and what it handed back, and opens its page
+  expect(await ui.find({ key: 'card:agent-x1' })).toBeUndefined()
+  expect((await ui.find({ key: 'finished:now:fold' }))?.text).toBe('1 finished ▸')
+  await ui.press({ key: 'finished:now:fold' })
+  await ui.redraw()
   const card = await ui.find({ key: 'card:agent-x1' })
   expect(card?.text).toContain('done')
   expect(card?.text).toContain('Found it: b was 2.')

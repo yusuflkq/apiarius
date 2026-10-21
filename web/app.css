@@ -481,6 +481,13 @@ button.q-opt:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.26); bac
    A running card gets a quiet blue edge; one waiting on you an amber one. */
 
 .run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(244px, 1fr)); gap: 14px; }
+.run-cards { display: flex; flex-direction: column; gap: 12px; }
+/* the finished agents' row: "3 finished ▸", Clear finished, Show 2 cleared */
+.finished { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.members .finished { grid-column: 1 / -1; padding: 2px 0; }
+.fin-fold { padding: 2px 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.fin-fold:hover { color: var(--fg); }
+.fin-clear, .fin-show { color: var(--muted); }
 .run-card {
   --ring-bg: var(--card);
   display: flex; flex-direction: column; gap: 10px; min-width: 0;

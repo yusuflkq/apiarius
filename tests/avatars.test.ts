@@ -72,8 +72,11 @@ test('a desktop draws each agent`s face as the library`s own document, robots by
   const state = sampleState()
   await demo($, on, state)
   const rows = D.agentRowsOf(state)
-  const order = D.cardAgentsOf(state).shown
+  // the finished row opened: those at work, then the finished
+  const groups = D.cardAgentsOf(state, true)
+  const order = [...groups.shown, ...groups.finished]
   const ui = await $.ui.mount(pane('desktop', 120))
+  await press(ui, 'finished:now:fold')
   const svgs = await ui.findAll({ type: 'Svg' })
   const faces = svgs.filter(svg => String(svg.props.alt).endsWith('avatar'))
   // the cards first, in their order: each the library's robot, 22 px, with its status dot, moving as its status does

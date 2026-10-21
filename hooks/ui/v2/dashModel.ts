@@ -16,7 +16,7 @@
  * Pure: every function reads the state and the `now` it is handed.
  */
 import { MAIN } from '../../model'
-import type { V2Activity, V2AgentRow, V2Figures, V2File, V2Need, V2Todo, WebStateV2 } from '../../web'
+import { isFinishedRow, type V2Activity, type V2AgentRow, type V2Figures, type V2File, type V2Need, type V2Todo, type WebStateV2 } from '../../web'
 import { ago, cellsOf, cutCells, flat, monoAdvance, msText, num, span, uiAdvance, usd, type Advance } from './text'
 
 /** The state's tool calls (`activity`, newest first); none in a state without them. */
@@ -198,12 +198,31 @@ export function cardsPerRow(columns: number): number {
 /** The cards Now shows at most; past it, the Orchestrator and the newest. */
 export const MOST_CARDS = 12
 
-/** Now's cards: the Orchestrator, then the agents in the order they started (new ones append; at one moment, in the tree's order); past twelve, the Orchestrator and the newest eleven. */
-export function cardAgentsOf(state: Pick<WebStateV2, 'agents'>): { shown: V2AgentRow[]; hidden: number } {
-  const list = agentRowsOf(state).sort((x, y) => Number(y.id === MAIN) - Number(x.id === MAIN) || x.startedAt - y.startedAt)
-  if (list.length <= MOST_CARDS) return { shown: list, hidden: 0 }
-  const [first, ...rest] = list
-  return { shown: [...(first ? [first] : []), ...rest.slice(rest.length - (MOST_CARDS - 1))], hidden: list.length - MOST_CARDS }
+/** Now's cards: those in front, those behind the "N finished" row (drawn while it is open), how many neither shows, and how many are finished. */
+export type CardGroups = { shown: V2AgentRow[]; finished: V2AgentRow[]; hidden: number; finishedCount: number }
+
+/**
+ * Now's cards: the Orchestrator, then the agents at work or waiting on you,
+ * in the order they started (new ones append; at one moment, in the tree's
+ * order), in front; the finished ones (done, failed, stopped or idle:
+ * W.isFinishedRow) behind one "N finished" row, drawn only while it is open
+ * (`isFinishedOpen`). The agents "Clear finished" hid are in neither. Past
+ * twelve in front, the Orchestrator, every one waiting on you and the newest
+ * of the rest; past twelve behind, the newest twelve.
+ */
+export function cardAgentsOf(state: Pick<WebStateV2, 'agents'>, isFinishedOpen = false): CardGroups {
+  const list = agentRowsOf(state)
+    .filter(row => !row.isCleared)
+    .sort((x, y) => Number(y.id === MAIN) - Number(x.id === MAIN) || x.startedAt - y.startedAt)
+  const front = list.filter(row => !isFinishedRow(row))
+  const done = list.filter(row => isFinishedRow(row))
+  // past twelve: the Orchestrator, every one waiting on you, then the newest
+  const keep = new Set(front.filter(row => row.id === MAIN).map(row => row.id))
+  for (let i = front.length - 1; i >= 0 && keep.size < MOST_CARDS; i--) if ((front[i] as V2AgentRow).status === 'waiting') keep.add((front[i] as V2AgentRow).id)
+  for (let i = front.length - 1; i >= 0 && keep.size < MOST_CARDS; i--) keep.add((front[i] as V2AgentRow).id)
+  const shown = front.length <= MOST_CARDS ? front : front.filter(row => keep.has(row.id))
+  const finished = isFinishedOpen ? done.slice(-MOST_CARDS) : []
+  return { shown, finished, hidden: front.length - shown.length + (isFinishedOpen ? done.length - finished.length : 0), finishedCount: done.length }
 }
 
 export function isRunning(status: string): boolean {

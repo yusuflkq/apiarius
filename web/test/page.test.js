@@ -321,11 +321,19 @@ test('Now is the dashboard: needs, a run card per agent, the figures, the plan, 
   assert.equal(p.run('ui.scrollTo.id'), `need-${ASK_ONE}`)
 })
 
-test('the run cards: the Orchestrator, then each agent as it started; each its status pill, its own todo in progress (else its task) with n/total, its call in flight verbatim (else its result), model · tokens and when; a click opens it', () => {
+test('the run cards: the Orchestrator, then each agent at work as it started, the finished behind "N finished ▸"; each its status pill, its own todo in progress (else its task) with n/total, its call in flight verbatim (else its result), model · tokens and when; a click opens it', () => {
   const p = page()
   p.load(SAMPLE)
   const cards = () => find(p.view('AgentsSection()'), 'run-card')
-  assert.deepEqual(cards().map(c => c.k), ['main', RESEARCHER, BUILDER, DOCS, SCOUT, TESTER, LINT, REVIEWER])
+  // those at work or waiting on you in front; the finished (done, failed, stopped, idle) behind one row, Clear finished beside it
+  assert.deepEqual(cards().map(c => c.k), ['main', BUILDER, REVIEWER])
+  const fold = () => find(p.view('AgentsSection()'), 'fin-fold')[0]
+  assert.equal(flat(textOf(fold())), '5 finished ▸')
+  assert.equal(flat(textOf(find(p.view('AgentsSection()'), 'fin-clear')[0])), 'Clear finished')
+  assert.equal(find(p.view('AgentsSection()'), 'fin-show').length, 0)
+  click(fold())
+  assert.equal(flat(textOf(fold())), '5 finished ▾')
+  assert.deepEqual(cards().map(c => c.k), ['main', BUILDER, REVIEWER, RESEARCHER, DOCS, SCOUT, TESTER, LINT])
   assert.ok(cards().every(c => c.t === 'button' && c.p['data-nav'] === 'agent'))
   const card = id => cards().find(c => c.k === id)
   const part = (id, cls) => flat(textOf(find(card(id), cls)[0]))
@@ -368,16 +376,16 @@ test('the run cards: the Orchestrator, then each agent as it started; each its s
   assert.ok(card(BUILDER).p.class.includes(' on'))
 })
 
-test('past twelve agents, the cards keep every one at work or waiting and the newest of the rest, and say how many more Org shows', () => {
+test('past twelve at work, the cards keep the Orchestrator, every one waiting on you and the newest of the rest, and say how many more Org shows', () => {
   const p = page()
   p.load(sample(s => {
-    for (let i = 0; i < 7; i++) s.agents.push({ row: 'agent', id: `extra${i}`, parent: 'main', depth: 1, kind: 'agent', status: 'done', title: `extra ${i}`, startedAt: s.session.startedAt + (i + 1) * MIN, endedAt: s.now - MIN, todos: [] })
+    for (let i = 0; i < 12; i++) s.agents.push({ row: 'agent', id: `extra${i}`, parent: 'main', depth: 1, kind: 'agent', status: 'running', title: `extra ${i}`, startedAt: s.now - (12 - i) * 1000, endedAt: null, todos: [] })
   }))
   const shown = find(p.view('AgentsSection()'), 'run-card').map(c => c.k)
   assert.equal(shown.length, 12)
-  for (const id of ['main', BUILDER, REVIEWER, TESTER, 'extra6']) assert.ok(shown.includes(id), id)
-  for (const id of ['extra0', 'extra1', 'extra2']) assert.ok(!shown.includes(id), id)
-  assert.match(p.text('AgentsSection()'), /^Agents 15 3 more in Org Orchestrator/)
+  for (const id of ['main', BUILDER, REVIEWER, 'extra3', 'extra11']) assert.ok(shown.includes(id), id)
+  for (const id of ['extra0', 'extra1', 'extra2', TESTER]) assert.ok(!shown.includes(id), id)
+  assert.match(p.text('AgentsSection()'), /^Agents 20 3 more in Org Orchestrator/)
   click(find(p.view('AgentsSection()'), 'sec-fold')[0])
   assert.equal(find(p.view('AgentsSection()'), 'run-card').length, 0)
 })
@@ -693,6 +701,52 @@ test('a slash command you ran alone is a small line in the middle, "You ran /log
   assert.equal(find(p.view('ChatPage()'), 'cgroup').filter(g => flat(textOf(g)).includes('/login')).length, 0)
 })
 
+test('Clear finished on the page: its button sends clearFinished; a state that marks the cleared leaves them off the Dashboard, the members, Org and Everyone, with "Show 5 cleared", which sends showCleared', async () => {
+  const p = page({ hash: '#/now' })
+  p.load(SAMPLE)
+  p.run('navigate("org")')
+  assert.ok(byTextAll(p.view('OrgPage()'), 'researcher') > 0)
+  p.run('navigate("now")')
+  click(find(p.view('AgentsSection()'), 'fin-clear')[0])
+  await settle()
+  assert.deepEqual(p.commands().map(c => c.cmd), ['clearFinished'])
+  assert.match(p.commands()[0].id, /^cl-/)
+  // the mod's next state marks them (and counts its fold rows without them)
+  const gone = [RESEARCHER, DOCS, SCOUT, TESTER, LINT]
+  const isGone = m => gone.includes(m.from) || gone.includes(m.to) || gone.includes(m.agent)
+  p.load(sample(s => {
+    for (const r of s.agents) if (r.row === 'agent' && gone.includes(r.id)) r.isCleared = true
+    s.agents = s.agents.filter(r => r.row !== 'fold')
+    for (const m of s.chat) if (isGone(m)) m.isCleared = true
+    s.cleared = { count: 5, at: NOW }
+    s.now += 1000
+  }))
+  assert.deepEqual(find(p.view('AgentsSection()'), 'run-card').map(c => c.k), ['main', BUILDER, REVIEWER])
+  assert.equal(find(p.view('AgentsSection()'), 'fin-fold').length, 0)
+  assert.equal(flat(textOf(find(p.view('AgentsSection()'), 'fin-show')[0])), 'Show 5 cleared')
+  assert.match(p.text('AgentsSection()'), /^Agents 3 /)
+  // Chat: no member of them, nothing of theirs in Everyone; a drawer of one still opens
+  p.run('navigate("chat")')
+  assert.deepEqual(find(p.view('ChatPage()'), 'member').map(m => flat(textOf(find(m, 'member-name')[0]))), ['Everyone', 'Orchestrator', 'builder', 'reviewer'])
+  const keys = messageKeys(p.view('ChatPage()'))
+  for (const m of SAMPLE.chat) assert.equal(keys.includes(m.id), !isGone(m), m.id)
+  p.open(`{ kind: "agent", id: "${TESTER}" }`)
+  assert.match(p.text('Drawer()'), /tester/)
+  p.run('closeDrawer()')
+  // Org: none of them, and how many are cleared
+  p.run('navigate("org")')
+  assert.match(p.text('OrgPage()'), /^3 agents .*5 cleared/)
+  for (const r of ['researcher', 'tester', 'scout']) assert.equal(byTextAll(p.view('OrgPage()'), r), 0, r)
+  // Show 5 cleared
+  p.run('navigate("now")')
+  click(find(p.view('AgentsSection()'), 'fin-show')[0])
+  await settle()
+  assert.equal(p.commands().slice(-1)[0].cmd, 'showCleared')
+})
+
+/** How many elements under `v` read exactly `text`. */
+const byTextAll = (v, text) => findAll(v, one => !!one.c && one.c.length === 1 && one.c[0] && one.c[0].t === '#' && one.c[0].s === text).length
+
 test('every agent a message names opens its drawer: the sender`s avatar and name, the recipient in "to X", the agent a notice is about', () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
@@ -739,17 +793,24 @@ test('Chat`s long messages fold to about six lines; a cut one loads /message/<id
   assert.equal(find(find(p.view('ChatPage()'), 'brow').find(b => b.k === 'm1792013130000_b81c6f3e2a9d4c17_'), 'b-more').length, 0)
 })
 
-test('Chat`s members replace the filter chips: Everyone, then each agent with its avatar, name and status dot; one picked shows your conversation with it and the composer sends to it; f steps through them', async () => {
+test('Chat`s members replace the filter chips: Everyone, then each agent with its avatar, name and status dot, the finished behind "N finished ▸"; one picked shows your conversation with it and the composer sends to it; no key steps through them', async () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
   const members = () => find(p.view('ChatPage()'), 'member')
   const preview = words => ({ ...p.run(`previewOf('chat', ${JSON.stringify(words)})`) })
   const placeholder = () => find(p.view('Composer("chat")'), 'composer-input')[0].p.placeholder
   assert.equal(find(p.view('ChatPage()'), 'chip').length, 0)
-  assert.deepEqual(members().map(m => flat(textOf(find(m, 'member-name')[0]))), ['Everyone', 'Orchestrator', 'builder', 'tester', 'Lint the new files', 'reviewer', 'researcher', 'docs', 'scout'])
+  // those at work in front; the finished behind "5 finished ▸" at the end, which opens on them
+  assert.deepEqual(members().map(m => flat(textOf(find(m, 'member-name')[0]))), ['Everyone', 'Orchestrator', 'builder', 'reviewer'])
+  const fold = () => find(p.view('ChatPage()'), 'fin-fold')[0]
+  assert.equal(flat(textOf(fold())), '5 finished ▸')
+  assert.equal(find(find(p.view('ChatPage()'), 'members')[0], 'fin-clear').length, 1)
+  click(fold())
+  assert.deepEqual(members().map(m => flat(textOf(find(m, 'member-name')[0]))), ['Everyone', 'Orchestrator', 'builder', 'reviewer', 'tester', 'Lint the new files', 'researcher', 'docs', 'scout'])
   // each agent: its avatar, its name, its status dot in its status's hue
   for (const m of members().slice(1)) assert.equal(findAll(m, v => v.t === 'img' && v.p.class === 'av').length, 1)
-  assert.deepEqual(members().slice(1).map(m => find(m, 'dot')[0].p.class), ['dot hue-wait', 'dot hue-wait', 'dot hue-done', 'dot hue-fail', 'dot hue-wait', 'dot hue-done', 'dot hue-done', 'dot hue-idle'])
+  assert.deepEqual(members().slice(1).map(m => find(m, 'dot')[0].p.class), ['dot hue-wait', 'dot hue-wait', 'dot hue-wait', 'dot hue-done', 'dot hue-fail', 'dot hue-done', 'dot hue-done', 'dot hue-idle'])
+  click(fold())
   // Everyone: every message, and the words go to the Orchestrator
   assert.ok(members()[0].p.class.includes(' on'))
   assert.equal(messageKeys(p.view('ChatPage()')).length, SAMPLE.chat.length)

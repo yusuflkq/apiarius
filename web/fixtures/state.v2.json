@@ -1197,5 +1197,9 @@
       "text": "Claude reads it when it finishes its current turn",
       "at": 1792013340000
     }
-  ]
+  ],
+  "cleared": {
+    "count": 0,
+    "at": null
+  }
 }

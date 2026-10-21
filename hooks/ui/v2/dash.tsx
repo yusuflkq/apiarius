@@ -4,7 +4,10 @@
  *
  * - the agents, a card each as the web's run cards, in rows of as many as
  *   fit at 32 cells or more (`cardsPerRow`: two at the pane's usual 68 to 84
- *   cells, up to six at its widest), each row's cards as wide and as tall.
+ *   cells, up to six at its widest), each row's cards as wide and as tall;
+ *   those at work (and the Orchestrator) in front, the finished ones behind
+ *   one "3 finished ▸" row that opens on their cards, with "Clear finished"
+ *   and "Show 2 cleared" beside it (./parts `finishedRow`).
  *   A card: the avatar (its status dot at its foot), the name, its status
  *   pill right after it and "Open →" at the right; the step box (its glyph,
  *   the agent's own todo in hand or its task's first line, "n/total"); its
@@ -38,6 +41,7 @@
  */
 import type { RenderElement } from 'claude-code'
 
+import { FINISHED_FOLD } from '../../model'
 import { agentKeyOf, fileKeyOf, type V2AgentRow, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import {
@@ -72,9 +76,11 @@ import {
   face,
   faces,
   facesCells,
+  finishedRow,
   foldHead,
   glyphCells,
   openButton,
+  openFoldsWith,
   pillCells,
   plainSlack,
   pressText,
@@ -125,35 +131,46 @@ function cardOf(kit: Kit, state: WebStateV2, row: V2AgentRow, width: number): Ca
 /**
  * The agents: their head ("▾ AGENTS 7", a press folds them to it and how
  * many run, wait and so on) and, where the deck has an org chart, the way
- * to it; then their cards in rows of as many as fit, every card in a row as
- * wide, and as tall.
+ * to it; then the cards of those at work in rows of as many as fit, every
+ * card in a row as wide, and as tall; then the "3 finished ▸" row with
+ * Clear finished, and, while it is open (`openFolds` holds
+ * `finished:now`), the finished ones' cards. The agents Clear finished hid
+ * are left out.
  */
-export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions, fold: Fold, openOrg?: () => void): RenderElement {
+export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions, fold: Fold, openOrg?: () => void, openFolds: readonly string[] = []): RenderElement {
   const { Box, Button } = kit
-  const { shown, hidden } = cardAgentsOf(state)
+  const isFinishedOpen = openFolds.includes(FINISHED_FOLD.now)
+  const { shown, finished, hidden, finishedCount } = cardAgentsOf(state, isFinishedOpen)
   const perRow = cardsPerRow(kit.columns)
   const width = widthFor(kit.columns, perRow)
   const link = openOrg ? <Button key="now:org" label={hidden > 0 ? `${hidden} more in the org chart →` : 'Org chart →'} plain dimColor onPress={openOrg} /> : null
-  const head = foldHead(kit, fold, 'Agents', agentRowsOf(state).length, actions, link)
+  const head = foldHead(kit, fold, 'Agents', agentRowsOf(state).filter(row => !row.isCleared).length, actions, link)
   if (!fold.isOpen) return section(kit, 'now:agents', head, null)
-  const cards = shown.map(row => cardOf(kit, state, row, width))
-  const rows: CardModel[][] = []
-  for (let i = 0; i < cards.length; i += perRow) rows.push(cards.slice(i, i + perRow))
+  const grid = (list: readonly V2AgentRow[]) => {
+    const cards = list.map(row => cardOf(kit, state, row, width))
+    const rows: CardModel[][] = []
+    for (let i = 0; i < cards.length; i += perRow) rows.push(cards.slice(i, i + perRow))
+    return rows.map(row => {
+      const lines = Math.max(1, ...row.map(card => card.lines.length))
+      return (
+        <Box key={`cards:${row[0]?.row.id ?? ''}`} flexDirection="row" columnGap={1}>
+          {row.map(card => agentCard(kit, state, card, width, lines, actions))}
+        </Box>
+      )
+    })
+  }
+  const toggle = () => actions.setV2View({ openFolds: openFoldsWith(openFolds, FINISHED_FOLD.now) })
+  const fin = finishedRow(kit, FINISHED_FOLD.now, finishedCount, isFinishedOpen, state.cleared?.count ?? 0, actions, toggle)
   return (
     <Box key="now:agents" flexDirection="column" rowGap={isAiry(kit) ? 1 : 0}>
       {head}
-      {shown.length === 0 ? (
+      {shown.length === 0 && finishedCount === 0 ? (
         quiet(kit, 'No agents yet: when Claude Code starts working, the Orchestrator and the agents it starts show up here.')
       ) : (
         <Box flexDirection="column" rowGap={1}>
-          {rows.map(row => {
-            const lines = Math.max(1, ...row.map(card => card.lines.length))
-            return (
-              <Box key={`cards:${row[0]?.row.id ?? ''}`} flexDirection="row" columnGap={1}>
-                {row.map(card => agentCard(kit, state, card, width, lines, actions))}
-              </Box>
-            )
-          })}
+          {grid(shown)}
+          {fin}
+          {finished.length > 0 ? grid(finished) : null}
           {hidden > 0 && !openOrg ? quiet(kit, `${plural(hidden, 'more agent')}: more than the Dashboard shows. /deck web lists them all.`) : null}
         </Box>
       )}

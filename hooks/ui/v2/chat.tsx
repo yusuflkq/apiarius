@@ -13,6 +13,11 @@
  *   - Everyone shows the whole chat, the composer to the Orchestrator; beside
  *     the list's line, "Between agents" keeps to what agents said to each
  *     other.
+ *   - The finished agents (done, failed, stopped or idle) sit behind one
+ *     "3 finished ▸" row at the list's foot, which opens on them, with
+ *     "Clear finished" beside it: the agents it hides leave the list, and
+ *     their messages Everyone and Between agents ("Show 2 cleared" brings
+ *     them back; nothing in Claude Code changes).
  * - Others' messages, on the left: the sender's avatar and name; when the
  *   words went to someone other than you, a dim "to" and the recipient's own
  *   small avatar and name; and when. Each name is a press that opens that
@@ -60,12 +65,12 @@ import type { RenderElement } from 'claude-code'
 
 import type { DeckView2 } from '../../../types'
 import { clean } from '../../format'
-import { MAIN, ORCHESTRATOR } from '../../model'
-import { needKeyOf, recipientOf, type V2AgentRow, type V2ChatRow, type V2Files, type V2Need, type WebAck, type WebStateV2 } from '../../web'
+import { FINISHED_FOLD, MAIN, ORCHESTRATOR } from '../../model'
+import { isFinishedRow, needKeyOf, recipientOf, type V2AgentRow, type V2ChatRow, type V2Files, type V2Need, type WebAck, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { AVATAR, icon, quiet, svgOf } from './look'
 import { P, mix, toneOf } from './palette'
-import { chevronOf, face } from './parts'
+import { chevronOf, face, finishedRow, openFoldsWith } from './parts'
 import { ago, cut, flat, foldText, plural } from './text'
 
 /** The messages the window shows at first, and the more each "Show earlier" adds. */
@@ -137,8 +142,8 @@ export type Candidate = { row: V2AgentRow; handle: string }
 /** Why words cannot go, and the agents a name could have meant (none when it meant none). */
 export type Refusal = { error: string; candidates: Candidate[] }
 
-/** What one drawing of Chat works from. */
-type Ctx = { kit: Kit; state: WebStateV2; files: V2Files; actions: DashActions; held: ReadonlyMap<string, V2Need>; picked: string }
+/** What one drawing of Chat works from: the open folds the view keeps (`DeckView2.openFolds`) among it. */
+type Ctx = { kit: Kit; state: WebStateV2; files: V2Files; actions: DashActions; held: ReadonlyMap<string, V2Need>; picked: string; openFolds: readonly string[] }
 
 const view = {
   /** How many messages the window shows, by filter. */
@@ -226,12 +231,15 @@ export type Member = { id: string; title: string; row: V2AgentRow | null }
  * The member list: every agent of the session in the tree's order (Claude
  * Code's own loops only when the chat names one), at most 30 (the
  * Orchestrator, the one picked, then the latest to speak or start); the one
- * picked kept though the state holds no agent for it. `hidden`: the agents
- * left out.
+ * picked kept though the state holds no agent for it. Those at work (and the
+ * Orchestrator, and the one picked) are `members`, in front; the finished
+ * ones (W.isFinishedRow) `finished`, behind their fold row. The agents
+ * "Clear finished" hid are left out, but the one picked. `hidden`: the
+ * agents left out past 30.
  */
-export function membersOf(state: WebStateV2, filter: string): { members: Member[]; hidden: number } {
+export function membersOf(state: WebStateV2, filter: string): { members: Member[]; finished: Member[]; hidden: number } {
   const named = new Set(state.chat.flatMap(row => [row.from, row.to ?? '', row.agent ?? '']))
-  const rows = agentRows(state).filter(row => row.kind !== 'engine' || named.has(row.id) || row.id === filter)
+  const rows = agentRows(state).filter(row => (row.kind !== 'engine' || named.has(row.id) || row.id === filter) && (!row.isCleared || row.id === filter))
   let kept = rows
   if (rows.length > MEMBERS_MOST) {
     const last = new Map<string, number>()
@@ -240,9 +248,12 @@ export function membersOf(state: WebStateV2, filter: string): { members: Member[
     const top = new Set([...rows].sort((a, b) => rank(b) - rank(a)).slice(0, MEMBERS_MOST).map(row => row.id))
     kept = rows.filter(row => top.has(row.id))
   }
-  const members: Member[] = kept.map(row => ({ id: row.id, title: row.title, row }))
-  if (isAgentFilter(filter) && !members.some(one => one.id === filter)) members.push({ id: filter, title: filter, row: null })
-  return { members, hidden: rows.length - kept.length }
+  const all: Member[] = kept.map(row => ({ id: row.id, title: row.title, row }))
+  const isBehind = (one: Member) => one.row !== null && isFinishedRow(one.row) && one.id !== filter
+  const members = all.filter(one => !isBehind(one))
+  const finished = all.filter(isBehind)
+  if (isAgentFilter(filter) && !all.some(one => one.id === filter)) members.push({ id: filter, title: filter, row: null })
+  return { members, finished, hidden: rows.length - kept.length }
 }
 
 /** The last word on command `id` in the state's acks: a later one replaces an earlier one. */
@@ -285,6 +296,8 @@ function entriesOf(state: WebStateV2, filter: string): Entry[] {
   const entries: Entry[] = []
   for (const row of state.chat) {
     if (!passes(row, filter)) continue
+    // what the agents Clear finished hid said or were told leaves Everyone and Between agents; their own conversation keeps it
+    if (row.isCleared && (filter === '' || filter === 'between')) continue
     const own = row.ackId && view.own.has(row.ackId) ? `send:${row.ackId}` : ''
     const key = own && !taken.has(own) ? own : `msg:${row.id}`
     taken.add(key)
@@ -406,7 +419,7 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   const { Box, Button } = kit
   const filter = filterOf(view2.chatFilter)
   const picked = isAgentFilter(filter) ? filter : ''
-  const ctx: Ctx = { kit, state, files, actions, held: new Map(state.needs.filter(need => need.kind === 'question').map(need => [need.id, need])), picked }
+  const ctx: Ctx = { kit, state, files, actions, held: new Map(state.needs.filter(need => need.kind === 'question').map(need => [need.id, need])), picked, openFolds: view2.openFolds }
   const members = memberList(ctx, filter)
   const share = sizeOf(members)
   const roomNodes = ROW_NODES - Math.max(0, share.nodes - LIST_SHARE.nodes)
@@ -488,12 +501,16 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
   const { kit, state, actions, picked } = ctx
   const { Box, Text, Button } = kit
   const isTerminal = kit.surface === 'terminal'
-  const { members, hidden } = membersOf(state, filter)
+  const { members, finished, hidden } = membersOf(state, filter)
   const pick = (id: string) => {
     actions.setV2View({ chatFilter: id })
     actions.reveal('chat:compose', 'nearest')
     actions.focusNext(1, [composerKey()])
   }
+  // the finished behind one row at the list's foot: "3 finished ▸", Clear finished, Show 2 cleared
+  const isFinishedOpen = ctx.openFolds.includes(FINISHED_FOLD.chat)
+  const fin = finishedRow(kit, FINISHED_FOLD.chat, finished.length, isFinishedOpen, state.cleared?.count ?? 0, actions, () => actions.setV2View({ openFolds: openFoldsWith(ctx.openFolds, FINISHED_FOLD.chat) }))
+  const behind = isFinishedOpen ? finished : []
   const between =
     picked === '' ? (
       <Button key="chat:filter:between" label="Between agents" plain dimColor={filter !== 'between'} onPress={() => actions.setV2View({ chatFilter: filter === 'between' ? '' : 'between' })} />
@@ -507,6 +524,8 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
     return (
       <Box key="chat:members" flexDirection="row" flexWrap="wrap" columnGap={2}>
         {items}
+        {fin}
+        {behind.map(one => memberChip(ctx, one.id, one.title, one.id === picked, () => pick(one.id)))}
         {between}
         {more}
       </Box>
@@ -525,7 +544,7 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
     <Box key="chat:members:head" flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={1}>
       <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={1} minWidth={0}>
         <Box flexShrink={0}>
-          <Button key="chat:members:fold" label={`${chevronOf(isOpen)} ${plural(members.length, 'agent')}`} plain dimColor onPress={fold} />
+          <Button key="chat:members:fold" label={`${chevronOf(isOpen)} ${plural(members.length + finished.length, 'agent')}`} plain dimColor onPress={fold} />
         </Box>
         {isOpen ? null : <Text color={P.muted3}>·</Text>}
         {isOpen ? null : <Box flexShrink={0}>{current ? face(kit, current.row, TO_FACE) : everyoneFace(kit, TO_FACE)}</Box>}
@@ -552,19 +571,27 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
     memberRow(ctx, { id: '', title: 'Everyone', row: null }, picked === '', running > 0 ? { word: `${running} at work`, hue: P.runText } : null, () => pick('')),
     ...members.map(one => memberRow(ctx, one, one.id === picked, statusOf(one.row), () => pick(one.id))),
   ]
-  const down = Math.ceil(rows.length / across)
-  const columns = Array.from({ length: across }, (_, i) => rows.slice(i * down, (i + 1) * down)).filter(one => one.length > 0)
+  // down each column, two or three across
+  const columnsOf = (list: readonly RenderElement[], key: string) => {
+    const down = Math.ceil(list.length / across)
+    const columns = Array.from({ length: across }, (_, i) => list.slice(i * down, (i + 1) * down)).filter(one => one.length > 0)
+    return (
+      <Box key={key} flexDirection="row" columnGap={1}>
+        {columns.map(column => (
+          <Box flexDirection="column" gap={1} width={`${Math.floor(100 / across)}%`} flexShrink={1} minWidth={0}>
+            {column}
+          </Box>
+        ))}
+      </Box>
+    )
+  }
   return (
     <Box key="chat:members" flexDirection="column">
       {head}
-      <Box key="chat:members:list" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
-        <Box flexDirection="row" columnGap={1}>
-          {columns.map(column => (
-            <Box flexDirection="column" gap={1} width={`${Math.floor(100 / across)}%`} flexShrink={1} minWidth={0}>
-              {column}
-            </Box>
-          ))}
-        </Box>
+      <Box key="chat:members:list" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1} rowGap={fin ? 1 : 0}>
+        {columnsOf(rows, 'chat:members:front')}
+        {fin}
+        {behind.length > 0 ? columnsOf(behind.map(one => memberRow(ctx, one, one.id === picked, statusOf(one.row), () => pick(one.id))), 'chat:members:finished') : null}
         {more}
       </Box>
     </Box>

@@ -4,7 +4,8 @@
  *
  * - Needs you (./needs): only when Claude Code holds something on you.
  * - Agents (./dash): a card each, in rows of as many as fit, every line of a
- *   card a press that opens the agent's page.
+ *   card a press that opens the agent's page; the finished ones behind one
+ *   "3 finished ▸" row, with Clear finished beside it.
  * - Figures (./dash): agents running, the plan's steps where Claude made a
  *   plan, the session's spend, what waits on you.
  * - Plan: only where Claude made one, every source it used, each as Claude
@@ -23,6 +24,7 @@
 import type { RenderElement } from 'claude-code'
 
 import { clean } from '../../format'
+import { FINISHED_FOLD } from '../../model'
 import { agentKeyOf, needKeyOf, type V2Plan, type V2Todo, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { agentsSection, figuresSection, isAiry, listsOf } from './dash'
@@ -40,15 +42,17 @@ const plansOpen = new Set<number>()
  * Now: Needs you, the agents' cards, the figures, the plan, then Recent
  * activity and Files; each section but Needs you folded where `collapsed`
  * (the view's `DeckView.collapsed`) holds its FOLD id. `openOrg`, where
- * given, is the way to the org chart beside the agents' head.
+ * given, is the way to the org chart beside the agents' head; `openFolds`
+ * (the view's `DeckView2.openFolds`) says whether the finished agents' row
+ * is open.
  */
-export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[], actions: DashActions, openOrg?: () => void): RenderElement {
+export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[], actions: DashActions, openOrg?: () => void, openFolds: readonly string[] = []): RenderElement {
   const { Box } = kit
   const fold = (id: string, summary: string) => sectionFold(collapsed, id, summary)
   return (
     <Box key="now" flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
       {needsSection(kit, state, state.needs, actions, 'now')}
-      {agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg)}
+      {agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg, openFolds)}
       {figuresSection(kit, state, actions, fold(FOLD.figures, figuresFoldOf(state)))}
       {state.plan ? planSection(kit, state.plan, state.now, actions, fold(FOLD.plan, planFoldOf(state))) : null}
       {listsOf(kit, state, actions, fold(FOLD.activity, activityFoldOf(state)), fold(FOLD.files, filesFoldOf(state)))}
@@ -59,12 +63,14 @@ export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[]
 /**
  * The rows `j` and `k` move the pane's focus among on Now, in the order it
  * draws them: each need (W.needKeyOf), then each agent card's name
- * (W.agentKeyOf) while the agents are open.
+ * (W.agentKeyOf) while the agents are open, the finished ones' while their
+ * row is open.
  */
-export function nowFocusKeys(state: WebStateV2, collapsed: readonly string[]): string[] {
+export function nowFocusKeys(state: WebStateV2, collapsed: readonly string[], openFolds: readonly string[] = []): string[] {
   const needs = state.needs.map(need => needKeyOf(need.id))
   if (collapsed.includes(FOLD.agents)) return needs
-  return [...needs, ...cardAgentsOf(state).shown.map(row => agentKeyOf(row.id))]
+  const cards = cardAgentsOf(state, openFolds.includes(FINISHED_FOLD.now))
+  return [...needs, ...[...cards.shown, ...cards.finished].map(row => agentKeyOf(row.id))]
 }
 
 /** A plan item's glyph name: Claude's own status. */

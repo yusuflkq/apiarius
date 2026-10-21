@@ -341,6 +341,23 @@ test('/agent serves an agent`s page file by id as JSON, with the token only, and
   assert.equal((await request(main.port, { path: '/agent/b81c6f3e2a9d4c17', headers: auth })).body, next)
 })
 
+test('POST /cmd passes clearFinished and showCleared on in exactly their shapes (no field but the page`s id)', async () => {
+  const count = main.lines.length
+  const good = [{ cmd: 'clearFinished', id: 'cl-1' }, { cmd: 'clearFinished' }, { cmd: 'showCleared', id: 'cl-2' }, { cmd: 'showCleared' }]
+  for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const bad = [
+    { cmd: 'clearFinished', agentId: 'main' },
+    { cmd: 'clearFinished', ids: ['a1'] },
+    { cmd: 'clearFinished', id: 'bad id' },
+    { cmd: 'showCleared', text: 'all' },
+    { cmd: 'showCleared', id: 7 },
+    { cmd: 'clearfinished' },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body))
+  await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"clearFinished","id":"cl-1"}', '{"cmd":"clearFinished"}', '{"cmd":"showCleared","id":"cl-2"}', '{"cmd":"showCleared"}'])
+})
+
 test('POST /cmd passes stopAgent and abortTurn on in exactly their shapes, with the page`s id', async () => {
   const count = main.lines.length
   const good = [

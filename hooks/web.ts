@@ -651,6 +651,8 @@ export type V2AgentRow = {
   todos: V2Todo[]
   /** In + out + cache reads. */
   tokens: number
+  /** Hidden by the deck's "Clear finished" (`clearedStateOf`): left out of the Dashboard, Chat's members and Everyone, and Org; still on its page, in Changes and Inspect. Never anything in Claude Code. */
+  isCleared?: true
 }
 
 /** A TodoWrite item, or a board task's words, with Claude's own status: `doing` its activeForm. */
@@ -701,6 +703,8 @@ export type V2ChatRow = {
   callId?: string
   /** The agent a notification is about. */
   agent?: string
+  /** From, to or about an agent "Clear finished" hid: left out of Chat's Everyone and Between agents. */
+  isCleared?: true
 }
 
 /** The plan, only as Claude made it, from every source it used; null when it made none. */
@@ -817,6 +821,8 @@ export type WebStateV2 = {
   inspect: V2Inspect
   /** What came of the page's commands, by their `id`: the newest 50, oldest first. */
   acks: WebAck[]
+  /** The agents "Clear finished" hid (their rows `isCleared`), how many, and when it was pressed last; 0 and null when none are. "Show N cleared" brings them back. */
+  cleared: { count: number; at: number | null }
 }
 
 /** An agent's own file, `agents/<id>.json`, read when its page opens: its words whole and its calls. */
@@ -910,6 +916,83 @@ function resultOf(agent: DeckAgent): string {
 /** Whether a row folds: finished or idle, nothing of its waits on you. */
 function isQuietRow(row: V2AgentRow): boolean {
   return row.kind !== 'orchestrator' && row.needs === 0 && (row.status === 'done' || row.status === 'failed' || row.status === 'idle')
+}
+
+/** Whether an agent is finished: done, failed, stopped or idle, nothing of its waiting on you; never the Orchestrator. The Dashboard and Chat's members fold these behind one "N finished" row. */
+export function isFinishedRow(row: V2AgentRow): boolean {
+  return isQuietRow(row)
+}
+
+/** When an agent's run ended (else its last wake, else its start): what "Clear finished" weighs against when it was pressed. */
+function runEndOf(row: V2AgentRow): number {
+  return row.endedAt ?? row.resumedAt ?? row.startedAt
+}
+
+/** What "Clear finished" hid: the agents' ids, and when it was pressed last (0 for never). The deck's view keeps it (`DeckView2.cleared`, `clearedAt`). */
+export type Cleared = { ids: readonly string[]; at: number }
+
+/** Nothing cleared. */
+export const NONE_CLEARED: Cleared = { ids: [], at: 0 }
+
+/**
+ * The state with what "Clear finished" hid marked, for every surface to
+ * leave out of the Dashboard, Chat's members and Everyone, and Org: an
+ * agent it named that is finished (`isFinishedRow`), ended no later than
+ * the press, and has nothing under it still shown. One that runs again
+ * shows again. Their chat rows (from, to or about one) are marked too; the
+ * fold rows count only the agents still shown; `cleared` says how many.
+ * Nothing leaves the state: an agent's page, Changes and Inspect keep them.
+ */
+export function clearedStateOf(state: WebStateV2, cleared: Cleared): WebStateV2 {
+  const named = new Set(cleared.ids)
+  const rows = state.agents.filter((row): row is V2AgentRow => row.row === 'agent')
+  if (named.size === 0 || !rows.some(row => named.has(row.id))) return { ...state, cleared: { count: 0, at: named.size > 0 && cleared.at > 0 ? cleared.at : null } }
+  const kids = new Map<string, V2AgentRow[]>()
+  for (const row of rows) if (row.parent !== null) kids.set(row.parent, [...(kids.get(row.parent) ?? []), row])
+  const hidden = new Map<string, boolean>()
+  const isHidden = (row: V2AgentRow, seen: Set<string>): boolean => {
+    const known = hidden.get(row.id)
+    if (known !== undefined) return known
+    if (seen.has(row.id)) return false
+    seen.add(row.id)
+    const is = named.has(row.id) && isFinishedRow(row) && runEndOf(row) <= cleared.at && (kids.get(row.id) ?? []).every(kid => isHidden(kid, seen))
+    hidden.set(row.id, is)
+    return is
+  }
+  const gone = new Set(rows.filter(row => isHidden(row, new Set())).map(row => row.id))
+  const agents: V2Row[] = []
+  for (const row of state.agents) {
+    if (row.row === 'agent') {
+      agents.push(gone.has(row.id) ? { ...row, isCleared: true } : row)
+      continue
+    }
+    // a fold row counts the agents it still shows; one with none left goes
+    const ids = row.ids.filter(id => !gone.has(id))
+    if (ids.length === 0) continue
+    const counts = { done: 0, failed: 0, stopped: 0, idle: 0 }
+    for (const id of ids) {
+      const one = rows.find(each => each.id === id)
+      if (!one) continue
+      if (one.isStopped) counts.stopped += 1
+      else if (one.status === 'failed') counts.failed += 1
+      else if (one.status === 'idle') counts.idle += 1
+      else counts.done += 1
+    }
+    agents.push({ ...row, ids, ...counts, text: foldTextOf(counts) })
+  }
+  const chat = state.chat.map(row => (gone.has(row.from) || (row.to !== null && gone.has(row.to)) || (row.agent !== undefined && gone.has(row.agent)) ? { ...row, isCleared: true as const } : row))
+  return { ...state, agents, chat, cleared: { count: gone.size, at: cleared.at > 0 ? cleared.at : null } }
+}
+
+/** The state as the Dashboard, Chat's members and Org draw it: the agents "Clear finished" hid left out. */
+export function shownStateOf(state: WebStateV2): WebStateV2 {
+  if (!state.agents.some(row => row.row === 'agent' && row.isCleared)) return state
+  return { ...state, agents: state.agents.filter(row => row.row !== 'agent' || !row.isCleared) }
+}
+
+/** The finished agents "Clear finished" would hide now: those shown that are finished (`isFinishedRow`). */
+export function finishedIdsOf(state: Pick<WebStateV2, 'agents'>): string[] {
+  return state.agents.filter((row): row is V2AgentRow => row.row === 'agent' && !row.isCleared && isFinishedRow(row)).map(row => row.id)
 }
 
 /** One agent's row, out of the tree: its `depth` and `fold` are the walk's to set. */
@@ -1233,6 +1316,7 @@ export function deckStateOf(
   answerable: ReadonlySet<string> = new Set(),
   gitDiffs: GitDiffs = new Map(),
   avatarStyle: string = AV.DEFAULT_STYLE,
+  cleared: Cleared = NONE_CLEARED,
 ): WebStateV2 {
   const root = git.root || ''
   const isRepo = git.isRepo === true && root !== ''
@@ -1247,7 +1331,8 @@ export function deckStateOf(
   const edits = data.edits.slice(-V2_CAPS.edits)
   const rows = agentRowsOf(data, now, needsBy)
   const plan = planOfV2(data)
-  return {
+  // what "Clear finished" hid is marked last, over the state as built
+  return clearedStateOf({
     v: 2,
     now,
     session: { id: sessionId, cwd, startedAt: data.startedAt },
@@ -1298,7 +1383,8 @@ export function deckStateOf(
         .map(agent => ({ id: agent.id, title: rowTitleOf(agent), model: shortModel(agent.model), tokens: { in: agent.tokensIn, out: agent.tokensOut, cacheRead: agent.cacheRead }, requests: agent.requests, tools: agent.tools, errors: agent.errors })),
     },
     acks: data.acks.slice(-V2_CAPS.acks).map(ack => ({ id: ack.id, ok: ack.ok, status: ack.status, text: ack.text, at: ack.at })),
-  }
+    cleared: { count: 0, at: null },
+  }, cleared)
 }
 
 /** Agent `agent`'s own file, `agents/<id>.json`: its words whole, its list, its latest calls and its edits. */
@@ -1543,7 +1629,7 @@ export function focusKeysOf(state: Pick<WebStateV2, 'needs' | 'agents' | 'change
   if (view2.tab === 'changes') return state.changes.files.map(file => fileKeyOf(file.path))
   if (view2.tab !== 'now') return []
   const open = new Set(view2.openFolds)
-  const rows = state.agents.flatMap(row => (row.row === 'fold' ? [row.id] : row.fold === null || open.has(row.fold) ? [agentKeyOf(row.id)] : []))
+  const rows = state.agents.flatMap(row => (row.row === 'fold' ? [row.id] : !row.isCleared && (row.fold === null || open.has(row.fold)) ? [agentKeyOf(row.id)] : []))
   return [...state.needs.map(need => needKeyOf(need.id)), ...rows]
 }
 
@@ -1691,6 +1777,10 @@ export type WebRoute =
   | { kind: 'abortTurn'; turnId: string }
   /** Draws the agents' avatars in another style (web/avatars.mjs `STYLE_IDS`): the person's setting, on every surface. */
   | { kind: 'avatarStyle'; style: AV.AvatarStyle }
+  /** "Clear finished": the finished agents hidden from the Dashboard, Chat and Org (the deck's own tidying, nothing in Claude Code). */
+  | { kind: 'clearFinished' }
+  /** "Show N cleared": the agents "Clear finished" hid shown again. */
+  | { kind: 'showCleared' }
   | { kind: 'ping' }
 
 /** The most a line may grow without a newline before it is dropped: past any command the server passes (16 KB). */
@@ -1791,6 +1881,8 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
     return { kind: 'abortTurn', turnId }
   }
   if (cmd.cmd === 'avatarStyle') return AV.isStyle(cmd.style) ? { kind: 'avatarStyle', style: cmd.style } : null
+  if (cmd.cmd === 'clearFinished') return { kind: 'clearFinished' }
+  if (cmd.cmd === 'showCleared') return { kind: 'showCleared' }
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '' || text.length > MOST_TEXT) return null
   if (cmd.cmd === 'review') return { kind: 'review', text }

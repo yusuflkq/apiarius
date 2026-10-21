@@ -128,6 +128,31 @@ export function foldLabel(title: string, count: number | null, isOpen: boolean):
   return `${chevronOf(isOpen)} ${title.toUpperCase()}${count !== null ? ` ${count}` : ''}`
 }
 
+/** The open folds (`DeckView2.openFolds`) with `id` opened, or folded again when it was open. */
+export function openFoldsWith(open: readonly string[], id: string): string[] {
+  return open.includes(id) ? open.filter(one => one !== id) : [...open, id]
+}
+
+/**
+ * The "N finished" row under the agents in front (the Dashboard's cards,
+ * Chat's members): "3 finished ▸" (a plain Button keyed `<key>:fold`; a
+ * press opens it on them, "3 finished ▾", or folds it), then "Clear
+ * finished" (`<key>:clear`: they are hidden from the deck, nothing in Claude
+ * Code changes), both while any is finished; and "Show 2 cleared"
+ * (`<key>:show`) while any is cleared. Null with neither.
+ */
+export function finishedRow(kit: Kit, key: string, count: number, isOpen: boolean, cleared: number, actions: DashActions, toggle: () => void): RenderElement | null {
+  const { Box, Button } = kit
+  if (count === 0 && cleared === 0) return null
+  return (
+    <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={2} alignItems="center">
+      {count > 0 ? <Button key={`${key}:fold`} label={`${count} finished ${chevronOf(isOpen)}`} plain dimColor onPress={toggle} /> : null}
+      {count > 0 ? <Button key={`${key}:clear`} label="Clear finished" plain dimColor onPress={() => actions.clearFinished()} /> : null}
+      {cleared > 0 ? <Button key={`${key}:show`} label={`Show ${cleared} cleared`} plain dimColor onPress={() => actions.showCleared()} /> : null}
+    </Box>
+  )
+}
+
 /** A section that folds: its id in `DeckView.collapsed` (dashModel's FOLD), whether it is open, and what its one line says while it is folded. */
 export type Fold = { id: string; isOpen: boolean; summary: string }
 

@@ -96,9 +96,18 @@ async function boxesOf(ui: { findAll: (q: { type: 'Box' }) => Promise<{ key?: st
   return (await ui.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith(prefix))
 }
 
-/** The cards' agents in the order Now draws them: the Orchestrator, then by when each started. */
-function cardOrder(state: W.WebStateV2): W.V2AgentRow[] {
-  return D.cardAgentsOf(state).shown
+/** The cards' agents in the order Now draws them: the Orchestrator and those at work by when each started, then (the finished row open) the finished. */
+function cardOrder(state: W.WebStateV2, isFinishedOpen = false): W.V2AgentRow[] {
+  const groups = D.cardAgentsOf(state, isFinishedOpen)
+  return [...groups.shown, ...groups.finished]
+}
+
+/** Opens the Dashboard's "N finished" row where it is folded. */
+async function openFinished(ui: { find: (q: { key: string }) => Promise<{ props: Record<string, unknown> } | undefined>; press: (q: { key: string }) => Promise<unknown>; redraw: () => Promise<void> }) {
+  const fold = await ui.find({ key: 'finished:now:fold' })
+  if (!String(fold?.props.label ?? '').endsWith('▸')) return
+  await ui.press({ key: 'finished:now:fold' })
+  await ui.redraw()
 }
 
 function nodesOf(node: unknown): number {
@@ -147,9 +156,14 @@ test('what a card says comes from the agent itself: its own todo in hand (else i
 test('a card an agent, in the order they started: the avatar, the name (keyed agent:<id>), its pill and Open →; the step box; the now line; model · tokens and when; every line of it opens the agent`s page', async ($, on) => {
   const state = sampleState()
   await demo($, on, state)
-  const order = cardOrder(state)
+  const order = cardOrder(state, true)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
+    // those at work in front; the finished behind "N finished ▸", opened here
+    const front = cardOrder(state)
+    expect(front.every(row => !W.isFinishedRow(row))).toBe(true)
+    expect(order.length).toBeGreaterThan(front.length)
+    await openFinished(ui)
     expect(await keysOf(ui, 'agent:')).toEqual(order.map(row => W.agentKeyOf(row.id)))
     expect((await boxesOf(ui, 'card:')).map(box => box.key)).toEqual(order.map(row => `card:${row.id}`))
     const builder = order.find(row => row.id === IDS.builder)!
@@ -329,7 +343,8 @@ test('each section`s head is one plain Button, "▾ AGENTS 8"; a press folds it 
     const again = await $.ui.mount(pane(surface))
     expect((await again.find({ key: 'fold:dash:agents' }))?.props.label).toBe(`▸ AGENTS ${n}`)
     for (const key of ['fold:dash:agents', 'fold:dash:figures', 'fold:dash:plan']) await press(again, key)
-    expect(await keysOf(again, 'agent:')).toHaveLength(n)
+    // those at work; the finished behind their row
+    expect(await keysOf(again, 'agent:')).toHaveLength(cardOrder(state).length)
     expect((await again.find({ key: 'now:plan' }))?.text).toContain('Task board')
     await again.unmount()
   }

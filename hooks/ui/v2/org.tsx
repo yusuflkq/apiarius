@@ -20,11 +20,14 @@
  *   coloured glyphs; the Client is tried again the next time Org shows, and
  *   whenever /deck opens.
  *
+ * The agents "Clear finished" hid are left out (W.shownStateOf): their
+ * pages, Changes and Inspect keep them.
+ *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
-import { agentKeyOf, type V2AgentRow, type WebStateV2 } from '../../web'
+import { agentKeyOf, shownStateOf, type V2AgentRow, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { agentRowsOf } from './dashModel'
 import { quiet, sectionHead } from './look'
@@ -67,15 +70,18 @@ export function isClientOn(kit: Kit, org: OrgSpot): boolean {
 }
 
 /** The rows the focus moves among on Org: the chart's names (W.agentKeyOf), or the tree's agents; none over the Client, whose cards are its own. */
-export function orgFocusKeys(kit: Kit, state: WebStateV2, org: OrgSpot): string[] {
+export function orgFocusKeys(kit: Kit, whole: WebStateV2, org: OrgSpot): string[] {
+  const state = shownStateOf(whole)
   const plan = orgChartPlanOf(kit, chartAgentsOf(state))
   if (plan) return orgChartKeysOf(plan)
   return isClientOn(kit, org) ? [] : treeRowsOf(state).map(({ row }) => agentKeyOf(row.id))
 }
 
 /** Org: its head, then the chart where the pane draws it, else the chart's Client, else the tree. */
-export function orgTab(kit: Kit, state: WebStateV2, actions: DashActions, org: OrgSpot): RenderElement {
+export function orgTab(kit: Kit, whole: WebStateV2, actions: DashActions, org: OrgSpot): RenderElement {
   const { Box, Client } = kit
+  // the agents Clear finished hid are no part of the chart
+  const state = shownStateOf(whole)
   const head = sectionHead(kit, 'Org chart', agentRowsOf(state).length)
   const agents = chartAgentsOf(state)
   const plan = orgChartPlanOf(kit, agents)

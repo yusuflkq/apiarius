@@ -360,7 +360,15 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     expect(await ui.find({ key: 'needs:now' })).toBeUndefined()
     const cards = await cardsOf(ui)
     expect(cards[0]).toBe('main')
-    expect([...cards].sort()).toEqual(['agent-fixer', 'agent-helper', 'agent-reviewer', 'agent-scout', 'main'])
+    // scout finished: behind "1 finished ▸" (opened once, it stays so), the rest at work in front
+    const fold = await shown(ui, { key: 'finished:now:fold' })
+    if (String(fold.props.label).endsWith('▸')) {
+      expect([...cards].sort()).toEqual(['agent-fixer', 'agent-helper', 'agent-reviewer', 'main'])
+      expect(fold.props.label).toBe('1 finished ▸')
+      await ui.press({ key: 'finished:now:fold' })
+      await ui.redraw()
+    }
+    expect([...(await cardsOf(ui))].sort()).toEqual(['agent-fixer', 'agent-helper', 'agent-reviewer', 'agent-scout', 'main'])
     expect((await shown(ui, { key: 'card:agent-fixer' })).text).toContain('fixer')
     expect((await shown(ui, { key: 'card:agent-scout' })).text).toContain('Finished')
     expect((await shown(ui, { key: 'card:agent-scout' })).text).toContain(ANSWERS.scout.slice(0, 20))

@@ -9,8 +9,8 @@
  * so ages read as they would live. It plays the mod's part for the page's
  * commands: each gets its ack, a chat shows in the stream and its agent
  * answers a moment later, an answer resolves its question, and stopAgent and
- * abortTurn get this build's "Not in this build yet". Commands are printed
- * here too.
+ * abortTurn get this build's "Not in this build yet", and Clear finished hides
+ * the finished agents until Show N cleared. Commands are printed here too.
  * Editing the sample starts the copy again from it. `--static` keeps the
  * sample's own times and only prints commands. Ctrl+C stops both processes.
  */
@@ -58,6 +58,7 @@ function reset() {
   const by = isStatic ? 0 : Date.now() - sample.now
   try { for (const name of ['agents', 'patches', 'messages', 'gitdiffs']) copyFolder(name, by) } catch (err) { console.error(`dev: ${err.message}`); return }
   state = by ? shift(sample, by) : sample
+  stash = null
   save()
 }
 
@@ -68,8 +69,10 @@ function save() {
   fs.writeFileSync(stateFile, `${JSON.stringify(file, null, 1)}\n`)
 }
 
-// ---- the mod's part, roughly: acks, the chat, the questions
+// ---- the mod's part, roughly: acks, the chat, the questions, Clear finished
 let seq = 0
+/** The rows as they stood before Clear finished, for Show N cleared. */
+let stash = null
 const later = (ms, fn) => setTimeout(() => { if (state) { fn(); save() } }, ms)
 const rows = () => state.agents.filter(r => r.row === 'agent')
 const rowOf = id => rows().find(r => r.id === id)
@@ -132,6 +135,31 @@ function play(cmd) {
     later(300, () => ack(cmd.id, false, 'failed', 'Not in this build yet: stop it in Claude Code'))
   } else if (cmd.cmd === 'abortTurn') {
     later(300, () => ack(cmd.id, false, 'failed', 'Not in this build yet: press Esc in Claude Code'))
+  } else if (cmd.cmd === 'clearFinished') {
+    // as the mod, roughly (W.clearedStateOf): every finished agent hidden from the deck, their messages from Everyone, their fold rows gone
+    later(200, () => {
+      const isDone = r => r.kind !== 'orchestrator' && !r.needs && !r.isCleared && (r.status === 'done' || r.status === 'failed' || r.status === 'idle')
+      const ids = rows().filter(isDone).map(r => r.id)
+      if (!ids.length) return ack(cmd.id, false, 'failed', 'Nothing finished to clear')
+      if (!stash) stash = state.agents.map(r => ({ ...r }))
+      for (const r of rows()) if (ids.includes(r.id)) r.isCleared = true
+      const gone = new Set(rows().filter(r => r.isCleared).map(r => r.id))
+      state.agents = state.agents.filter(r => r.row !== 'fold' || r.ids.some(id => !gone.has(id)))
+      for (const m of state.chat) if (gone.has(m.from) || gone.has(m.to) || gone.has(m.agent)) m.isCleared = true
+      state.cleared = { count: gone.size, at: Date.now() }
+      ack(cmd.id, true, 'delivered', `Cleared ${ids.length} finished ${ids.length === 1 ? 'agent' : 'agents'} from the deck`)
+    })
+  } else if (cmd.cmd === 'showCleared') {
+    later(200, () => {
+      const n = state.cleared ? state.cleared.count : 0
+      if (!n || !stash) return ack(cmd.id, false, 'failed', 'Nothing cleared to show')
+      const current = new Map(rows().map(r => [r.id, r]))
+      state.agents = stash.map(r => { const one = { ...(r.row === 'agent' ? current.get(r.id) || r : r) }; delete one.isCleared; return one })
+      stash = null
+      for (const m of state.chat) delete m.isCleared
+      state.cleared = { count: 0, at: null }
+      ack(cmd.id, true, 'delivered', `Showing ${n} cleared ${n === 1 ? 'agent' : 'agents'} again`)
+    })
   } else if (cmd.cmd === 'avatarStyle') {
     // as the mod: the style is the person's own, and the next state names it (the dev deck keeps it while it runs)
     later(200, () => {

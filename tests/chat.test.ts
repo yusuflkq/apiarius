@@ -324,21 +324,36 @@ test('a long message shows about six lines and Show more; a cut one opens in pla
   }
 })
 
-test('the member list: Everyone, then every agent with its avatar, name and status, two columns at 84 cells and three at 160; a pick shows your conversation with that agent, marked, and the composer goes to it', async ($, on) => {
+test('the member list: Everyone, then every agent with its avatar, name and status, two columns at 84 cells and three at 160, the finished behind "N finished ▸"; a pick shows your conversation with that agent, marked, and the composer goes to it', async ($, on) => {
   const { v2 } = await demo($, on)
   const agents = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'engine')
-  expect(membersOf(v2, '').members.map(one => one.id)).toEqual(agents.map(row => row.id))
+  const front = agents.filter(row => !W.isFinishedRow(row))
+  const behind = agents.filter(row => W.isFinishedRow(row))
+  expect(behind.length).toBeGreaterThan(0)
+  expect(membersOf(v2, '').members.map(one => one.id)).toEqual(front.map(row => row.id))
+  expect(membersOf(v2, '').finished.map(one => one.id)).toEqual(behind.map(row => row.id))
   const all = v2.chat.map(row => `msg:${row.id}`)
+  /** How many columns a list of `n` rows takes, `across` at most, down each. */
+  const columnsFor = (n: number, across: number) => Math.ceil(n / Math.ceil(n / across))
   for (const [cols, across] of [[84, 2], [160, 3]] as const) {
     const ui = await $.ui.mount(pane('desktop', cols))
     await press(ui, 'tab:chat')
     // no filter row, no dropdown
     for (const key of ['key:f', 'chat:filter:more', 'chat:filter:you', 'chat:filters']) expect(await ui.find({ key })).toBeUndefined()
-    // a bordered list, in columns, down each: Everyone first
+    // a bordered list, in columns, down each: Everyone first, then those at work; the finished behind one row at its foot
     const list = await ui.find({ key: 'chat:members:list' })
     expect(list?.props).toMatchObject({ borderStyle: 'round' })
-    expect(under(list, node => node.type === 'Box' && node.props?.width === `${Math.floor(100 / across)}%`).length).toBe(across)
-    expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:between', 'chat:filter:all', ...agents.map(row => `chat:filter:${row.id}`)])
+    const fold = await ui.find({ key: 'finished:chat:fold' })
+    if (String(fold?.props.label).endsWith('▾')) await press(ui, 'finished:chat:fold')
+    expect((await ui.find({ key: 'finished:chat:fold' }))?.props).toMatchObject({ label: `${behind.length} finished ▸`, plain: true })
+    expect((await ui.find({ key: 'finished:chat:clear' }))?.props).toMatchObject({ label: 'Clear finished', plain: true })
+    expect(under(await ui.find({ key: 'chat:members:list' }), node => node.type === 'Box' && node.props?.width === `${Math.floor(100 / across)}%`).length).toBe(columnsFor(front.length + 1, across))
+    expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:between', 'chat:filter:all', ...front.map(row => `chat:filter:${row.id}`)])
+    // opened: the finished under it, in columns of their own
+    await press(ui, 'finished:chat:fold')
+    expect((await ui.find({ key: 'finished:chat:fold' }))?.props.label).toBe(`${behind.length} finished ▾`)
+    expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:between', 'chat:filter:all', ...front.map(row => `chat:filter:${row.id}`), ...behind.map(row => `chat:filter:${row.id}`)])
+    expect(under(await ui.find({ key: 'chat:members:list' }), node => node.type === 'Box' && node.props?.width === `${Math.floor(100 / across)}%`).length).toBe(columnsFor(front.length + 1, across) + columnsFor(behind.length, across))
     expect((await ui.find({ key: 'chat:members:fold' }))?.props.label).toBe(`▾ ${agents.length} agents`)
     // a row: the avatar, the name, the status word
     const row = await ui.find({ key: `chat:member:${IDS.builder}` })
@@ -388,8 +403,11 @@ test('a narrow pane folds the member list to one line naming whom you are talkin
   const list = await ui.find({ key: 'chat:members:list' })
   expect(under(list, node => node.type === 'Box' && node.props?.width === '100%').length).toBe(1)
   expect((await ui.find({ key: 'chat:members:fold' }))?.props.label).toBe(`▾ ${n} agents`)
-  // picked, then folded: the line names it, with its face
+  // picked, then folded: the line names it, with its face (docs is finished: behind its row until that opens; picked, it stands in front)
+  await press(ui, 'finished:chat:fold')
   await press(ui, `chat:filter:${IDS.docs}`)
+  await press(ui, 'finished:chat:fold')
+  expect(await buttonKeys(ui, `chat:filter:${IDS.docs}`)).toEqual([`chat:filter:${IDS.docs}`])
   await press(ui, 'chat:members:fold')
   const head = await ui.find({ key: 'chat:members:head' })
   expect(head?.text).toMatch(new RegExp(`^▸ ${n} agents·docs$`))
@@ -416,10 +434,17 @@ test('the terminal draws the group chat with no image: the member list one wrapp
   const chat = await ui.find({ key: 'chat' })
   expect(under(chat, node => node.type === 'Svg')).toEqual([])
   expect(under(chat, node => node.type === 'Box' && (node.props?.backgroundColor === BLUE || node.props?.backgroundColor === BUBBLE))).toEqual([])
-  // the member line: Everyone, each agent, Between agents
+  // the member line: Everyone, each agent at work, "N finished ▸" and Clear finished, Between agents; opened, the finished after it
   const agents = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'engine')
+  const front = agents.filter(row => !W.isFinishedRow(row))
+  const behind = agents.filter(row => W.isFinishedRow(row))
   expect((await ui.find({ key: 'chat:members' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' })
-  expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:all', ...agents.map(row => `chat:filter:${row.id}`), 'chat:filter:between'])
+  expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:all', ...front.map(row => `chat:filter:${row.id}`), 'chat:filter:between'])
+  expect((await ui.find({ key: 'finished:chat:fold' }))?.text).toBe(`${behind.length} finished ▸`)
+  expect((await ui.find({ key: 'finished:chat:clear' }))?.text).toBe('Clear finished')
+  await press(ui, 'finished:chat:fold')
+  expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:all', ...front.map(row => `chat:filter:${row.id}`), ...behind.map(row => `chat:filter:${row.id}`), 'chat:filter:between'])
+  await press(ui, 'finished:chat:fold')
   const builder = agents.find(row => row.id === IDS.builder)!
   const mark = AV.terminalFace({ id: builder.id, status: builder.status })
   const chip = await ui.find({ key: `chat:filter:${IDS.builder}` })

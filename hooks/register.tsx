@@ -97,12 +97,71 @@ const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usag
 
 function v2Of(now: number, isFresh = false): W.WebStateV2 {
   const asking = [...askers.keys()]
-  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd, view.avatarStyle].join('\u0001')
+  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd, view.avatarStyle, clearedKey()].join('\u0001')
   if (!isFresh && v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage && v2Memo.diffs === gitDiffs) return v2Memo.state
   // a question the page may answer is one whose race runs in this module: none after a reload
-  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs, view.avatarStyle)
+  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs, view.avatarStyle, clearedOf())
   Object.assign(v2Memo, { key, data, git, usage, diffs: gitDiffs, state, shows: W.v2KeyOf(state) })
   return state
+}
+
+/** What "Clear finished" hid, as the view keeps it (`DeckView2.cleared`, `clearedAt`). */
+function clearedOf(): W.Cleared {
+  return { ids: view.v2.cleared, at: view.v2.clearedAt }
+}
+
+/** What "Clear finished" hid, as one string: a change marks the state anew. */
+function clearedKey(): string {
+  return `${view.v2.cleared.length}:${view.v2.clearedAt}`
+}
+
+/** The sample with what "Clear finished" hid marked, kept while neither changes. */
+const demoMemo: { of: W.WebStateV2 | null; key: string; state: W.WebStateV2 | null } = { of: null, key: '', state: null }
+
+/** The sample as the pane shows it: what "Clear finished" hid marked (`W.clearedStateOf`); null while it is read. */
+function demoShown(): W.WebStateV2 | null {
+  const sample = demo.v2
+  if (sample === null) return null
+  const key = clearedKey()
+  if (demoMemo.of !== sample || demoMemo.key !== key || demoMemo.state === null) Object.assign(demoMemo, { of: sample, key, state: W.clearedStateOf(sample, clearedOf()) })
+  return demoMemo.state
+}
+
+/**
+ * "Clear finished": every agent shown that is finished (done, failed,
+ * stopped or idle) hidden from the Dashboard, Chat's members and Everyone,
+ * and Org, in this session's deck or the sample shown. The deck's own
+ * tidying: nothing in Claude Code changes. Kept in the view, so a reload
+ * keeps it. Answers what it did, in words, and acks `ackId`.
+ */
+async function clearFinished($: EngineInterface, ackId = ''): Promise<string> {
+  const now = await $.clock.now()
+  const state = shownV2Of(now)
+  const ids = state ? W.finishedIdsOf(state) : []
+  if (ids.length === 0) {
+    await ack($, ackId, 'failed', 'Nothing finished to clear')
+    return 'Nothing finished to clear.'
+  }
+  view.v2 = M.clearedWith(view.v2, ids, now)
+  changed($)
+  const said = `Cleared ${ids.length} finished ${ids.length === 1 ? 'agent' : 'agents'} from the deck`
+  await ack($, ackId, 'delivered', said)
+  return `${said} (Claude Code keeps them). /deck clear show brings them back.`
+}
+
+/** "Show N cleared": the agents "Clear finished" hid shown again everywhere; acks `ackId`. */
+async function showCleared($: EngineInterface, ackId = ''): Promise<string> {
+  const now = await $.clock.now()
+  const count = shownV2Of(now)?.cleared?.count ?? 0
+  if (view.v2.cleared.length === 0) {
+    await ack($, ackId, 'failed', 'Nothing cleared to show')
+    return 'Nothing cleared to show.'
+  }
+  view.v2 = M.view2With(view.v2, { cleared: [], clearedAt: 0 })
+  changed($)
+  const said = count > 0 ? `Showing ${count} cleared ${count === 1 ? 'agent' : 'agents'} again` : 'Showing the cleared agents again'
+  await ack($, ackId, 'delivered', said)
+  return `${said}.`
 }
 
 /**
@@ -188,7 +247,7 @@ function screenKey(now: number): string {
   v2Of(now, true)
   const shown = webPaneOf()
   const webKey = `${shown.status}\t${shown.url}\t${shown.opened}\t${shown.note}`
-  const sample = view.isDemo ? [demo.version, demo.v2 !== null, demo.note].join('|') : ''
+  const sample = view.isDemo ? [demo.version, demo.v2 !== null, demo.note, clearedKey()].join('|') : ''
   return [v2Memo.shows, gitKeyOf(git), webKey, sample].join('\n\u0001')
 }
 
@@ -896,7 +955,8 @@ function onWebLine($: EngineInterface, line: string): boolean {
   else if (route.kind === 'avatarStyle') {
     setAvatarStyle($, route.style)
     void ack($, ackId, 'delivered', `Avatars: ${AV.styleName(route.style)}`)
-  }
+  } else if (route.kind === 'clearFinished') void clearFinished($, ackId)
+  else if (route.kind === 'showCleared') void showCleared($, ackId)
   return false
 }
 
@@ -1986,7 +2046,7 @@ async function focusOn($: EngineInterface, key: string): Promise<void> {
 
 /** The v2 state the pane shows: the sample's while it shows (null while it is read), else this session's. */
 function shownV2Of(now: number): W.WebStateV2 | null {
-  return view.isDemo ? demo.v2 : v2Of(now)
+  return view.isDemo ? demoShown() : v2Of(now)
 }
 
 /** `j` (1) and `k` (-1): the ring a row down or up among `keys`, else among the rows the v2 screen draws (`W.focusKeysOf`); held at either end. */
@@ -2069,6 +2129,9 @@ function actionsFor($: EngineInterface): DeckActions {
       changed($)
     },
     setAvatarStyle: style => setAvatarStyle($, style),
+    // the deck's own tidying, nothing in Claude Code: finished agents hidden, or shown again
+    clearFinished: () => void clearFinished($),
+    showCleared: () => void showCleared($),
 
     // the sample's chat sends nothing: its agents are a recording, and its Orchestrator is not this session's
     // a send from the pane's composer carries an id: its ack says what came of it, under the message; Chat keeps to its end, where it shows
@@ -2116,7 +2179,7 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
 function dashOf(now: number, surface: RenderSurface): DashModel {
   const isDemo = view.isDemo
   return {
-    v2: isDemo ? demo.v2 : v2Of(now),
+    v2: isDemo ? demoShown() : v2Of(now),
     v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data, gitDiffs),
     isDemo,
     demoNote: demo.note,
@@ -2785,7 +2848,7 @@ export const register: Register = on => {
         name: 'deck',
         description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes or settings; /deck demo: sample data; /deck web: in the Browser pane)',
         // now (the Dashboard's id), inspect and help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
-        argumentHint: '[dashboard|chat|org|changes|settings|demo|web|web stop|band|avatars [style]|close|probe]',
+        argumentHint: '[dashboard|chat|org|changes|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2820,6 +2883,9 @@ export const register: Register = on => {
       return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /deck band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
     }
     if (arg === 'avatars' || arg.startsWith('avatars ')) return avatarsCommand($, arg.slice('avatars'.length).trim())
+    // the deck's own tidying: finished agents hidden from the Dashboard, Chat and Org (nothing in Claude Code), or shown again
+    if (arg === 'clear') return { text: await clearFinished($) }
+    if (arg === 'clear show' || arg === 'clear undo') return { text: await showCleared($) }
     if (arg === 'probe') return toggleProbe($)
     // the live dashboard: started if need be, its link answered, opened in the Browser pane when it can be
     const words = arg.split(/\s+/)

@@ -582,19 +582,26 @@ test('the commands v2 adds: stopAgent only for a background agent or a teammate 
 
 test('the v2 screens` own state in the pane: the Dashboard (`now`), nothing unfolded, all of Chat; each field set as it is checked, the rest kept, healed from a snapshot; Inspect open is Settings now', () => {
   const fresh = M.defaultView().v2
-  expect(fresh).toEqual({ tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false })
+  const none = { cleared: [], clearedAt: 0 }
+  expect(fresh).toEqual({ tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, ...none })
   const set = M.view2With(fresh, { tab: 'chat', chatFilter: 'agent-x1' })
-  expect(set).toEqual({ tab: 'chat', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false })
+  expect(set).toEqual({ tab: 'chat', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false, ...none })
   // a tab of none of the five (the Dashboard's id is `now`), folds that are no strings, a filter that is none: kept as they were
-  expect(M.view2With(set, { tab: 'dashboard', openFolds: ['fold:main', 7, '', 'fold:main', 'fold:b'], chatFilter: 3, isInspectOpen: 'yes' })).toEqual({ tab: 'chat', openFolds: ['fold:main', 'fold:b'], chatFilter: 'agent-x1', isInspectOpen: false })
+  expect(M.view2With(set, { tab: 'dashboard', openFolds: ['fold:main', 7, '', 'fold:main', 'fold:b'], chatFilter: 3, isInspectOpen: 'yes' })).toEqual({ tab: 'chat', openFolds: ['fold:main', 'fold:b'], chatFilter: 'agent-x1', isInspectOpen: false, ...none })
   expect(M.view2With(set, { openFolds: Array.from({ length: 60 }, (_, i) => `fold:${i}`) }).openFolds).toHaveLength(50)
   expect(M.view2With(set, { tab: 'settings' }).tab).toBe('settings')
   // Inspect over a tab, as an earlier build kept it, opens Settings, where Inspect is
-  expect(M.view2With(set, { isInspectOpen: true })).toEqual({ tab: 'settings', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false })
+  expect(M.view2With(set, { isInspectOpen: true })).toEqual({ tab: 'settings', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false, ...none })
+  // what Clear finished hid: ids as strings, each once, the newest 500, and when; anything else kept as it was
+  expect(M.view2With(set, { cleared: ['a1', 7, '', 'a1', 'a2'], clearedAt: 1000 })).toMatchObject({ cleared: ['a1', 'a2'], clearedAt: 1000 })
+  expect(M.view2With(set, { cleared: 'a1', clearedAt: -1 })).toMatchObject(none)
+  expect(M.view2With(set, { cleared: Array.from({ length: 600 }, (_, i) => `a${i}`) }).cleared).toHaveLength(500)
+  expect(M.clearedWith(M.view2With(set, { cleared: ['a1'], clearedAt: 5 }), ['a2', 'a1'], 9)).toMatchObject({ cleared: ['a1', 'a2'], clearedAt: 9 })
   // a reload: a view of an earlier build has none, a saved one keeps its own
   expect(M.healView({ tab: 'plan' }).v2).toEqual(fresh)
-  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: false } }).v2).toEqual({ tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: false })
-  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: [], chatFilter: '', isInspectOpen: true } }).v2).toEqual({ tab: 'settings', openFolds: [], chatFilter: '', isInspectOpen: false })
+  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: false } }).v2).toEqual({ tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: false, ...none })
+  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: [], chatFilter: '', isInspectOpen: true } }).v2).toEqual({ tab: 'settings', openFolds: [], chatFilter: '', isInspectOpen: false, ...none })
+  expect(M.healView({ ...M.defaultView(), v2: { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, cleared: ['a1'], clearedAt: 1000 } }).v2).toMatchObject({ cleared: ['a1'], clearedAt: 1000 })
 })
 
 test('the lazy files as the pane opens them: an agent`s file, a patch and a cut message`s whole text by the ids the state names, from the live deck or as read', () => {

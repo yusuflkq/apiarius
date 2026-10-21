@@ -148,6 +148,15 @@ export type DashActions = Actions & {
    * every session; the pane draws again and the web page follows.
    */
   setAvatarStyle: (style: string) => void
+  /**
+   * "Clear finished" (as `/deck clear`): every agent shown that is finished
+   * (done, failed, stopped or idle) hidden from the Dashboard, Chat's members
+   * and Everyone, and Org, kept in the view through reloads. The deck's own
+   * tidying: nothing in Claude Code changes.
+   */
+  clearFinished: () => void
+  /** "Show N cleared" (as `/deck clear show`): the agents "Clear finished" hid shown again. */
+  showCleared: () => void
 }
 
 /** What the pane draws from, beside the deck's model. */

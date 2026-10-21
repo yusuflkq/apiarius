@@ -443,8 +443,12 @@ function rowOf(r) {
     fold: typeof r.fold === 'string' && r.fold ? r.fold : null,
     task: str(r.task), isTaskCut: r.isTaskCut === true, result: str(r.result), isResultCut: r.isResultCut === true,
     todos: todosOf(r.todos), tokens: numOr(r.tokens, 0),
+    isCleared: r.isCleared === true,
   };
 }
+
+/** Whether an agent is finished: done, failed, stopped or idle, nothing of its waiting on you; never the Orchestrator (the mod's W.isFinishedRow). The Dashboard and Chat's members fold these behind one "N finished" row. */
+const isFinished = a => a.kind !== 'orchestrator' && !a.needs && (a.status === 'done' || a.status === 'failed' || a.status === 'idle');
 
 function planOf(p) {
   p = obj(p);
@@ -456,7 +460,7 @@ function planOf(p) {
   return { board, todos: todos && todos.items.length ? todos : null, approved, workflows };
 }
 
-const chatOf = m => ({ ...m, at: numOr(m.at, 0), from: str(m.from), to: typeof m.to === 'string' && m.to ? m.to : null, who: str(m.who), kind: str(m.kind) || 'chat', title: str(m.title), text: str(m.text), isCut: m.isCut === true });
+const chatOf = m => ({ ...m, at: numOr(m.at, 0), from: str(m.from), to: typeof m.to === 'string' && m.to ? m.to : null, who: str(m.who), kind: str(m.kind) || 'chat', title: str(m.title), text: str(m.text), isCut: m.isCut === true, isCleared: m.isCleared === true });
 
 function changesOf(c) {
   c = obj(c) || {};
@@ -531,6 +535,8 @@ function normalize(s) {
     inspect: inspectOf(s.inspect),
     acks: arr(s.acks).filter(k => k && typeof k.id === 'string' && k.id),
     avatarStyle: AV.styleOf(s.avatarStyle),
+    // what the deck's Clear finished hid (its rows `isCleared`): how many, and when
+    cleared: { count: numOr((obj(s.cleared) || {}).count, 0), at: numOr((obj(s.cleared) || {}).at, null) },
   };
 }
 
@@ -550,9 +556,11 @@ function group(list, f) {
 function buildIndex(s) {
   const rows = s.agents.filter(r => r.row === 'agent');
   const byId = new Map(rows.map(r => [r.id, r]));
+  // the agents the Dashboard, Chat's members and Org draw: those Clear finished hid left out (their drawers, Changes and Settings keep them)
+  const shown = rows.filter(r => !r.isCleared);
   // who started whom, for the chart: each parent's agents in the order they started
   const kids = new Map(), roots = [];
-  for (const r of rows) {
+  for (const r of shown) {
     const p = r.parent && r.parent !== r.id && byId.has(r.parent) ? r.parent : null;
     if (p) (kids.get(p) || kids.set(p, []).get(p)).push(r);
     else roots.push(r);
@@ -564,7 +572,7 @@ function buildIndex(s) {
   const choiceByCall = new Map();
   for (const m of s.chat) if (m.kind === 'choice' && m.callId) choiceByCall.set(m.callId, m);
   return {
-    rows, byId, kids, roots, tree,
+    rows, shown, byId, kids, roots, tree,
     needById: new Map(s.needs.map(n => [n.id, n])),
     needsBy: group(s.needs, n => n.agent),
     editById: new Map(s.changes.edits.map(e => [e.id, e])),
@@ -1491,17 +1499,58 @@ function NeedsSection() {
 const CARDS = 12;
 
 /**
- * The run cards: the Orchestrator, then each agent in the order it started,
- * so a new one appends and nothing moves. Past twelve, every one at work or
- * waiting on you and the newest of the rest.
+ * The run cards: the Orchestrator, then each agent at work or waiting on you
+ * in the order it started, so a new one appends and nothing moves; past
+ * twelve, the Orchestrator, every one waiting on you and the newest of the
+ * rest. The finished ones (`isFinished`)
+ * stand behind one "N finished ▸" row, drawn while it is open (the newest
+ * twelve). The agents Clear finished hid are in neither.
  */
-function cardRows() {
-  const list = IX.rows.slice().sort((x, y) => (y.kind === 'orchestrator') - (x.kind === 'orchestrator') || x.startedAt - y.startedAt);
-  if (list.length <= CARDS) return { shown: list, hidden: 0 };
-  const keep = new Set(list.filter(a => a.kind === 'orchestrator' || isLive(a.status)).map(a => a.id));
-  for (let i = list.length - 1; i >= 0 && keep.size < CARDS; i--) keep.add(list[i].id);
-  const shown = list.filter(a => keep.has(a.id));
-  return { shown, hidden: list.length - shown.length };
+function cardRows(isFinishedOpen) {
+  const list = IX.shown.slice().sort((x, y) => (y.kind === 'orchestrator') - (x.kind === 'orchestrator') || x.startedAt - y.startedAt);
+  const front = list.filter(a => !isFinished(a)), behind = list.filter(isFinished);
+  // past twelve: the Orchestrator, every one waiting on you, then the newest
+  const keep = new Set(front.filter(a => a.kind === 'orchestrator').map(a => a.id));
+  for (let i = front.length - 1; i >= 0 && keep.size < CARDS; i--) if (front[i].status === 'waiting') keep.add(front[i].id);
+  for (let i = front.length - 1; i >= 0 && keep.size < CARDS; i--) keep.add(front[i].id);
+  const shown = front.length <= CARDS ? front : front.filter(a => keep.has(a.id));
+  const finished = isFinishedOpen ? behind.slice(-CARDS) : [];
+  return { shown, finished, finishedCount: behind.length, hidden: front.length - shown.length + (isFinishedOpen ? behind.length - finished.length : 0) };
+}
+
+/**
+ * The "N finished" row under the agents in front (the Dashboard's cards,
+ * Chat's members): "3 finished ▸", a press opens it on them ("▾") or folds
+ * it; "Clear finished" hides them from the deck (the Desktop pane and the
+ * terminal too; nothing in Claude Code changes); "Show 2 cleared" brings
+ * those it hid back. Null with nothing finished and nothing cleared.
+ */
+function FinishedRow(scope, n, open) {
+  const cleared = S.cleared ? S.cleared.count : 0;
+  if (!n && !cleared) return null;
+  return h('div', { key: `fin:${scope}`, class: `finished finished-${scope}` },
+    n > 0 && h('button', { key: 'fold', type: 'button', class: 'fin-fold', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(`finished|${scope}`) }, `${n} finished ${open ? '▾' : '▸'}`),
+    n > 0 && h('button', { key: 'clear', type: 'button', class: 'btn btn-xs fin-clear', title: 'Hide the finished agents from this deck: Claude Code keeps them', onClick: () => clearFinished() }, 'Clear finished'),
+    cleared > 0 && h('button', { key: 'show', type: 'button', class: 'btn btn-xs fin-show', onClick: () => showCleared() }, `Show ${cleared} cleared`));
+}
+
+/** Clear finished: the mod hides every finished agent from the deck, here and in the pane, and the next state says so. Nothing in Claude Code changes. */
+async function clearFinished() {
+  try {
+    await command({ cmd: 'clearFinished', id: newCmdId('cl') });
+    toast('Finished agents cleared from the deck: Claude Code keeps them');
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/** Show N cleared: the agents Clear finished hid come back. */
+async function showCleared() {
+  try {
+    await command({ cmd: 'showCleared', id: newCmdId('cl') });
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 const PILL = { starting: 'starting', running: 'running', waiting: 'waiting', done: 'done', failed: 'failed', stopped: 'stopped', idle: 'idle' };
@@ -1571,10 +1620,14 @@ function RunCard(a) {
 }
 
 function AgentsSection() {
-  const { shown, hidden } = cardRows();
+  const open = isOpen('finished|now', false);
+  const { shown, finished, finishedCount, hidden } = cardRows(open);
   const link = h('a', { class: 'sec-link', href: hrefOf('org', route.drawer) }, hidden ? `${hidden} more in Org` : 'Org chart', icon('arrowRight'));
-  return Section('agents', 'Agents', IX.rows.length || null, link, () => (IX.rows.length
-    ? h('div', { class: 'run-grid' }, shown.map(RunCard))
+  return Section('agents', 'Agents', IX.shown.length || null, link, () => (IX.shown.length || S.cleared.count
+    ? h('div', { class: 'run-cards' },
+      h('div', { key: 'front', class: 'run-grid' }, shown.map(RunCard)),
+      FinishedRow('now', finishedCount, open),
+      finished.length > 0 && h('div', { key: 'finished', class: 'run-grid run-grid-finished' }, finished.map(RunCard)))
     : h('div', { class: 'card' }, Empty('bot', 'No agents yet', 'The Orchestrator and the agents it starts show here as they work.'))));
 }
 
@@ -1701,14 +1754,16 @@ function OrgPage() {
   const view = ui.orgView;
   const setView = v => { ui.orgView = v; store.set('orgView', v); renderNow(); };
   const Toggle = (id, ic, label) => h('button', { key: id, type: 'button', class: view === id ? 'on' : '', 'aria-pressed': view === id ? 'true' : 'false', title: label, onClick: () => setView(id) }, icon(ic), h('span', null, label));
-  const count = st => IX.rows.filter(r => stateOf(r) === st || (st === 'running' && r.status === 'starting')).length;
-  const counts = [plural(IX.rows.length, 'agent')];
+  // the agents Clear finished hid are no part of the chart
+  const count = st => IX.shown.filter(r => stateOf(r) === st || (st === 'running' && r.status === 'starting')).length;
+  const counts = [plural(IX.shown.length, 'agent')];
   for (const [st, word] of [['running', 'running'], ['waiting', 'waiting on you'], ['failed', 'failed'], ['stopped', 'stopped']]) if (count(st)) counts.push(`${count(st)} ${word}`);
+  if (S.cleared.count) counts.push(`${S.cleared.count} cleared`);
   return h('div', { key: 'org', class: `page page-org view-${view}` },
     h('div', { key: 'bar', class: 'org-bar' },
       h('p', { class: 'org-count' }, counts.join(' · ')),
       h('div', { class: 'seg-toggle', role: 'group', 'aria-label': 'Show the agents as' }, Toggle('chart', 'org', 'Chart'), Toggle('list', 'list', 'List'))),
-    !IX.rows.length
+    !IX.shown.length
       ? h('div', { key: 'none', class: 'card' }, Empty('org', 'No agents yet', 'The Orchestrator and the agents it starts show here, each under the one that started it.'))
       : view === 'list' ? h('div', { key: 'tree', class: 'card tree' }, treeRows().map(r => (r.row === 'fold' ? FoldRow(r) : AgentRow(r)))) : OrgChart());
 }
@@ -1719,6 +1774,8 @@ function OrgPage() {
 function treeRows() {
   const shown = [], hidden = new Set();
   for (const r of S.agents) {
+    // what Clear finished hid is no row of the list (the mod's fold rows count it out already)
+    if (r.row === 'agent' && r.isCleared) { hidden.add(r.id); continue; }
     const hide = r.row === 'fold' ? hidden.has(r.parent) : !!r.fold && !isOpen(`fold|${r.fold}`, false);
     if (hide) hidden.add(r.id);
     else shown.push(r);
@@ -2095,8 +2152,8 @@ function WorkflowCard(w) {
 /** One sender's messages this close in time stack under one head. */
 const GROUP_MS = 5 * 60000;
 
-/** Chat's members after Everyone: each agent in the state's order (Claude Code's own loops are no one to talk to). */
-const membersOf = () => IX.rows.filter(r => r.kind !== 'engine');
+/** Chat's members after Everyone: each agent in the state's order (Claude Code's own loops are no one to talk to), those Clear finished hid left out. */
+const membersOf = () => IX.shown.filter(r => r.kind !== 'engine');
 
 /** The member picked: one no longer in the session reads as Everyone. */
 const filterOf = () => (ui.chatFilter !== 'all' && membersOf().some(r => r.id === ui.chatFilter) ? ui.chatFilter : 'all');
@@ -2130,12 +2187,21 @@ function MemberButton(a, on) {
   a ? Dot(statusOf(st).hue, isRunning(a.status)) : null);
 }
 
-/** The members: Everyone, then each agent. A compact grid over the chat; a narrow column beside it on a wide page. */
+/**
+ * The members: Everyone, then each agent at work (and the one picked); the
+ * finished behind one "N finished ▸" row at the end, with Clear finished. A
+ * compact grid over the chat; a narrow column beside it on a wide page.
+ */
 function Members(f) {
+  const all = membersOf();
+  const front = all.filter(a => !isFinished(a) || a.id === f), behind = all.filter(a => isFinished(a) && a.id !== f);
+  const open = isOpen('finished|chat', false);
   return h('nav', { key: 'members', class: 'members', 'aria-label': 'Chat with' },
     h('p', { key: 'cap', class: 'members-cap' }, 'Chat with'),
     MemberButton(null, f === 'all'),
-    membersOf().map(a => MemberButton(a, f === a.id)));
+    front.map(a => MemberButton(a, f === a.id)),
+    FinishedRow('chat', behind.length, open),
+    open ? behind.map(a => MemberButton(a, f === a.id)) : null);
 }
 
 /** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone) in the middle. */
@@ -2156,7 +2222,8 @@ function chatEntries(f) {
     const send = sent || (m.ackId ? ui.outbox.find(o => o.id === m.ackId) : null);
     out.push({ m, sent: send || null, key: send ? `out:${send.id}` : m.id, side: sideOf(m) });
   };
-  for (const m of S.chat) if (inFilter(m, f)) add(m, null);
+  // what the agents Clear finished hid said or were told leaves Everyone; their own conversation keeps it
+  for (const m of S.chat) if (inFilter(m, f) && !(f === 'all' && m.isCleared)) add(m, null);
   for (const o of ui.outbox) {
     if (IX.chatByAck.has(o.id)) continue;
     const m = pendingRow(o);

@@ -236,9 +236,24 @@ export function defaultView(): DeckView {
   }
 }
 
-/** The v2 screens' own state as a fresh pane has it: the Dashboard (`now`), nothing unfolded, all of Chat. */
+/** The v2 screens' own state as a fresh pane has it: the Dashboard (`now`), nothing unfolded, all of Chat, nothing cleared. */
 export function defaultView2(): DeckView2 {
-  return { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false }
+  return { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, cleared: [], clearedAt: 0 }
+}
+
+/** The agents `view.v2.cleared` keeps at most, the oldest dropped first. */
+const CLEARED_KEPT = 500
+
+/** The fold ids of the "N finished" rows: the Dashboard's and Chat's members'. */
+export const FINISHED_FOLD = { now: 'finished:now', chat: 'finished:chat' } as const
+
+/**
+ * "Clear finished": the agents in `ids` hidden from the Dashboard, Chat's
+ * members and Everyone, and Org from `at` on, with those hidden already;
+ * nothing in Claude Code changes.
+ */
+export function clearedWith(current: DeckView2, ids: readonly string[], at: number): DeckView2 {
+  return { ...current, cleared: [...new Set([...current.cleared, ...ids])].slice(-CLEARED_KEPT), clearedAt: at }
 }
 
 /** The v2 tabs, in their keys' order (1 Dashboard, 2 Chat, 3 Org, 4 Changes, 5 Settings); the Dashboard's id stays `now`. */
@@ -291,6 +306,8 @@ export function view2With(current: DeckView2, patch: unknown): DeckView2 {
     openFolds: Array.isArray(p.openFolds) ? [...new Set(p.openFolds.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-OPEN_FOLDS_KEPT) : current.openFolds,
     chatFilter: typeof p.chatFilter === 'string' ? p.chatFilter : current.chatFilter,
     isInspectOpen: false,
+    cleared: Array.isArray(p.cleared) ? [...new Set(p.cleared.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-CLEARED_KEPT) : current.cleared,
+    clearedAt: typeof p.clearedAt === 'number' && Number.isFinite(p.clearedAt) && p.clearedAt >= 0 ? p.clearedAt : current.clearedAt,
   }
 }
 

@@ -131,9 +131,21 @@ test('Now: Needs you as Claude Code holds them (a question answerable here, a pe
     const note = v2.needs.find(need => need.kind === 'notification')!
     expect((await ui.find({ key: `needs:${note.id}` }))?.text).toContain('The github MCP server is asking for your input')
 
-    // the agents: a card each, every one of them, the Orchestrator first and then as they started; each name keyed as `j` and `k` move to (W.agentKeyOf)
-    const cards = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent').sort((x, y) => Number(y.id === 'main') - Number(x.id === 'main') || x.startedAt - y.startedAt)
+    // the agents: a card each, the Orchestrator first and then those at work as they started; each name keyed as `j` and `k` move to (W.agentKeyOf)
+    const rows = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent').sort((x, y) => Number(y.id === 'main') - Number(x.id === 'main') || x.startedAt - y.startedAt)
+    const front = rows.filter(row => !W.isFinishedRow(row))
+    const behind = rows.filter(row => W.isFinishedRow(row))
+    // the finished (done, failed, stopped or idle) behind one "N finished ▸" row, Clear finished beside it; opened, their cards after
+    const fold = await ui.find({ key: 'finished:now:fold' })
+    if (String(fold?.props.label).endsWith('▾')) await press(ui, 'finished:now:fold')
+    expect(await keysOf(ui, 'agent:')).toEqual(front.map(row => W.agentKeyOf(row.id)))
+    expect((await ui.find({ key: 'finished:now:fold' }))?.props).toMatchObject({ label: `${behind.length} finished ▸`, plain: true })
+    expect((await ui.find({ key: 'finished:now:clear' }))?.props).toMatchObject({ label: 'Clear finished', plain: true })
+    expect(await ui.find({ key: 'finished:now:show' })).toBeUndefined()
+    await press(ui, 'finished:now:fold')
+    const cards = [...front, ...behind]
     expect(await keysOf(ui, 'agent:')).toEqual(cards.map(row => W.agentKeyOf(row.id)))
+    expect((await ui.find({ key: 'finished:now:fold' }))?.props.label).toBe(`${behind.length} finished ▾`)
     expect(await keysOf(ui, 'fold:')).toEqual(['fold:dash:agents', 'fold:dash:figures', 'fold:dash:plan', 'fold:dash:activity', 'fold:dash:files'])
     const builder = await ui.find({ key: `card:${IDS.builder}` })
     expect(builder?.text).toContain('Bash npm test -- rateLimit')
@@ -170,6 +182,8 @@ test('a section`s head folds it to one line (and it stays so), another press ope
     expect(await ui.find({ key: `agent:${IDS.scout}` })).toBeUndefined()
     await press(ui, 'fold:dash:agents')
     expect((await ui.find({ key: 'fold:dash:agents' }))?.props.label).toBe(`▾ AGENTS ${n}`)
+    // scout stopped: behind the finished row
+    if (String((await ui.find({ key: 'finished:now:fold' }))?.props.label).endsWith('▸')) await press(ui, 'finished:now:fold')
     expect((await ui.find({ key: `card:${IDS.scout}` }))?.text).toContain('Stopped')
 
     // builder's page: who it is, its live call, what it waits on you for, its task; Activity and Edits on demand

@@ -402,10 +402,24 @@ export type DeckMapView = 'tree' | 'wire'
 export type DeckView2 = {
   /** The tab open: `now` is the Dashboard (its id from before it was renamed, so `/deck now` and saved views still land). */
   tab: 'now' | 'chat' | 'org' | 'changes' | 'settings'
-  /** The fold rows opened, by their id (`fold:` and the parent's id); oldest first, at most 50. Every other stays folded. */
+  /**
+   * The fold rows opened, by their id: a tree's (`fold:` and the parent's
+   * id), and the "N finished" rows of the Dashboard (`finished:now`) and of
+   * Chat's members (`finished:chat`); oldest first, at most 50. Every other
+   * stays folded.
+   */
   openFolds: string[]
   /** Chat's filter: '' for Everyone, `between` (agent to agent), or the id of the agent picked in its member list. */
   chatFilter: string
+  /**
+   * The agents "Clear finished" hid from the Dashboard, Chat's members and
+   * Everyone, and Org (the deck's own tidying: nothing in Claude Code), by
+   * id, oldest first, at most 500; one that runs again after the press shows
+   * again. "Show N cleared" empties it.
+   */
+  cleared: string[]
+  /** When "Clear finished" was pressed last; 0 for never. */
+  clearedAt: number
   /**
    * Inspect over the tab, as earlier builds had it: always false now, as
    * Inspect is a section of Settings. A view saved with `true`, or a patch
