@@ -94,7 +94,10 @@ Two things are open: which store backs production, and which routes skip the lim
 ${'Next, builder runs the limiter tests, which need your OK to run. '.repeat(3)}`
 
 function patchOf(path: string, lines: string[], isNew = false): string {
-  const head = isNew ? `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` : `--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,${lines.length} @@\n`
+  // the hunk's counts as git writes them: the old side its context and removed lines, the new side its context and added lines
+  const before = lines.filter(line => !line.startsWith('+')).length
+  const after = lines.filter(line => !line.startsWith('-')).length
+  const head = isNew ? `--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n` : `--- a/${path}\n+++ b/${path}\n@@ -1,${before} +1,${after} @@\n`
   return `${head}${lines.join('\n')}\n`
 }
 
