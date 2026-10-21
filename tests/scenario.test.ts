@@ -260,6 +260,30 @@ async function cardsOf(ui: Drawing): Promise<string[]> {
   return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('card:') && !key.startsWith('card:open:')).map(key => key.slice('card:'.length))
 }
 
+/**
+ * Who spoke to whom, as Chat's group chat says it, in order: each group's
+ * head (its sender, then "to X"; none to you, or for yours to the
+ * Orchestrator), the line over a message stacked under it naming another.
+ */
+function routesOf(boxes: readonly FoundElement[]): string[] {
+  const routes: string[] = []
+  let from = ''
+  let to = ''
+  for (const box of boxes) {
+    const key = box.key ?? ''
+    if (key.startsWith('grp:')) {
+      const head = /^●?(.*?)(?:now|\d+[mhd])/.exec(box.text)?.[1] ?? ''
+      const [who = '', whom] = head.split(' to ')
+      from = who
+      to = whom ?? (who === 'You' ? 'Orchestrator' : 'you')
+    } else if ((key.startsWith('msg:') || key.startsWith('send:')) && !box.text.startsWith('Claude Code · ')) {
+      to = /^to (.+?) · /.exec(box.text)?.[1] ?? to
+      routes.push(`${from} → ${to}`)
+    }
+  }
+  return routes
+}
+
 const ROUTES = [
   'You → Orchestrator',
   'Orchestrator → scout',
@@ -359,12 +383,13 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     await ui.press({ key: 'page:fold:edits' })
     await ui.press({ key: 'key:b' })
 
-    // Chat: the whole conversation in order, each row a sentence; the agents' words to each other among it
+    // Chat: the whole conversation in order, as a group chat; the agents' words to each other among it
     await ui.press({ key: 'tab:chat' })
-    const rows = (await ui.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith('msg:'))
-    expect(rows.map(row => row.text.slice(0, row.text.indexOf(':')))).toEqual(ROUTES)
-    expect(rows.find(row => row.text.startsWith('reviewer → fixer'))?.text).toContain(ASK)
-    expect(rows.find(row => row.text.startsWith('fixer → reviewer'))?.text).toContain(REPLY)
+    const boxes = await ui.findAll({ type: 'Box' })
+    expect(routesOf(boxes)).toEqual(ROUTES)
+    const groups = boxes.filter(box => (box.key ?? '').startsWith('grp:'))
+    expect(groups.find(group => group.text.includes('reviewer to fixer'))?.text).toContain(ASK)
+    expect(groups.find(group => group.text.includes('fixer to reviewer'))?.text).toContain(REPLY)
 
     // Changes: the repository the agents edited, its three files and whose own edits touched each
     await ui.press({ key: 'tab:changes' })

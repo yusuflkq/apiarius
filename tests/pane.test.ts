@@ -4,10 +4,10 @@
  * the agents' cards, the figures, the plan from every source Claude used,
  * Recent activity and Files, each section folding by its head; more of it
  * in tests/now.test.ts);
- * an agent's page and Back; Chat (its sentence rows, its filters, `f`, its
- * window, the composer and what came of a send); Changes; Inspect and help;
- * and the band's one line. Drawn by the deck itself (`/deck demo` over the
- * v2 sample, `/deck` over a live session), or a piece by itself (`probe`).
+ * an agent's page and Back; Changes; Inspect and help; and the band's one
+ * line (Chat's own tests are in tests/chat.test.ts). Drawn by the deck
+ * itself (`/deck demo` over the v2 sample, `/deck` over a live session),
+ * or a piece by itself (`probe`).
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -196,107 +196,6 @@ test('a section`s head folds it to one line (and it stays so), another press ope
   }
 })
 
-test('Chat: every message as a sentence row with its time, f and the chips filter it, a long one folds and opens in place, a send from the deck says what came of it', async ($, on) => {
-  const { v2 } = await demo($, on)
-  for (const surface of SURFACES) {
-    const ui = await $.ui.mount(pane(surface))
-    await press(ui, 'tab:chat')
-    expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
-    // a row a message, oldest first, read as a sentence
-    const rows = (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('msg:'))
-    expect(rows).toEqual(v2.chat.map(row => `msg:${row.id}`))
-    const between = v2.chat.find(row => row.kind === 'message' && row.title === 'Limiter ready for review')!
-    const said = await ui.find({ key: `msg:${between.id}` })
-    expect(said?.text).toContain('builder → reviewer:')
-    expect(said?.text).toContain('Limiter ready for review')
-    // no addressee made up: builder's words to nobody in particular read "builder:"
-    const plain = v2.chat.find(row => row.to === null)!
-    expect((await ui.find({ key: `msg:${plain.id}` }))?.text).toContain('builder: Will do')
-    // what came of the deck's sends
-    const failed = v2.chat.find(row => row.ackId === 'c-1')!
-    expect((await ui.find({ key: `msg:${failed.id}` }))?.text).toContain('✕ Not delivered: it has ended')
-    const delivered = v2.chat.find(row => row.ackId === 'c-2')!
-    expect((await ui.find({ key: `msg:${delivered.id}` }))?.text).toContain('✓ Delivered: it reads it at its next step')
-    // a question still held on you says so
-    const asked = v2.chat.find(row => row.kind === 'question' && row.callId === 'toolu_01AskOne')!
-    expect((await ui.find({ key: `msg:${asked.id}` }))?.text).toContain('waiting on you')
-
-    // the cut answer: folded, Show more reads its whole text and opens it as Markdown
-    const cut = v2.chat.find(row => row.isCut)!
-    expect(await ui.find({ key: `chat:more:${cut.id}` })).toBeDefined()
-    await press(ui, `chat:more:${cut.id}`)
-    expect((await ui.find({ type: 'Markdown', text: /The whole answer/ })) ?? null).not.toBeNull()
-    expect((await ui.find({ key: `chat:more:${cut.id}` }))?.props.label).toBe('Show less')
-    await press(ui, `chat:more:${cut.id}`)
-
-    // the chips: All · You · each agent the chat names · Between agents; f steps to the next
-    const chips = await keysOf(ui, 'chat:filter:')
-    expect(chips[0]).toBe('chat:filter:all')
-    expect(chips[1]).toBe('chat:filter:you')
-    expect(chips).toContain(`chat:filter:${IDS.builder}`)
-    expect(chips[chips.length - 1]).toBe('chat:filter:between')
-    expect((await ui.find({ key: 'key:f' }))?.props).toMatchObject({ hotkey: 'f', label: 'Filter' })
-    await press(ui, 'key:f')
-    expect((await ui.find({ key: 'chat:filter:you' }))?.props.dimColor).toBe(false)
-    const mine = (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('msg:'))
-    expect(mine).toEqual(v2.chat.filter(row => row.from === 'you' || row.to === 'you').map(row => `msg:${row.id}`))
-    await press(ui, 'chat:filter:between')
-    const theirs = (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('msg:'))
-    expect(theirs).toContain(`msg:${between.id}`)
-    expect(theirs).not.toContain(`msg:${delivered.id}`)
-    await press(ui, `chat:filter:${IDS.builder}`)
-    const builders = v2.chat.filter(row => row.from === IDS.builder || row.to === IDS.builder || row.agent === IDS.builder)
-    expect((await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('msg:'))).toEqual(builders.map(row => `msg:${row.id}`))
-    await press(ui, 'chat:filter:all')
-    await press(ui, 'tab:now')
-    await ui.unmount()
-  }
-})
-
-test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMessage (previewed so), a name no agent carries is refused before it goes; the send shows at once and what came of it under it', async ($, on) => {
-  const clock = mock.clock(on, { now: NOW })
-  const w = newWorld()
-  on('ui.focus', () => ({}))
-  world(on, w)
-  await work($)
-  await $.command.run(deck('chat'))
-  await clock.advance(1000)
-  const field = async (ui: { find: (q: { type: 'Input' }) => Promise<{ key?: string } | undefined> }) => (await ui.find({ type: 'Input' }))?.key ?? ''
-  for (const surface of SURFACES) {
-    const ui = await $.ui.mount(pane(surface))
-    expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
-    await ui.input({ key: await field(ui), text: '', kind: 'change' })
-    await ui.redraw()
-    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('No @: to the Orchestrator')
-    // a name no agent carries: refused, said why, nothing sent
-    await ui.input({ key: await field(ui), text: '@nobody look again' })
-    await ui.redraw()
-    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('No agent named @nobody in this session')
-    expect(w.sent).toEqual([])
-    // the preview says where the words go while they are typed
-    await ui.input({ key: await field(ui), text: '@scout look', kind: 'change' })
-    await ui.redraw()
-    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('→ scout via SendMessage')
-    await ui.input({ key: await field(ui), text: 'hello', kind: 'change' })
-    await ui.redraw()
-    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('→ Orchestrator')
-    await ui.unmount()
-  }
-  const ui = await $.ui.mount(pane('desktop'))
-  const before = await field(ui)
-  await ui.input({ key: before, text: '@scout look at src/range.js again' })
-  await clock.advance(400)
-  await ui.redraw()
-  expect(w.sent).toEqual([{ to: 'agent-x1', text: 'look at src/range.js again' }])
-  // the row is the state's now, with what came of it; the field starts empty again
-  const row = (await ui.findAll({ type: 'Box' })).find(box => (box.key ?? '').startsWith('msg:') && box.text.includes('look at src/range.js again'))
-  expect(row?.text).toContain('You → scout:')
-  expect(row?.text).toContain('Delivered')
-  expect(await field(ui)).not.toBe(before)
-  expect((await ui.find({ type: 'Input' }))?.props.value).toBe('')
-  await ui.unmount()
-})
-
 test('a question answered from the pane: one press for one answer, toggles and Submit for several; it goes the way the page`s answer goes (in the sample, there alone)', async ($, on) => {
   const { w } = await demo($, on)
   const ui = await $.ui.mount(pane('desktop'))
@@ -391,48 +290,6 @@ test('the band: one line while an agent is at work or something needs you, its w
   expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(false)
   await ui.unmount()
   await band.unmount()
-})
-
-/** The nodes a drawn tree holds. */
-function nodesOf(node: unknown): number {
-  if (node === null || node === undefined || typeof node === 'boolean') return 0
-  if (typeof node !== 'object') return 1
-  const children = (node as { children?: unknown[] }).children ?? []
-  return 1 + children.reduce((sum: number, child) => sum + nodesOf(child), 0)
-}
-
-test('Chat draws a window of the newest rows, Show earlier adds more, and even the whole of the state`s 200 keeps inside the pane`s bounds', async ($, on) => {
-  const data = M.emptyData(NOW - 7_200_000)
-  for (let i = 0; i < 260; i++) M.addMessage(data, { from: i % 2 ? M.YOU : M.MAIN, to: i % 2 ? M.MAIN : M.YOU, kind: i % 2 ? 'prompt' : 'answer', text: `Message ${i}: ${'words '.repeat(80)}`, at: NOW - (260 - i) * 10_000 })
-  const view = { ...M.defaultView(), v2: { ...M.defaultView2(), tab: 'chat' as const } }
-  const clock = mock.clock(on, { now: NOW })
-  world(on, newWorld(), { v: M.SNAPSHOT_VERSION, data, view })
-  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck('chat'))
-  await clock.advance(1000)
-  for (const surface of SURFACES) {
-    const ui = await $.ui.mount(pane(surface))
-    // what opening the pane started (git, the usage) draws again once it is read
-    await clock.advance(1000)
-    await ui.redraw()
-    const rows = async () => (await ui.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith('msg:')).length
-    // the window is the pane's own, the same on every surface it draws on: paged on the first
-    if (surface === SURFACES[0]) {
-      expect(await rows()).toBe(30)
-      expect((await ui.find({ key: 'chat:earlier' }))?.props.label).toBe('Show earlier · 170 more')
-      await press(ui, 'chat:earlier')
-      expect(await rows()).toBe(60)
-    }
-    for (let i = 0; i < 5 && (await ui.find({ key: 'chat:earlier' })); i++) await press(ui, 'chat:earlier')
-    // as many as the pane holds, the newest; then it says where the rest are
-    const shown = await rows()
-    expect(shown).toBeGreaterThan(60)
-    expect(await ui.find({ key: 'chat:earlier' })).toBeUndefined()
-    expect((await ui.find({ key: 'chat' }))?.text).toContain(`${200 - shown} earlier: more than the pane holds.`)
-    expect(nodesOf(await ui.drawn())).toBeLessThan(2000)
-    expect(JSON.stringify(await ui.drawn()).length).toBeLessThan(200_000)
-    await ui.unmount()
-  }
 })
 
 test('from 120 cells Recent activity and Files stand side by side, the cards four a row at 140; below, one under the other, two cards a row; top to bottom what needs you, the agents, the figures, the plan', async ($, on) => {
