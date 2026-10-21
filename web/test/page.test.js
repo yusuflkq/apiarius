@@ -177,7 +177,7 @@ test('reads the live state (v1 with v2 under its key) and the bare sample alike;
 test('the header: the state in one word, your latest request in your words, and model · context · cost; the goal opens on its whole text', async () => {
   const p = page()
   p.load(SAMPLE)
-  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · context 41% · \\$4\\.12 Now 4 Chat Org Changes ${SAMPLE.changes.files.length}`))
+  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · context 41% · \\$4\\.12 Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Settings`))
   click(find(p.view('Header()'), 'goal')[0])
   assert.match(p.text('Header()'), /Your latest request · 4m ago Also exempt \/health and \/metrics from the limiter\./)
   // a goal the state cut short: its whole text from /message/<messageId>, fetched once
@@ -190,7 +190,24 @@ test('the header: the state in one word, your latest request in your words, and 
   assert.deepEqual(cut.fetched('message'), ['/message/m-goal'])
   // idle, with nothing known yet of the model, the context or the cost
   p.load(sample(s => Object.assign(s.header, { state: 'idle', stateText: 'Idle', goal: null, line: '' })))
-  assert.match(p.text('Header()'), /^Idle No request yet Now 4/)
+  assert.match(p.text('Header()'), /^Idle No request yet Dashboard 4/)
+})
+
+test('Now is called the Dashboard: its tab says so; its route stays #/now, and #/dashboard (and #/) open it too', () => {
+  const p = page({ hash: '#/dashboard' })
+  p.load(SAMPLE)
+  assert.equal(p.run('route.tab'), 'now')
+  const tabs = () => find(p.view('Header()'), 'tab')
+  assert.deepEqual(tabs().map(t => flat(textOf(t))), ['Dashboard 4', 'Chat', 'Org', `Changes ${SAMPLE.changes.files.length}`, 'Settings'])
+  assert.deepEqual(tabs().map(t => t.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/settings'])
+  assert.ok(tabs()[0].p.class.includes(' on'))
+  p.key('2')
+  p.key('1')
+  assert.equal(p.run('location.hash'), '#/now')
+  assert.equal(p.run('route.tab'), 'now')
+  for (const hash of ['#/', '#/now', '#/dashboard/', '#/nowhere']) assert.equal(page({ hash }).run('route.tab'), 'now', hash)
+  // what pointed at Now says Dashboard
+  assert.match(p.text('HelpSection()'), /Dashboard What needs you/)
 })
 
 // ---- Now: needs
@@ -608,80 +625,251 @@ test('the plan: every source Claude used, each as made (the board with owners, t
 
 // ---- Chat
 
-test('Chat: every row reads as a sentence, who: text, with its time on the right; names open their agents; long ones fold and a cut one loads /message/<id> once', async () => {
+/** The chat's groups and notices, in order: a group's key is `g:` and its first message's key, a notice's its message's. */
+const groupsIn = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(cgroup|notice)( |$)/.test(one.p.class))
+/** The keys of every message drawn: each bubble's, each notice's. */
+const messageKeys = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(brow|notice)( |$)/.test(one.p.class)).map(one => one.k)
+
+test('Chat is a group chat: others` bubbles at the left under their avatar and name, "to X" with X`s small avatar; yours at the right in blue under "You"; one sender`s run stacks under one head; Claude Code`s notices in the middle', () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
   assert.equal(p.run('route.tab'), 'chat')
-  const rows = () => find(p.view('ChatPage()'), 'crow')
-  assert.equal(rows().length, SAMPLE.chat.length)
-  const row = id => rows().find(r => r.k === id)
-  const line = id => flat(textOf(find(row(id), 'crow-line')[0]))
-  assert.equal(line('m1792011720000_a3f9c2e1b7d4058e_main'), 'researcher → Orchestrator : Found 14 public routes, all mounted in src/app.ts after auth() . No limiter exists. The Redis client ( ioredis ) is already a dependency.')
-  assert.equal(textOf(find(row('m1792011720000_a3f9c2e1b7d4058e_main'), 'crow-time')[0]), '31m')
-  // a SendMessage, titled by its summary; words to nobody in particular; a name no agent carries
-  assert.match(line('m1792013040000_b81c6f3e2a9d4c17_aa11bb22cc33dd44'), /^builder → reviewer : Limiter ready for review · src\/rateLimit\.ts and both stores are in\./)
-  assert.equal(line('m1792013130000_b81c6f3e2a9d4c17_'), 'builder : Will do: the store is picked by REDIS_URL, in memory without it.')
-  const bot = row('m1792013220000_b81c6f3e2a9d4c17_ops_bot')
-  assert.deepEqual(find(bot, 'name-link').map(textOf), ['builder'])
-  assert.match(flat(textOf(bot)), /^builder → ops-bot : A Redis for CI · Can CI start a Redis service/)
-  // Claude Code's own words
-  assert.match(line('m1792013520000_engine_you'), /^Claude Code → you : github · The github MCP server is asking for your input$/)
-  // a question still held on you points to its card
-  assert.match(flat(textOf(row('m1792013400000_main_you'))), /Answer it on Now/)
-  click(byText(row('m1792013400000_main_you'), 'more', 'Answer it on Now'))
+  const chat = () => p.view('ChatPage()')
+  assert.equal(find(chat(), 'crow').length, 0, 'no sentence rows')
+  // every message once, in the state's order
+  assert.deepEqual(messageKeys(chat()), SAMPLE.chat.map(m => m.id))
+  assert.equal(groupsIn(chat()).length, 21)
+  const group = id => groupsIn(chat()).find(g => g.k === `g:${id}` || g.k === id)
+  const head = id => flat(textOf(find(group(id), 'cg-head')[0]))
+  // the Orchestrator's answer to you and its three spawns minutes after: one head (no "to you"), each spawn saying whom it went to
+  const run = group('m1792011780000_main_you')
+  assert.equal(run.p.class, 'cgroup theirs')
+  assert.equal(head('m1792011780000_main_you'), 'Orchestrator 30m')
+  assert.deepEqual(find(run, 'brow').map(b => b.k), ['m1792011780000_main_you', 'm1792011840000_main_b81c6f3e2a9d4c17', 'm1792012020000_main_e5f6a7b8c9d0142b', 'm1792012080000_main_f1e2d3c4b5a6978c'])
+  assert.deepEqual(find(run, 'b-to').map(t => flat(textOf(t))), ['to builder · 29m', 'to docs · 26m', 'to scout · 25m'])
+  assert.equal(findAll(find(run, 'cg-av')[0], v => v.t === 'img' && v.p.class === 'av').length, 1, 'the sender`s avatar')
+  // a SendMessage: its summary bold over its words (Markdown), to an agent, that agent`s small avatar beside its name
+  const sent = group('m1792013040000_b81c6f3e2a9d4c17_aa11bb22cc33dd44')
+  assert.equal(head('m1792013040000_b81c6f3e2a9d4c17_aa11bb22cc33dd44'), 'builder to reviewer 9m')
+  assert.equal(flat(textOf(find(sent, 'b-title')[0])), 'Limiter ready for review')
+  assert.match(flat(textOf(find(sent, 'bubble')[0])), /^Limiter ready for review src\/rateLimit\.ts and both stores are in\./)
+  assert.equal(find(sent, 'md').length, 1)
+  assert.equal(findAll(find(sent, 'cg-to')[0], v => v.t === 'img' && v.p.class === 'av').length, 1)
+  // words to nobody in particular: no "to"; a name no agent carries: words, not a link
+  assert.equal(head('m1792013130000_b81c6f3e2a9d4c17_'), 'builder 7m')
+  assert.equal(head('m1792013220000_b81c6f3e2a9d4c17_ops_bot'), 'builder to ops-bot 6m')
+  assert.equal(find(find(group('m1792013220000_b81c6f3e2a9d4c17_ops_bot'), 'cg-to')[0], 'party-link').length, 0)
+  // yours: at the right, "You", "to X" unless it went to the Orchestrator, in blue, plain
+  const mine = group('m1792013340000_you_main')
+  assert.equal(mine.p.class, 'cgroup mine')
+  assert.equal(head('m1792013340000_you_main'), 'You 4m')
+  assert.equal(head('m1792012620000_you_d2e3f4a5b6c7089a'), 'You to Lint the new files 16m')
+  assert.equal(find(mine, 'b-plain').length, 1)
+  assert.equal(find(mine, 'md').length, 0)
+  // Claude Code's own: in the middle, small, the agent a notification is about named
+  assert.deepEqual(find(chat(), 'notice').map(n => flat(textOf(n))), [
+    'Claude Code Agent "Write the limiter tests" completed 12m',
+    'Claude Code Claude needs your permission to use Bash builder 2m',
+    'Claude Code The github MCP server is asking for your input 1m',
+  ])
+  // a question still held on you: edged amber, and the way to its card on the Dashboard
+  const held = group('m1792013400000_main_you')
+  assert.match(find(held, 'bubble')[0].p.class, /is-held/)
+  click(byText(held, 'b-answer', 'Answer on Dashboard'))
   assert.equal(p.run('route.tab'), 'now')
   assert.deepEqual({ ...p.run('ui.scrollTo'), until: 0 }, { id: `need-${ASK_ONE}`, on: 'now', until: 0, focus: true })
-  // a name opens its agent
-  click(find(row('m1792011720000_a3f9c2e1b7d4058e_main'), 'name-link')[0])
-  assert.equal(p.run('route.drawer.id'), RESEARCHER)
-  // the cut answer: two lines until asked, then the whole of it, fetched once
-  const cut = 'm1792011780000_main_you'
-  assert.ok(find(row(cut), 'crow-line')[0].p.class.includes('clamp'))
-  click(byText(row(cut), 'crow-more', 'Show more'))
-  assert.equal(p.run('ui.holdChat'), true)
-  assert.match(flat(textOf(row(cut))), /Loading the rest…/)
-  await settle()
-  assert.match(flat(textOf(row(cut))), /^Orchestrator → you : Here is where things stand\..*Two things are open: which store backs production, and which routes skip the limiter\./)
-  assert.equal(find(row(cut), 'md').length, 1)
-  click(byText(row(cut), 'crow-more', 'Show less'))
-  click(byText(row(cut), 'crow-more', 'Show more'))
-  await settle()
-  assert.deepEqual(p.fetched('message'), [`/message/${cut}`])
 })
 
-test('the chips filter Chat: All · You · each agent in the tree`s order · Between agents; f moves to the next', () => {
+test('every agent a message names opens its drawer: the sender`s avatar and name, the recipient in "to X", the agent a notice is about', () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
-  const chips = () => find(p.view('ChatPage()'), 'chip')
-  assert.deepEqual(chips().map(c => flat(textOf(c))), ['All', 'You', 'Orchestrator', 'builder', 'tester', 'Lint the new files', 'reviewer', 'researcher', 'docs', 'scout', 'Between agents'])
-  const shown = () => find(p.view('ChatPage()'), 'crow').map(r => r.k)
-  const pick = label => click(chips().find(c => flat(textOf(c)) === label))
-  pick('You')
-  assert.ok(shown().every(id => /_you(_|$)|^m\d+_you_/.test(id)), shown().join())
-  assert.equal(shown().length, 9)
-  pick('builder')
-  // everything to or from it, and Claude Code's word about it (its permission prompt)
-  assert.ok(shown().includes('m1792013436000_engine_you'))
-  assert.ok(shown().includes('m1792013220000_b81c6f3e2a9d4c17_ops_bot'))
-  assert.equal(shown().length, 10)
-  pick('Between agents')
-  assert.ok(!shown().some(id => /_you|engine/.test(id)), shown().join())
-  assert.ok(shown().includes('m1792013220000_b81c6f3e2a9d4c17_ops_bot'))
-  assert.equal(shown().length, 13)
-  // f: the next chip, on Chat
-  pick('All')
+  const group = id => groupsIn(p.view('ChatPage()')).find(g => g.k === `g:${id}` || g.k === id)
+  const sent = () => group('m1792013040000_b81c6f3e2a9d4c17_aa11bb22cc33dd44')
+  click(find(sent(), 'cg-av')[0])
+  assert.equal(p.run('route.drawer.id'), BUILDER)
+  assert.equal(p.run('location.hash'), `#/chat/agent/${BUILDER}`)
+  p.run('closeDrawer()')
+  click(find(find(sent(), 'cg-name')[0], 'party-link')[0])
+  assert.equal(p.run('route.drawer.id'), BUILDER)
+  click(find(find(sent(), 'cg-to')[0], 'party-link')[0])
+  assert.equal(p.run('route.drawer.id'), REVIEWER)
+  // "to scout" over a spawn stacked under the Orchestrator's head
+  click(find(find(group('m1792011780000_main_you'), 'b-to')[2], 'party-link')[0])
+  assert.equal(p.run('route.drawer.id'), SCOUT)
+  // yours: the one it went to
+  click(find(find(group('m1792012620000_you_d2e3f4a5b6c7089a'), 'cg-to')[0], 'party-link')[0])
+  assert.equal(p.run('route.drawer.id'), LINT)
+  // Claude Code's notice: the agent it is about
+  click(find(group('m1792013436000_engine_you'), 'party-link')[0])
+  assert.equal(p.run('route.drawer.id'), BUILDER)
+  // you and Claude Code are no one to open
+  assert.equal(find(find(group('m1792013340000_you_main'), 'cg-head')[0], 'party-link').length, 0)
+})
+
+test('Chat`s long messages fold to about six lines; a cut one loads /message/<id> once, the chat held where it is', async () => {
+  const p = page({ hash: '#/chat' })
+  p.load(SAMPLE)
+  const cut = 'm1792011780000_main_you'
+  const row = () => find(p.view('ChatPage()'), 'brow').find(b => b.k === cut)
+  assert.ok(find(row(), 'b-words')[0].p.class.includes('folded'))
+  click(byText(row(), 'b-more', 'Show more'))
+  assert.equal(p.run('ui.holdChat'), true)
+  assert.match(flat(textOf(row())), /Loading the rest…/)
+  await settle()
+  assert.match(flat(textOf(row())), /^Here is where things stand\..*Two things are open: which store backs production, and which routes skip the limiter\./)
+  assert.ok(!find(row(), 'b-words')[0].p.class.includes('folded'))
+  click(byText(row(), 'b-more', 'Show less'))
+  click(byText(row(), 'b-more', 'Show more'))
+  await settle()
+  assert.deepEqual(p.fetched('message'), [`/message/${cut}`])
+  // a short one has nothing to fold
+  assert.equal(find(find(p.view('ChatPage()'), 'brow').find(b => b.k === 'm1792013130000_b81c6f3e2a9d4c17_'), 'b-more').length, 0)
+})
+
+test('Chat`s members replace the filter chips: Everyone, then each agent with its avatar, name and status dot; one picked shows your conversation with it and the composer sends to it; f steps through them', async () => {
+  const p = page({ hash: '#/chat' })
+  p.load(SAMPLE)
+  const members = () => find(p.view('ChatPage()'), 'member')
+  const preview = words => ({ ...p.run(`previewOf('chat', ${JSON.stringify(words)})`) })
+  const placeholder = () => find(p.view('Composer("chat")'), 'composer-input')[0].p.placeholder
+  assert.equal(find(p.view('ChatPage()'), 'chip').length, 0)
+  assert.deepEqual(members().map(m => flat(textOf(find(m, 'member-name')[0]))), ['Everyone', 'Orchestrator', 'builder', 'tester', 'Lint the new files', 'reviewer', 'researcher', 'docs', 'scout'])
+  // each agent: its avatar, its name, its status dot in its status's hue
+  for (const m of members().slice(1)) assert.equal(findAll(m, v => v.t === 'img' && v.p.class === 'av').length, 1)
+  assert.deepEqual(members().slice(1).map(m => find(m, 'dot')[0].p.class), ['dot hue-wait', 'dot hue-wait', 'dot hue-done', 'dot hue-fail', 'dot hue-wait', 'dot hue-done', 'dot hue-done', 'dot hue-idle'])
+  // Everyone: every message, and the words go to the Orchestrator
+  assert.ok(members()[0].p.class.includes(' on'))
+  assert.equal(messageKeys(p.view('ChatPage()')).length, SAMPLE.chat.length)
+  assert.equal(placeholder(), 'Message the Orchestrator, or @name an agent…')
+  assert.deepEqual(preview('Ship it'), { text: '→ Orchestrator' })
+  // builder: your conversation with it (all it said and was told, and Claude Code's word about it), and the words go to it
+  click(members()[2])
+  assert.equal(p.run('ui.chatFilter'), BUILDER)
+  assert.equal(p.run('ui.pinChat'), true)
+  assert.ok(members()[2].p.class.includes(' on'))
+  assert.ok(!members()[0].p.class.includes(' on'))
+  const shown = messageKeys(p.view('ChatPage()'))
+  assert.equal(shown.length, 10)
+  for (const id of ['m1792013100000_you_b81c6f3e2a9d4c17', 'm1792013130000_b81c6f3e2a9d4c17_', 'm1792013436000_engine_you', 'm1792013220000_b81c6f3e2a9d4c17_ops_bot']) assert.ok(shown.includes(id), id)
+  assert.equal(placeholder(), 'Message builder…')
+  assert.deepEqual(preview(''), { text: 'To builder · @name for another agent', hint: true })
+  assert.deepEqual(preview('Keep going'), { text: '→ builder via SendMessage' })
+  p.run('ui.drafts.set("chat", "Keep the store optional.")')
+  await p.run('sendChat("chat")')
+  const [cmd] = p.commands()
+  assert.deepEqual(cmd, { cmd: 'chat', id: cmd.id, agentId: BUILDER, text: 'Keep the store optional.' })
+  assert.deepEqual(messageKeys(p.view('ChatPage()')).slice(-1), [`out:${cmd.id}`])
+  // an @name still goes where it says
+  p.run('ui.drafts.set("chat", "@reviewer Look again.")')
+  await p.run('sendChat("chat")')
+  assert.equal(p.commands()[1].agentId, REVIEWER)
+  // the Orchestrator picked: its conversation, the words to it as ever
+  click(members()[1])
+  assert.equal(placeholder(), 'Message the Orchestrator…')
+  assert.deepEqual(preview('Ship it'), { text: '→ Orchestrator' })
+  // Everyone again: the Orchestrator; under its name, how many are at work
+  click(members()[0])
+  assert.equal(p.run('ui.chatFilter'), 'all')
+  assert.equal(p.run('recipientOf("Ship it", filterOf()).agentId'), 'main')
+  assert.equal(flat(textOf(find(members()[0], 'member-sub')[0])), 'every message')
+  p.load(sample(s => { s.now += 1000; s.figures.running = 2 }))
+  assert.equal(flat(textOf(find(members()[0], 'member-sub')[0])), '2 at work')
+  assert.equal(flat(textOf(find(members()[2], 'member-sub')[0])), 'waiting on you')
+  // f: the next member, round again to Everyone
   p.run('navigate("now")')
   assert.equal(p.key('f'), true)
   assert.equal(p.run('route.tab'), 'chat')
-  assert.equal(p.run('ui.chatFilter'), 'you')
-  p.key('f')
   assert.equal(p.run('ui.chatFilter'), 'main')
-  // an agent gone from the session reads as All
+  p.key('f')
+  assert.equal(p.run('ui.chatFilter'), BUILDER)
+  p.run(`ui.chatFilter = "${SCOUT}"`)
+  p.key('f')
+  assert.equal(p.run('ui.chatFilter'), 'all')
+  // one gone from the session reads as Everyone
   p.run('ui.chatFilter = "gone"')
-  assert.ok(chips()[0].p.class.includes('on'))
+  assert.ok(members()[0].p.class.includes(' on'))
+  assert.equal(p.run('recipientOf("hi", filterOf()).agentId'), 'main')
+  // the drawer's "Chat with": that member
+  p.open(`{ kind: "agent", id: "${TESTER}" }`)
+  click(byText(p.view('Drawer()'), 'btn', 'Chat with tester'))
+  assert.equal(p.run('filterOf()'), TESTER)
+  assert.equal(placeholder(), 'Message tester…')
 })
 
-test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMessage, as W.recipientOf reads it; the preview says where, the ack what came of it', async () => {
+const NATIVE = 'n1a2b3c4d5e6f708', SHELL = 'n2b3c4d5e6f70819', BUILD = 'b0b1b2b3b4b5b6b7', W1 = 'w1aaaaaaaaaaaaaa', W2 = 'w2bbbbbbbbbbbbbb'
+/** The sample with agents to @name: a running "Native Chat as a group chat" (no name: its title is its description), a newer finished "Native shell", an older finished "build", and two "worker"s started at once, both at work. */
+const crowd = () => sample(s => {
+  const row = (id, status, title, name, startedAt) => ({ row: 'agent', id, parent: 'main', depth: 1, kind: 'agent', status, name, description: title, title, shortId: id.slice(0, 7), startedAt, todos: [] })
+  s.agents.push(
+    row(NATIVE, 'running', 'Native Chat as a group chat', '', NOW - 6 * MIN),
+    row(SHELL, 'done', 'Native shell', '', NOW - 3 * MIN),
+    row(BUILD, 'done', 'build', 'build', NOW - 40 * MIN),
+    row(W1, 'running', 'worker', 'worker', NOW - 2 * MIN),
+    row(W2, 'running', 'worker', 'worker', NOW - 2 * MIN),
+  )
+})
+
+test('@name is forgiving, as W.recipientOf is: names read lowercase in a–z and 0–9; an exact id or short id, then an exact name, one that starts with it, one that holds it, one that holds every word of it; those at work or waiting first, then the newest; a tie asks "Did you mean"', async () => {
+  const p = page({ hash: '#/chat' })
+  p.load(crowd())
+  const to = words => { const r = p.run(`recipientOf(${JSON.stringify(words)})`); return r.error ? r.error : `${r.agentId}: ${r.text}` }
+  assert.equal(p.run('normName("Native Chat — as a Group-chat!")'), 'nativechatasagroupchat')
+  assert.deepEqual([...p.run('handleWords("NativeChat")')], ['native', 'chat'])
+  // the owner's: @NativeChat finds "Native Chat as a group chat"
+  assert.equal(to('@NativeChat hi'), `${NATIVE}: hi`)
+  assert.equal(to('@native-chat hi'), `${NATIVE}: hi`)
+  // 1. an exact id or short id, any case
+  assert.equal(to('@b81c6f3 hi'), `${BUILDER}: hi`)
+  assert.equal(to('@B81C6F3E2A9D4C17 hi'), `${BUILDER}: hi`)
+  // 2. an exact name before a longer one that starts with it, at work or not
+  assert.equal(to('@build hi'), `${BUILD}: hi`)
+  assert.equal(to('@Build-er hi'), `${BUILDER}: hi`)
+  // 3. a name that starts with it: the one at work before the newer one done
+  assert.equal(to('@native hi'), `${NATIVE}: hi`)
+  assert.equal(to('@re hi'), `${REVIEWER}: hi`)
+  // 4. a name that holds it: in the sample, of builder and reviewer (waiting on you), tester and researcher (done), the newest of those waiting
+  const base = page({ hash: '#/chat' })
+  base.load(SAMPLE)
+  assert.equal(base.run('recipientOf("@er hi").agentId'), REVIEWER)
+  assert.equal(to('@newfiles hi'), `${LINT}: hi`)
+  // 5. a name that holds every word of it, in any order
+  assert.equal(to('@files-new hi'), `${LINT}: hi`)
+  assert.equal(to('@ChatNative hi'), `${NATIVE}: hi`)
+  assert.equal(to('@group_native hi'), `${NATIVE}: hi`)
+  // none; never the Orchestrator (words with no @ go to it)
+  assert.equal(to('@zz hi'), 'No agent named @zz in this session')
+  assert.equal(to('@orchestrator hi'), 'No agent named @orchestrator in this session')
+  // a tie: as much at work, started at once
+  const tie = p.run('recipientOf("@worker go on")')
+  assert.equal(tie.error, 'Did you mean: worker (w1aaaaa), worker (w2bbbbb)?')
+  assert.deepEqual(tie.choices.map(r => r.id).sort(), [W1, W2])
+  // one of them done: the other, no question
+  const one = page({ hash: '#/chat' })
+  one.load(sample(s => { crowd().agents.slice(-2).forEach((r, i) => s.agents.push({ ...r, status: i ? 'done' : 'running' })) }))
+  assert.equal(one.run('recipientOf("@worker go on").agentId'), W1)
+
+  // the composer: the foot says where it goes; a tie offers each as a name to click, which @names that one alone
+  const preview = words => ({ ...p.run(`previewOf('chat', ${JSON.stringify(words)})`) })
+  assert.deepEqual(preview('@NativeChat hi'), { text: '→ Native Chat as a group chat via SendMessage' })
+  p.run('ui.drafts.set("chat", "@worker go on")')
+  const foot = () => find(p.view('Composer("chat")'), 'composer-foot')[0]
+  assert.match(flat(textOf(foot())), /^Did you mean: worker \(w1aaaaa\) worker \(w2bbbbb\)/)
+  await p.run('sendChat("chat")')
+  assert.equal(p.commands().length, 0, 'a tie sends nothing')
+  click(find(foot(), 'choice').find(c => /w2bbbbb/.test(textOf(c))))
+  assert.equal(p.run('ui.drafts.get("chat")'), '@w2bbbbb go on')
+  assert.deepEqual(preview('@w2bbbbb go on'), { text: '→ worker via SendMessage' })
+  await p.run('sendChat("chat")')
+  assert.deepEqual(p.commands().map(c => [c.agentId, c.text]), [[W2, 'go on']])
+  // typing an @name: the agents it can be, best first; a pick @names it alone
+  p.run('ui.drafts.set("chat", "@nat")')
+  assert.deepEqual(find(p.view('Composer("chat")'), 'pick-handle').map(textOf), [`@${NATIVE.slice(0, 7)}`, `@${SHELL.slice(0, 7)}`])
+  p.run('ui.drafts.set("chat", "@wor")')
+  click(find(p.view('Composer("chat")'), 'pick')[0])
+  assert.match(p.run('ui.drafts.get("chat")'), /^@w[12][ab]{5} $/)
+})
+
+test('the composer: no @ goes to the member picked (Everyone: the Orchestrator), @name to that agent by SendMessage; the preview says where, the ack what came of it', async () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
   const to = words => p.run(`recipientOf(${JSON.stringify(words)})`)
@@ -693,9 +881,10 @@ test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMe
   assert.deepEqual({ ...to('   ') }, { error: 'Nothing to send' })
   const preview = words => ({ ...p.run(`previewOf('chat', ${JSON.stringify(words)})`) })
   assert.deepEqual(preview(''), { text: 'To the Orchestrator · @name for one of its agents', hint: true })
+  assert.deepEqual(preview('@'), { text: 'Type the agent\'s name', hint: true })
   assert.deepEqual(preview('Ship it'), { text: '→ Orchestrator' })
   assert.deepEqual(preview('@researcher what did you find?'), { text: '→ researcher via SendMessage' })
-  assert.deepEqual(preview('@re'), { text: 'Tab picks the first', hint: true })
+  assert.deepEqual(preview('@re'), { text: '→ reviewer via SendMessage' })
   assert.deepEqual(preview('@zz hi'), { text: 'No agent named @zz in this session', err: true })
   // typing an @name: the agents it can be, picked by a click or Tab
   p.run('ui.drafts.set("chat", "@re")')
@@ -703,25 +892,26 @@ test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMe
   click(find(p.view('Composer("chat")'), 'pick')[1])
   assert.equal(p.run('ui.drafts.get("chat")'), '@researcher ')
 
-  // a send: the command, the row it shows as at once, then what its ack says
+  // a send: the command, the bubble it shows as at once, then what its ack says
   p.run('ui.drafts.set("chat", "@builder Keep the Redis store optional.")')
   await p.run('sendChat("chat")')
   const [cmd] = p.commands()
   assert.deepEqual(cmd, { cmd: 'chat', id: cmd.id, agentId: BUILDER, text: 'Keep the Redis store optional.' })
   assert.equal(p.run('ui.drafts.has("chat")'), false, 'the box is cleared')
-  const mine = () => find(p.view('ChatPage()'), 'crow').find(r => r.k === `out:${cmd.id}`)
-  assert.match(flat(textOf(mine())), /^YO You → builder : Keep the Redis store optional\. Sending… now$/)
+  const mine = () => groupsIn(p.view('ChatPage()')).find(g => g.k === `g:out:${cmd.id}`)
+  assert.equal(mine().p.class, 'cgroup mine')
+  assert.equal(flat(textOf(mine())), 'You to builder now Keep the Redis store optional. Sending…')
   p.load(sample(s => {
     s.chat.push({ id: 'm-mine', at: NOW, from: 'you', to: BUILDER, who: 'You → builder', kind: 'chat', text: 'Keep the Redis store optional.', ackId: cmd.id })
     s.acks.push({ id: cmd.id, ok: true, status: 'delivered', text: 'It reads it at its next step', at: NOW })
   }))
-  assert.match(flat(textOf(mine())), /Delivered: it reads it at its next step/)
-  assert.equal(find(p.view('ChatPage()'), 'crow').filter(r => /Keep the Redis store optional\./.test(textOf(r)) && r.k !== 'm1792013100000_you_b81c6f3e2a9d4c17').length, 1, 'one row, its key kept')
+  assert.equal(flat(textOf(mine())), 'You to builder now Keep the Redis store optional. Delivered: it reads it at its next step')
+  assert.equal(find(p.view('ChatPage()'), 'brow').filter(b => /Keep the Redis store optional\./.test(textOf(b)) && b.k !== 'm1792013100000_you_b81c6f3e2a9d4c17').length, 1, 'one bubble, its key kept')
   // none comes: after a while the page says so
   p.run('ui.drafts.set("chat", "Anyone there?")')
   await p.run('sendChat("chat")')
   p.setNow(NOW + 21_000)
-  assert.match(flat(textOf(find(p.view('ChatPage()'), 'crow').pop())), /Sent, but Claude Code hasn't confirmed it/)
+  assert.match(flat(textOf(find(p.view('ChatPage()'), 'brow').pop())), /Sent, but Claude Code hasn't confirmed it/)
   // a name no agent carries is refused before it goes
   p.run('ui.drafts.set("chat", "@ops-bot hello")')
   await p.run('sendChat("chat")')
@@ -729,10 +919,10 @@ test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMe
   assert.match(p.text('Composer("chat")'), /No agent named @ops-bot in this session/)
 })
 
-test('the sample`s acks show under the rows they name, while they matter: refused, queued; a delivered one is old news once its agent spoke after it', () => {
+test('the sample`s acks show under the bubbles they name, while they matter: refused, queued; a delivered one is old news once its agent spoke after it', () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
-  const note = id => { const r = find(p.view('ChatPage()'), 'crow').find(one => one.k === id); return find(r, 'crow-note').map(n => flat(textOf(n))) }
+  const note = id => { const b = find(p.view('ChatPage()'), 'brow').find(one => one.k === id); return find(b, 'b-note').map(n => flat(textOf(n))) }
   assert.deepEqual(note('m1792012620000_you_d2e3f4a5b6c7089a'), ['Not delivered: it has ended'])
   assert.deepEqual(note('m1792013340000_you_main'), ['Queued: Claude reads it when it finishes its current turn'])
   assert.deepEqual(note('m1792013100000_you_b81c6f3e2a9d4c17'), [])
@@ -887,24 +1077,75 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   assert.match(flat(textOf(drawer())), /This agent is not in the session/)
 })
 
-test('Inspect: context, cost and tokens per agent, by i or the header`s button', () => {
+test('Settings (5, #/settings) holds Inspect, the avatar style and Help, laid out as a page: the header keeps no Inspect or Keys button, and no key badge', () => {
   const p = page()
   p.load(SAMPLE)
+  const header = p.view('Header()')
+  assert.equal(find(header, 'icon-btn').length, 0)
+  assert.equal(findAll(header, v => v.t === 'kbd' || (v.p && v.p.title && /\(\d\)|\([a-z]\)/.test(v.p.title))).length, 0)
+  assert.equal(p.key('5'), true)
+  assert.equal(p.run('route.tab'), 'settings')
+  assert.equal(p.run('location.hash'), '#/settings')
+  assert.ok(find(p.view('Header()'), 'tab')[4].p.class.includes(' on'))
+  assert.deepEqual(find(p.view('Page()'), 'sec-title').map(t => flat(textOf(t))), ['Inspect', 'Avatar style', 'Help'])
+  // Inspect: the context, the spend, the tokens and the agents; then each agent's tokens, requests, tool calls and failures
+  const ins = p.text('InspectSection()')
+  assert.match(ins, /^Inspect This session Context 41% Spend \$4\.12 Tokens 2\.3M Agents 8 Tokens by agent Agent Model In Out Cache Total Req Tools Err/)
+  assert.match(ins, /Orchestrator opus-5\.5 182k 21\.3k 1\.2M 1\.4M 31 2 0 researcher haiku-4\.5 41k 2\.1k 88k 131k 6 2 0/)
+  assert.match(ins, /Lint the new files haiku-4\.5 9k 600 12k 21\.6k 2 1 1/)
+  assert.equal(find(p.view('InspectSection()'), 'bar-fill')[0].p.style.width, '41%')
+  // an agent's name opens its drawer over Settings
+  click(find(find(p.view('InspectSection()'), 'ins-who')[2], 'who-link')[0])
+  assert.equal(p.run('location.hash'), `#/settings/agent/${BUILDER}`)
+  // Help: what each tab is for, each name going to it; then the keys
+  const help = p.text('HelpSection()')
+  assert.match(help, /^Help Dashboard What needs you, a card per agent.* Chat The session as a group chat\..* Org Every agent under the one that started it.* Changes Git's uncommitted files.* Settings This page/)
+  assert.match(help, /Keys .* 1 2 3 4 5 Dashboard · Chat · Org · Changes · Settings j k Move the focus down, up/)
+  assert.deepEqual(find(p.view('HelpSection()'), 'help-tab-name').map(a => a.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/settings'])
+  // the only drawer is an agent's: an old link to Inspect, and #/inspect and #/help, open Settings
+  for (const hash of ['#/chat/inspect', '#/inspect', '#/help']) {
+    const old = page({ hash })
+    assert.deepEqual({ tab: old.run('route.tab'), drawer: old.run('route.drawer') }, { tab: 'settings', drawer: null }, hash)
+  }
+  // with nothing yet, Settings still draws: the avatar style and the help are the deck's own
+  const empty = page({ hash: '#/settings' })
+  empty.load({ v: 1, empty: true })
+  assert.match(empty.text('Page()'), /^Inspect This session .*No agent has spent tokens yet.* Avatar style .* Help Dashboard/)
+  assert.equal(empty.key('n'), false)
+  assert.equal(empty.key('1'), true)
+  assert.match(empty.text('Page()'), /Nothing yet/)
+})
+
+test('i and h quietly bring Settings` Inspect and Help into view (a folded one opened); pressed again there, back to the tab you came from', () => {
+  const p = page({ hash: '#/org' })
+  p.load(SAMPLE)
+  p.run('setShut("inspect", true)')
+  assert.equal(p.key('i'), true)
+  assert.equal(p.run('route.tab'), 'settings')
+  assert.equal(p.run('ui.scrollTo.id'), 'sec-inspect')
+  assert.equal(find(p.view('InspectSection()'), 'ins-table').length, 1, 'opened')
+  p.key('h')
+  assert.equal(p.run('route.tab'), 'settings')
+  assert.equal(p.run('ui.scrollTo.id'), 'sec-help')
+  p.key('?')
+  assert.equal(p.run('route.tab'), 'org')
+  p.key('h')
+  p.key('h')
+  assert.equal(p.run('route.tab'), 'org')
+  // the Settings tab itself, then i: Inspect; again: back
+  p.key('5')
   p.key('i')
-  assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'inspect' })
-  const text = p.text('Drawer()')
-  assert.match(text, /^Inspect This session Context 41% Cost \$4\.12 Tokens 2\.3M Tokens by agent 8 agents Agent Model In Out Cache Req Tools Err/)
-  assert.match(text, /Orchestrator opus-5\.5 182k 21\.3k 1\.2M 31 2 0 researcher haiku-4\.5 41k 2\.1k 88k 6 2 0/)
-  assert.match(text, /Lint the new files haiku-4\.5 9k 600 12k 2 1 1/)
+  assert.equal(p.run('ui.scrollTo.id'), 'sec-inspect')
   p.key('i')
-  assert.equal(p.run('route.drawer'), null)
-  click(find(p.view('Header()'), 'icon-btn')[0])
-  assert.equal(p.run('route.drawer.kind'), 'inspect')
+  assert.equal(p.run('route.tab'), 'org')
+  // none fires while you type
+  assert.equal(p.key('i', 'TEXTAREA'), false)
+  assert.equal(p.run('route.tab'), 'org')
 })
 
 // ---- keys, and live updates
 
-test('keys: 1 2 3 4 the routes, n the next need (opened and focused), m and @ the composer, h help, b and Esc close; none fires while you type', () => {
+test('keys: 1 2 3 4 5 the routes, n the next need (opened and focused), m and @ the composer, b and Esc close; none fires while you type', () => {
   const p = page()
   p.load(SAMPLE)
   assert.equal(p.key('2'), true)
@@ -915,6 +1156,8 @@ test('keys: 1 2 3 4 the routes, n the next need (opened and focused), m and @ th
   assert.equal(p.run('location.hash'), '#/org')
   p.key('4')
   assert.equal(p.run('route.tab'), 'changes')
+  p.key('5')
+  assert.equal(p.run('route.tab'), 'settings')
   p.key('1')
   assert.equal(p.run('location.hash'), '#/now')
   // typing: the key is the text's
@@ -940,16 +1183,12 @@ test('keys: 1 2 3 4 the routes, n the next need (opened and focused), m and @ th
   p.open(`{ kind: "agent", id: "${REVIEWER}" }`)
   p.key('m')
   assert.equal(p.run('ui.focusTo'), `composer-${REVIEWER}`)
-  // h: the keys; Esc closes it, then the drawer; b the same
-  p.key('h')
-  assert.equal(p.run('ui.help'), true)
-  assert.match(p.text('Help()'), /^Keys .* 1 2 3 4 Now · Chat · Org · Changes j k Move the focus down, up/)
-  p.key('Escape')
-  assert.equal(p.run('ui.help'), false)
-  assert.equal(p.run('route.drawer.id'), REVIEWER)
-  p.key('Escape')
+  // Esc closes the drawer; b the same; typing, Esc leaves the field
+  assert.equal(p.key('Escape'), true)
   assert.equal(p.run('route.drawer'), null)
-  p.key('i')
+  p.open(`{ kind: "agent", id: "${REVIEWER}" }`)
+  assert.equal(p.key('Escape', 'TEXTAREA'), true)
+  assert.equal(p.run('route.drawer.id'), REVIEWER)
   p.key('b')
   assert.equal(p.run('route.drawer'), null)
   assert.equal(p.key('b'), false, 'nothing to go back from')
@@ -969,7 +1208,8 @@ test('a live update keeps what you were doing: a half-typed message, an open fol
   assert.equal(p.run('ui.drafts.get("chat")'), 'half a thou')
   assert.equal(p.run('route.drawer.id'), BUILDER)
   assert.equal(p.run('filterOf()'), REVIEWER)
-  assert.ok(find(p.view('ChatPage()'), 'crow').some(r => r.k === 'm-new'))
+  assert.ok(find(p.view('ChatPage()'), 'brow').some(r => r.k === 'm-new'))
+  assert.ok(find(p.view('ChatPage()'), 'member').find(m => m.k === REVIEWER).p.class.includes(' on'))
   p.run('ui.orgView = "list"')
   assert.ok(find(p.view('OrgPage()'), 'arow').some(r => r.k === LINT), 'the fold stays open')
   assert.ok(find(p.view('NeedsSection()'), 'need')[2].p.class.includes('open'))
@@ -977,7 +1217,7 @@ test('a live update keeps what you were doing: a half-typed message, an open fol
 
 // ---- Avatars
 
-test('the avatars are drawn in the state`s style (robots by default; one the page does not know, robots); Help lists the ten, the one drawn checked, and a pick posts avatarStyle and draws it at once, until the state names it', async () => {
+test('the avatars are drawn in the state`s style (robots by default; one the page does not know, robots); Settings lists the ten, each with a preview, the one drawn checked, and a pick posts avatarStyle and draws it at once, until the state names it', async () => {
   const p = page()
   const svgOf = v => decodeURIComponent(v.p.src.replace(/^data:image[/]svg[+]xml;charset=utf-8,/, ''))
   const face = () => svgOf(p.view("Avatar(IX.byId.get('main'), 24)"))
@@ -992,18 +1232,18 @@ test('the avatars are drawn in the state`s style (robots by default; one the pag
   assert.ok(face().includes(MOOD))
   p.load(sample(s => { s.avatarStyle = 'plaid' }))
   assert.ok(face().includes(ROBOT))
-  // Help: the ten styles, each with its sample faces drawn in it, the one drawn checked
+  // Settings: the ten styles, each with its sample faces drawn in it, the one drawn checked
   p.load(sample(s => { s.avatarStyle = 'mood' }))
-  p.run('ui.help = true')
-  const picks = () => find(p.view('Help()'), 'style-pick')
+  const picks = () => find(p.view('AvatarSection()'), 'style-pick')
   assert.deepEqual(picks().map(b => flat(textOf(b))), ['Robots', 'Mood faces', 'Critters', 'Pixel sprites', 'Monogram tiles', 'Orbits', 'Bauhaus', 'Progress rings', 'Terminal glyphs', 'Blob faces'])
   const checked = () => picks().filter(b => b.p['aria-checked'] === 'true').map(b => flat(textOf(b)))
   assert.deepEqual(checked(), ['Mood faces'])
   for (const [i, b] of picks().entries()) {
     const faces = findAll(b, v => v.t === 'img')
     assert.equal(faces.length, 3)
-    assert.equal(svgOf(faces[0]), AVATARS.avatarSvg(AVATARS.STYLE_IDS[i], { id: 'bob', name: 'bob', role: '', status: 'done' }, { size: 26, dot: true, animated: false }))
+    assert.equal(svgOf(faces[0]), AVATARS.avatarSvg(AVATARS.STYLE_IDS[i], { id: 'bob', name: 'bob', role: '', status: 'done' }, { size: 30, dot: true, animated: false }))
   }
+  assert.deepEqual(picks().map(b => find(b, 'style-check').length), [0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
   // a pick: the command goes, and the page draws it at once
   click(picks()[2])
   await settle()
@@ -1023,4 +1263,23 @@ test('the avatars are drawn in the state`s style (robots by default; one the pag
   click(picks()[9])
   await settle()
   assert.equal(p.commands().length, count)
+})
+
+test('Org (and Chat`s members) draw the agents in the style in force: the state`s, or one just picked in Settings', async () => {
+  const p = page({ hash: '#/org' })
+  const svgOf = v => decodeURIComponent(v.p.src.replace(/^data:image[/]svg[+]xml;charset=utf-8,/, ''))
+  const card = () => findAll(byText(p.view('OrgPage()'), 'org-card', 'builder'), v => v.t === 'img')[0]
+  const member = () => findAll(find(p.view('ChatPage()'), 'member').find(m => m.k === BUILDER), v => v.t === 'img')[0]
+  const drawn = (style, size, opts) => p.run(`AV.avatarSvg(${JSON.stringify(style)}, faceOf(IX.byId.get(${JSON.stringify(BUILDER)})), ${JSON.stringify({ size, ...opts })})`)
+  p.load(sample(s => { s.avatarStyle = 'mood' }))
+  assert.equal(svgOf(card()), drawn('mood', 34, { dot: true, animated: true }))
+  assert.ok(svgOf(card()).includes('<circle cx="20" cy="20" r="17"'))
+  assert.equal(svgOf(member()), drawn('mood', 24, { dot: false, animated: false }))
+  await p.run('pickStyle("pixel")')
+  assert.equal(svgOf(card()), drawn('pixel', 34, { dot: true, animated: true }))
+  assert.equal(svgOf(member()), drawn('pixel', 24, { dot: false, animated: false }))
+  // a pick holds until the state names it, 10 s at most: then the state's, whoever picked it
+  p.setNow(NOW + 11_000)
+  p.load(sample(s => { s.now = NOW + 11_000; s.avatarStyle = 'bauhaus' }))
+  assert.equal(svgOf(card()), drawn('bauhaus', 34, { dot: true, animated: true }))
 })

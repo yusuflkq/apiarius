@@ -3,9 +3,10 @@
  * What Claude Code is doing, who is working on what, and whether anything
  * needs you, live over SSE. It draws the mod's v2 view model (web/CONTRACT.md,
  * "v2: one view model for every surface"), the one the Desktop pane and the
- * terminal draw too, with the same names, order and keys: four routes (#/now,
- * the dashboard; #/chat; #/org, the org chart; #/changes), an agent drawer and
- * an Inspect drawer. No dependencies and no build step.
+ * terminal draw too, with the same names, order and keys: five routes (#/now,
+ * the Dashboard; #/chat, the group chat; #/org, the org chart; #/changes;
+ * #/settings: Inspect, the avatar style and Help) and an agent drawer. No
+ * dependencies and no build step.
  *
  * The page renders through a tiny keyed virtual DOM (h/patch below). Every
  * state update builds the view again and patches the live DOM in place, so
@@ -298,6 +299,7 @@ const IC = {
   dollar: '<line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
   activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
 };
 
 function icon(name, cls) {
@@ -840,20 +842,34 @@ function agentFileOf(a) {
 }
 
 // ===================================================================== router
-// #/now, #/chat, #/org, #/changes; a drawer rides on the route it opened
-// over: #/now/agent/<id>, #/chat/inspect. #/ is Now.
+// #/now (the Dashboard; #/dashboard too), #/chat, #/org, #/changes,
+// #/settings; an agent's drawer rides on the route it opened over:
+// #/now/agent/<id>. #/ is the Dashboard.
 
-const TABS = [['now', 'Now'], ['chat', 'Chat'], ['org', 'Org'], ['changes', 'Changes']];
+const TABS = [['now', 'Dashboard'], ['chat', 'Chat'], ['org', 'Org'], ['changes', 'Changes'], ['settings', 'Settings']];
+/** The other names a route answers to: the Dashboard's own, and Settings', where Inspect and Help went. */
+const ROUTE_ALIAS = { dashboard: 'now', inspect: 'settings', help: 'settings' };
 
 function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } });
-  const tab = TABS.some(t => t[0] === parts[0]) ? parts[0] : 'now';
-  const drawer = parts[1] === 'agent' && parts[2] ? { kind: 'agent', id: parts[2] } : parts[1] === 'inspect' ? { kind: 'inspect' } : null;
+  const name = ROUTE_ALIAS[parts[0]] || parts[0];
+  // an Inspect drawer's link of an earlier page (#/<route>/inspect) opens Settings
+  const tab = parts[1] === 'inspect' ? 'settings' : TABS.some(t => t[0] === name) ? name : 'now';
+  const drawer = parts[1] === 'agent' && parts[2] ? { kind: 'agent', id: parts[2] } : null;
   return { tab, drawer, key: tab };
 }
 let route = parseRoute();
 
-const hrefOf = (tab, drawer) => `#/${tab}${!drawer ? '' : drawer.kind === 'agent' ? `/agent/${encodeURIComponent(drawer.id)}` : '/inspect'}`;
+const hrefOf = (tab, drawer) => `#/${tab}${drawer ? `/agent/${encodeURIComponent(drawer.id)}` : ''}`;
+
+/** Takes the page to `next`, noting the tab it leaves (`i` and `h` go back to it from Settings). */
+function setRoute(next) {
+  if (next.tab !== route.tab) {
+    ui.prevTab = route.tab;
+    if (next.tab !== 'settings') ui.settingsAt = null;
+  }
+  route = next;
+}
 
 /** Keeps where the page shown now is scrolled to; the chat read to its end keeps "the end". */
 function saveScroll() {
@@ -867,7 +883,7 @@ function navigate(tab, drawer = route.drawer) {
   saveScroll();
   const href = hrefOf(tab, drawer);
   if (location.hash !== href) location.hash = href;
-  route = { tab, drawer, key: tab };
+  setRoute({ tab, drawer, key: tab });
   renderNow();
 }
 const openAgent = id => navigate(route.tab, { kind: 'agent', id });
@@ -882,7 +898,7 @@ const isWide = () => typeof window.innerWidth === 'number' && window.innerWidth 
 const ui = {
   orgView: store.get('orgView', 'chart') === 'list' ? 'list' : 'chart', // Org: the chart or the list
   open: new Map(),         // disclosure key -> open
-  chatFilter: 'all',       // 'all' | 'you' | 'between' | an agent's id
+  chatFilter: 'all',       // Chat's member picked: 'all' (Everyone) | an agent's id
   drafts: new Map(),       // composer scope ('chat', 'agent:<id>') -> half-typed words
   inputs: new Map(),       // composer scope -> its textarea
   sends: new Map(),        // composer scope -> { status, text, at }: the POST in flight, or why it could not go
@@ -897,7 +913,8 @@ const ui = {
   holdChat: false,         // the next render leaves the chat where it is ("Show more")
   pinChat: false,          // the next render takes the chat to its newest row (a send)
   goalOpen: false,         // the header's goal, open on its whole text
-  help: false,
+  prevTab: 'now',          // the tab shown before this one
+  settingsAt: null,        // the section of Settings `i` or `h` went to ('inspect', 'help'), while Settings shows
   picked: null,            // { style, until }: an avatar style picked here, drawn until the state names it
   toast: null,             // { text, until }
   needAt: -1,              // the need `n` went to last
@@ -1379,7 +1396,7 @@ function NeedsList(agentId) {
 
 // ===================================================================== header
 // Always in view: the session's state in one word, your latest request in
-// your words, and the model, context and spend; then the three tabs.
+// your words, and the model, context and spend; then the tabs.
 
 const STATE_HUE = { working: 'run', waiting: 'wait', idle: 'idle' };
 
@@ -1420,11 +1437,12 @@ function ConnPill() {
   return h('span', { class: 'conn' }, Dot('idle'), 'Connecting');
 }
 
-function Tab(id, label, i) {
+/** A tab: its name, and for the Dashboard what needs you, for Changes the files uncommitted. Its key works quietly: no badge says it. */
+function Tab(id, label) {
   const on = route.tab === id;
   const has = S && !S.empty;
   const n = !has ? 0 : id === 'now' ? S.needs.length : id === 'changes' ? S.changes.files.length : 0;
-  return h('a', { key: id, class: `tab${on ? ' on' : ''}`, href: hrefOf(id, route.drawer), 'aria-current': on ? 'page' : null, title: `${label} (${i + 1})` },
+  return h('a', { key: id, class: `tab${on ? ' on' : ''}`, href: hrefOf(id, route.drawer), 'aria-current': on ? 'page' : null },
     h('span', null, label),
     n > 0 && h('span', { class: `tab-n${id === 'now' ? ' is-need' : ''}`, title: id === 'now' ? plural(n, 'thing needs you', 'things need you') : plural(n, 'uncommitted file') }, String(n)));
 }
@@ -1432,25 +1450,22 @@ function Tab(id, label, i) {
 function Header() {
   const has = S && !S.empty;
   const hd = has ? S.header : null;
-  const inspect = !!route.drawer && route.drawer.kind === 'inspect';
   return h('header', { class: 'hd' },
     h('div', { class: 'hd-top' },
       h('span', { class: 'brand-mark', title: 'Agent Deck', 'aria-hidden': 'true' }),
       hd ? StateWord() : h('span', { class: 'state is-idle' }, Dot('idle'), S ? 'Idle' : 'Connecting'),
       hd ? GoalButton() : h('span', { class: 'goal goal-none' }),
-      hd && hd.line ? h('span', { class: 'hd-line hd-line-top' }, hd.line) : null,
-      h('button', { type: 'button', class: `icon-btn${inspect ? ' on' : ''}`, title: 'Inspect (i)', 'aria-label': 'Inspect', 'aria-pressed': inspect ? 'true' : 'false', onClick: toggleInspect }, icon('gauge')),
-      h('button', { type: 'button', class: `icon-btn${ui.help ? ' on' : ''}`, title: 'Keys (h)', 'aria-label': 'Keys', 'aria-pressed': ui.help ? 'true' : 'false', onClick: toggleHelp }, icon('keyboard'))),
+      hd && hd.line ? h('span', { class: 'hd-line hd-line-top' }, hd.line) : null),
     GoalPanel(),
     h('nav', { class: 'hd-tabs', 'aria-label': 'Pages' },
-      TABS.map(([id, label], i) => Tab(id, label, i)),
+      TABS.map(([id, label]) => Tab(id, label)),
       h('span', { class: 'hd-tabs-end' },
         hd && hd.line ? h('span', { class: 'hd-line hd-line-tabs' }, hd.line) : null,
         ConnPill())));
 }
 
-// ======================================================================== now
-// The dashboard: what needs you (only while something does), a run card per
+// ================================================================== dashboard
+// The Dashboard (#/now): what needs you (only while something does), a run card per
 // agent, the session's figures, the plan (only if Claude made one), the
 // newest tool calls and the files the agents touched. Each section folds by
 // its head; on a wide page the last two sit side by side.
@@ -1472,7 +1487,7 @@ function NeedsSection() {
 
 // ------------------------------------------------------------- run cards
 
-/** How many run cards Now draws; past that, Org shows them all. */
+/** How many run cards the Dashboard draws; past that, Org shows them all. */
 const CARDS = 12;
 
 /**
@@ -2064,46 +2079,140 @@ function WorkflowCard(w) {
 }
 
 // ======================================================================= chat
-// One stream of every real message, oldest first: your prompts, Claude's
-// answers, delegations, reports, agent-to-agent SendMessage, questions and
-// your answers, Claude Code's notifications. Each row reads as a sentence,
-// "who: text", in the words the state gives; long ones fold.
+// The session as a group chat, as the Desktop pane draws it (hooks/ui/v2/
+// chat.tsx): every real message, oldest first. Yours at the right in blue,
+// under "You"; others' at the left under the sender's avatar and name, with
+// "to X" and X's small avatar when the words went to someone other than you;
+// one sender's messages within five minutes stack under one head. Claude
+// Code's own notices sit in the middle, small and dim. Every agent named
+// opens its drawer. Over it the members: Everyone, then each agent; one
+// picked shows your conversation with it, and the composer's words go to it.
 
-/** The filter chips: All · You · each agent (in the tree's order) · Between agents. */
-const chatChips = () => [['all', 'All'], ['you', 'You'], ...IX.rows.map(r => [r.id, r.title]), ['between', 'Between agents']];
+/** One sender's messages this close in time stack under one head. */
+const GROUP_MS = 5 * 60000;
 
-/** Whether chat row `m` shows under filter `f`. */
+/** Chat's members after Everyone: each agent in the state's order (Claude Code's own loops are no one to talk to). */
+const membersOf = () => IX.rows.filter(r => r.kind !== 'engine');
+
+/** The member picked: one no longer in the session reads as Everyone. */
+const filterOf = () => (ui.chatFilter !== 'all' && membersOf().some(r => r.id === ui.chatFilter) ? ui.chatFilter : 'all');
+
+/** Whether chat row `m` is in the conversation shown: everything with Everyone; with an agent, all it said and was told, and Claude Code's word about it. */
 function inFilter(m, f) {
   if (f === 'all') return true;
-  if (f === 'you') return m.from === 'you' || m.to === 'you';
-  if (f === 'between') return m.from !== 'you' && m.from !== 'engine' && m.to != null && m.to !== 'you' && m.to !== 'engine';
   return m.from === f || m.to === f || m.agent === f;
 }
 
-/** The filter in force: one naming an agent no longer in the session reads as All. */
-const filterOf = () => (chatChips().some(c => c[0] === ui.chatFilter) ? ui.chatFilter : 'all');
-
-function FilterChips(f) {
-  return h('div', { class: 'chips', role: 'group', 'aria-label': 'Show messages of' },
-    chatChips().map(([id, label]) => h('button', {
-      key: id, type: 'button', class: `chip${f === id ? ' on' : ''}`, 'aria-pressed': f === id ? 'true' : 'false',
-      onClick: () => { ui.chatFilter = id; ui.pinChat = true; renderNow(); },
-    }, IX.byId.has(id) ? Avatar(IX.byId.get(id), 14) : null, label)));
+/** Picks a member: its conversation shows, at its newest message, and the composer's words go to it. */
+function pickMember(id) {
+  ui.chatFilter = id;
+  ui.pinChat = true;
+  if ((ui.sends.get('chat') || {}).status === 'error') ui.sends.delete('chat');
+  renderNow();
 }
 
-const MD_KINDS = new Set(['spawn', 'result', 'answer', 'message']);
+/** A member: its avatar, its name and its status dot, its status's word under its name where there is room; Everyone: how many are at work. */
+function MemberButton(a, on) {
+  const st = a ? stateOf(a) : '';
+  const working = a ? 0 : S.figures ? S.figures.running : IX.rows.filter(r => r.id !== 'main' && r.kind !== 'engine' && isRunning(r.status)).length;
+  return h('button', {
+    key: a ? a.id : 'all', type: 'button', class: `member${on ? ' on' : ''}${a ? ` is-${st}` : ' member-all'}`, 'aria-pressed': on ? 'true' : 'false',
+    title: a ? `${a.title} · ${statusOf(st).label}` : 'Everyone: every message; yours go to the Orchestrator',
+    onClick: () => pickMember(a ? a.id : 'all'),
+  },
+  h('span', { class: 'member-av' }, a ? Avatar(a, 24) : h('span', { class: 'member-all-ic' }, icon('users'))),
+  h('span', { class: 'member-name' }, a ? a.title : 'Everyone'),
+  h('span', { class: 'member-sub' }, a ? statusOf(st).label : working > 0 ? `${working} at work` : 'every message'),
+  a ? Dot(statusOf(st).hue, isRunning(a.status)) : null);
+}
 
-/** The row's head, `who` as the state words it, each side that names an agent opening it. */
-function Who(m) {
-  const parts = String(m.who || nameOf(m.from)).split(' → ');
-  const ids = parts.length === 2 ? [m.from, m.to] : [m.from];
-  return h('span', { class: 'crow-who' }, parts.map((part, i) => {
-    const id = ids[i];
-    const name = id && IX.byId.has(id)
-      ? h('button', { key: `n${i}`, type: 'button', class: 'name-link', onClick: e => { stop(e); openAgent(id); } }, part)
-      : h('span', { key: `n${i}` }, part);
-    return i ? [h('span', { key: `a${i}`, class: 'crow-arrow' }, ' → '), name] : name;
-  }));
+/** The members: Everyone, then each agent. A compact grid over the chat; a narrow column beside it on a wide page. */
+function Members(f) {
+  return h('nav', { key: 'members', class: 'members', 'aria-label': 'Chat with' },
+    h('p', { key: 'cap', class: 'members-cap' }, 'Chat with'),
+    MemberButton(null, f === 'all'),
+    membersOf().map(a => MemberButton(a, f === a.id)));
+}
+
+/** Where a message stands: yours at the right, others' at the left, Claude Code's own in the middle. */
+const sideOf = m => (m.from === 'you' ? 'mine' : m.from === 'engine' ? 'notice' : 'theirs');
+
+/** A send from here not in the chat yet (or refused): drawn as the row it becomes, so it turns into it in place. */
+const pendingRow = o => ({ id: o.id, at: o.at, from: 'you', to: o.agentId, who: `You → ${o.title}`, kind: 'chat', title: '', text: o.text, ackId: o.id });
+
+/**
+ * The messages shown with member `f`, oldest first, then the sends from here
+ * the state does not hold yet: each with its key (a message sent from here
+ * keeps its "Sending…" key, so it never blinks when the mod records it), the
+ * send it was, and its side.
+ */
+function chatEntries(f) {
+  const out = [];
+  const add = (m, sent) => {
+    const send = sent || (m.ackId ? ui.outbox.find(o => o.id === m.ackId) : null);
+    out.push({ m, sent: send || null, key: send ? `out:${send.id}` : m.id, side: sideOf(m) });
+  };
+  for (const m of S.chat) if (inFilter(m, f)) add(m, null);
+  for (const o of ui.outbox) {
+    if (IX.chatByAck.has(o.id)) continue;
+    const m = pendingRow(o);
+    if (inFilter(m, f)) add(m, o);
+  }
+  return out;
+}
+
+/** Whether `next` stacks under `prev`'s head: the same sender (not Claude Code), within a few minutes. */
+const joins = (prev, next) => !!prev && next.side !== 'notice' && prev.side === next.side && prev.m.from === next.m.from && next.m.at - prev.m.at <= GROUP_MS;
+
+/** The entries as groups, each a head's messages: those that stack under it. */
+function groupsOf(entries) {
+  const groups = [];
+  entries.forEach((e, i) => {
+    if (!joins(entries[i - 1], e)) groups.push([]);
+    groups[groups.length - 1].push(e);
+  });
+  return groups;
+}
+
+/** A party a message names: an agent's name (and its avatar, `size` px; none for 0) opens its drawer; you, Claude Code and a name no agent carries are words. */
+function Party(id, size) {
+  const a = IX.byId.get(id);
+  if (!a) return h('span', { class: 'party' }, size ? whoAvatar(id, size) : null, h('span', { class: 'party-name' }, nameOf(id)));
+  return h('button', { type: 'button', class: 'party party-link', title: a.title, onClick: e => { stop(e); openAgent(a.id); } },
+    size ? Avatar(a, size) : null, h('span', { class: 'party-name' }, a.title));
+}
+
+/** The recipient a head names: others' words to anyone but you; yours to anyone but the Orchestrator. */
+function headTo(e) {
+  const to = e.m.to;
+  if (to == null) return null;
+  return (e.side === 'mine' ? to === 'main' : to === 'you') ? null : to;
+}
+
+const timeTitle = at => (at ? new Date(at).toLocaleString() : '');
+
+/**
+ * A group: Claude Code's notice alone in the middle; yours at the right,
+ * "You" over them; others' at the left, the sender's avatar beside its name
+ * and the messages under the name. A message to another recipient than the
+ * one before it says so over it.
+ */
+function ChatGroup(list) {
+  const e = list[0], m = e.m;
+  if (e.side === 'notice') return Notice(e);
+  const to = headTo(e);
+  const head = [
+    h('span', { key: 'name', class: 'cg-name' }, e.side === 'mine' ? 'You' : Party(m.from, 0)),
+    to && h('span', { key: 'to', class: 'cg-to' }, h('span', { class: 'cg-to-word' }, 'to'), Party(to, 16)),
+    h('span', { key: 'time', class: 'cg-time', title: timeTitle(m.at) }, ageOf(m.at)),
+  ];
+  const items = h('div', { class: 'cg-items' }, list.map((x, i) => Bubble(x, i > 0 && x.m.to !== list[i - 1].m.to)));
+  if (e.side === 'mine') return h('div', { key: `g:${e.key}`, class: 'cgroup mine' }, h('div', { class: 'cg-head' }, head), items);
+  const a = IX.byId.get(m.from);
+  return h('div', { key: `g:${e.key}`, class: 'cgroup theirs' },
+    a ? h('button', { type: 'button', class: 'cg-av', tabindex: '-1', title: a.title, 'aria-label': `Open ${a.title}`, onClick: () => openAgent(a.id) }, Avatar(a, 30))
+      : h('span', { class: 'cg-av' }, whoAvatar(m.from, 30)),
+    h('div', { class: 'cg-main' }, h('div', { class: 'cg-head' }, head), items));
 }
 
 /** The kinds of row that are an agent's words back: its answer, its words to nobody in particular, a SendMessage. */
@@ -2124,122 +2233,190 @@ function sendNoteOf(m, sent) {
   return S.chat.some(x => x.from === m.to && x.at > m.at && REPLY_KINDS.has(x.kind)) ? null : st;
 }
 
-function ChatRow(m, sent) {
-  // a message sent from here keeps the key of its "Sending…" row, so it never blinks when the mod records it
-  const out = sent || (m.ackId ? ui.outbox.find(o => o.id === m.ackId) : null);
-  const key = out ? `out:${out.id}` : m.id;
-  const text = String(m.text || '');
-  const long = m.isCut || text.length > 200 || text.trim().includes('\n');
+/** Words longer than this, or of more lines, fold to about six lines until opened. */
+const FOLD_CHARS = 480, FOLD_LINES = 6;
+
+/**
+ * One message's bubble: others' words dark, as Markdown (a SendMessage's
+ * summary bold over them); yours blue, as written. A question held on you
+ * edged amber, with the way to its card. A long one folds; a cut one reads
+ * its whole text once when opened. Under it what came of it.
+ */
+function Bubble(e, showTo) {
+  const m = e.m;
+  const mine = e.side === 'mine';
+  // what was sent from here is whole on the page already, even where the state would cut it
+  const text = String(e.sent ? e.sent.text : m.text || '');
+  const isCut = !e.sent && m.isCut;
+  const long = isCut || text.length > FOLD_CHARS || text.trim().split('\n').length > FOLD_LINES;
   const fold = `chat|${m.id}`;
   const open = long && isOpen(fold, false);
-  const full = open && m.isCut ? fullTextOf(m.id) : null;
-  const body = full && full.status === 'ok' ? full.text : text;
-  const md = MD_KINDS.has(m.kind);
+  const full = open && isCut ? fullTextOf(m.id) : null;
+  const body = (full && full.status === 'ok' ? full.text : text).trim();
   const held = m.kind === 'question' && m.callId ? IX.needById.get(m.callId) : null;
-  const note = sendNoteOf(m, out);
+  const note = sendNoteOf(m, e.sent);
   const flip = () => { ui.holdChat = true; toggle(fold); };
-  const title = m.title && [h('span', { key: 'title', class: 'crow-title' }, m.title), h('span', { key: 'dot', class: 'crow-sep' }, ' · ')];
+  const words = mine ? h('p', { key: 'w', class: 'b-plain' }, body) : h('div', { key: 'w', class: 'b-md' }, Markdown(body));
   return h('div', {
-    key, class: `crow kind-${m.kind}${held ? ' is-held' : ''}${open ? ' open' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true,
-    onKeyDown: e => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); if (long) flip(); else if (IX.byId.has(m.from)) openAgent(m.from); } },
+    key: e.key, class: `brow${open ? ' open' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true,
+    onKeyDown: ev => { if (ev.key === 'Enter' && ev.target === ev.currentTarget) { ev.preventDefault(); if (long) flip(); else if (IX.byId.has(m.from)) openAgent(m.from); } },
   },
-  h('span', { class: 'crow-av' }, whoAvatar(m.from, 20)),
-  h('div', { class: 'crow-body' },
-    open
-      ? [
-        h('p', { key: 'line', class: 'crow-line' }, Who(m), m.title ? [': ', h('span', { key: 'title', class: 'crow-title' }, m.title)] : ':'),
-        h('div', { key: 'full', class: 'crow-full' }, md ? Markdown(body) : h('p', { class: 'crow-plain' }, body.trim())),
-        full && full.status === 'loading' && h('p', { key: 'wait', class: 'muted small' }, 'Loading the rest…'),
-        full && full.status === 'error' && h('p', { key: 'err', class: 'msg-err' }, icon('alert'), h('span', null, full.error),
-          h('button', { class: 'btn btn-xs', type: 'button', onClick: () => { fullTexts.delete(m.id); ui.holdChat = true; renderNow(); } }, 'Retry')),
-      ]
-      : h('p', { key: 'line', class: `crow-line${long ? ' clamp' : ''}` }, Who(m), ': ', title, md ? inline(oneLine(body)) : oneLine(body)),
-    long && h('button', { key: 'more', class: 'more more-start crow-more', type: 'button', 'aria-expanded': open ? 'true' : 'false', disabled: !!(full && full.status === 'loading'), onClick: flip },
+  showTo && m.to && h('p', { class: 'b-to' }, h('span', null, 'to'), Party(m.to, 14), h('span', { class: 'b-to-time' }, `· ${ageOf(m.at)}`)),
+  h('div', { class: `bubble kind-${m.kind}${held ? ' is-held' : ''}`, title: timeTitle(m.at) || null },
+    !mine && m.title && h('p', { class: 'b-title' }, m.title),
+    h('div', { class: `b-words${m.kind === 'question' && !mine ? ' b-question' : ''}${long && !open ? ' folded' : ''}` },
+      m.kind === 'question' && !mine ? h('span', { key: 'q', class: 'b-q' }, icon('help')) : null, words),
+    full && full.status === 'loading' && h('p', { class: 'b-wait' }, 'Loading the rest…'),
+    full && full.status === 'error' && h('p', { class: 'msg-err' }, icon('alert'), h('span', null, full.error),
+      h('button', { class: 'btn btn-xs', type: 'button', onClick: () => { fullTexts.delete(m.id); ui.holdChat = true; renderNow(); } }, 'Retry')),
+    long && h('button', { class: 'more more-start b-more', type: 'button', 'aria-expanded': open ? 'true' : 'false', disabled: !!(full && full.status === 'loading'), onClick: flip },
       open ? 'Show less' : 'Show more', icon('chevronDown', open ? 'flip' : '')),
-    held && h('p', { key: 'held', class: 'crow-held' }, held.isAnswerable
-      ? h('button', { type: 'button', class: 'more more-start', onClick: () => goToNeed(held) }, 'Answer it on Now', icon('arrowRight'))
-      : 'Answer it in Claude Code.'),
-    m.isDelivered === false && !m.ackId && h('p', { key: 'undelivered', class: 'crow-note' }, StatusNote({ tone: 'fail', icon: 'x', text: 'Not delivered' })),
-    note && h('p', { key: 'note', class: 'crow-note' }, StatusNote(note))),
-  h('span', { class: 'crow-time', title: m.at ? new Date(m.at).toLocaleString() : '' }, ageOf(m.at)));
+    held && (held.isAnswerable
+      ? h('button', { type: 'button', class: 'more more-start b-answer', onClick: () => goToNeed(held) }, 'Answer on Dashboard', icon('arrowRight'))
+      : h('p', { class: 'b-held' }, 'Answer it in Claude Code.'))),
+  m.isDelivered === false && !m.ackId && h('p', { class: 'b-note' }, StatusNote({ tone: 'fail', icon: 'x', text: 'Not delivered' })),
+  note && h('p', { class: 'b-note' }, StatusNote(note)));
 }
 
-/** A send from here not in the chat yet (or refused): drawn as the row it becomes, so it turns into it in place. */
-const pendingRow = o => ({ id: o.id, at: o.at, from: 'you', to: o.agentId, who: `You → ${o.title}`, kind: 'chat', title: '', text: o.text, ackId: o.id });
+/** Claude Code's own notice, in the middle, small and dim: "Claude Code · Agent "X" completed · 12m"; the agent a notification is about opens. */
+function Notice(e) {
+  const m = e.m;
+  const said = oneLine(m.text) || oneLine(m.title);
+  const words = said.length > 200 ? `${said.slice(0, 199)}…` : said;
+  const about = m.kind === 'notification' && m.agent && m.agent !== 'main' && IX.byId.has(m.agent) && !said.includes(nameOf(m.agent)) ? m.agent : null;
+  return h('div', { key: e.key, class: 'notice', 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
+    h('span', { class: 'notice-who' }, 'Claude Code'),
+    h('span', { class: 'notice-text' }, words),
+    about && h('span', { class: 'notice-about' }, Party(about, 14)),
+    h('span', { class: 'notice-time' }, ageOf(m.at)));
+}
 
 function ChatPage() {
   const f = filterOf();
-  const rows = S.chat.filter(m => inFilter(m, f));
-  const pending = ui.outbox.filter(o => !IX.chatByAck.has(o.id)).map(o => [pendingRow(o), o]).filter(([m]) => inFilter(m, f));
-  const empty = f === 'all' ? 'No messages yet.' : f === 'you' ? 'Nothing to or from you yet.' : f === 'between' ? 'No messages between agents yet.' : `No messages to or from ${nameOf(f)} yet.`;
+  const groups = groupsOf(chatEntries(f));
+  const a = f === 'all' ? null : IX.byId.get(f);
   return h('div', { key: 'chat', class: 'page page-chat' },
-    FilterChips(f),
-    rows.length || pending.length
-      ? h('div', { key: 'list', class: 'chat-list', role: 'log', 'aria-label': 'Chat' }, rows.map(m => ChatRow(m)), pending.map(([m, o]) => ChatRow(m, o)))
-      : h('div', { key: 'empty', class: 'chat-list chat-empty' }, h('p', { class: 'muted' }, empty)),
-    Composer('chat'));
+    Members(f),
+    h('div', { key: 'main', class: 'chat-main' },
+      groups.length
+        ? h('div', { key: 'list', class: 'chat-list', role: 'log', 'aria-label': a ? `Chat with ${a.title}` : 'Chat' }, groups.map(ChatGroup))
+        : h('div', { key: 'empty', class: 'chat-list chat-empty' }, h('p', { class: 'muted' }, a ? `Nothing to or from ${a.title} yet.` : 'No messages yet.')),
+      Composer('chat')));
 }
 
 // ------------------------------------------------------------ the composer
-// With no @ a message goes to the Orchestrator; `@name rest` sends `rest` to
-// that agent by SendMessage. The rules are W.recipientOf's (hooks/web.ts).
+// Words with no @ go to the member picked: for Everyone the Orchestrator, for
+// an agent that agent, by SendMessage. `@name rest` sends `rest` to the agent
+// @name names, by the forgiving rule W.recipientOf has too (hooks/web.ts):
+// see matchHandle.
 
-/** The agent `@handle` names: the row whose name it is (any case), else whose short id it is; never the Orchestrator. */
-function agentByHandle(handle) {
-  const k = String(handle || '').toLowerCase();
+/** A name as @ reads it: lowercase, and nothing but a–z and 0–9 ("Native Chat", "native-chat" and "NativeChat" read alike). */
+const normName = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+/** A handle's words: split at anything but a letter or a digit, and where a lowercase letter or a digit meets a capital ("NativeChat": native, chat). */
+const handleWords = s => String(s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+/** The names an agent answers to: its name and its title, each normalised. */
+const namesOf = r => [...new Set([normName(r.name), normName(r.title)])].filter(Boolean);
+
+/**
+ * The ways a handle names an agent, tried in this order: its exact id or
+ * short id; its exact name; a name that starts with it; a name that holds
+ * it; a name that holds every word of it.
+ */
+const HANDLE_MATCH = [
+  (r, q) => r.id.toLowerCase() === q.raw || (r.shortId !== '' && r.shortId.toLowerCase() === q.raw),
+  (r, q) => q.norm !== '' && namesOf(r).includes(q.norm),
+  (r, q) => q.norm !== '' && namesOf(r).some(n => n.startsWith(q.norm)),
+  (r, q) => q.norm !== '' && namesOf(r).some(n => n.includes(q.norm)),
+  (r, q) => q.words.length > 0 && namesOf(r).some(n => q.words.every(w => n.includes(w))),
+];
+
+/** Those at work or waiting on you first, then the newest. */
+const liveRank = r => (isLive(r.status) ? 1 : 0);
+const byPreference = (x, y) => liveRank(y) - liveRank(x) || y.startedAt - x.startedAt;
+
+/** The agents a handle can name, best first: those the first way that finds any finds, in preference. Never the Orchestrator: words with no @ go to it. */
+function rankHandle(handle) {
+  const q = { raw: String(handle || '').toLowerCase(), norm: normName(handle), words: handleWords(handle) };
   const rows = IX.rows.filter(r => r.id !== 'main');
-  return rows.find(r => r.name.toLowerCase() === k) || rows.find(r => r.shortId !== '' && r.shortId.toLowerCase() === k) || null;
+  for (const test of HANDLE_MATCH) {
+    const found = rows.filter(r => test(r, q));
+    if (found.length) return found.sort(byPreference);
+  }
+  return [];
 }
-const handleOf = r => r.name || r.shortId;
 
-/** Who the composer's words go to, and what of them: W.recipientOf, over this state's rows. */
-function recipientOf(words) {
+/** The agent `@handle` names, `{ row }`; `{ tie }` when the best it finds are alike (as much at work, started at once), the ones it could be; `{}` for none. */
+function matchHandle(handle) {
+  const list = rankHandle(handle);
+  if (!list.length) return {};
+  const tie = list.filter(r => byPreference(r, list[0]) === 0);
+  return tie.length > 1 ? { tie } : { row: list[0] };
+}
+
+/** The handle a pick @names an agent by: its name when it has no space, else its short id (W's handleOf). */
+const handleOf = r => (r.name !== '' && !/\s/.test(r.name) ? r.name : r.shortId || r.id);
+/** A handle that names `r` alone: its own, else its short id. */
+function handleFor(r) {
+  const m = matchHandle(handleOf(r));
+  return m.row && m.row.id === r.id ? handleOf(r) : r.shortId || r.id;
+}
+/** A choice's name in "Did you mean": its title, with its short id when another choice has that title too. */
+const choiceName = (r, list) => (r.shortId && list.some(o => o !== r && o.title === r.title) ? `${r.title} (${r.shortId})` : r.title);
+
+/** Who the chat's words go to, and what of them: W.recipientOf over this state's rows; with no @, member `to` (the Orchestrator for Everyone). */
+function recipientOf(words, to = 'all') {
   const said = String(words || '').trim();
   const at = /^@(\S+)\s*([\s\S]*)$/.exec(said);
   if (!at) {
+    if (said === '') return { error: 'Nothing to send' };
+    const a = to !== 'all' ? IX.byId.get(to) : null;
+    if (a) return { agentId: a.id, title: a.title, text: said };
     const main = IX.byId.get('main');
-    return said === '' ? { error: 'Nothing to send' } : { agentId: 'main', title: main ? main.title : 'Orchestrator', text: said };
+    return { agentId: 'main', title: main ? main.title : 'Orchestrator', text: said };
   }
-  const found = agentByHandle(at[1]);
+  const found = matchHandle(at[1]);
   const text = at[2].trim();
-  if (!found) return { error: `No agent named @${at[1]} in this session` };
+  if (found.tie) return { error: `Did you mean: ${found.tie.map(r => choiceName(r, found.tie)).join(', ')}?`, choices: found.tie };
+  if (!found.row) return { error: `No agent named @${at[1]} in this session` };
   if (text === '') return { error: 'Nothing to send' };
-  return { agentId: found.id, title: found.title, text };
+  return { agentId: found.row.id, title: found.row.title, text };
 }
 
 /** "→ Orchestrator", "→ researcher via SendMessage". */
 const viaOf = (id, title) => (id === 'main' ? `→ ${title}` : `→ ${title} via SendMessage`);
 const composerId = scope => (scope === 'chat' ? 'composer-chat' : `composer-${(IX.byId.get(scope.slice(6)) || { fileId: 'x' }).fileId}`);
 
-/** Where a composer's words go: the chat's by their @, a drawer's to its agent. */
+/** Where a composer's words go: the chat's to the member picked or by their @, a drawer's to its agent. */
 function targetOf(scope, words) {
-  if (scope === 'chat') return recipientOf(words);
+  if (scope === 'chat') return recipientOf(words, filterOf());
   const a = IX.byId.get(scope.slice(6));
   const text = String(words || '').trim();
   if (!a) return { error: 'No such agent in this session' };
   return text ? { agentId: a.id, title: a.title, text } : { error: 'Nothing to send' };
 }
 
-/** What the composer's foot says of its words: who they go to, or why they cannot go yet. */
+/** What the composer's foot says of its words: who they go to, the agents an @name could be ("Did you mean"), or why they cannot go. */
 function previewOf(scope, draft) {
   if (scope !== 'chat') { const a = IX.byId.get(scope.slice(6)); return a ? { text: viaOf(a.id, a.title) } : { text: 'No such agent in this session', err: true }; }
   const said = draft.trim();
   const at = /^@(\S+)/.exec(said);
+  const f = filterOf();
+  const a = f !== 'all' ? IX.byId.get(f) : null;
+  if (said === '@') return { text: 'Type the agent\'s name', hint: true };
   if (!at) {
+    if (a) return said ? { text: viaOf(a.id, a.title) } : { text: `To ${a.title} · @name for another agent`, hint: true };
     const main = IX.byId.get('main');
     return said ? { text: viaOf('main', main ? main.title : 'Orchestrator') } : { text: 'To the Orchestrator · @name for one of its agents', hint: true };
   }
-  const found = agentByHandle(at[1]);
-  if (found) return { text: viaOf(found.id, found.title) };
-  // still typing the name: no error until it ends
-  if (/^@\S*$/.test(draft) && suggestionsOf(at[1]).length) return { text: 'Tab picks the first', hint: true };
+  const found = matchHandle(at[1]);
+  if (found.row) return { text: viaOf(found.row.id, found.row.title) };
+  if (found.tie) return { text: 'Did you mean:', choices: found.tie, err: true };
   return { text: `No agent named @${at[1]} in this session`, err: true };
 }
 
-/** The agents whose @handle starts with what is typed, while the @name is still being typed. */
+/** The agents an @name being typed can be, best first; for a bare @ every agent, in the state's order. */
 function suggestionsOf(typed) {
-  const k = String(typed || '').toLowerCase();
-  return IX.rows.filter(r => r.id !== 'main' && handleOf(r) && handleOf(r).toLowerCase().startsWith(k)).slice(0, 6);
+  return (typed ? rankHandle(typed) : IX.rows.filter(r => r.id !== 'main')).slice(0, 6);
 }
 
 function setDraft(scope, value, focus = true) {
@@ -2263,6 +2440,8 @@ async function sendChat(scope) {
   const words = ui.drafts.get(scope) || '';
   if ((ui.sends.get(scope) || {}).status === 'sending') return;
   const t = targetOf(scope, words);
+  // an @name that could be more than one: the foot asks which ("Did you mean"), nothing goes
+  if (t.choices) { renderNow(); return; }
   if (t.error) { ui.sends.set(scope, { status: 'error', text: t.error, at: Date.now() }); renderNow(); return; }
   if (t.text.length > 4000) { ui.sends.set(scope, { status: 'error', text: 'Too long: at most 4000 characters', at: Date.now() }); renderNow(); return; }
   const id = newCmdId('c');
@@ -2291,26 +2470,37 @@ async function sendChat(scope) {
   renderNow();
 }
 
+/** The composer's foot: where the words go, or the agents an @name could be, each a button that @names it alone. */
+function ToLine(scope, draft, to) {
+  const cls = `composer-to${to.err ? ' is-err' : ''}${to.hint ? ' is-hint' : ''}`;
+  if (!to.choices) return h('span', { class: cls }, to.text);
+  const pick = r => setDraft(scope, draft.replace(/^(\s*)@\S+/, (_, lead) => `${lead}@${handleFor(r)}`));
+  return h('span', { class: `${cls} has-choices` }, h('span', { key: 'ask' }, to.text),
+    to.choices.map(r => h('button', { key: r.id, type: 'button', class: 'choice', title: `@${handleFor(r)}`, onMouseDown: e => e.preventDefault(), onClick: () => pick(r) },
+      Avatar(r, 14), h('span', null, choiceName(r, to.choices)))));
+}
+
 function Composer(scope) {
   const isChat = scope === 'chat';
-  const agent = isChat ? null : IX.byId.get(scope.slice(6));
+  const f = isChat ? filterOf() : 'all';
+  const agent = isChat ? (f !== 'all' ? IX.byId.get(f) : null) : IX.byId.get(scope.slice(6));
   const draft = ui.drafts.get(scope) || '';
   const st = ui.sends.get(scope);
   const typing = isChat ? /^@(\S*)$/.exec(draft) : null;
   const picks = typing ? suggestionsOf(typing[1]).filter(r => handleOf(r).toLowerCase() !== typing[1].toLowerCase()) : [];
-  const pick = r => setDraft(scope, `@${handleOf(r)} `);
+  const pick = r => setDraft(scope, `@${handleFor(r)} `);
   const to = previewOf(scope, draft);
   const last = !isChat && ui.lastSend.get(scope);
   const lastNote = last && !(st && st.status === 'sending') ? sendState(last, 'chat') : null;
+  const placeholder = agent ? `Message ${agent.id === 'main' ? 'the Orchestrator' : agent.title}…` : isChat ? 'Message the Orchestrator, or @name an agent…' : 'Message this agent…';
   return h('div', { key: `composer:${scope}`, class: `composer${isChat ? ' composer-chat' : ''}` },
     picks.length > 0 && h('div', { key: 'picks', class: 'picks', role: 'listbox', 'aria-label': 'Agents' },
       picks.map(r => h('button', { key: r.id, type: 'button', class: 'pick', role: 'option', onMouseDown: e => e.preventDefault(), onClick: () => pick(r) },
-        Avatar(r, 14), h('span', { class: 'pick-handle' }, `@${handleOf(r)}`), r.title !== handleOf(r) && h('span', { class: 'pick-title' }, r.title)))),
+        Avatar(r, 14), h('span', { class: 'pick-handle' }, `@${handleFor(r)}`), r.title !== handleFor(r) && h('span', { class: 'pick-title' }, r.title)))),
     h('div', { class: 'composer-box' },
       h('textarea', {
         key: `ta:${scope}`, id: composerId(scope), class: 'composer-input', rows: '1', maxlength: '4200',
-        placeholder: isChat ? 'Message the Orchestrator, or @name an agent…' : `Message ${agent ? agent.title : 'this agent'}…`,
-        'aria-label': isChat ? 'Message' : `Message ${agent ? agent.title : ''}`,
+        placeholder, 'aria-label': agent ? `Message ${agent.title}` : 'Message the Orchestrator',
         ref: el => { ui.inputs.set(scope, el); el.value = ui.drafts.get(scope) || ''; requestAnimationFrame(() => autosize(el)); },
         onInput: e => {
           ui.drafts.set(scope, e.target.value);
@@ -2326,7 +2516,7 @@ function Composer(scope) {
       h('button', { class: 'btn btn-primary btn-sm composer-send', type: 'button', title: 'Send (Enter)', disabled: !!(st && st.status === 'sending'), onClick: () => sendChat(scope) },
         icon('send'), h('span', { class: 'composer-send-label' }, st && st.status === 'sending' ? 'Sending' : 'Send'))),
     h('div', { class: 'composer-foot' },
-      h('span', { class: `composer-to${to.err ? ' is-err' : ''}${to.hint ? ' is-hint' : ''}` }, to.text),
+      ToLine(scope, draft, to),
       h('span', { class: 'composer-status', role: 'status', 'aria-live': 'polite' },
         st && st.status === 'error' ? StatusNote({ tone: 'fail', icon: 'x', text: st.text }) : lastNote ? StatusNote(lastNote) : null),
       h('span', { class: 'composer-keys' }, 'Enter sends · Shift+Enter adds a line')));
@@ -2460,7 +2650,7 @@ function ChangesPage() {
 // ===================================================================== drawer
 // An agent's page, depth on demand: its task, its todos, its live call, its
 // result, every tool call (from its file), its edits, its chat and a message
-// box. Inspect is the session's depth: context, cost, tokens per agent.
+// box. The session's depth (context, cost, tokens per agent) is Settings'.
 
 function DrawerHead(lead, title, sub, extra) {
   return h('div', { key: 'head', class: 'drawer-head' },
@@ -2575,81 +2765,112 @@ function AgentDrawer(id) {
   ];
 }
 
-function InspectDrawer() {
+function Drawer() {
+  const d = route.drawer;
+  if (!d || d.kind !== 'agent' || !S || S.empty) return null;
+  return h('aside', { key: `drawer:${d.id}`, class: 'drawer drawer-agent', role: 'dialog', 'aria-label': `Agent: ${nameOf(d.id)}` }, AgentDrawer(d.id));
+}
+
+// =================================================================== settings
+// The session's depth and the deck's own: Inspect (the context, the spend and
+// each agent's tokens), the avatar style, and Help (what each tab is for, and
+// the keys). Each section folds by its head, as the Dashboard's do; `i` and
+// `h` bring Inspect and Help into view.
+
+function SettingsPage() {
+  return h('div', { key: 'settings', class: 'page page-settings' },
+    InspectSection(),
+    AvatarSection(),
+    HelpSection());
+}
+
+function InspectStat(label, value, extra) {
+  return h('div', { key: label, class: 'ins-stat' }, h('p', { class: 'ins-label' }, label), h('p', { class: 'ins-value' }, value), extra || null);
+}
+
+/** Inspect: the context, the spend and the tokens, then each agent's tokens, requests, tool calls and failures. */
+function InspectSection() {
   const ins = S.inspect;
   const sum = total(ins.agents, a => a.tokens.in + a.tokens.out + a.tokens.cacheRead);
   const pct = ins.contextPercent;
-  return [
-    DrawerHead(h('span', { key: 'lead', class: 'drawer-ic' }, icon('gauge')), 'Inspect', 'This session'),
-    h('div', { key: 'body', class: 'drawer-body' },
-      h('div', { key: 'stats', class: 'ins-stats' },
-        h('div', { class: 'ins-stat' },
-          h('p', { class: 'ins-label' }, 'Context'),
-          h('p', { class: 'ins-value' }, pct == null ? '—' : `${Math.round(pct)}%`),
-          pct != null && h('span', { class: 'bar' }, h('span', { class: `bar-fill${pct >= 80 ? ' hot' : ''}`, style: { width: `${clamp(pct, 0, 100)}%` } }))),
-        h('div', { class: 'ins-stat' }, h('p', { class: 'ins-label' }, 'Cost'), h('p', { class: 'ins-value' }, usd(ins.costUsd))),
-        h('div', { class: 'ins-stat' }, h('p', { class: 'ins-label' }, 'Tokens'), h('p', { class: 'ins-value' }, num(sum)))),
-      Block('agents', 'Tokens by agent', plural(ins.agents.length, 'agent'),
-        ins.agents.length
-          ? h('div', { class: 'ins-table', role: 'table' },
-            h('div', { class: 'ins-row ins-th', role: 'row' }, [['Agent', ''], ['Model', ''], ['In', 'Input tokens'], ['Out', 'Output tokens'], ['Cache', 'Cache reads'], ['Req', 'Model requests'], ['Tools', 'Tool calls'], ['Err', 'Tool calls that failed']].map(([t, title]) => h('span', { key: t, role: 'columnheader', title: title || null }, t))),
-            ins.agents.map(r => h('div', { key: r.id, class: 'ins-row', role: 'row' },
-              h('span', { class: 'ins-who' }, NameLink(r.id, 16)),
-              h('span', { class: 'mono ins-model' }, r.model || '—'),
-              h('span', { class: 'mono' }, num(r.tokens.in)),
-              h('span', { class: 'mono' }, num(r.tokens.out)),
-              h('span', { class: 'mono' }, num(r.tokens.cacheRead)),
-              h('span', { class: 'mono' }, String(r.requests)),
-              h('span', { class: 'mono' }, String(r.tools)),
-              h('span', { class: `mono${r.errors ? ' err' : ' muted'}` }, String(r.errors)))))
-          : h('p', { class: 'muted small' }, 'No agent has spent tokens yet.')),
-      h('p', { key: 'next', class: 'ins-next' }, 'Still to come here: what fills the context, what is loaded, each permission decision, and the background tasks.')),
-  ];
+  const COLS = [['Agent', ''], ['Model', ''], ['In', 'Input tokens'], ['Out', 'Output tokens'], ['Cache', 'Cache reads'], ['Total', 'In, out and cache reads'], ['Req', 'Model requests'], ['Tools', 'Tool calls'], ['Err', 'Tool calls that failed']];
+  return Section('inspect', 'Inspect', null, h('span', { class: 'sec-note' }, 'This session'), () => h('div', { class: 'ins' },
+    h('div', { key: 'stats', class: 'ins-stats' },
+      InspectStat('Context', pct == null ? '—' : `${Math.round(pct)}%`,
+        pct != null && h('span', { class: 'bar' }, h('span', { class: `bar-fill${pct >= 80 ? ' hot' : ''}`, style: { width: `${clamp(pct, 0, 100)}%` } }))),
+      InspectStat('Spend', usd(ins.costUsd)),
+      InspectStat('Tokens', num(sum)),
+      InspectStat('Agents', String(ins.agents.length))),
+    h('div', { key: 'by', class: 'ins-by' },
+      h('p', { class: 'ins-caption' }, 'Tokens by agent'),
+      ins.agents.length
+        ? h('div', { class: 'ins-table', role: 'table', 'aria-label': 'Tokens by agent' },
+          h('div', { class: 'ins-row ins-th', role: 'row' }, COLS.map(([t, title]) => h('span', { key: t, role: 'columnheader', title: title || null }, t))),
+          ins.agents.map(r => h('div', { key: r.id, class: 'ins-row', role: 'row' },
+            h('span', { class: 'ins-who' }, NameLink(r.id, 18)),
+            h('span', { class: 'mono ins-model' }, r.model || '—'),
+            h('span', { class: 'mono' }, num(r.tokens.in)),
+            h('span', { class: 'mono' }, num(r.tokens.out)),
+            h('span', { class: 'mono' }, num(r.tokens.cacheRead)),
+            h('span', { class: 'mono ins-total' }, num(r.tokens.in + r.tokens.out + r.tokens.cacheRead)),
+            h('span', { class: 'mono' }, String(r.requests)),
+            h('span', { class: 'mono' }, String(r.tools)),
+            h('span', { class: `mono${r.errors ? ' err' : ' muted'}` }, String(r.errors)))))
+        : h('div', { class: 'card' }, Empty('gauge', 'No agent has spent tokens yet', 'Each agent\'s tokens, requests and tool calls show here as it works.'))),
+    h('p', { key: 'next', class: 'ins-next' }, 'Still to come here: what fills the context, what is loaded, each permission decision, and the background tasks.')));
 }
 
-function Drawer() {
-  const d = route.drawer;
-  if (!d || !S || S.empty) return null;
-  const label = d.kind === 'agent' ? `Agent: ${nameOf(d.id)}` : 'Inspect';
-  return h('aside', { key: d.kind === 'agent' ? `drawer:${d.id}` : 'drawer:inspect', class: `drawer drawer-${d.kind}`, role: 'dialog', 'aria-label': label },
-    d.kind === 'agent' ? AgentDrawer(d.id) : InspectDrawer());
+/** The avatar style: every style the library draws, each a preview of three agents (done, at work, waiting on you) and its name; the one drawn checked. */
+function AvatarSection() {
+  const now = styleNow();
+  return Section('avatars', 'Avatar style', null, null, () => h('div', { class: 'avatars' },
+    h('p', { class: 'sec-text' }, 'How the agents look here, in the Desktop pane and in /deck demo, in every session. /deck avatars <style> picks one too.'),
+    h('div', { class: 'styles', role: 'radiogroup', 'aria-label': 'Avatar style' },
+      AV.STYLES.map(s => h('button', {
+        key: s.id, type: 'button', role: 'radio', class: `style-pick${s.id === now ? ' on' : ''}`, 'aria-checked': s.id === now ? 'true' : 'false',
+        title: `Draw the agents as ${s.name}`, onClick: () => pickStyle(s.id),
+      },
+      h('span', { class: 'style-faces', 'aria-hidden': 'true' }, WELCOME.map(a => h('span', { key: a.id }, Avatar(a, 30, { dot: true, style: s.id })))),
+      h('span', { class: 'style-name' }, s.name),
+      s.id === now && icon('check', 'style-check'))))));
 }
 
-// ================================================================ help, notes
-
-const KEYS = [
-  ['1 2 3 4', 'Now · Chat · Org · Changes'],
-  ['j  k', 'Move the focus down, up'],
-  ['Enter', 'Open the focused row: an agent, a fold, a need, a file'],
-  ['b', 'Back: close the agent or Inspect'],
-  ['n', 'The next thing that needs you'],
-  ['f', 'Filter Chat: All · You · each agent · Between agents'],
-  ['m', 'Message: the composer (in an agent\'s drawer, that agent)'],
-  ['i', 'Inspect'],
-  ['h  ?', 'These keys'],
-  ['/', 'The composer'],
-  ['@', 'The composer, with @ typed'],
-  ['Esc', 'Close the drawer or these keys'],
+/** What each tab is for, in its order. */
+const TAB_HELP = [
+  ['now', 'What needs you, a card per agent, the session\'s figures, the plan Claude made, the newest tool calls and the files the agents touched.'],
+  ['chat', 'The session as a group chat. Pick Everyone or one agent at the top: your words go to the one picked (Everyone: the Orchestrator), or @name another.'],
+  ['org', 'Every agent under the one that started it, as a chart (drag to pan, pinch or + and − to zoom) or as a list.'],
+  ['changes', 'Git\'s uncommitted files, each with git\'s own diff and the agents\' own edits of it; their other edits; the commits; and Review.'],
+  ['settings', 'This page: the session\'s context, spend and tokens per agent, how the agents look, and these notes.'],
 ];
 
-function Help() {
-  if (!ui.help) return null;
-  const now = styleNow();
-  return h('div', { key: 'help', class: 'modal-wrap', onClick: e => { if (e.target === e.currentTarget) toggleHelp(); } },
-    h('div', { class: 'modal', role: 'dialog', 'aria-label': 'Keys and avatars' },
-      h('div', { class: 'modal-head' }, h('h2', { class: 'modal-title' }, 'Keys'), h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onClick: toggleHelp }, icon('x'))),
-      h('p', { class: 'modal-note' }, 'The same keys work in the Desktop pane and the terminal, but for /, @, ? and Esc, which are this page\'s own.'),
-      h('dl', { class: 'keys' }, KEYS.map(([k, what]) => [h('dt', { key: `k:${k}` }, k.split(/\s+/).map((one, i) => h('kbd', { key: i }, one))), h('dd', { key: `d:${k}` }, what)])),
-      h('h2', { class: 'modal-title modal-sub' }, 'Avatars'),
-      h('p', { class: 'modal-note' }, 'How the agents look here, in the Desktop pane and in /deck demo, in every session. /deck avatars <style> picks one too.'),
-      h('div', { class: 'styles', role: 'radiogroup', 'aria-label': 'Avatar style' },
-        AV.STYLES.map(s => h('button', {
-          key: s.id, type: 'button', role: 'radio', class: `style-pick${s.id === now ? ' on' : ''}`, 'aria-checked': s.id === now ? 'true' : 'false',
-          title: `Draw the agents as ${s.name}`, onClick: () => pickStyle(s.id),
-        },
-        h('span', { class: 'style-faces', 'aria-hidden': 'true' }, WELCOME.map(a => h('span', { key: a.id }, Avatar(a, 26, { dot: true, style: s.id })))),
-        h('span', { class: 'style-name' }, s.name))))));
+const KEYS = [
+  ['1 2 3 4 5', 'Dashboard · Chat · Org · Changes · Settings'],
+  ['j  k', 'Move the focus down, up'],
+  ['Enter', 'Open the focused row: an agent, a fold, a need, a file'],
+  ['b', 'Back: close the agent'],
+  ['n', 'The next thing that needs you'],
+  ['f', 'Chat with the next one: Everyone, then each agent'],
+  ['m', 'Message: the composer (in an agent\'s drawer, that agent)'],
+  ['i', 'Inspect, here in Settings'],
+  ['h  ?', 'Help, here in Settings'],
+  ['/', 'The composer'],
+  ['@', 'The composer, with @ typed'],
+  ['Esc', 'Close the drawer'],
+];
+
+function HelpSection() {
+  return Section('help', 'Help', null, null, () => h('div', { class: 'help' },
+    h('dl', { key: 'tabs', class: 'card list help-tabs' }, TAB_HELP.map(([id, what]) => h('div', { key: id, class: 'help-tab' },
+      h('dt', null, h('a', { class: 'help-tab-name', href: hrefOf(id, null) }, TABS.find(t => t[0] === id)[1])),
+      h('dd', null, what)))),
+    h('div', { key: 'keys', class: 'card help-keys' },
+      h('p', { class: 'ins-caption' }, 'Keys'),
+      h('p', { class: 'sec-text' }, 'The same keys work in the Desktop pane and the terminal, but for /, @, ? and Esc, which are this page\'s own. None fires while you type.'),
+      h('dl', { class: 'keys' }, KEYS.map(([k, what]) => [h('dt', { key: `k:${k}` }, k.split(/\s+/).map((one, i) => h('kbd', { key: i }, one))), h('dd', { key: `d:${k}` }, what)])))));
 }
+
+// ===================================================================== notes
 
 function Toast() {
   const t = ui.toast;
@@ -2715,6 +2936,8 @@ function Welcome() {
 
 function Page() {
   if (!S) return conn.status === 'denied' || conn.fails >= 2 ? Unreachable() : Loading();
+  // Settings holds with nothing yet too: the avatar style and the help are the deck's own
+  if (route.tab === 'settings') return SettingsPage();
   if (S.empty) return Welcome();
   return route.tab === 'chat' ? ChatPage() : route.tab === 'org' ? OrgPage() : route.tab === 'changes' ? ChangesPage() : NowPage();
 }
@@ -2727,34 +2950,37 @@ function App() {
     h('main', { class: 'scroll', ref: el => { scroller = el; } }, Page()),
     drawer ? h('div', { key: 'scrim', class: 'scrim', onClick: closeDrawer }) : null,
     Drawer(),
-    Help(),
     Toast());
 }
 
 // ======================================================================= keys
 // The same keys as the Desktop pane and the terminal (web/CONTRACT.md,
-// "Keys"), plus the page's own /, @, ? and Esc. None fires while you type.
+// "Keys"), plus the page's own /, @, ? and Esc. None fires while you type,
+// and no badge in the header says them: Settings' Help lists them.
 
 const isTyping = t => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable === true);
 
-function toggleInspect() {
-  const d = route.drawer;
-  navigate(route.tab, d && d.kind === 'inspect' ? null : { kind: 'inspect' });
-}
-function toggleHelp() {
-  ui.help = !ui.help;
-  renderNow();
+/**
+ * `i` and `h`: Settings, its Inspect or its Help opened and brought into
+ * view (an agent's drawer stays where the page is wide enough to keep it);
+ * pressed again there, back to the tab you came from.
+ */
+function openSettings(section) {
+  if (route.tab === 'settings' && ui.settingsAt === section) { navigate(ui.prevTab && ui.prevTab !== 'settings' ? ui.prevTab : 'now'); return; }
+  setShut(section, false);
+  navigate('settings', isWide() ? route.drawer : null);
+  ui.settingsAt = section;
+  scrollSoon(`sec-${section}`, 'settings');
 }
 
 /** Back: closes what is open over the page, the topmost first. */
 function back() {
-  if (ui.help) { toggleHelp(); return true; }
   if (route.drawer) { closeDrawer(); return true; }
   if (ui.goalOpen) { ui.goalOpen = false; renderNow(); return true; }
   return false;
 }
 
-/** Takes Now to need `n`'s card, open, and the focus with it. */
+/** Takes the Dashboard to need `n`'s card, open, and the focus with it. */
 function goToNeed(n) {
   ui.needOpen.set(n.id, true);
   setShut('needs', false);
@@ -2768,8 +2994,9 @@ function nextNeed() {
   goToNeed(S.needs[ui.needAt]);
 }
 
+/** f: Chat with the next member, Everyone then each agent, round again. */
 function cycleFilter() {
-  const ids = chatChips().map(c => c[0]);
+  const ids = ['all', ...membersOf().map(r => r.id)];
   ui.chatFilter = ids[(ids.indexOf(filterOf()) + 1) % ids.length];
   ui.pinChat = true;
   navigate('chat', isWide() ? route.drawer : null);
@@ -2807,17 +3034,19 @@ function moveFocus(dir) {
 
 /** What a key does (false: nothing, and it goes on to the browser). */
 function keyAction(key) {
-  if (!S || S.empty) return key === 'h' || key === '?' ? (toggleHelp(), true) : false;
+  if (!S) return false;
+  // nothing yet: the tabs and Settings' keys, the rest have nothing to act on
+  if (S.empty && !/^[1-5ih?]$/.test(key)) return false;
   switch (key) {
-    case '1': case '2': case '3': case '4': navigate(TABS[Number(key) - 1][0]); return true;
+    case '1': case '2': case '3': case '4': case '5': navigate(TABS[Number(key) - 1][0]); return true;
     case 'j': moveFocus(1); return true;
     case 'k': moveFocus(-1); return true;
     case 'b': return back();
     case 'n': nextNeed(); return true;
     case 'f': cycleFilter(); return true;
     case 'm': message(); return true;
-    case 'i': toggleInspect(); return true;
-    case 'h': case '?': toggleHelp(); return true;
+    case 'i': openSettings('inspect'); return true;
+    case 'h': case '?': openSettings('help'); return true;
     case '/': composeInChat(false); return true;
     case '@': composeInChat(true); return true;
     default: return false;
@@ -2827,7 +3056,7 @@ function keyAction(key) {
 function onKey(e) {
   if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'Escape') {
-    if (isTyping(e.target) && !ui.help) { e.target.blur(); e.preventDefault(); return; }
+    if (isTyping(e.target)) { e.target.blur(); e.preventDefault(); return; }
     if (back()) e.preventDefault();
     return;
   }
@@ -2882,7 +3111,7 @@ function afterRender(pin) {
     if (el) { el.focus(); if (el.setSelectionRange) { const n = el.value.length; try { el.setSelectionRange(n, n); } catch { /* not text */ } } }
     ui.focusTo = null;
   }
-  // n and "Answer it on Now" bring a need's card into view (and the focus to it), once it has rendered.
+  // n and "Answer on Dashboard" bring a need's card into view (and the focus to it), once it has rendered; i and h a section of Settings.
   if (ui.scrollTo) {
     const want = ui.scrollTo;
     const el = scroller && want.on === route.key ? document.getElementById(want.id) : null;
@@ -2905,7 +3134,7 @@ function afterRender(pin) {
 function boot() {
   window.addEventListener('hashchange', () => {
     saveScroll();
-    route = parseRoute();
+    setRoute(parseRoute());
     renderNow();
   });
   window.addEventListener('resize', () => invalidate());
