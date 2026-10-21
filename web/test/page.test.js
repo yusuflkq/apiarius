@@ -18,14 +18,17 @@ const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.j
 const NOW = SAMPLE.now
 const MIN = 60_000
 
-/** The sample's lazy files of one kind (agents, patches, messages), by id. */
+/** The sample's lazy files of one kind (agents, patches, messages, gitdiffs), by id. */
 const lazy = kind => Object.fromEntries(fs.readdirSync(path.join(WEB, 'fixtures', 'v2', kind)).map(file => [file.replace(/\.[^.]+$/, ''), fs.readFileSync(path.join(WEB, 'fixtures', 'v2', kind, file), 'utf8')]))
-const FILES = { agent: lazy('agents'), patch: lazy('patches'), message: lazy('messages') }
+const FILES = { agent: lazy('agents'), patch: lazy('patches'), message: lazy('messages'), gitdiff: lazy('gitdiffs') }
 
 const BUILDER = 'b81c6f3e2a9d4c17'
 const RESEARCHER = 'a3f9c2e1b7d4058e'
 const REVIEWER = 'aa11bb22cc33dd44'
 const LINT = 'd2e3f4a5b6c7089a'
+const TESTER = 'c4d7e8f9a0b1263d'
+const DOCS = 'e5f6a7b8c9d0142b'
+const SCOUT = 'f1e2d3c4b5a6978c'
 const ASK_ONE = 'toolu_01AskOne'
 const ASK_MANY = 'toolu_01AskMany'
 const Q_STORE = 'Which store should back the limiter in production?'
@@ -40,19 +43,20 @@ function sample(change) {
 
 /**
  * A fresh page at `hash`, its clock at `now`: app.js in a context of its own.
- * Its fetch answers POST /cmd with {"ok":true} and GET /agent, /patch and
- * /message from `files` (the sample's by default); every call is kept in
- * `calls` (a command's body parsed). Rendering is a no-op: the views are
+ * Its fetch answers POST /cmd with {"ok":true} and GET /agent, /patch,
+ * /message and /gitdiff from `files` (the sample's by default); every call is
+ * kept in `calls` (a command's body parsed). Its localStorage is `storage`, a
+ * plain object (a fresh one by default). Rendering is a no-op: the views are
  * read, not drawn.
  */
-function page({ hash = '', now = NOW, files = FILES } = {}) {
+function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
   const noop = () => {}
   const calls = []
   const reply = (status, body) => ({ ok: status < 300, status, json: async () => JSON.parse(body), text: async () => body })
   const fetch = async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
     if (url === '/cmd') return reply(200, '{"ok":true}')
-    const m = /^\/(agent|patch|message)\/([^?]+)/.exec(url)
+    const m = /^\/(agent|patch|message|gitdiff)\/([^?]+)/.exec(url)
     if (m) {
       const text = files[m[1]][decodeURIComponent(m[2])]
       return text === undefined ? reply(404, 'no such file\n') : reply(200, text)
@@ -64,7 +68,7 @@ function page({ hash = '', now = NOW, files = FILES } = {}) {
     location: { search: '?t=test-token', hash },
     window: { addEventListener: noop },
     document: { title: '', querySelector: () => null, getElementById: () => null },
-    localStorage: { getItem: () => null, setItem: noop },
+    localStorage: { getItem: k => (Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v) } },
     requestAnimationFrame: () => 1,
     cancelAnimationFrame: noop,
     setTimeout: () => 1,
@@ -80,6 +84,7 @@ function page({ hash = '', now = NOW, files = FILES } = {}) {
   return {
     run,
     calls,
+    storage,
     /** The commands the page posted, oldest first. */
     commands: () => calls.filter(one => one.url === '/cmd').map(one => one.body),
     /** The lazy files the page fetched, by path, in order. */
@@ -166,7 +171,7 @@ test('reads the live state (v1 with v2 under its key) and the bare sample alike;
 test('the header: the state in one word, your latest request in your words, and model · context · cost; the goal opens on its whole text', async () => {
   const p = page()
   p.load(SAMPLE)
-  assert.match(p.text('Header()'), /^Waiting on you Also exempt \/health and \/metrics from the limiter\. 4m opus-5\.5 · context 41% · \$4\.12 Now 4 Chat Changes 5/)
+  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · context 41% · \\$4\\.12 Now 4 Chat Org Changes ${SAMPLE.changes.files.length}`))
   click(find(p.view('Header()'), 'goal')[0])
   assert.match(p.text('Header()'), /Your latest request · 4m ago Also exempt \/health and \/metrics from the limiter\./)
   // a goal the state cut short: its whole text from /message/<messageId>, fetched once
@@ -255,12 +260,256 @@ test('a question answers inline, by its need`s id, and collapses to "Answered: X
   assert.match(flat(textOf(ro)), /Answer it in Claude Code\.$/)
 })
 
-// ---- Now: agents and plan
+// ---- Now: the dashboard
 
-test('the agents: the state`s rows in its order, each a status dot, its name, its call in flight verbatim and its time; a fold row opens on its members', () => {
+/** The sample with the dashboard's own lists (the figures, the activity, the files) as these tests give them. */
+const dash = change => sample(s => { Object.assign(s, { figures: { ...FIGURES }, activity: FEED, files: TOUCHED }); if (change) change(s) })
+
+test('Now is the dashboard: needs, a run card per agent, the figures, the plan, recent activity and files, in that order; a head folds its section and the page remembers it; n opens Needs again', () => {
+  const p = page()
+  p.load(dash())
+  const order = () => [...p.view('NowPage()').c].filter(Boolean).flatMap(v => (v.k === 'cols' ? v.c.filter(Boolean) : [v])).map(v => v.k)
+  assert.deepEqual(order(), ['needs', 'agents', 'figures', 'plan', 'activity', 'files'])
+  assert.equal(find(p.view('NowPage()'), 'dash-cols').length, 1, 'activity and files share a row where the page is wide')
+  // nothing needs you and no plan: neither leaves a trace
+  p.load(dash(s => { s.needs = []; s.plan = null; s.figures.plan = null }))
+  assert.deepEqual(order(), ['agents', 'figures', 'activity', 'files'])
+  // a head folds its section: the head stays, the body goes, and so it stays on the next load
+  p.load(dash())
+  const sec = id => find(p.view('NowPage()'), `sec-${id}`)[0]
+  const fold = id => find(sec(id), 'sec-fold')[0]
+  assert.equal(fold('activity').p['aria-expanded'], 'true')
+  click(fold('activity'))
+  assert.equal(fold('activity').p['aria-expanded'], 'false')
+  assert.ok(sec('activity').p.class.includes('shut'))
+  assert.equal(flat(textOf(sec('activity'))), 'Recent activity')
+  assert.deepEqual(JSON.parse(p.storage['agent-deck:shut']), ['activity'])
+  const again = page({ storage: p.storage })
+  again.load(dash())
+  assert.equal(find(find(again.view('NowPage()'), 'sec-activity')[0], 'ra-row').length, 0)
+  click(fold('activity'))
+  assert.ok(find(sec('activity'), 'ra-row').length > 0)
+  assert.deepEqual(JSON.parse(p.storage['agent-deck:shut']), [])
+  // Needs folded: n opens it again, on the need
+  click(fold('needs'))
+  assert.equal(find(sec('needs'), 'need').length, 0)
+  p.key('n')
+  assert.equal(find(sec('needs'), 'need').length, 4)
+  assert.equal(p.run('ui.scrollTo.id'), `need-${ASK_ONE}`)
+})
+
+test('the run cards: the Orchestrator, then each agent as it started; each its status pill, its own todo in progress (else its task) with n/total, its call in flight verbatim (else its result), model · tokens and when; a click opens it', () => {
   const p = page()
   p.load(SAMPLE)
-  const rows = () => [...find(p.view('AgentsSection()'), 'tree')[0].c].filter(Boolean)
+  const cards = () => find(p.view('AgentsSection()'), 'run-card')
+  assert.deepEqual(cards().map(c => c.k), ['main', RESEARCHER, BUILDER, DOCS, SCOUT, TESTER, LINT, REVIEWER])
+  assert.ok(cards().every(c => c.t === 'button' && c.p['data-nav'] === 'agent'))
+  const card = id => cards().find(c => c.k === id)
+  const part = (id, cls) => flat(textOf(find(card(id), cls)[0]))
+  // the Orchestrator: its own todo in progress, 2 of its 4 done, and its call in flight
+  assert.equal(part('main', 'run-head'), 'Orchestrator waiting')
+  assert.equal(part('main', 'run-step'), 'Write the limiter and its stores 2/4')
+  assert.equal(part('main', 'run-now'), 'AskUserQuestion Which store should back the limiter in production?')
+  assert.equal(part('main', 'run-foot'), 'opus-5.5 · 1.4M Started 42m ago')
+  // an agent with no todos: its task's first line, no count; its call in flight, verbatim
+  assert.match(part(BUILDER, 'run-step'), /^Write a sliding-window rate limiter in src\/rateLimit\.ts: 100 requests a minute/)
+  assert.equal(find(card(BUILDER), 'run-step-n').length, 0)
+  assert.equal(part(BUILDER, 'run-now'), 'Bash npm test -- rateLimit')
+  assert.equal(part(BUILDER, 'run-foot'), 'sonnet-4.5 · 513k Started 29m ago')
+  // finished: what it handed back, and when; failed or stopped with nothing handed back: the word
+  assert.equal(part(TESTER, 'run-head'), 'tester done')
+  assert.equal(part(TESTER, 'run-now'), 'Wrote 6 tests in tests/rateLimit.test.ts ; all pass against the in-memory store.')
+  assert.equal(part(TESTER, 'run-foot'), 'haiku-4.5 · 76.9k Finished 12m ago')
+  assert.equal(part(LINT, 'run-head'), 'Lint the new files failed')
+  assert.equal(part(LINT, 'run-now'), 'Failed')
+  assert.equal(part(SCOUT, 'run-head'), 'scout stopped')
+  assert.equal(part(SCOUT, 'run-foot'), 'haiku-4.5 · 15.3k Stopped 22m ago')
+  // the pill and the step's glyph take the status hue
+  assert.deepEqual(find(card(BUILDER), 'pill').map(x => x.p.class), ['pill hue-wait'])
+  assert.deepEqual(find(card(TESTER), 'pill').map(x => x.p.class), ['pill hue-done'])
+  assert.deepEqual(find(find(card(TESTER), 'run-step')[0], 'glyph').map(g => g.p.class), ['glyph hue-done'])
+  assert.deepEqual(find(find(card(LINT), 'run-step')[0], 'glyph').map(g => g.p.class), ['glyph hue-fail'])
+  // running: the card's blue edge, its step spinning, a live dot by its call
+  p.load(sample(s => { s.now += 1000; s.agents.find(r => r.id === BUILDER).status = 'running' }))
+  assert.match(card(BUILDER).p.class, /^run-card is-running/)
+  assert.ok(find(find(card(BUILDER), 'run-step')[0], 'glyph')[0].p.class.includes('spin'))
+  assert.equal(find(card(BUILDER), 'run-live').length, 1)
+  assert.equal(find(card('main'), 'run-live').length, 0, 'waiting on you: no live dot')
+  // a click opens its drawer
+  click(card(BUILDER))
+  assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: BUILDER })
+  assert.ok(card(BUILDER).p.class.includes(' on'))
+})
+
+test('past twelve agents, the cards keep every one at work or waiting and the newest of the rest, and say how many more Org shows', () => {
+  const p = page()
+  p.load(sample(s => {
+    for (let i = 0; i < 7; i++) s.agents.push({ row: 'agent', id: `extra${i}`, parent: 'main', depth: 1, kind: 'agent', status: 'done', title: `extra ${i}`, startedAt: s.session.startedAt + (i + 1) * MIN, endedAt: s.now - MIN, todos: [] })
+  }))
+  const shown = find(p.view('AgentsSection()'), 'run-card').map(c => c.k)
+  assert.equal(shown.length, 12)
+  for (const id of ['main', BUILDER, REVIEWER, TESTER, 'extra6']) assert.ok(shown.includes(id), id)
+  for (const id of ['extra0', 'extra1', 'extra2']) assert.ok(!shown.includes(id), id)
+  assert.match(p.text('AgentsSection()'), /^Agents 15 3 more in Org Orchestrator/)
+  click(find(p.view('AgentsSection()'), 'sec-fold')[0])
+  assert.equal(find(p.view('AgentsSection()'), 'run-card').length, 0)
+})
+
+const FIGURES = { running: 2, waiting: 1, done: 3, failed: 1, stopped: 1, plan: { done: 1, total: 3 }, costUsd: 4.12, tokens: 2305400, contextPercent: 41, minutes: 40, needs: 4 }
+
+test('the figures, as the state counts them: the agents in each state, the plan`s items done (only with a plan), the spend, what waits on you; each opens what it counts', () => {
+  const p = page()
+  p.load(sample(s => { s.figures = FIGURES }))
+  const tiles = () => find(p.view('FiguresStrip()'), 'kpi')
+  assert.deepEqual(tiles().map(k => flat(textOf(k))), [
+    '2 Agents running 1 waiting · 3 done · 1 failed · 1 stopped',
+    '1/3 Plan done 2 to go',
+    '$4.12 Session spend 2.3M tokens · 40 min · context 41%',
+    '4 Waiting on you Orchestrator asks: Which store should back the limiter in production?',
+  ])
+  assert.equal(p.view('FiguresStrip()').p.style['--n'], '4')
+  // Waiting on you goes to the first need; Agents running to Org; the plan to the plan
+  click(tiles()[3])
+  assert.equal(p.run('ui.scrollTo.id'), `need-${ASK_ONE}`)
+  click(tiles()[1])
+  assert.equal(p.run('ui.scrollTo.id'), 'sec-plan')
+  click(tiles()[0])
+  assert.equal(p.run('route.tab'), 'org')
+  // no plan: no Plan tile; nothing waiting: it says so and goes nowhere; nothing known of the spend: a dash
+  p.load(sample(s => { s.figures = { ...FIGURES, plan: null, needs: 0, costUsd: null, tokens: null, minutes: null, contextPercent: null }; s.needs = [] }))
+  assert.deepEqual(find(p.view('FiguresStrip()'), 'kpi-label').map(textOf), ['Agents running', 'Session spend', 'Waiting on you'])
+  assert.equal(flat(textOf(tiles()[1])), '— Session spend —')
+  assert.equal(flat(textOf(tiles()[2])), '0 Waiting on you Nothing waits on you')
+  assert.equal(tiles()[2].t, 'div')
+  // a mod that writes no figures: no strip
+  p.load(sample(s => { delete s.figures }))
+  assert.equal(p.view('FiguresStrip()'), null)
+})
+
+const call = (min, agent, agentName, tool, text, ok, ms) => ({ id: `toolu_feed${min}`, at: NOW - min * MIN, agent, agentName, tool, text, ok, ms })
+const FEED = [
+  call(3, TESTER, 'tester', 'Edit', 'src/rateLimit.ts', true, 250),
+  call(0, BUILDER, 'builder', 'Bash', 'Run the limiter tests', null, null),
+  call(1, 'main', 'Orchestrator', 'AskUserQuestion', 'Which store should back the limiter in production?', null, null),
+  call(2, LINT, 'Lint the new files', 'Bash', 'Lint the new files', false, 2100),
+  call(4, 'main', 'Orchestrator', 'TodoWrite', 'update todos', true, 200),
+  call(5, SCOUT, 'scout', 'WebFetch', 'github.com/redis/ioredis#readme', true, 1800),
+  call(6, DOCS, 'docs', 'mcp__github__create_issue', 'Add a Redis service to CI', true, 900),
+  call(7, RESEARCHER, 'researcher', 'Grep', 'router\\.(get|post) in src', true, 900),
+  call(8, RESEARCHER, 'researcher', 'Read', 'src/app.ts', true, 300),
+  call(9, BUILDER, 'builder', 'Write', 'src/rateLimit.ts', true, 400),
+  call(10, 'main', 'Orchestrator', 'Agent', 'Write the limiter', true, 1200),
+  call(11, 'main', 'Orchestrator', 'Agent', 'Map the routes', true, 1100),
+]
+
+test('Recent activity: the newest ten tool calls of every agent, newest first, each who · verb · what, its outcome and age; a row opens its agent; none yet says so', () => {
+  const p = page()
+  p.load(sample(s => { s.activity = FEED }))
+  const rows = () => find(p.view('ActivitySection()'), 'ra-row')
+  assert.equal(rows().length, 10)
+  assert.deepEqual(rows().map(r => flat(textOf(r))), [
+    'builder ran Run the limiter tests waiting now',
+    'Orchestrator asked you: Which store should back the limiter in production? waiting 1m',
+    'Lint the new files ran Lint the new files failed 2m',
+    'tester edited src/rateLimit.ts 250ms 3m',
+    'Orchestrator updated its todos 200ms 4m',
+    'scout fetched github.com/redis/ioredis#readme 1.8s 5m',
+    'docs used mcp__github__create_issue on Add a Redis service to CI 900ms 6m',
+    'researcher searched router\\.(get|post) in src 900ms 7m',
+    'researcher read src/app.ts 300ms 8m',
+    'builder wrote src/rateLimit.ts 400ms 9m',
+  ])
+  // a path in the mono face; a shell call's words (what it says it does) not
+  assert.deepEqual(find(rows()[3], 'ra-target').map(t => t.p.class), ['ra-target mono'])
+  assert.deepEqual(find(rows()[0], 'ra-target').map(t => t.p.class), ['ra-target'])
+  click(rows()[5])
+  assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: SCOUT })
+  // a new call comes in at the top, the rest keep their rows
+  p.load(sample(s => { s.now += MIN; s.activity = [call(-1, REVIEWER, 'reviewer', 'Read', 'src/rateLimit.ts', true, 120), ...FEED] }))
+  assert.deepEqual(rows().slice(0, 2).map(r => r.k), ['toolu_feed-1', 'toolu_feed0'])
+  // none yet, or a mod that writes none
+  p.load(sample(s => { s.now += 2 * MIN; s.activity = [] }))
+  assert.equal(p.text('ActivitySection()'), 'Recent activity No tool calls yet Every agent\'s tool calls show here as they happen.')
+  p.load(sample(s => { s.now += 3 * MIN; delete s.activity }))
+  assert.match(p.text('ActivitySection()'), /No tool calls yet/)
+})
+
+const OUTSIDE = 'C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js'
+const TOUCHED = [
+  { path: 'src/rateLimit.ts', editors: [BUILDER, TESTER], added: 10, removed: 0, lastAt: NOW - 3 * MIN },
+  { path: 'src/app.ts', editors: [BUILDER], added: 2, removed: 1, lastAt: NOW - 24 * MIN },
+  ...Array.from({ length: 10 }, (_, i) => ({ path: `src/routes/r${i}.ts`, editors: [RESEARCHER], added: 1, removed: 1, lastAt: NOW - (30 + i) * MIN })),
+  { path: OUTSIDE, editors: [BUILDER], added: 3, removed: 0, lastAt: NOW - 11 * MIN, isOutside: true },
+]
+
+test('Files: the repository`s ten edited last, each with its editors ("shared" by two or more), +/− and age; the rest a click away; those outside the repo one dim row; a file opens on Changes', () => {
+  const p = page()
+  p.load(sample(s => { s.files = TOUCHED }))
+  const view = () => p.view('FilesSection()')
+  const rows = () => find(view(), 'file-row')
+  assert.match(flat(textOf(find(view(), 'sec-head')[0])), /^Files 12 Changes$/)
+  assert.equal(rows().length, 10)
+  assert.equal(flat(textOf(rows()[0])), 'src/ rateLimit.ts shared +10 −0 3m')
+  assert.equal(find(rows()[0], 'stack-item').length, 2)
+  assert.equal(flat(textOf(rows()[1])), 'src/ app.ts +2 −1 24m')
+  assert.equal(find(rows()[1], 'tag').length, 0, 'one editor: not shared')
+  assert.deepEqual(find(view(), 'outside-row').map(r => flat(textOf(r))), ['2 more files', '1 file outside the repo'])
+  click(find(view(), 'outside-row')[0])
+  assert.equal(rows().length, 12)
+  click(find(view(), 'outside-row')[1])
+  const out = rows()[12]
+  assert.equal(flat(textOf(find(out, 'path')[0])), '…/Temp/ bench.js')
+  assert.equal(find(out, 'path')[0].p.title, OUTSIDE)
+  // a file opens on Changes, open there and brought into view: git's file, or the agents' other edit of one
+  click(rows()[1])
+  assert.equal(p.run('route.tab'), 'changes')
+  assert.equal(p.run('ui.open.get("git|src/app.ts")'), true)
+  assert.equal(p.run('ui.scrollTo.id'), 'file-src/app.ts')
+  const app = find(p.view('ChangesPage()'), 'chg').find(c => c.k === 'src/app.ts')
+  assert.ok(app.p.class.includes('open'))
+  assert.equal(app.p.id, 'file-src/app.ts')
+  p.run('navigate("now")')
+  click(rows()[12])
+  assert.equal(p.run(`ui.open.get(${JSON.stringify(`other|${OUTSIDE}`)})`), true)
+  assert.equal(p.run('ui.open.get("outside|changes")'), true)
+  assert.equal(find(p.view('ChangesPage()'), 'fgroup').find(g => g.k === OUTSIDE).p.id, `file-${OUTSIDE}`)
+  // none yet, or a mod that writes none
+  p.load(sample(s => { s.now += MIN; s.files = [] }))
+  assert.equal(p.text('FilesSection()'), 'Files No files touched yet Files the agents edit show here, with who is on each.')
+  p.load(sample(s => { s.now += 2 * MIN; delete s.files }))
+  assert.match(p.text('FilesSection()'), /No files touched yet/)
+})
+
+test('the sample`s own figures, activity and files, as the mod`s builder writes them, read on the dashboard as they are', () => {
+  const p = page()
+  p.load(SAMPLE)
+  assert.deepEqual(find(p.view('FiguresStrip()'), 'kpi').map(k => flat(textOf(k))), [
+    '0 Agents running 2 waiting · 3 done · 1 failed · 1 stopped',
+    '1/3 Plan done 2 to go',
+    '$4.12 Session spend 2.3M tokens · 40 min · context 41%',
+    '4 Waiting on you Orchestrator asks: Which store should back the limiter in production?',
+  ])
+  const feed = find(p.view('ActivitySection()'), 'ra-row')
+  assert.equal(feed.length, Math.min(10, SAMPLE.activity.length))
+  assert.deepEqual(feed.map(r => r.k), SAMPLE.activity.slice(0, 10).map(x => x.id))
+  assert.equal(flat(textOf(feed[0])), 'reviewer asked you: Which routes should skip the limiter? waiting 2m')
+  assert.equal(flat(textOf(feed.find(r => /failed/.test(textOf(r))))), 'Lint the new files ran Lint the new files failed 18m')
+  const files = p.view('FilesSection()')
+  assert.match(flat(textOf(find(files, 'sec-head')[0])), new RegExp(`^Files ${SAMPLE.files.filter(f => !f.isOutside).length} Changes$`))
+  assert.equal(flat(textOf(find(files, 'file-row')[0])), 'src/ rateLimit.ts shared +7 −1 19m')
+  assert.deepEqual(find(files, 'outside-row').map(r => flat(textOf(r))), ['1 file outside the repo'])
+})
+
+// ---- Org
+
+test('Org`s list: the state`s rows in its order, each a status dot, its name, its call in flight verbatim and its time; a fold row opens on its members', () => {
+  const p = page({ hash: '#/org' })
+  p.load(SAMPLE)
+  assert.equal(p.run('route.tab'), 'org')
+  click(byText(p.view('OrgPage()'), 'seg-toggle', 'List').c.filter(Boolean)[1])
+  assert.equal(p.run('ui.orgView'), 'list')
+  assert.equal(p.storage['agent-deck:orgView'], '"list"')
+  const rows = () => [...find(p.view('OrgPage()'), 'tree')[0].c].filter(Boolean)
   assert.deepEqual(rows().map(r => r.k), ['main', BUILDER, `fold:${BUILDER}`, REVIEWER, 'fold:main'])
   assert.deepEqual(rows().map(r => flat(textOf(r))), [
     'Orchestrator AskUserQuestion Which store should back the limiter in production? 40m',
@@ -287,16 +536,20 @@ test('the agents: the state`s rows in its order, each a status dot, its name, it
   // a row opens its agent
   click(rows().find(r => r.k === BUILDER))
   assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: BUILDER })
-  assert.equal(p.run('location.hash'), `#/now/agent/${BUILDER}`)
+  assert.equal(p.run('location.hash'), `#/org/agent/${BUILDER}`)
   assert.ok(rows().find(r => r.k === BUILDER).p.class.includes(' on'))
 })
 
-test('Tree ⇄ Chart: the chart draws every agent row under the one that started it; it opens readable and the fit button shows it all', () => {
+test('Org`s chart, by default (and 3): every agent row under the one that started it, counted above; it opens readable and the fit button shows it all; Now has no toggle', () => {
   const p = page()
   p.load(SAMPLE)
-  click(byText(p.view('AgentsSection()'), 'seg-toggle', 'Chart').c.filter(Boolean)[1])
-  assert.equal(p.run('ui.view'), 'chart')
-  const chart = p.view('AgentsSection()')
+  assert.equal(find(p.view('NowPage()'), 'seg-toggle').length, 0)
+  assert.equal(find(p.view('NowPage()'), 'org-view').length, 0)
+  p.key('3')
+  assert.equal(p.run('route.tab'), 'org')
+  assert.equal(p.run('ui.orgView'), 'chart')
+  const chart = p.view('OrgPage()')
+  assert.equal(flat(textOf(find(chart, 'org-bar')[0])), '8 agents · 3 waiting on you · 1 failed · 1 stopped Chart List')
   assert.equal(find(chart, 'org-card').length, 8)
   assert.equal(find(chart, 'edge').length, 7)
   assert.match(flat(textOf(byText(chart, 'org-card', 'tester'))), /^tester general-purpose · 10m haiku-4\.5 · 76\.9k Wrote 6 tests/)
@@ -339,7 +592,7 @@ test('the plan: every source Claude used, each as made (the board with owners, t
   // only the sources Claude used
   p.load(sample(s => Object.assign(s.plan, { board: [], approved: null, workflows: [] })))
   assert.deepEqual(find(p.view('PlanSection()'), 'pcard-title').map(textOf), ['Todo list'])
-  p.load(sample(s => { s.plan = null }))
+  p.load(sample(s => { s.plan = null; if (s.figures) s.figures.plan = null }))
   assert.equal(p.view('PlanSection()'), null)
   assert.doesNotMatch(p.text('NowPage()'), /Plan/)
 })
@@ -480,20 +733,29 @@ test('the sample`s acks show under the rows they name, while they matter: refuse
 
 // ---- Changes
 
-test('Changes: git`s files, each opening on the agents` own patches of it; the other edits, those outside the repo folded; commits; Review asks first', async () => {
+test('Changes: git`s files, each opening on git`s own diff and the agents` own patches of it; the other edits, those outside the repo folded; commits; Review asks first', async () => {
   const p = page({ hash: '#/changes' })
   p.load(SAMPLE)
   const view = () => p.view('ChangesPage()')
-  assert.match(flat(textOf(view())), /^5 uncommitted files \+16 −2 feat\/rate-limit ↑1 · 9c1e4b7 · acme-api Ask for review Uncommitted 5/)
-  assert.deepEqual(find(view(), 'chg').map(c => c.k), ['src/app.ts', 'src/rateLimit.ts', 'tests/rateLimit.test.ts', 'docs/api.md', 'package.json'])
-  click(find(find(view(), 'chg')[0], 'chg-head')[0])
-  const app = () => find(view(), 'chg')[0]
+  const files = SAMPLE.changes.files
+  const add = files.reduce((t, f) => t + f.added, 0), rem = files.reduce((t, f) => t + f.removed, 0)
+  assert.match(flat(textOf(view())), new RegExp(`^${files.length} uncommitted files \\+${add} −${rem} feat/rate-limit ↑1 · 9c1e4b7 · acme-api Ask for review Uncommitted ${files.length}`))
+  assert.deepEqual(find(view(), 'chg').map(c => c.k), files.map(f => f.path))
+  const chg = path => find(view(), 'chg').find(c => c.k === path)
+  click(find(chg('src/app.ts'), 'chg-head')[0])
+  const app = () => chg('src/app.ts')
+  assert.match(flat(textOf(app())), /^M src\/ app\.ts \+2 −1 Git's diff against HEAD/)
   assert.match(flat(textOf(app())), /The agent edit of this file Edit builder 24m ago \+2 −1/)
   await settle()
   assert.deepEqual(p.fetched('patch'), ['/patch/toolu_01BldE1'])
-  assert.deepEqual(find(app(), 'dl').map(l => l.p.class), ['dl dl-hunk', 'dl dl-ctx', 'dl dl-add', 'dl dl-ctx', 'dl dl-del', 'dl dl-add'])
-  click(find(find(view(), 'chg')[4], 'chg-head')[0])
-  assert.match(flat(textOf(find(view(), 'chg')[4])), /No agent edited this file in this session\.$/)
+  assert.deepEqual(p.fetched('gitdiff'), [`/gitdiff/${files.find(f => f.path === 'src/app.ts').diffId}`])
+  // git's diff first, the agent's own patch beside it: never one read as the other
+  const [git, own] = find(app(), 'chg-part')
+  assert.deepEqual(find(git, 'dl').map(l => l.p.class), ['dl dl-hunk', 'dl dl-ctx', 'dl dl-add', 'dl dl-ctx', 'dl dl-del', 'dl dl-add'])
+  assert.deepEqual(find(own, 'dl').map(l => l.p.class), ['dl dl-hunk', 'dl dl-ctx', 'dl dl-add', 'dl dl-ctx', 'dl dl-del', 'dl dl-add'])
+  assert.equal(find(git, 'edit').length, 0)
+  click(find(chg('package.json'), 'chg-head')[0])
+  assert.match(flat(textOf(chg('package.json'))), /No agent edited this file in this session\.$/)
   // the agents' edits git does not list: here only one outside the repository, in its dim row
   const other = () => find(view(), 'sec').find(s => /^Other agent edits/.test(flat(textOf(find(s, 'sec-title')[0]))))
   assert.equal(flat(textOf(find(other(), 'sec-title')[0])), 'Other agent edits')
@@ -512,6 +774,44 @@ test('Changes: git`s files, each opening on the agents` own patches of it; the o
   assert.deepEqual(cmd, { cmd: 'review', id: cmd.id, text: 'Review the diff' })
   p.load(sample(s => s.acks.push({ id: cmd.id, ok: true, status: 'queued', text: 'Claude reviews it when it finishes its current turn', at: NOW })))
   assert.equal(flat(textOf(find(review(), 'confirm-note')[0])), 'Queued: Claude reviews it when it finishes its current turn')
+})
+
+test('Changes: git`s diff comes from /gitdiff/<diffId>, fetched again when the id moves; an untracked file`s is its whole text; with none, the page says why; one not on disk can be retried', async () => {
+  const p = page({ hash: '#/changes' })
+  p.load(SAMPLE)
+  const first = SAMPLE.changes.files.find(f => f.path === 'package.json').diffId
+  p.run('ui.open.set("git|package.json", true)')
+  const row = () => find(p.view('ChangesPage()'), 'chg').find(c => c.k === 'package.json')
+  assert.match(flat(textOf(row())), /Git's diff against HEAD/)
+  await settle()
+  assert.deepEqual(p.fetched('gitdiff'), [`/gitdiff/${first}`])
+  const git = () => find(row(), 'chg-part')[0]
+  assert.deepEqual(find(git(), 'dl').map(l => l.p.class.slice(6)), ['hunk', 'ctx', 'ctx', 'add', 'ctx', 'ctx'])
+  assert.match(flat(textOf(git())), /10 \+ "ioredis": "\^5\.4\.1",/)
+  // drawn again from what it fetched: no second fetch
+  row()
+  await settle()
+  assert.equal(p.fetched('gitdiff').length, 1)
+  // the file changed: its diff has another id, fetched afresh
+  const moved = SAMPLE.changes.files.find(f => f.path === 'docs/api.md').diffId
+  p.load(sample(s => { s.now += 1000; s.changes.files.find(f => f.path === 'package.json').diffId = moved }))
+  row()
+  await settle()
+  assert.deepEqual(p.fetched('gitdiff'), [`/gitdiff/${first}`, `/gitdiff/${moved}`])
+  assert.match(flat(textOf(git())), /Each user may make 100 requests a minute/)
+  // untracked (git's ??, the mod's N), not read yet: why there is none, and no fetch
+  p.load(sample(s => { s.now += 2000; Object.assign(s.changes.files.find(f => f.path === 'package.json'), { code: 'N', diffId: null }) }))
+  assert.equal(flat(textOf(git())), 'Git\'s diff untracked: its whole text Git\'s diff of this file is not here: not read yet, a binary file, or too long to show.')
+  assert.equal(p.fetched('gitdiff').length, 2)
+  // an id with no file on disk: the error, and Retry fetches it again
+  p.load(sample(s => { s.now += 3000; s.changes.files.find(f => f.path === 'package.json').diffId = 'gone-1-1' }))
+  row()
+  await settle()
+  assert.match(flat(textOf(git())), /Git's diff is not on disk yet\. Retry$/)
+  click(byText(git(), 'btn', 'Retry'))
+  row()
+  await settle()
+  assert.deepEqual(p.fetched('gitdiff').slice(-2), ['/gitdiff/gone-1-1', '/gitdiff/gone-1-1'])
 })
 
 // ---- the drawers
@@ -595,13 +895,16 @@ test('Inspect: context, cost and tokens per agent, by i or the header`s button',
 
 // ---- keys, and live updates
 
-test('keys: 1 2 3 the routes, n the next need (opened and focused), m and @ the composer, h help, b and Esc close; none fires while you type', () => {
+test('keys: 1 2 3 4 the routes, n the next need (opened and focused), m and @ the composer, h help, b and Esc close; none fires while you type', () => {
   const p = page()
   p.load(SAMPLE)
   assert.equal(p.key('2'), true)
   assert.equal(p.run('route.tab'), 'chat')
   assert.equal(p.run('location.hash'), '#/chat')
   p.key('3')
+  assert.equal(p.run('route.tab'), 'org')
+  assert.equal(p.run('location.hash'), '#/org')
+  p.key('4')
   assert.equal(p.run('route.tab'), 'changes')
   p.key('1')
   assert.equal(p.run('location.hash'), '#/now')
@@ -631,7 +934,7 @@ test('keys: 1 2 3 the routes, n the next need (opened and focused), m and @ the 
   // h: the keys; Esc closes it, then the drawer; b the same
   p.key('h')
   assert.equal(p.run('ui.help'), true)
-  assert.match(p.text('Help()'), /^Keys .* 1 2 3 Now · Chat · Changes j k Move the focus down, up/)
+  assert.match(p.text('Help()'), /^Keys .* 1 2 3 4 Now · Chat · Org · Changes j k Move the focus down, up/)
   p.key('Escape')
   assert.equal(p.run('ui.help'), false)
   assert.equal(p.run('route.drawer.id'), REVIEWER)
@@ -658,6 +961,7 @@ test('a live update keeps what you were doing: a half-typed message, an open fol
   assert.equal(p.run('route.drawer.id'), BUILDER)
   assert.equal(p.run('filterOf()'), REVIEWER)
   assert.ok(find(p.view('ChatPage()'), 'crow').some(r => r.k === 'm-new'))
-  assert.ok(find(p.view('AgentsSection()'), 'arow').some(r => r.k === LINT), 'the fold stays open')
+  p.run('ui.orgView = "list"')
+  assert.ok(find(p.view('OrgPage()'), 'arow').some(r => r.k === LINT), 'the fold stays open')
   assert.ok(find(p.view('NeedsSection()'), 'need')[2].p.class.includes('open'))
 })

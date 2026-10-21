@@ -3,9 +3,9 @@
  * What Claude Code is doing, who is working on what, and whether anything
  * needs you, live over SSE. It draws the mod's v2 view model (web/CONTRACT.md,
  * "v2: one view model for every surface"), the one the Desktop pane and the
- * terminal draw too, with the same names, order and keys: three routes
- * (#/now, #/chat, #/changes), an agent drawer and an Inspect drawer. No
- * dependencies and no build step.
+ * terminal draw too, with the same names, order and keys: four routes (#/now,
+ * the dashboard; #/chat; #/org, the org chart; #/changes), an agent drawer and
+ * an Inspect drawer. No dependencies and no build step.
  *
  * The page renders through a tiny keyed virtual DOM (h/patch below). Every
  * state update builds the view again and patches the live DOM in place, so
@@ -291,6 +291,9 @@ const IC = {
   bell: '<path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/>',
   gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
   keyboard: '<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>',
+  dollar: '<line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+  activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
 };
 
 function icon(name, cls) {
@@ -434,9 +437,37 @@ function changesOf(c) {
   const repo = obj(c.repo);
   return {
     repo: repo ? { name: str(repo.name), root: str(repo.root), branch: str(repo.branch), ahead: numOr(repo.ahead, 0), behind: numOr(repo.behind, 0), head: str(repo.head) } : null,
-    files: arr(c.files).filter(f => f && typeof f.path === 'string').map(f => ({ path: f.path, code: str(f.code), added: numOr(f.added, 0), removed: numOr(f.removed, 0), edits: arr(f.edits).filter(x => typeof x === 'string') })),
+    files: arr(c.files).filter(f => f && typeof f.path === 'string').map(f => ({ path: f.path, code: str(f.code), added: numOr(f.added, 0), removed: numOr(f.removed, 0), edits: arr(f.edits).filter(x => typeof x === 'string'), diffId: typeof f.diffId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(f.diffId) ? f.diffId : null })),
     edits: arr(c.edits).filter(e => e && typeof e.id === 'string' && typeof e.path === 'string').map(e => ({ id: e.id, agent: str(e.agent), tool: str(e.tool), path: e.path, at: numOr(e.at, 0), added: numOr(e.added, 0), removed: numOr(e.removed, 0), isOutside: e.isOutside === true })),
     commits: arr(c.commits).filter(x => x && typeof x.hash === 'string').map(x => ({ ...x, short: str(x.short) || x.hash.slice(0, 7), subject: str(x.subject), author: str(x.author), at: numOr(x.at, 0), added: numOr(x.added, 0), removed: numOr(x.removed, 0), files: numOr(x.files, 0), agent: typeof x.agent === 'string' && x.agent ? x.agent : null })),
+  };
+}
+
+/** The newest tool calls of every agent, newest first. */
+function activityOf(list) {
+  return arr(list).filter(x => x && typeof x.tool === 'string' && typeof x.agent === 'string' && x.agent).map(x => ({
+    id: str(x.id) || `${numOr(x.at, 0)}|${x.agent}|${x.tool}|${str(x.text)}`, at: numOr(x.at, 0), agent: x.agent, agentName: str(x.agentName),
+    tool: x.tool, text: str(x.text), ok: typeof x.ok === 'boolean' ? x.ok : null, ms: numOr(x.ms),
+  })).sort((x, y) => y.at - x.at);
+}
+
+/** The files the agents edited, in the state's order (the repository's first, each list the one edited last first). */
+function filesOf(list) {
+  return arr(list).filter(f => f && typeof f.path === 'string' && f.path).map(f => ({
+    path: f.path, editors: arr(f.editors).filter(x => typeof x === 'string' && x), added: numOr(f.added, 0), removed: numOr(f.removed, 0), lastAt: numOr(f.lastAt, 0), isOutside: f.isOutside === true,
+  }));
+}
+
+/** The session's figures as the state counts them; null from a mod that writes none. */
+function figuresOf(f) {
+  f = obj(f);
+  if (!f) return null;
+  const n = k => numOr(f[k], 0);
+  const plan = obj(f.plan);
+  return {
+    running: n('running'), waiting: n('waiting'), done: n('done'), failed: n('failed'), stopped: n('stopped'),
+    plan: plan ? { done: numOr(plan.done, 0), total: numOr(plan.total, 0) } : null,
+    costUsd: numOr(f.costUsd), tokens: numOr(f.tokens), contextPercent: numOr(f.contextPercent), minutes: numOr(f.minutes), needs: n('needs'),
   };
 }
 
@@ -468,6 +499,9 @@ function normalize(s) {
     plan: planOf(s.plan),
     chat: arr(s.chat).filter(m => m && typeof m.id === 'string' && m.id).map(chatOf),
     changes: changesOf(s.changes),
+    activity: activityOf(s.activity),
+    files: filesOf(s.files),
+    figures: figuresOf(s.figures),
     inspect: inspectOf(s.inspect),
     acks: arr(s.acks).filter(k => k && typeof k.id === 'string' && k.id),
   };
@@ -677,10 +711,11 @@ function StatusNote(st, cls) {
 }
 
 // ================================================================ lazy files
-// A cut message's whole text (/message/<id>), an edit's patch (/patch/<id>)
-// and an agent's page file (/agent/<fileId>), each fetched the first time a
-// view shows it and kept. An agent's file is written again as it works, so
-// it is fetched again when its row changes.
+// A cut message's whole text (/message/<id>), an edit's patch (/patch/<id>),
+// git's own diff of a file (/gitdiff/<diffId>) and an agent's page file
+// (/agent/<fileId>), each fetched the first time a view shows it and kept. A
+// git diff that changes comes under another id. An agent's file is written
+// again as it works, so it is fetched again when its row changes.
 
 const fullTexts = new Map();
 
@@ -698,17 +733,20 @@ function fullTextOf(id) {
   return t;
 }
 
-const patches = new Map();
+/** Patches (`patch`) and git's diffs (`gitdiff`), by `<kind>:<id>`. */
+const diffs = new Map();
+const DIFF_WORD = { patch: 'The patch', gitdiff: 'Git\'s diff' };
 
-function patchOf(id) {
-  let p = patches.get(id);
+function diffOf(kind, id) {
+  const key = `${kind}:${id}`;
+  let p = diffs.get(key);
   if (p) return p;
   p = { status: 'loading', hunks: null, error: '' };
-  patches.set(id, p);
-  fetch(`/patch/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
-    .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'The patch is not on disk yet.' : `The server answered ${r.status}.`))))
+  diffs.set(key, p);
+  fetch(`/${kind}/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
+    .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? `${DIFF_WORD[kind]} is not on disk yet.` : `The server answered ${r.status}.`))))
     .then(text => { p.status = 'ok'; p.hunks = parsePatch(text); })
-    .catch(e => { p.status = 'error'; p.error = e.message || 'Could not load the patch.'; })
+    .catch(e => { p.status = 'error'; p.error = e.message || `Could not load ${DIFF_WORD[kind].toLowerCase()}.`; })
     .finally(invalidate);
   return p;
 }
@@ -775,10 +813,10 @@ function agentFileOf(a) {
 }
 
 // ===================================================================== router
-// #/now, #/chat, #/changes; a drawer rides on the route it opened over:
-// #/now/agent/<id>, #/chat/inspect. #/ is Now.
+// #/now, #/chat, #/org, #/changes; a drawer rides on the route it opened
+// over: #/now/agent/<id>, #/chat/inspect. #/ is Now.
 
-const TABS = [['now', 'Now'], ['chat', 'Chat'], ['changes', 'Changes']];
+const TABS = [['now', 'Now'], ['chat', 'Chat'], ['org', 'Org'], ['changes', 'Changes']];
 
 function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } });
@@ -815,7 +853,7 @@ const isWide = () => typeof window.innerWidth === 'number' && window.innerWidth 
 // Lives across renders and routes; never reset by a state update.
 
 const ui = {
-  view: store.get('agentsView', 'tree') === 'chart' ? 'chart' : 'tree', // Now's agents: the tree or the org chart
+  orgView: store.get('orgView', 'chart') === 'list' ? 'list' : 'chart', // Org: the chart or the list
   open: new Map(),         // disclosure key -> open
   chatFilter: 'all',       // 'all' | 'you' | 'between' | an agent's id
   drafts: new Map(),       // composer scope ('chat', 'agent:<id>') -> half-typed words
@@ -853,6 +891,14 @@ function toggle(key) {
   renderNow();
 }
 
+/** The sections folded by their heads (`Section`), kept across reloads. */
+const shut = new Set(arr(store.get('shut', [])).filter(x => typeof x === 'string'));
+function setShut(id, on) {
+  if (on === shut.has(id)) return;
+  if (on) shut.add(id); else shut.delete(id);
+  store.set('shut', [...shut]);
+}
+
 function toast(text) {
   ui.toast = { text, until: Date.now() + 2400 };
   setTimeout(invalidate, 2500);
@@ -877,10 +923,22 @@ function Glyph(st, size = 16) {
   return h('svg', { class: `glyph hue-${hue}${ic === 'progress' ? ' spin' : ''}`, width: size, height: size, viewBox: '0 0 24 24', 'aria-hidden': 'true', html: IC[ic] });
 }
 
-function SecHead(title, count, right) {
-  return h('div', { class: 'sec-head' },
-    h('h2', { class: 'sec-title' }, title, count != null && h('span', { class: 'sec-count' }, String(count))),
-    right || null);
+/**
+ * A section: its head, whose title (and count) folds it, with `right` beside
+ * it; then its body while it is open. `body` is a function, so a folded
+ * section builds (and fetches) nothing.
+ */
+function Section(id, title, count, right, body) {
+  const open = !shut.has(id);
+  return h('section', { key: id, id: `sec-${id}`, class: `sec sec-${id}${open ? '' : ' shut'}`, 'aria-label': title },
+    h('div', { class: 'sec-head' },
+      h('h2', { class: 'sec-title' },
+        h('button', { type: 'button', class: 'sec-fold', 'aria-expanded': open ? 'true' : 'false', onClick: () => { setShut(id, open); renderNow(); } },
+          h('span', null, title),
+          count != null && h('span', { class: 'sec-count' }, String(count)),
+          icon('chevronDown', 'sec-chev'))),
+      right || null),
+    open ? body() : null);
 }
 
 function DiffStat(add, rem) {
@@ -983,12 +1041,13 @@ function Folded(key, long, body, more = 'Show more') {
 
 // --------------------------------------------------------------------- diffs
 
-function PatchView(id, scope) {
-  const p = patchOf(id);
+/** A patch (`kind` 'patch', an agent's edit) or git's own diff of a file ('gitdiff'), its lines numbered and tinted. */
+function PatchView(id, scope, kind = 'patch') {
+  const p = diffOf(kind, id);
   if (p.status === 'loading') return h('div', { class: 'diff diff-wait' }, h('span', { class: 'sk sk-line' }), h('span', { class: 'sk sk-line short' }));
   if (p.status === 'error') {
     return h('div', { class: 'diff-err' }, icon('alert'), h('span', null, p.error),
-      h('button', { class: 'btn btn-xs', type: 'button', onClick: () => { patches.delete(id); renderNow(); } }, 'Retry'));
+      h('button', { class: 'btn btn-xs', type: 'button', onClick: () => { diffs.delete(`${kind}:${id}`); renderNow(); } }, 'Retry'));
   }
   if (!p.hunks.length) return h('div', { class: 'diff-err muted' }, 'No changed lines.');
   // The rows are cached per patch and per place it shows (a vnode can only be mounted once).
@@ -1023,7 +1082,8 @@ function FileGroup(path, edits, opts) {
   const key = `${opts.scope}|${path}`;
   const open = isOpen(key, opts.open);
   const add = total(edits, e => e.added), rem = total(edits, e => e.removed);
-  return h('div', { key: path, class: `fgroup${open ? ' open' : ''}` },
+  // Changes' own (the dashboard's Files go there): once in the page, so it can be brought into view
+  return h('div', { key: path, id: opts.scope === 'other' ? `file-${path}` : null, class: `fgroup${open ? ' open' : ''}` },
     h('button', { class: 'fgroup-head', type: 'button', 'data-nav': 'file', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) },
       icon('chevronRight', 'chev'),
       icon('file', 'fic'),
@@ -1362,25 +1422,253 @@ function Header() {
 }
 
 // ======================================================================== now
-// What Claude is doing, who is working on what, and whether anything needs
-// you: Needs (only while something does), the agents, and the plan (only if
-// Claude made one).
+// The dashboard: what needs you (only while something does), a run card per
+// agent, the session's figures, the plan (only if Claude made one), the
+// newest tool calls and the files the agents touched. Each section folds by
+// its head; on a wide page the last two sit side by side.
 
 function NowPage() {
   if (!IX.rows.length && !S.chat.length) return Welcome();
-  const plan = PlanSection();
-  return h('div', { key: 'now', class: `page page-now${plan ? ' has-plan' : ''}` }, NeedsSection(), AgentsSection(), plan);
+  return h('div', { key: 'now', class: 'page page-now' },
+    NeedsSection(),
+    AgentsSection(),
+    FiguresStrip(),
+    PlanSection(),
+    h('div', { key: 'cols', class: 'dash-cols' }, ActivitySection(), FilesSection()));
 }
 
 function NeedsSection() {
-  const list = NeedsList(null);
-  if (!list) return null;
-  return h('section', { key: 'needs', class: 'sec sec-needs', 'aria-label': 'Needs you' }, SecHead('Needs you', S.needs.length || null), list);
+  if (!S.needs.length && !resolvedCalls().length) return null;
+  return Section('needs', 'Needs you', S.needs.length || null, null, () => NeedsList(null));
 }
 
-// ---------------------------------------------------------------- the tree
+// ------------------------------------------------------------- run cards
 
-/** The rows the tree draws: a fold row's members only while it is open. */
+/** How many run cards Now draws; past that, Org shows them all. */
+const CARDS = 12;
+
+/**
+ * The run cards: the Orchestrator, then each agent in the order it started,
+ * so a new one appends and nothing moves. Past twelve, every one at work or
+ * waiting on you and the newest of the rest.
+ */
+function cardRows() {
+  const list = IX.rows.slice().sort((x, y) => (y.kind === 'orchestrator') - (x.kind === 'orchestrator') || x.startedAt - y.startedAt);
+  if (list.length <= CARDS) return { shown: list, hidden: 0 };
+  const keep = new Set(list.filter(a => a.kind === 'orchestrator' || isLive(a.status)).map(a => a.id));
+  for (let i = list.length - 1; i >= 0 && keep.size < CARDS; i--) keep.add(list[i].id);
+  const shown = list.filter(a => keep.has(a.id));
+  return { shown, hidden: list.length - shown.length };
+}
+
+const PILL = { starting: 'starting', running: 'running', waiting: 'waiting', done: 'done', failed: 'failed', stopped: 'stopped', idle: 'idle' };
+
+function Pill(st) {
+  return h('span', { class: `pill hue-${statusOf(st).hue}` }, PILL[st] || st);
+}
+
+/**
+ * What a run card's inner box says: the agent's own todo in progress, else
+ * the first line of its task (the Orchestrator's task is your latest
+ * request), with its todos done of all of them.
+ */
+function stepOf(a) {
+  const st = stateOf(a);
+  const cur = a.todos.find(t => t.status === 'active');
+  const goal = a.kind === 'orchestrator' && S.header.goal ? S.header.goal.headline : '';
+  const text = (cur && cur.text) || firstLine(a.task) || goal || a.description || a.type || KIND_WORD[a.kind];
+  const n = a.todos.length ? `${a.todos.filter(t => t.status === 'done').length}/${a.todos.length}` : '';
+  return { text, n, glyph: isRunning(a.status) ? 'active' : st };
+}
+
+/** A run card's line: its call in flight, verbatim; else what it handed back; else its status in a word. */
+function NowLine(a) {
+  if (a.live) {
+    return [
+      isRunning(a.status) && h('span', { key: 'dot', class: 'run-live' }, Dot('run', true)),
+      h('span', { key: 'tool', class: 'run-tool' }, a.live.tool),
+      h('span', { key: 'text', class: PATHY.has(a.live.tool) ? 'run-said mono' : 'run-said' }, a.live.text),
+    ];
+  }
+  if (a.result) return h('span', { key: 'said', class: 'run-said' }, inline(firstLine(a.result, 280)));
+  const st = stateOf(a);
+  return h('span', { key: 'quiet', class: 'run-quiet' }, isRunning(a.status) ? 'Working' : ROW_WORD[st] || statusOf(st).label);
+}
+const nowTitle = a => (a.live ? `${a.live.tool} ${a.live.text}` : a.result ? firstLine(a.result, 600) : '');
+
+/** "Started 4m ago" while it works, "Finished 2m ago" (or failed, stopped) once it ended. */
+function runTime(a) {
+  const st = stateOf(a);
+  if (a.endedAt != null && !isLive(a.status)) return `${st === 'failed' ? 'Failed' : st === 'stopped' ? 'Stopped' : 'Finished'} ${agoText(a.endedAt)}`;
+  return a.startedAt ? `Started ${agoText(a.startedAt)}` : '';
+}
+
+function RunCard(a) {
+  const st = stateOf(a), step = stepOf(a);
+  return h('button', {
+    key: a.id, type: 'button', class: `run-card is-${st}${isAgentOpen(a.id) ? ' on' : ''}`, 'data-nav': 'agent', enter: true,
+    'aria-label': `${a.title}, ${statusOf(st).label}`, onClick: () => openAgent(a.id),
+  },
+  h('span', { class: 'run-head' },
+    AvatarDot(a, 24),
+    h('span', { class: 'run-name', title: [a.title, a.type || KIND_WORD[a.kind]].filter(Boolean).join(' · ') }, a.title),
+    Pill(st)),
+  h('span', { class: 'run-step' },
+    Glyph(step.glyph, 15),
+    h('span', { class: 'run-step-text', title: step.text }, step.text),
+    step.n && h('span', { class: 'run-step-n' }, step.n)),
+  h('span', { class: `run-now${a.live && a.status === 'waiting' ? ' is-waiting' : ''}`, title: nowTitle(a) }, NowLine(a)),
+  h('span', { class: 'run-foot' },
+    h('span', { class: 'run-model' }, modelLine(a)),
+    h('span', { class: 'run-time' }, runTime(a))));
+}
+
+function AgentsSection() {
+  const { shown, hidden } = cardRows();
+  const link = h('a', { class: 'sec-link', href: hrefOf('org', route.drawer) }, hidden ? `${hidden} more in Org` : 'Org chart', icon('arrowRight'));
+  return Section('agents', 'Agents', IX.rows.length || null, link, () => (IX.rows.length
+    ? h('div', { class: 'run-grid' }, shown.map(RunCard))
+    : h('div', { class: 'card' }, Empty('bot', 'No agents yet', 'The Orchestrator and the agents it starts show here as they work.'))));
+}
+
+// ----------------------------------------------------------------- figures
+// The session's numbers, as the state counts them (v2's `figures`): the
+// agents in each state, the plan's items done (only with a plan), the spend,
+// and what waits on you.
+
+/** What a need is, in one line: "Orchestrator asks: Which store…?", "builder needs permission: npm test". */
+function needLine(n) {
+  const who = n.agentName || nameOf(n.agent);
+  if (n.kind === 'question') return `${who} asks: ${needGist(n)}`;
+  if (n.kind === 'permission') return `${who} needs permission: ${needGist(n)}`;
+  return [n.title, n.text].filter(Boolean).join(': ');
+}
+
+function Figure(ic, value, label, desc, go) {
+  const body = [
+    h('span', { key: 'main', class: 'kpi-main' },
+      h('span', { class: 'kpi-value' }, String(value)),
+      h('span', { class: 'kpi-label' }, label),
+      h('span', { class: 'kpi-desc', title: desc }, desc)),
+    icon(ic, 'kpi-ic'),
+  ];
+  return go ? h('button', { key: label, type: 'button', class: 'kpi', onClick: go }, body) : h('div', { key: label, class: 'kpi' }, body);
+}
+
+function FiguresStrip() {
+  const f = S.figures;
+  if (!f) return null;
+  const counts = [`${f.waiting} waiting`, `${f.done} done`, `${f.failed} failed`];
+  if (f.stopped) counts.push(`${f.stopped} stopped`);
+  const spend = [
+    f.tokens != null && `${num(f.tokens)} tokens`,
+    f.minutes != null && (f.minutes < 1 ? '<1 min' : `${Math.round(f.minutes)} min`),
+    f.contextPercent != null && `context ${Math.round(f.contextPercent)}%`,
+  ].filter(Boolean);
+  const first = S.needs[0];
+  const tiles = [
+    Figure('bot', f.running, 'Agents running', counts.join(' · '), () => navigate('org')),
+    f.plan && Figure('listChecks', `${f.plan.done}/${f.plan.total}`, 'Plan done', f.plan.done >= f.plan.total ? 'All done' : `${f.plan.total - f.plan.done} to go`,
+      S.plan ? () => { setShut('plan', false); scrollSoon('sec-plan', 'now'); } : null),
+    Figure('dollar', usd(f.costUsd), 'Session spend', spend.join(' · ') || '—'),
+    Figure('hand', f.needs, 'Waiting on you', first ? needLine(first) : 'Nothing waits on you', first ? () => goToNeed(first) : null),
+  ].filter(Boolean);
+  return h('div', { key: 'figures', class: 'kpis', style: { '--n': String(tiles.length) }, role: 'group', 'aria-label': 'Figures' }, tiles);
+}
+
+// ----------------------------------------------------------- recent activity
+
+/** A tool call's verb on the activity line: "ran", "edited"; a tool with none "used <tool> on". */
+const TOOL_VERB = { Read: 'read', Edit: 'edited', MultiEdit: 'edited', NotebookEdit: 'edited', Write: 'wrote', Bash: 'ran', PowerShell: 'ran', Grep: 'searched', Glob: 'listed', WebFetch: 'fetched', WebSearch: 'searched the web for', Agent: 'started', Task: 'started', SendMessage: 'messaged', TodoWrite: 'updated its todos', TaskCreate: 'added the task', TaskUpdate: 'updated', TaskGet: 'read', TaskList: 'read', ToolSearch: 'loaded', Skill: 'used', AskUserQuestion: 'asked you:' };
+/** Tools whose verb says it all: their words would only repeat it. */
+const VERB_ONLY = new Set(['TodoWrite']);
+/** The activity's words in the mono face: a path or a pattern (a shell call's words are what it says it does). */
+const FEED_MONO = new Set(['Read', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write', 'Glob', 'Grep']);
+
+function ActivityRow(x) {
+  const a = IX.byId.get(x.agent);
+  const verb = TOOL_VERB[x.tool] || `used ${x.tool}${x.text ? ' on' : ''}`;
+  const said = VERB_ONLY.has(x.tool) ? '' : x.text;
+  return h('button', {
+    key: x.id, type: 'button', class: 'ra-row', 'data-nav': 'activity', enter: true, title: `${x.tool} ${x.text}`.trim(),
+    onClick: () => { if (a) openAgent(a.id); },
+  },
+  whoAvatar(x.agent, 22),
+  h('span', { class: 'ra-text' },
+    h('span', { class: 'ra-who' }, x.agentName || nameOf(x.agent)), ' ',
+    h('span', { class: 'ra-verb' }, verb), ' ',
+    said && h('span', { class: `ra-target${FEED_MONO.has(x.tool) ? ' mono' : ''}` }, said)),
+  Outcome(a || { status: 'done' }, x),
+  h('span', { class: 'ra-time', title: x.at ? new Date(x.at).toLocaleString() : '' }, ageOf(x.at)));
+}
+
+function ActivitySection() {
+  const list = S.activity.slice(0, 10);
+  return Section('activity', 'Recent activity', null, null, () => (list.length
+    ? h('div', { class: 'card list feed' }, list.map(ActivityRow))
+    : h('div', { class: 'card' }, Empty('activity', 'No tool calls yet', 'Every agent\'s tool calls show here as they happen.'))));
+}
+
+// ------------------------------------------------------------------- files
+
+/** Takes Changes to file `path`, open: git's file, else the agents' other edit of it (outside the repo, its fold opened too). */
+function openFile(f) {
+  const inGit = IX.gitPaths.has(f.path);
+  ui.open.set(inGit ? `git|${f.path}` : `other|${f.path}`, true);
+  if (!inGit && f.isOutside) ui.open.set('outside|changes', true);
+  setShut(inGit ? 'uncommitted' : 'other', false);
+  navigate('changes', isWide() ? route.drawer : null);
+  scrollSoon(`file-${f.path}`, 'changes');
+}
+
+function FileRow(f) {
+  return h('button', { key: f.path, type: 'button', class: 'file-row', 'data-nav': 'file', onClick: () => openFile(f) },
+    icon('file', 'fic'),
+    PathText(f.isOutside ? shortPath(f.path) : f.path, 'grow', f.path),
+    f.editors.length >= 2 && h('span', { class: 'tag tag-wait', title: 'More than one agent edited this file' }, 'shared'),
+    f.editors.length > 0 && AvatarStack(f.editors, 18),
+    DiffStat(f.added, f.removed),
+    h('span', { class: 'file-time', title: f.lastAt ? new Date(f.lastAt).toLocaleString() : '' }, ageOf(f.lastAt)));
+}
+
+/** The files the agents touched: the repository's ten edited last, the rest a click away, then one dim row for those outside it. */
+function FilesSection() {
+  const own = S.files.filter(f => !f.isOutside), outside = S.files.filter(f => f.isOutside);
+  const rest = own.length - 10;
+  const link = S.files.length ? h('a', { class: 'sec-link', href: hrefOf('changes', route.drawer) }, 'Changes', icon('arrowRight')) : null;
+  const moreKey = 'more|files', more = rest > 0 && isOpen(moreKey, false);
+  return Section('files', 'Files', own.length || null, link, () => (S.files.length
+    ? h('div', { class: 'card list files' },
+      (more ? own : own.slice(0, 10)).map(FileRow),
+      rest > 0 && h('button', { key: moreKey, class: `outside-row${more ? ' open' : ''}`, type: 'button', 'aria-expanded': more ? 'true' : 'false', onClick: () => toggle(moreKey) },
+        icon('chevronRight', 'chev'), h('span', { class: 'outside-text' }, more ? 'Show the ten edited last' : `${plural(rest, 'more file')}`)),
+      OutsideRows(outside.length, 'now', () => outside.map(FileRow)))
+    : h('div', { class: 'card' }, Empty('file', 'No files touched yet', 'Files the agents edit show here, with who is on each.'))));
+}
+
+// ======================================================================== org
+// Every agent under the one that started it: the org chart (pan, zoom, fit)
+// or, toggled, the list, the state's tree with its folds.
+
+function OrgPage() {
+  const view = ui.orgView;
+  const setView = v => { ui.orgView = v; store.set('orgView', v); renderNow(); };
+  const Toggle = (id, ic, label) => h('button', { key: id, type: 'button', class: view === id ? 'on' : '', 'aria-pressed': view === id ? 'true' : 'false', title: label, onClick: () => setView(id) }, icon(ic), h('span', null, label));
+  const count = st => IX.rows.filter(r => stateOf(r) === st || (st === 'running' && r.status === 'starting')).length;
+  const counts = [plural(IX.rows.length, 'agent')];
+  for (const [st, word] of [['running', 'running'], ['waiting', 'waiting on you'], ['failed', 'failed'], ['stopped', 'stopped']]) if (count(st)) counts.push(`${count(st)} ${word}`);
+  return h('div', { key: 'org', class: `page page-org view-${view}` },
+    h('div', { key: 'bar', class: 'org-bar' },
+      h('p', { class: 'org-count' }, counts.join(' · ')),
+      h('div', { class: 'seg-toggle', role: 'group', 'aria-label': 'Show the agents as' }, Toggle('chart', 'org', 'Chart'), Toggle('list', 'list', 'List'))),
+    !IX.rows.length
+      ? h('div', { key: 'none', class: 'card' }, Empty('org', 'No agents yet', 'The Orchestrator and the agents it starts show here, each under the one that started it.'))
+      : view === 'list' ? h('div', { key: 'tree', class: 'card tree' }, treeRows().map(r => (r.row === 'fold' ? FoldRow(r) : AgentRow(r)))) : OrgChart());
+}
+
+// ---------------------------------------------------------------- the list
+
+/** The rows the list draws: a fold row's members only while it is open. */
 function treeRows() {
   const shown = [], hidden = new Set();
   for (const r of S.agents) {
@@ -1449,18 +1737,6 @@ function FoldRow(f) {
   icon('chevronRight', 'chev'),
   h('span', { class: 'frow-text' }, f.text),
   AvatarStack(f.ids, 16, 6));
-}
-
-function AgentsSection() {
-  const view = ui.view;
-  const setView = v => { ui.view = v; store.set('agentsView', v); renderNow(); };
-  const Toggle = (id, ic, label) => h('button', { key: id, type: 'button', class: view === id ? 'on' : '', 'aria-pressed': view === id ? 'true' : 'false', title: label, onClick: () => setView(id) }, icon(ic), h('span', null, label));
-  return h('section', { key: 'agents', class: 'sec sec-agents' },
-    SecHead('Agents', IX.rows.length || null,
-      h('div', { class: 'seg-toggle', role: 'group', 'aria-label': 'Show the agents as' }, Toggle('tree', 'tree', 'Tree'), Toggle('chart', 'org', 'Chart'))),
-    !IX.rows.length
-      ? h('div', { key: 'none', class: 'card' }, Empty('bot', 'No agents yet', 'The Orchestrator and the agents it starts show here as they work.'))
-      : view === 'chart' ? OrgChart() : h('div', { key: 'tree', class: 'card tree' }, treeRows().map(r => (r.row === 'fold' ? FoldRow(r) : AgentRow(r)))));
 }
 
 // --------------------------------------------------------------- the chart
@@ -1706,7 +1982,7 @@ function PlanSection() {
   if (p.approved) blocks.push(ApprovedCard(p.approved));
   for (const w of p.workflows) blocks.push(WorkflowCard(w));
   if (!blocks.length) return null;
-  return h('section', { key: 'plan', class: 'sec sec-plan' }, SecHead('Plan'), h('div', { class: 'plan' }, blocks));
+  return Section('plan', 'Plan', null, null, () => h('div', { class: 'plan' }, blocks));
 }
 
 function PlanCard(key, title, note, body, hint) {
@@ -2029,9 +2305,10 @@ function Composer(scope) {
 }
 
 // ==================================================================== changes
-// Git's uncommitted files, each opening on the agents' own edits of it (git's
-// hunks are never tagged by agent: nothing maps them); the agents' other
-// edits; the commits; and Review, which asks Claude after a confirm.
+// Git's uncommitted files, each opening on git's own diff of it and, beside
+// it, the agents' own edits of it (git's hunks are never tagged by agent:
+// nothing maps them); the agents' other edits; the commits; and Review, which
+// asks Claude after a confirm.
 
 const CODE = { M: ['M', 'wait', 'Modified'], A: ['A', 'done', 'Added'], N: ['N', 'done', 'New'], D: ['D', 'fail', 'Deleted'], R: ['R', 'run', 'Renamed'], C: ['C', 'run', 'Copied'], U: ['U', 'fail', 'Conflict'], '?': ['?', 'idle', 'Untracked'], '??': ['?', 'idle', 'Untracked'] };
 
@@ -2083,11 +2360,23 @@ function ReviewButton(scope, text, label = 'Ask for review') {
       : note ? h('div', { key: 'note', class: 'confirm confirm-note' }, StatusNote(note, 'review-note')) : null);
 }
 
+/** An untracked file: git status's '??', which the mod writes 'N'. */
+const isUntracked = code => ['N', '?', '??'].includes(String(code || '').trim());
+
+/** Git's own diff of one uncommitted file (/gitdiff/<diffId>), fetched again when its id moves; or why there is none. */
+function GitDiff(f) {
+  return h('div', { key: 'git', class: 'chg-part' },
+    h('p', { class: 'chg-label' }, icon('branch'), h('span', null, 'Git\'s diff'), h('span', { class: 'chg-note' }, isUntracked(f.code) ? 'untracked: its whole text' : 'against HEAD')),
+    f.diffId
+      ? PatchView(f.diffId, 'git', 'gitdiff')
+      : h('p', { class: 'chg-none' }, 'Git\'s diff of this file is not here: not read yet, a binary file, or too long to show.'));
+}
+
 function GitFileRow(f) {
   const key = `git|${f.path}`, open = isOpen(key, false);
   const edits = f.edits.map(id => IX.editById.get(id)).filter(Boolean);
   const editors = [...new Set(edits.map(e => e.agent))];
-  return h('div', { key: f.path, class: `chg${open ? ' open' : ''}` },
+  return h('div', { key: f.path, id: `file-${f.path}`, class: `chg${open ? ' open' : ''}` },
     h('button', { class: 'chg-head', type: 'button', 'data-nav': 'file', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) },
       icon('chevronRight', 'chev'),
       CodeBadge(f.code),
@@ -2095,9 +2384,11 @@ function GitFileRow(f) {
       editors.length > 0 && AvatarStack(editors, 18),
       DiffStat(f.added, f.removed)),
     open && h('div', { class: 'chg-body' },
-      edits.length
-        ? [h('p', { key: 'label', class: 'chg-label' }, `${edits.length === 1 ? 'The agent edit' : `The ${edits.length} agent edits`} of this file`), edits.map(e => EditBlock(e, 'git'))]
-        : h('p', { class: 'chg-none' }, 'No agent edited this file in this session.')));
+      GitDiff(f),
+      h('div', { key: 'edits', class: 'chg-part' },
+        edits.length
+          ? [h('p', { key: 'label', class: 'chg-label' }, icon('pencil'), h('span', null, `${edits.length === 1 ? 'The agent edit' : `The ${edits.length} agent edits`} of this file`)), edits.map(e => EditBlock(e, 'git'))]
+          : h('p', { class: 'chg-none' }, 'No agent edited this file in this session.'))));
 }
 
 function CommitRow(c) {
@@ -2129,17 +2420,13 @@ function ChangesPage() {
             h('span', { class: 'sep' }, '·'), h('span', null, repo.head.slice(0, 7)), h('span', { class: 'sep' }, '·'), h('span', null, repo.name))
           : h('p', { class: 'chg-repo' }, 'The session is not in a git repository; the agents\' own edits are below.')),
       files.length > 0 && ReviewButton('changes', `Review the uncommitted changes (${plural(files.length, 'file')}, +${add} −${rem}) and tell me what to fix before I commit.`)),
-    repo && h('section', { key: 'git', class: 'sec' },
-      SecHead('Uncommitted', files.length || null),
-      files.length ? h('div', { class: 'card list chgs' }, files.map(GitFileRow)) : h('div', { class: 'card' }, Empty('check', 'Working tree clean', 'Nothing to commit.'))),
-    (other.length > 0 || !repo) && h('section', { key: 'other', class: 'sec' },
-      SecHead(repo ? 'Other agent edits' : 'Agent edits', own.length || null),
-      other.length
-        ? h('div', { class: 'fgroups' }, own.map(fileGroup), OutsideRows(outside.length, 'changes', () => outside.map(fileGroup)))
-        : h('div', { class: 'card' }, Empty('pencil', 'No agent edits yet', 'Each Edit and Write an agent makes shows here, grouped by file.'))),
-    ch.commits.length > 0 && h('section', { key: 'commits', class: 'sec' },
-      SecHead('Commits', ch.commits.length),
-      h('div', { class: 'card list commits' }, ch.commits.map(CommitRow))));
+    repo && Section('uncommitted', 'Uncommitted', files.length || null, null, () => (files.length
+      ? h('div', { class: 'card list chgs' }, files.map(GitFileRow))
+      : h('div', { class: 'card' }, Empty('check', 'Working tree clean', 'Nothing to commit.')))),
+    (other.length > 0 || !repo) && Section('other', repo ? 'Other agent edits' : 'Agent edits', own.length || null, null, () => (other.length
+      ? h('div', { class: 'fgroups' }, own.map(fileGroup), OutsideRows(outside.length, 'changes', () => outside.map(fileGroup)))
+      : h('div', { class: 'card' }, Empty('pencil', 'No agent edits yet', 'Each Edit and Write an agent makes shows here, grouped by file.')))),
+    ch.commits.length > 0 && Section('commits', 'Commits', ch.commits.length, null, () => h('div', { class: 'card list commits' }, ch.commits.map(CommitRow))));
 }
 
 // ===================================================================== drawer
@@ -2303,7 +2590,7 @@ function Drawer() {
 // ================================================================ help, notes
 
 const KEYS = [
-  ['1 2 3', 'Now · Chat · Changes'],
+  ['1 2 3 4', 'Now · Chat · Org · Changes'],
   ['j  k', 'Move the focus down, up'],
   ['Enter', 'Open the focused row: an agent, a fold, a need, a file'],
   ['b', 'Back: close the agent or Inspect'],
@@ -2384,7 +2671,7 @@ function Welcome() {
 function Page() {
   if (!S) return conn.status === 'denied' || conn.fails >= 2 ? Unreachable() : Loading();
   if (S.empty) return Welcome();
-  return route.tab === 'chat' ? ChatPage() : route.tab === 'changes' ? ChangesPage() : NowPage();
+  return route.tab === 'chat' ? ChatPage() : route.tab === 'org' ? OrgPage() : route.tab === 'changes' ? ChangesPage() : NowPage();
 }
 
 function App() {
@@ -2425,6 +2712,7 @@ function back() {
 /** Takes Now to need `n`'s card, open, and the focus with it. */
 function goToNeed(n) {
   ui.needOpen.set(n.id, true);
+  setShut('needs', false);
   navigate('now', isWide() ? route.drawer : null);
   scrollSoon(`need-${n.id}`, 'now', true);
 }
@@ -2476,7 +2764,7 @@ function moveFocus(dir) {
 function keyAction(key) {
   if (!S || S.empty) return key === 'h' || key === '?' ? (toggleHelp(), true) : false;
   switch (key) {
-    case '1': case '2': case '3': navigate(TABS[Number(key) - 1][0]); return true;
+    case '1': case '2': case '3': case '4': navigate(TABS[Number(key) - 1][0]); return true;
     case 'j': moveFocus(1); return true;
     case 'k': moveFocus(-1); return true;
     case 'b': return back();
@@ -2561,7 +2849,7 @@ function afterRender(pin) {
     } else if (Date.now() > want.until) ui.scrollTo = null;
   }
   // The org chart fits itself until the reader pans or zooms it.
-  if (route.tab === 'now' && ui.view === 'chart' && org.view && org.view.isConnected && lastLayout) {
+  if (route.tab === 'org' && ui.orgView === 'chart' && org.view && org.view.isConnected && lastLayout) {
     const size = `${org.view.clientWidth}x${org.view.clientHeight}`;
     if (!org.touched && (org.sig !== lastLayout.sig || org.size !== size)) fitOrg(lastLayout);
     org.sig = lastLayout.sig; org.size = size;

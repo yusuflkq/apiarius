@@ -30,7 +30,7 @@ const stateFile = path.join(dir, 'state.json')
 let state = null // the v2 state
 
 // ---- the copy: the sample, every time moved by the same amount so the state's `now` is now (hooks/web.ts v2TimesMoved)
-const TIMES = new Set(['at', 'now', 'startedAt', 'endedAt'])
+const TIMES = new Set(['at', 'now', 'startedAt', 'endedAt', 'lastAt'])
 function shift(value, by) {
   if (Array.isArray(value)) { for (const one of value) if (one && typeof one === 'object') shift(one, by) }
   else for (const [key, one] of Object.entries(value)) {
