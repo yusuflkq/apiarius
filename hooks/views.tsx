@@ -1,43 +1,30 @@
 /**
- * The deck's pane: in the sample (`/deck demo`) a header saying so, then one
- * row of tabs (Dashboard · Org · Plan · Changes, hotkeys 1 to 4) over the
- * open tab, or over an agent's page opened from it (Back returns to the tab).
- * The Dashboard, Org, Plan and the agent pages draw the web deck's state
- * (./ui/dash), so the pane and the page always agree; Changes draws the
- * deck's own model (./ui), as do Stats and Classic (the summary and outline
- * of earlier builds), off the tab row now but still opened by `/deck stats`
- * and `/deck classic`. The band above the prompt is `./ui/band`.
+ * The deck's pane and its band, on the v2 view model (web/CONTRACT.md v2),
+ * the one state the web page, the Desktop pane and the terminal draw:
  *
- * Pure: Kit, DeckModel, DashModel and DeckActions come from the hooks module,
- * which works out no outline: Classic's select, fold, zoom and Details are
- * made here of its `pick`, `setOutline` and `openDetails`
- * (`classicActionsOf`).
+ * - the pane (`deckView`): in the sample (`/deck demo`) a header saying so,
+ *   then ./ui/v2: the header, the tabs (1 Now · 2 Chat · 3 Changes) and the
+ *   open tab, or an agent's page, Inspect or help over it;
+ * - the band above the prompt (`bandOf`): one line, ./ui/band.
+ *
+ * Pure: Kit, DeckModel, DashModel and DeckActions come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckTab, DeckView } from '../types'
-import { agentsTab } from './ui/agents'
+import type { DeckView } from '../types'
 import { bandView } from './ui/band'
-import { changesTab } from './ui/changes'
-import { toggles, type ToggleItem } from './ui/common'
-import { agentPage } from './ui/dash/agent'
-import { dashboardTab } from './ui/dash/dashboard'
-import { orgTab } from './ui/dash/org'
-import { P } from './ui/dash/palette'
-import { quiet } from './ui/dash/parts'
-import { planTab } from './ui/dash/plan'
-import * as O from './ui/outlineModel'
-import { statsTab } from './ui/stats'
 import type { DashActions, DashModel, DeckModel, Kit } from './ui/types'
+import { v2Deck } from './ui/v2/deck'
+import { quiet } from './ui/v2/look'
+import { P } from './ui/v2/palette'
 
-/** The outline's folds and zoom, as `DeckView` keeps them. */
+/** The outline's folds and zoom, as `DeckView` keeps them (an earlier build's; nothing draws them now). */
 export type OutlineSpot = Pick<DeckView, 'folded' | 'zoom'>
 
 /**
  * What the hooks module's presses run (its `actionsFor`): the deck's own,
- * with the outline's folds and zoom set as they are handed over, never
- * worked out there. `classicActionsOf` makes Classic's select, fold, zoom
- * and Details of them.
+ * and three an earlier build's outline took (`pick`, `setOutline`,
+ * `openDetails`), which no screen presses now.
  */
 export type DeckActions = Omit<DashActions, 'select' | 'toggleFold' | 'zoomTo' | 'selectAgent' | 'showDetails'> & {
   /** Opens row `id` in the detail block (an agent's id, a plan step's key, `file:` and a path); with `outline`, the outline's folds and zoom become it. */
@@ -48,67 +35,35 @@ export type DeckActions = Omit<DashActions, 'select' | 'toggleFold' | 'zoomTo' |
   openDetails: (id: string, outline?: OutlineSpot) => void
 }
 
-/**
- * The actions Classic's screens press, made of the hooks module's: a row
- * picked shows in the outline (out of a zoom it lies outside, the branches
- * folded above it opened: `O.revealed`), a fold toggles (`O.foldToggled`), a
- * zoom re-roots it or, on the branch already zoomed, comes back out
- * (`O.zoomFor`). Each works on `model`'s data and view, the hooks module's
- * own, as they stand when the press runs.
- */
-export function classicActionsOf(model: Pick<DeckModel, 'data' | 'view'>, actions: DeckActions): DashActions {
-  const { data, view } = model
+/** The actions the screens press, of the hooks module's. */
+function dashActionsOf(actions: DeckActions): DashActions {
   const { pick, setOutline, openDetails, ...rest } = actions
   return {
     ...rest,
-    select: id => pick(id, O.revealed(data, view, id)),
+    select: id => pick(id),
     selectAgent: id => pick(id),
-    toggleFold: id => setOutline({ folded: O.foldToggled(data, view, id) }),
-    // zooming on the branch already zoomed comes back out: the detail's Zoom and the outline's z both toggle
-    zoomTo: id => setOutline({ zoom: id !== '' && id === view.zoom ? '' : O.zoomFor(data, view, id) }),
-    showDetails: id => openDetails(id, id !== '' ? O.revealed(data, view, id) : undefined),
+    toggleFold: () => undefined,
+    zoomTo: () => undefined,
+    showDetails: id => openDetails(id),
   }
 }
 
-/** The band above the prompt (./ui/band), its presses Classic's: null when it has nothing to say. */
+/** The band above the prompt (./ui/band): its one line from `model.band`; null when it has nothing to say. */
 export function bandOf(kit: Kit, model: DeckModel, actions: DeckActions, theirs: RenderElement | null): RenderElement | null {
-  return bandView(kit, model, classicActionsOf(model, actions), theirs)
+  return bandView(kit, model.band, actions, theirs)
 }
 
-/** The tab row. Stats and Classic (`agents`) are off it: `/deck stats` and `/deck classic` open them, and no tab shows lit there. */
-export const TABS: readonly ToggleItem<DeckTab>[] = [
-  { id: 'dashboard', label: 'Dashboard', hotkey: '1' },
-  { id: 'org', label: 'Org', hotkey: '2' },
-  { id: 'plan', label: 'Plan', hotkey: '3' },
-  { id: 'changes', label: 'Changes', hotkey: '4' },
-]
-
-/** The whole pane: the sample's header when it shows, the tab row, then the open tab or the agent page over it. */
+/** The whole pane: the sample's header when it shows, then the v2 deck (./ui/v2/deck). */
 export function deckView(kit: Kit, model: DeckModel, deckActions: DeckActions, dash: DashModel): RenderElement {
   const { Box } = kit
-  const actions = classicActionsOf(model, deckActions)
+  const actions = dashActionsOf(deckActions)
+  const state = dash.v2
   return (
     <Box flexDirection="column" gap={1}>
       {dash.isDemo ? demoHeader(kit, actions) : null}
-      {toggles(kit, 'tab', TABS, model.view.tab, one => actions.setTab(one))}
-      {bodyOf(kit, model, actions, dash)}
+      {state ? v2Deck(kit, state, dash.v2Files, model, actions, dash.isDemo) : quiet(kit, dash.demoNote || 'Reading the sample…')}
     </Box>
   )
-}
-
-/** Under the tab row: the agent page while one is open, else the tab; the sample has no Changes (nor Stats or Classic) of its own. */
-function bodyOf(kit: Kit, model: DeckModel, actions: DashActions, dash: DashModel): RenderElement {
-  const { view, now } = model
-  const state = dash.state
-  if (state === null) return quiet(kit, dash.demoNote || 'Reading the sample…')
-  if (view.page !== '') return agentPage(kit, state, dash.paneData, view, actions, now)
-  if (view.tab === 'dashboard') return dashboardTab(kit, state, actions, now, dash.isDemo ? null : (model.web ?? null), view.collapsed)
-  if (view.tab === 'org') return orgTab(kit, state, actions, dash)
-  if (view.tab === 'plan') return planTab(kit, state, view, actions, now)
-  if (dash.isDemo) return quiet(kit, "The sample covers the Dashboard, Org, Plan and the agent pages. Back to this chat shows this session's Changes.")
-  if (view.tab === 'changes') return changesTab(kit, model, actions)
-  if (view.tab === 'stats') return statsTab(kit, model, actions)
-  return agentsTab(kit, model, actions)
 }
 
 /** The sample's header: Sample data, what it is, and Back to this chat. */

@@ -57,7 +57,7 @@ test('the click that gives the pane the keyboard keeps every Button`s press hand
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     const before = handles(await ui.drawn())
-    expect(Object.keys(before)).toEqual(expect.arrayContaining(['tab:dashboard', 'tab:org', 'dash:open:main', 'dash:time:main']))
+    expect(Object.keys(before)).toEqual(expect.arrayContaining(['tab:now', 'tab:chat', 'agent:main', 'key:i', 'key:h']))
     expect(Object.values(before).every(handle => typeof handle === 'number')).toBe(true)
 
     await ui.redraw({ ...PANE, isFocused: true })
@@ -67,9 +67,13 @@ test('the click that gives the pane the keyboard keeps every Button`s press hand
     await ui.redraw({ ...PANE, isFocused: false })
     expect(handles(await ui.drawn())).toEqual(before)
 
-    // a pane of another width is drawn anew: the cards lay out again
+    // a pane of another width is drawn for it, and a press on it lands
     await ui.redraw({ ...PANE, bodyColumns: 140 })
-    expect(handles(await ui.drawn())['tab:org']).not.toBe(before['tab:org'])
+    expect(Object.keys(handles(await ui.drawn()))).toEqual(Object.keys(before))
+    await ui.press({ key: 'tab:chat' })
+    await ui.redraw({ ...PANE, bodyColumns: 140 })
+    expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
+    await ui.press({ key: 'tab:now' })
     await ui.unmount()
   }
 })
@@ -78,48 +82,51 @@ test('a press on a tree handed back runs the newest view`s closure, and what it 
   await opened($, on)
   const ui = await $.ui.mount(pane('desktop'))
   await ui.redraw({ ...PANE, isFocused: true })
-  const dashboard = handles(await ui.drawn())
+  const now = handles(await ui.drawn())
 
-  // Open → on the Orchestrator's card: its page, Back at the top
-  await ui.press({ key: 'dash:open:main' })
+  // the Orchestrator's row: its page, Back at the top
+  await ui.press({ key: 'agent:main' })
   await ui.redraw({ ...PANE, isFocused: true })
-  expect(await ui.find({ key: 'page:back' })).toBeDefined()
+  expect(await ui.find({ key: 'key:b' })).toBeDefined()
   const page = handles(await ui.drawn())
-  expect(page['tab:dashboard']).not.toBe(dashboard['tab:dashboard'])
+  expect(page['tab:now']).not.toBe(now['tab:now'])
 
   // the pressed button is gone, so the pane lets the keyboard go and takes it back: the page keeps its handles
   await ui.redraw({ ...PANE, isFocused: false })
   await ui.redraw({ ...PANE, isFocused: true })
   expect(handles(await ui.drawn())).toEqual(page)
 
-  // Back, then the Org tab: each press lands on the tree handed back
-  await ui.press({ key: 'page:back' })
+  // Back, then Chat: each press lands on the tree handed back
+  await ui.press({ key: 'key:b' })
   await ui.redraw({ ...PANE, isFocused: true })
-  expect(await ui.find({ key: 'page:back' })).toBeUndefined()
-  expect((await ui.find({ key: 'dash:open:main' }))?.props.label).toBe('Open →')
-  await ui.press({ key: 'tab:org' })
+  expect(await ui.find({ key: 'key:b' })).toBeUndefined()
+  expect((await ui.find({ key: 'agent:main' }))?.props.label).toBe('Orchestrator')
+  await ui.press({ key: 'tab:chat' })
   await ui.redraw({ ...PANE, isFocused: false })
-  expect((await ui.find({ key: 'tab:org' }))?.props.dimColor).toBe(false)
-  expect((await ui.find({ key: 'tab:dashboard' }))?.props.dimColor).toBe(true)
+  expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
+  expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(true)
   await ui.unmount()
 })
 
-test('a card`s time changes with the minute, not with the draw: a new minute draws the pane anew, a focus flip inside one does not', async ($, on) => {
+test('a row`s elapsed time changes with the minute, not with the draw: a new minute draws the pane anew, a focus flip inside one does not', async ($, on) => {
   const clock = await opened($, on)
+  await $.prompt.submit({ text: 'Fix the off-by-one in src/range.js', origin: { kind: 'composer' }, wait: false })
+  await $.turn.start({ text: 'Fix the off-by-one in src/range.js', turnId: 't1' })
+  await clock.advance(1000)
   const ui = await $.ui.mount(pane('desktop'))
-  const first = (await ui.find({ key: 'dash:time:main' }))?.props.label
+  const first = (await ui.find({ key: 'row:main' }))?.text
   const firstHandles = handles(await ui.drawn())
 
   await clock.advance(20_000)
   await ui.redraw({ ...PANE, isFocused: true })
-  expect((await ui.find({ key: 'dash:time:main' }))?.props.label).toBe(first)
+  expect((await ui.find({ key: 'row:main' }))?.text).toBe(first)
   expect(handles(await ui.drawn())).toEqual(firstHandles)
 
   await clock.advance(180_000)
   await ui.redraw({ ...PANE, isFocused: false })
-  const later = (await ui.find({ key: 'dash:time:main' }))?.props.label
+  const later = (await ui.find({ key: 'row:main' }))?.text
   expect(later).not.toBe(first)
-  expect(String(later)).toMatch(/3m/)
+  expect(String(later)).toMatch(/3m$/)
   await ui.unmount()
 })
 

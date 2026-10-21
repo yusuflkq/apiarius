@@ -11,9 +11,10 @@ import { bash } from './tools'
  * of its own. Fixer and helper edit three files, each Edit answering with the
  * tool's own structuredPatch. Reviewer asks fixer over SendMessage, and fixer
  * answers. Each agent completes with an answer. The deck draws it all on the
- * terminal and on the desktop: the goal and what needs you, the outline of
- * who started whom with where each is, each agent's task, result and exact
- * diffs, and the whole conversation under the Orchestrator's Talk.
+ * terminal and on the desktop (the v2 pane): the state and your request,
+ * the tree of who started whom with the finished folded, each agent's task,
+ * result, calls and exact diffs, the whole conversation in Chat, and git's
+ * files in Changes.
  */
 
 const NOW = 1_700_000_100_000
@@ -254,16 +255,15 @@ function exactly(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 }
 
-/** The outline's rows, top to bottom, by the id each stands for. */
+/** The tree's agent rows, top to bottom, by the id each stands for. */
 async function rowsOf(ui: Drawing): Promise<string[]> {
   return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('row:')).map(key => key.slice('row:'.length))
 }
 
-/** The cells an outline row is indented: its fold column's left padding. */
+/** The cells a tree row is indented: its left padding, two a level. */
 async function indentOf(ui: Drawing, id: string): Promise<number> {
   const row = (await ui.findAll({ type: 'Box' })).find(box => box.key === `row:${id}`)
-  const line = (row?.children[0] ?? {}) as { children?: { props?: Record<string, unknown> }[] }
-  return Number(line.children?.[0]?.props?.paddingLeft ?? -1)
+  return Number(row?.props.paddingLeft ?? -1)
 }
 
 const ROUTES = [
@@ -279,7 +279,7 @@ const ROUTES = [
   'fixer → Orchestrator',
   'reviewer → Orchestrator',
   // its answer to you
-  'Orchestrator → You',
+  'Orchestrator → you',
 ]
 
 test('a live run, replayed: three named agents and a nested helper, their edits, their messages and answers, on each surface', { timeoutMs: 30_000 }, async ($, on) => {
@@ -287,7 +287,7 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   const { disk } = world(on)
 
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
-  await $.command.run(deck('details'))
+  await $.command.run(deck(''))
   await clock.advance(1000)
 
   // you ask; the Orchestrator delegates to three named agents
@@ -308,16 +308,17 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await $.tool.call(inLoop('agent-fixer', bash({ command: 'node --test', description: 'Run the unit tests' })))
   await clock.advance(1000)
 
-  // while they work: the goal, who runs, who started whom and where each is
+  // while they work: the state, your request, who is at work under whom, each one's call; the finished folded
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await shown(ui, { type: 'Text', text: exactly('Nothing needs you') })
-    await shown(ui, { type: 'Text', text: exactly(PROMPT) })
-    expect((await shown(ui, { type: 'Text', text: /3 running/ })).text).toMatch(/1 done · 3 files/)
-    expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
-    expect(await indentOf(ui, 'agent-helper')).toBe(await indentOf(ui, 'agent-fixer') + 2)
-    await shown(ui, { type: 'Text', text: exactly('Run the unit tests') })
-    await shown(ui, { type: 'Text', text: exactly(`Done: ${ANSWERS.scout}`) })
+    const header = await shown(ui, { key: 'deck:header' })
+    expect(header.text).toContain('Working')
+    expect(header.text).toContain(PROMPT)
+    expect(await ui.find({ key: 'needs:now' })).toBeUndefined()
+    expect(await rowsOf(ui)).toEqual(['main', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
+    expect(await indentOf(ui, 'agent-helper')).toBe((await indentOf(ui, 'agent-fixer')) + 2)
+    expect((await shown(ui, { key: 'row:agent-fixer' })).text).toContain('fixer')
+    expect((await shown(ui, { key: 'fold:main' })).props.label).toBe('▸ 1 done')
     await ui.unmount()
   }
 
@@ -330,86 +331,69 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await clock.advance(1000)
 
   for (const surface of SURFACES) {
-    // Classic is off the tab row: /deck classic opens it
-    await $.command.run(deck('classic'))
     const ui = await $.ui.mount(pane(surface))
-    await ui.press({ key: 'agent:main' })
-
-    // all done: the line says what is left to review, and nobody runs
-    await shown(ui, { type: 'Text', text: exactly('All done · 3 files to review') })
-    await shown(ui, { key: 'needs:review' })
-    expect((await shown(ui, { type: 'Text', text: /4 done/ })).text).not.toMatch(/running/)
-    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-
-    // the outline: every agent under the Orchestrator in spawn order, each with its result; fixer's helper folded under it
-    expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-reviewer'])
-    for (const [name, said] of Object.entries(ANSWERS)) if (name !== 'helper') await shown(ui, { type: 'Text', text: exactly(`Done: ${said}`) })
-    await ui.press({ key: 'fold:agent-fixer' })
+    // all done: idle, the agents folded under the Orchestrator, opened on a press, fixer's helper under it
+    expect((await shown(ui, { key: 'deck:header' })).text).toContain('Idle')
+    expect(await rowsOf(ui)).toEqual(['main'])
+    await ui.press({ key: 'fold:main' })
     expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
-    expect(await indentOf(ui, 'agent-helper')).toBe(await indentOf(ui, 'agent-fixer') + 2)
-    await shown(ui, { type: 'Text', text: exactly(`Done: ${ANSWERS.helper}`) })
+    expect(await indentOf(ui, 'agent-helper')).toBe((await indentOf(ui, 'agent-fixer')) + 2)
+    expect((await shown(ui, { key: 'row:agent-scout' })).text).toContain('done')
 
-    // fixer's row: its task, its result, then Diffs with its own patches
+    // fixer's page: its task, its result, its own patches
     await ui.press({ key: 'agent:agent-fixer' })
-    await ui.press({ key: 'detail:edits' })
-    expect((await ui.find({ key: 'agent:agent-fixer' }))?.props.variant).toBe('primary')
-    expect((await ui.find({ key: 'agent:main' }))?.props.variant).toBeUndefined()
-    for (const label of ['Task', 'Result']) await shown(ui, { type: 'Text', text: exactly(label) })
-    await shown(ui, { type: 'Text', text: exactly(FIXER_TASK) })
-    await shown(ui, { type: 'Text', text: exactly(ANSWERS.fixer) })
+    expect((await shown(ui, { key: 'page:task' })).text).toContain(FIXER_TASK)
+    expect((await shown(ui, { key: 'page:result' })).text).toContain(ANSWERS.fixer)
+    await ui.press({ key: 'page:fold:activity' })
+    expect((await shown(ui, { key: 'page:activity' })).text).toContain('Bash node --test')
+    await ui.press({ key: 'page:fold:activity' })
+    await ui.press({ key: 'page:fold:edits' })
     const codes = await ui.findAll({ type: 'Code' })
     expect(codes.map(code => code.props.format)).toEqual(['diff', 'diff'])
     expect(codes.some(code => code.text.includes(FIX_LINE) && code.props.path === 'src/token.js')).toBe(true)
     expect(codes.some(code => code.text.includes(TEST_LINE) && code.props.path === 'test/token.test.js')).toBe(true)
     expect(codes.some(code => code.text.includes(NOTE_LINE))).toBe(false)
-    await shown(ui, { type: 'Text', text: exactly('token.js') })
-    await shown(ui, { type: 'Text', text: exactly('token.test.js') })
-
+    await ui.press({ key: 'page:fold:edits' })
     // helper's own diff is the README note
+    await ui.press({ key: 'key:b' })
     await ui.press({ key: 'agent:agent-helper' })
+    await ui.press({ key: 'page:fold:edits' })
     const notes = await ui.findAll({ type: 'Code' })
     expect(notes.length).toBe(1)
     expect(notes[0]?.text).toContain(NOTE_LINE)
-    await ui.press({ key: 'fold:agent-fixer' })
+    await ui.press({ key: 'page:fold:edits' })
+    await ui.press({ key: 'key:b' })
+    await ui.press({ key: 'fold:main' })
 
-    // the Orchestrator's Talk is the whole conversation, in order; a press on a row opens its words
-    await ui.press({ key: 'agent:main' })
-    await ui.press({ key: 'detail:chat' })
-    const rows = (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('msg:'))
-    expect(rows.map(row => row.props.label)).toEqual(ROUTES)
-    const keyOf = (route: string) => rows.find(row => row.props.label === route)?.key ?? `missing ${route}`
-    await ui.press({ key: keyOf('reviewer → fixer') })
-    await shown(ui, { type: 'Markdown', text: ASK })
-    await ui.press({ key: keyOf('reviewer → fixer') })
-    await ui.press({ key: keyOf('fixer → reviewer') })
-    await shown(ui, { type: 'Markdown', text: REPLY })
-    await ui.press({ key: keyOf('fixer → reviewer') })
-    await ui.press({ key: 'detail:edits' })
+    // Chat: the whole conversation in order, each row a sentence; the agents' words to each other among it
+    await ui.press({ key: 'tab:chat' })
+    const rows = (await ui.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith('msg:'))
+    expect(rows.map(row => row.text.slice(0, row.text.indexOf(':')))).toEqual(ROUTES)
+    expect(rows.find(row => row.text.startsWith('reviewer → fixer'))?.text).toContain(ASK)
+    expect(rows.find(row => row.text.startsWith('fixer → reviewer'))?.text).toContain(REPLY)
 
-    // Changes: the repository the agents edited, its three files and who touched each
+    // Changes: the repository the agents edited, its three files and whose own edits touched each
     await ui.press({ key: 'tab:changes' })
-    await shown(ui, { type: 'Text', text: /repo ⎇ main/ })
+    expect((await shown(ui, { key: 'changes:repo' })).text).toContain('repo ⎇ main')
     for (const path of ['src/token.js', 'test/token.test.js', 'README.md']) await shown(ui, { key: `file:${path}` })
-    expect((await ui.findAll({ type: 'Text', text: exactly('by fixer') })).length).toBe(2)
-    expect((await ui.findAll({ type: 'Text', text: exactly('by helper') })).length).toBe(1)
+    expect((await shown(ui, { key: 'filerow:src/token.js' })).text).toContain('fixer')
+    expect((await shown(ui, { key: 'filerow:README.md' })).text).toContain('helper')
     await ui.press({ key: 'file:src/token.js' })
-    const opened = await shown(ui, { type: 'Code' })
-    expect(opened.props.format).toBe('diff')
-    expect(opened.text).toContain(FIX_LINE)
+    expect((await ui.findAll({ type: 'Code' })).some(code => code.props.format === 'diff' && code.text.includes(FIX_LINE))).toBe(true)
     await ui.press({ key: 'file:src/token.js' })
-    await $.command.run(deck('classic'))
+    await ui.press({ key: 'tab:now' })
     await ui.unmount()
   }
 
-  // the work is committed: nothing left to notice
+  // the work is committed: nothing left in Changes
   disk.changed = []
   disk.head = COMMITTED
   await clock.advance(10_000)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await shown(ui, { type: 'Text', text: exactly('Nothing needs you') })
-    expect(await ui.find({ key: 'needs:review' })).toBeUndefined()
-    await shown(ui, { type: 'Text', text: /no files changed/ })
+    await ui.press({ key: 'tab:changes' })
+    await shown(ui, { type: 'Text', text: /Working tree clean/ })
+    await ui.press({ key: 'tab:now' })
     await ui.unmount()
   }
 })

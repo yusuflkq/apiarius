@@ -116,7 +116,7 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
-test('/deck opens the pane on the Dashboard; the tab row reaches Changes (a file diff, the commit log), and /deck stats and /deck classic the views off it, on each surface', async ($, on) => {
+test('/deck opens the pane on Now; Changes shows git`s files (one opened to git`s own diff) and the commit log; /deck stats and /deck classic land on Now, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -127,72 +127,70 @@ test('/deck opens the pane on the Dashboard; the tab row reaches Changes (a file
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-    expect((await ui.find({ key: 'tab:dashboard' }))?.props.dimColor).toBe(false)
-    // before the first prompt the goal card says what will be there
-    expect(await ui.find({ type: 'Text', text: /^No goal yet\. Your next prompt to Claude Code becomes the goal\./ })).toBeDefined()
+    expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(false)
+    // before the first prompt the header says so; the Orchestrator is the tree's one row
+    expect((await ui.find({ key: 'deck:header' }))?.text).toContain('No request yet')
+    expect(await ui.find({ key: 'agent:main' })).toBeDefined()
 
     await ui.press({ key: 'tab:changes' })
     expect((await ui.find({ key: 'tab:changes' }))?.props.dimColor).toBe(false)
-    expect((await ui.find({ key: 'tab:dashboard' }))?.props.dimColor).toBe(true)
+    expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(true)
     expect(await ui.find({ key: 'file:src/app.ts' })).toBeDefined()
     expect(await ui.find({ key: 'file:notes.txt' })).toBeDefined()
     await ui.press({ key: 'file:src/app.ts' })
+    expect((await ui.find({ key: 'filediff:src/app.ts' }))?.text).toContain('No agent edited it')
     const code = await ui.find({ type: 'Code' })
     expect(code?.props.format).toBe('diff')
+    expect(String(code?.props.source)).toContain('+const b = 3')
     await ui.press({ key: 'file:src/app.ts' })
 
     expect(await ui.find({ key: `commit:${HASH}` })).toBeDefined()
     await ui.press({ key: `commit:${HASH}` })
-    expect(await ui.find({ key: `review-commit:${HASH}` })).toBeDefined()
+    expect((await ui.findAll({ type: 'Code' })).some(one => String(one.props.source).includes('+const b = 3'))).toBe(true)
     await ui.press({ key: `commit:${HASH}` })
+    expect(await ui.find({ key: 'changes:review' })).toBeDefined()
 
-    // Stats and Classic are off the tab row, which lights none of its tabs over them
-    expect(await ui.find({ key: 'tab:stats' })).toBeUndefined()
-    expect(await ui.find({ key: 'tab:agents' })).toBeUndefined()
-    const lit = async () => (await ui.findAll({ type: 'Button' })).filter(button => button.key?.startsWith('tab:') && button.props.dimColor === false).map(button => button.key)
+    // the old views' commands land on Now: Stats on Inspect, Classic on the tree
     await $.command.run(deck('stats'))
     await ui.redraw()
-    expect(await lit()).toEqual([])
-    expect(await ui.find({ type: 'Text', text: /No history yet/ })).toBeDefined()
-    // Classic: the Agents tab of earlier builds, before the first prompt one quiet line
+    expect((await ui.find({ key: 'inspect' }))?.text).toContain('TOKENS BY AGENT')
     await $.command.run(deck('classic'))
     await ui.redraw()
-    expect(await lit()).toEqual([])
-    expect(await ui.find({ type: 'Text', text: /^No goal yet: your next prompt sets it/ })).toBeDefined()
-    await ui.press({ key: 'tab:dashboard' })
-    expect(await lit()).toEqual(['tab:dashboard'])
+    expect(await ui.find({ key: 'inspect' })).toBeUndefined()
+    expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(false)
     await ui.unmount()
   }
 })
 
-test('a subagent shows in the outline with its task, the Orchestrator`s edit shows as a diff, and Talk reaches it', async ($, on) => {
-  mock.clock(on, { now: NOW })
+test('a subagent shows in the tree, its page has its task and the Orchestrator`s page its edit as a diff, and the composer`s @name reaches it', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
   const sent: { to: string; text: string }[] = []
   world(on, sent)
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
-  await $.command.run(deck('details'))
+  await $.command.run(deck(''))
   await $.turn.start({ text: 'fix the bug in app.ts', turnId: 't1' })
   await $.agent.spawn(spawn('scout', 'hunt the bug', 'Find the bug in src/app.ts'))
   await $.tool.call({ tool: 'Edit', file_path: '/repo/src/app.ts', old_string: 'const b = 2', new_string: 'const b = 3' })
+  await clock.advance(1000)
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-    expect(await ui.find({ key: 'agent:agent-x1' })).toBeDefined()
+    expect((await ui.find({ key: 'agent:agent-x1' }))?.props).toMatchObject({ label: 'scout', plain: true })
 
     await ui.press({ key: 'agent:main' })
-    await ui.press({ key: 'detail:edits' })
+    await ui.press({ key: 'page:fold:edits' })
     expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
+    await ui.press({ key: 'page:fold:edits' })
+    await ui.press({ key: 'key:b' })
 
     await ui.press({ key: 'agent:agent-x1' })
-    expect(await ui.find({ type: 'Text', text: 'Find the bug in src/app.ts' })).toBeDefined()
-    await ui.press({ key: 'detail:chat' })
-    await ui.input({ key: 'chat:agent-x1', text: `hello from ${surface}` })
-
-    // its row in the outline, under its label, selected; no image on either surface
-    expect((await ui.find({ key: 'agent:agent-x1' }))?.props).toMatchObject({ label: 'scout', variant: 'primary' })
-    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
-    await ui.press({ key: 'detail:activity' })
+    expect((await ui.find({ key: 'page:task' }))?.text).toContain('Find the bug in src/app.ts')
+    await ui.press({ key: 'key:m' })
+    const field = (await ui.find({ type: 'Input' }))?.key ?? ''
+    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('@scout ')
+    await ui.input({ key: field, text: `@scout hello from ${surface}` })
+    await ui.press({ key: 'tab:now' })
     await ui.unmount()
   }
 
@@ -200,7 +198,11 @@ test('a subagent shows in the outline with its task, the Orchestrator`s edit sho
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it: b was 2.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-x1' })
   const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-  expect(await ui.find({ type: 'Text', text: 'Done: Found it: b was 2.' })).toBeDefined()
+  // done, it folds under the Orchestrator: open the fold, then its page
+  expect((await ui.find({ key: 'fold:main' }))?.props.label).toBe('▸ 1 done')
+  await ui.press({ key: 'fold:main' })
+  await ui.press({ key: 'agent:agent-x1' })
+  expect((await ui.find({ key: 'page:result' }))?.text).toContain('Found it: b was 2.')
   await ui.unmount()
 })
 

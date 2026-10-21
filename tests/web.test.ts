@@ -699,24 +699,23 @@ test('a restart that cannot take its old port again takes another and says so; o
   expect(linkOf(answer.text).url).toBe('http://127.0.0.1:5555/?t=token-kept')
 })
 
-test('the pane: Classic`s Open dashboard starts the web deck; with no Browser pane to open it, the link shows as markdown', async ($, on) => {
+test('the pane: with no Browser pane to open the web deck in, its link shows as markdown under the header', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ hasBrowser: false })
   world(on, w)
   await work($)
-  await $.command.run(deck('classic'))
-  await clock.advance(500)
-  const pane = { plugin: 'agent-deck', surface: 'desktop' as const, component: 'Pane' as const, requestId: 'agent-deck', viewport: { columns: 100, rows: 50, isFullscreen: true }, props: { title: 'Agent Deck', isFocused: true, bodyColumns: 96, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const }
-  const ui = await $.ui.mount(pane)
-  expect((await ui.find({ key: 'web:open' }))?.props).toMatchObject({ label: 'Open dashboard', variant: 'primary', hotkey: 'w' })
-  expect(await ui.find({ key: 'web:link' })).toBeUndefined()
-  await ui.press({ key: 'web:open' })
+  await $.command.run(deck('web'))
   await clock.settle()
   expect(w.children).toHaveLength(1)
   // both spellings of the Browser pane's server, then the tool: none opened it
   expect(w.opened.map(one => one.server)).toEqual(['Claude_Browser', 'Claude Browser'])
+  await $.command.run(deck(''))
+  await clock.advance(500)
+  const pane = { plugin: 'agent-deck', surface: 'desktop' as const, component: 'Pane' as const, requestId: 'agent-deck', viewport: { columns: 100, rows: 50, isFullscreen: true }, props: { title: 'Agent Deck', isFocused: true, bodyColumns: 96, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const }
+  const ui = await $.ui.mount(pane)
   const link = await ui.find({ key: 'web:link' })
   expect(link?.type).toBe('Markdown')
-  expect(link?.text).toMatch(new RegExp(`^\\[Open Agent Deck\\]\\(http://127\\.0\\.0\\.1:${PORT}/\\?t=[0-9a-f-]{36}\\) in the Browser pane$`))
+  expect(link?.text).toContain(`[Open Agent Deck](http://127.0.0.1:${PORT}/?t=`)
+  expect(link?.text).toMatch(/\) in the Browser pane$/)
   await ui.unmount()
 })
