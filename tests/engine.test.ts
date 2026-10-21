@@ -35,7 +35,15 @@ function world(on: On, saved: DeckSnapshot[]) {
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [] }))
   on('agent.spawn', ($, e) => ({ model: 'claude-haiku', agentId: `agent-${e.name ?? 'x'}` }))
-  on('prompt.submit', ($, e) => ({ text: e.text }))
+  // a prompt submitted while idle starts its turn inside prompt.submit, as the engine does, while held (`submitStarting`)
+  on('prompt.submit', async ($, e) => {
+    if (submitting.isHeld) {
+      await new Promise<void>(resolve => {
+        submitting.release = resolve
+      })
+    }
+    return { text: e.text }
+  })
   on('session.send', () => ({ isDelivered: true }))
   on('session.receive', ($, e) => ({ text: e.text }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
@@ -65,6 +73,26 @@ function world(on: On, saved: DeckSnapshot[]) {
 
 /** Lets the SendMessage call held open end. */
 const sending: { release?: () => void } = {}
+
+/** Holds prompt.submit open while the test starts its turn inside it, then lets it end. */
+const submitting: { isHeld: boolean; release?: () => void } = { isHeld: false }
+
+/**
+ * A prompt submitted while the session is idle, as the engine runs it: its
+ * turn starts (turn.start) inside prompt.submit, before `next(e)` resolves;
+ * then the turn ends, answered or interrupted.
+ */
+async function submitStarting($: Engine, clock: MockClock, prompt: { text: string; origin: { kind: 'composer' } | { kind: 'task-notification' } | { kind: 'peer' }; wait: boolean }, turnId: string, reason: 'answer' | 'aborted') {
+  submitting.isHeld = true
+  const submitted = $.prompt.submit(prompt)
+  await clock.settle()
+  await $.turn.start({ text: prompt.text, turnId })
+  submitting.isHeld = false
+  submitting.release?.()
+  await submitted
+  await $.turn.complete({ turnId, answer: reason === 'answer' ? `Done with ${turnId}.` : '', durationMs: 1000, isAborted: reason === 'aborted', reason })
+  await clock.settle()
+}
 
 /** A SendMessage call of loop `agentId`, its session.send raised inside it as the engine's tool raises it. */
 async function sendInside($: Engine, clock: MockClock, call: { to: string; message: string; summary?: string; agentId: string }) {
@@ -226,6 +254,27 @@ test('a prompt typed over the running turn is logged when you send it, once: the
   await $.turn.start({ text: 'Then the docs', turnId: 't4' })
   await clock.advance(2000)
   expect(promptsOf(lastOf(saved))).toEqual(['Map the repository', 'Also note the test runner', 'Then the docs', 'And the changelog', 'Then the docs'])
+})
+
+test('your prompt after an interrupted notification`s turn is yours: each prompt of yours a row once, though each turn starts inside its prompt`s submit', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  world(on, saved)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+
+  await submitStarting($, clock, typed('spin up three agents and make one secretly evil'), 't1', 'answer')
+  // an agent's hand-back and then its task's notification each start a turn; you interrupt the last
+  await submitStarting($, clock, { text: 'Another Claude session sent a message:\n<agent-message from="agent-bravo">\n[Subagent hand-back] core.py is done.\n</agent-message>', origin: { kind: 'peer' }, wait: false }, 't2', 'answer')
+  await submitStarting($, clock, { text: '<task-notification>\n<task-id>agent-bravo</task-id>\n<status>completed</status>\n<summary>Agent "Bravo" finished</summary>\n</task-notification>', origin: { kind: 'task-notification' }, wait: false }, 't3', 'aborted')
+  // "Interrupted · What should Claude do instead?": your steering
+  await submitStarting($, clock, typed('no this is not what i wanted: three plain agents that talk to each other'), 't4', 'answer')
+  await clock.advance(2000)
+
+  const data = lastOf(saved)
+  expect(promptsOf(data)).toEqual(['spin up three agents and make one secretly evil', 'no this is not what i wanted: three plain agents that talk to each other'])
+  expect(data.goals.map(goal => goal.text).slice(-1)).toEqual(['no this is not what i wanted: three plain agents that talk to each other'])
+  // the hand-back and the notification are no words of yours
+  expect(data.messages.some(one => one.from === M.YOU && one.text.includes('hand-back'))).toBe(false)
 })
 
 test('Claude Code`s notifications are rows from Claude Code to you, as it sent them (a type the deck does not know too); those that ask something are needs, each taken down when what it waits on moves', async ($, on) => {

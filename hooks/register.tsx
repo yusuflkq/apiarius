@@ -272,8 +272,48 @@ async function respell($: EngineInterface, activity: DeckActivity, tool: string,
 /** A slash command's expansion (classic UserPromptExpansion), held for the prompt it becomes: its headline. */
 let expansion: { headline: string; at: number } | null = null
 
-/** Whether the last prompt submitted, the one the next turn starts with, is the person's own words; null while none was seen. */
-let isNextTurnTheirs: boolean | null = null
+/** A prompt gone in whose turn may start yet: its words, whether they are the person's own, whether it came over a running turn, whether its submit has resolved. */
+type Submitted = { text: string; isTheirs: boolean; isQueued: boolean; isSettled: boolean }
+
+/**
+ * The prompts submitted whose turn may start yet, newest last (at most 20).
+ * The engine starts a prompt's turn inside `prompt.submit`'s `next(e)`, so
+ * its `turn.start` comes before the submit's hook goes on: each is noted
+ * before `next(e)`, and the turn it starts finds it by its words. (Read
+ * after `next(e)`, a turn took the prompt before it for its own: after a
+ * notification's turn, your next prompt was taken for no words of yours.)
+ */
+const submitted: Submitted[] = []
+
+/** Notes a prompt going in, before its turn can start. One submitted while the session is idle starts its turn at once, so any other such left (a local command's, which starts none) is let go. */
+function noteSubmitted(text: string, isTheirs: boolean, isQueued: boolean): Submitted {
+  if (!isQueued) for (let i = submitted.length - 1; i >= 0; i--) if (submitted[i]?.isQueued === false) submitted.splice(i, 1)
+  const entry: Submitted = { text: text.trim(), isTheirs, isQueued, isSettled: false }
+  submitted.push(entry)
+  if (submitted.length > 20) submitted.splice(0, submitted.length - 20)
+  return entry
+}
+
+/** Lets a prompt go whose turn will never start: a hook dropped it. */
+function dropSubmitted(entry: Submitted) {
+  const at = submitted.indexOf(entry)
+  if (at >= 0) submitted.splice(at, 1)
+}
+
+/**
+ * The prompt a turn of the main loop's starts with, let go once found: the
+ * newest submitted in its words; else, as a hook may have rewritten them,
+ * the one submitted while idle whose submit is still under way. Undefined
+ * for a turn no prompt.submit came before (one a background task's
+ * notification starts).
+ */
+function takeSubmitted(text: string): Submitted | undefined {
+  const said = text.trim()
+  let at = -1
+  for (let i = submitted.length - 1; i >= 0 && at < 0; i--) if (submitted[i]?.text === said) at = i
+  for (let i = submitted.length - 1; i >= 0 && at < 0; i--) if (submitted[i]?.isQueued === false && submitted[i]?.isSettled === false) at = i
+  return at < 0 ? undefined : submitted.splice(at, 1)[0]
+}
 
 /**
  * Your prompts typed while a turn of the main loop's ran, logged when they
@@ -3040,7 +3080,11 @@ export const register: Register = on => {
     const isDecks = e.origin.kind === 'plugin' && e.origin.name === $.plugin.name
     // the deck's prompt asking the Orchestrator to pass your words to a subagent is no goal of yours, nor a follow-up
     if (isDecks && isRelayPrompt(e.text)) kind = 'event'
+    // the turn it starts begins inside next(e): noted first, so that turn knows whose words it starts with
+    const entry = noteSubmitted(e.text, M.isUsersWords(e.origin), e.turnId !== undefined)
     const result = await next(e)
+    if (result.drop !== undefined) dropSubmitted(entry)
+    else entry.isSettled = true
     try {
       const now = await $.clock.now()
       let isChanged = false
@@ -3050,8 +3094,6 @@ export const register: Register = on => {
           markDeckPrompt(e.text)
           markRelayPrompt(e.text)
         }
-        // the turn it starts logs it as yours only when it is in your words: an agent's hand-back or a notification is not
-        isNextTurnTheirs = M.isUsersWords(e.origin)
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
         expansion = null
         if (kind !== 'event') isChanged = M.noteGoal(data, kind, { text: e.text, origin: e.origin.kind, at: now, ...(kind === 'goal' && said ? { headline: said } : {}) }) !== undefined
@@ -3100,6 +3142,8 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     // a subagent's or teammate's run starts a turn of its own (engine 2.1.304): none of it is the main loop's
     if (e.agentId !== undefined) return next(e)
+    // the prompt it starts with, noted by prompt.submit before its next(e): taken before anything is awaited
+    const prompt = takeSubmitted(e.text)
     try {
       const now = await $.clock.now()
       const main = M.agentOf(data, M.MAIN)
@@ -3113,8 +3157,7 @@ export const register: Register = on => {
       }
       // a turn whose prompt came from elsewhere (an agent's hand-back, already its result) is no prompt of yours, nor one that
       // opens with a notice: a background agent's <task-notification> can start a turn with no prompt.submit before it
-      const isTheirs = (isNextTurnTheirs ?? true) && !M.isNoticeText(e.text)
-      isNextTurnTheirs = null
+      const isTheirs = (prompt?.isTheirs ?? true) && !M.isNoticeText(e.text)
       // your words from the deck were logged when you sent them; a relay of them to a subagent goes in no Talk of the Orchestrator's
       const isDecks = takeRelayTurn(e.text, e.turnId) !== undefined || takeDeckPrompt(e.text)
       // a prompt you typed over the turn before was logged as you typed it
