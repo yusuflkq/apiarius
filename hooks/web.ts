@@ -380,7 +380,7 @@ function editorsByPath(data: DeckData): Map<string, string[]> {
  * characters (`isCut` then), whether it was delivered, and the command or
  * call it belongs to. v1 reads an agent's words to nobody in particular (its
  * words after your message, `to` '') as to you, as it always has: v2 says
- * whom they went to (`chatOf`).
+ * whom they went to (`deckStateOf`'s chat rows: `to` null).
  */
 function webMessageOf(message: DeckData['messages'][number]): WebMessage {
   const text = cutMarkdown(message.text, WEB_CAPS.messageChars)
