@@ -44,7 +44,13 @@ function world(on: On, saved: DeckSnapshot[]) {
     }
     return { text: e.text }
   })
-  on('session.send', () => ({ isDelivered: true }))
+  // a send to a finished agent resumes it inside the send, as the engine does, while one is set (`resuming.run`)
+  on('session.send', async () => {
+    const run = resuming.run
+    resuming.run = undefined
+    if (run) await run()
+    return { isDelivered: true }
+  })
   on('session.receive', ($, e) => ({ text: e.text }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -73,6 +79,9 @@ function world(on: On, saved: DeckSnapshot[]) {
 
 /** Lets the SendMessage call held open end. */
 const sending: { release?: () => void } = {}
+
+/** The resume a send raises inside itself, once. */
+const resuming: { run?: () => Promise<unknown> } = {}
 
 /** Holds prompt.submit open while the test starts its turn inside it, then lets it end. */
 const submitting: { isHeld: boolean; release?: () => void } = { isHeld: false }
@@ -301,6 +310,50 @@ test('/login run alone is the command you ran, a row of its own and never a prom
     ['command', '', '/model opus'],
   ])
   expect(data.goals.map(goal => goal.text)).toEqual(['hi spin up an orchestrator and 3 agents', 'now the real work'])
+})
+
+test('a SendMessage that wakes a finished agent is one message row, no spawn: the agent resumed, its task kept, whether its resume comes inside the send, after it, or with no send', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  world(on, saved)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.prompt.submit(typed('Play the imposter game with three players'))
+  await $.turn.start({ text: 'Play the imposter game with three players', turnId: 't1' })
+  await $.agent.spawn(spawnOf('red', 'You are player Red. Give your first clue.'))
+  await $.turn.complete({ turnId: 'turn-red', answer: 'RED: the quiet piece decides.', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-red' })
+  await clock.advance(60_000)
+  const startedAt = M.agentOf(lastOf(saved), 'agent-red')!.startedAt
+
+  // round 1: the Orchestrator's SendMessage to Red, finished, resumes it inside the send
+  const round1 = 'ROUND 1 messages:\n- BLUE: "the quietest piece decides"\nGive your round-2 message.'
+  resuming.run = () => $.agent.spawn({ ...spawnOf('red', round1), resume: { agentId: 'agent-red' } })
+  await $.session.send({ to: 'agent-red', text: round1, origin: { kind: 'model' } })
+  await clock.advance(2000)
+  let red = M.agentOf(lastOf(saved), 'agent-red')!
+  expect([red.status, red.prompt, red.startedAt, red.resumedAt]).toEqual(['running', 'You are player Red. Give your first clue.', startedAt, NOW + 60_000])
+  await $.turn.complete({ turnId: 'turn-red-2', answer: 'RED round 2: I open with the king pawn.', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-red' })
+
+  // round 2: the send logged first, the resume after it
+  const round2 = 'ROUND 2 messages:\n- BLUE: "pure skill"\nGive your round-3 message.'
+  await $.session.send({ to: 'red', text: round2, origin: { kind: 'model' } })
+  await $.agent.spawn({ ...spawnOf('red', round2), resume: { agentId: 'agent-red' } })
+  await $.turn.complete({ turnId: 'turn-red-3', answer: 'RED round 3.', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-red' })
+  // Claude Code brings it back with words of its own and no send
+  await $.agent.spawn({ ...spawnOf('red', 'Continue from where you stopped.'), resume: { agentId: 'agent-red' } })
+  await clock.advance(2000)
+
+  const data = lastOf(saved)
+  expect(data.messages.filter(one => one.to === 'agent-red').map(one => [one.from, one.kind, one.text])).toEqual([
+    [M.MAIN, 'spawn', 'You are player Red. Give your first clue.'],
+    [M.MAIN, 'message', round1],
+    [M.MAIN, 'message', round2],
+    [M.MAIN, 'message', 'Continue from where you stopped.'],
+  ])
+  red = M.agentOf(data, 'agent-red')!
+  expect([red.status, red.prompt, red.description, red.startedAt]).toEqual(['running', 'You are player Red. Give your first clue.', 'red work', startedAt])
+  expect(red.resumedAt).toBeGreaterThan(NOW + 60_000)
+  // one agent, never a second row for a resume
+  expect(data.agents.filter(one => one.name === 'red').length).toBe(1)
 })
 
 test('Claude Code`s notifications are rows from Claude Code to you, as it sent them (a type the deck does not know too); those that ask something are needs, each taken down when what it waits on moves', async ($, on) => {

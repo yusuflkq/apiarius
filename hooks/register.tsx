@@ -363,6 +363,26 @@ function takeTypedMidTurn(text: string): boolean {
  */
 const sendTitles: { id: string; from: string; text: string; summary: string }[] = []
 
+/**
+ * The sends under way (`session.send` before its `next(e)` resolves), each
+ * to whom and with which words: a send that wakes a finished agent raises
+ * that agent's resume inside it, and the send logs the one message.
+ */
+const sendsInFlight: { from: string; to: string; text: string }[] = []
+
+/** The message rows a resume logged for want of a send under way, by id, the newest 20: a send of the same words after it is that one row. */
+const resumeRows: string[] = []
+
+/** A resumed agent's waking words, one message from `from`: the send under way to it (or just logged) logs them; with none, the resume does. */
+function logResumeWords(agent: DeckAgent, from: string, words: string, at: number) {
+  if (words.trim() === '') return
+  const isSent = sendsInFlight.some(one => one.text.trim() === words.trim() && (one.to === agent.id || M.resolveRecipient(data, one.to)?.id === agent.id))
+  if (isSent || M.loggedSendOf(data, { to: agent.id, text: words, at })) return
+  const row = M.addMessage(data, { from, to: agent.id, kind: 'message', text: words, at })
+  resumeRows.push(row.id)
+  if (resumeRows.length > 20) resumeRows.splice(0, resumeRows.length - 20)
+}
+
 /** The summary of the SendMessage under way that sends `text` from loop `from`; '' for none. */
 function sendTitleOf(from: string, text: string): string {
   const sent = F.oneLine(text)
@@ -1541,7 +1561,7 @@ async function sendChat($: EngineInterface, agentId: string, text: string, ackId
   const message = M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered, ...(ackId ? { ackId } : {}) })
   if (sent.isDelivered) {
     $.ui.toast(`Sent to ${W.rowTitleOf(agent)}`)
-    if (M.isEnded(agent.status)) M.reopen(agent)
+    if (M.isEnded(agent.status)) M.reopen(agent, now)
     replies.set(agentId, { since: now, isRead: false })
     await ack($, ackId, 'delivered', 'It reads it at its next step')
   } else if (isAutoModeRefusal(sent.reason)) {
@@ -1662,7 +1682,7 @@ async function relayPassed($: EngineInterface, relay: Relay, now: number): Promi
   relay.isPassed = true
   relay.message.isDelivered = true
   const agent = M.agentOf(data, relay.agentId)
-  if (agent && M.isEnded(agent.status)) M.reopen(agent)
+  if (agent && M.isEnded(agent.status)) M.reopen(agent, now)
   replies.set(relay.agentId, { since: now, isRead: false })
   $.ui.toast(`Passed on to ${relay.label} by the Orchestrator.`)
   await ack($, relay.ackId, 'delivered', 'Passed on by the Orchestrator')
@@ -2861,7 +2881,7 @@ export const register: Register = on => {
       // a loop no spawn named is a workflow's agent while a run is live, else the engine's own
       agent = M.seeLoop(data, agentId, start)
       // a call is work: an ended agent (a message woke it) or an idle teammate runs again
-      if (M.isEnded(agent.status) || agent.status === 'idle') M.reopen(agent)
+      if (M.isEnded(agent.status) || agent.status === 'idle') M.reopen(agent, start)
       delete agent.endedAt
       // the agent the engine waited on for the person moved on; a call of its a reload left noted as held on you has ended
       M.clearNeeds(data, { kind: 'start', agent: agentId })
@@ -3044,7 +3064,11 @@ export const register: Register = on => {
     try {
       const now = await $.clock.now()
       const parentId = e.parentAgentId ?? M.MAIN
-      if (result.agentId) {
+      // a message woke a finished agent (SendMessage to it), or Claude Code brought one back: the same agent resumed, no new spawn
+      const resumed = e.resume && result.agentId ? M.noteResume(data, result.agentId, now) : undefined
+      if (resumed) {
+        logResumeWords(resumed, resumed.parentId ?? parentId, e.prompt, now)
+      } else if (result.agentId) {
         if (parentId !== M.MAIN) M.seeLoop(data, parentId, now)
         // the row its Agent call made takes the agent's id: the same row, never a second one
         const { agent, from } = M.noteSpawn(data, {
@@ -3062,9 +3086,15 @@ export const register: Register = on => {
           at: now,
         })
         if (from !== undefined) renameInView(from, agent.id)
-        // a workflow's agents fold into one row: their hand-offs stay in the run
-        if (!e.workflow) M.addMessage(data, { from: agent.parentId ?? parentId, to: agent.id, kind: 'spawn', text: e.prompt, at: now })
-      } else if (result.deny !== undefined && !e.workflow) {
+        if (e.resume) {
+          // resumed, though the deck never saw it start (a reload lost it): its words a message, once
+          agent.resumedAt = now
+          logResumeWords(agent, agent.parentId ?? parentId, e.prompt, now)
+        } else if (!e.workflow) {
+          // a workflow's agents fold into one row: their hand-offs stay in the run
+          M.addMessage(data, { from: agent.parentId ?? parentId, to: agent.id, kind: 'spawn', text: e.prompt, at: now })
+        }
+      } else if (result.deny !== undefined && !e.workflow && !e.resume) {
         M.settleAgentCall(data, { toolUseId: e.tool_use_id, isStarted: false, why: result.deny, at: now })
       }
       touched($, now)
@@ -3217,7 +3247,7 @@ export const register: Register = on => {
         agent.lastAt = now
         if (!agent.model) agent.model = usageOfStep.model
         // a step of an ended agent's loop (a message woke it), or of an idle teammate's, is a new run
-        if (agent.kind !== 'main' && (M.isEnded(agent.status) || agent.status === 'idle')) M.reopen(agent)
+        if (agent.kind !== 'main' && (M.isEnded(agent.status) || agent.status === 'idle')) M.reopen(agent, now)
         M.bump(data, now, 'tokens', usageOfStep.input_tokens + usageOfStep.output_tokens + usageOfStep.cache_creation_input_tokens + usageOfStep.cache_read_input_tokens)
         touched($, now)
       }
@@ -3277,7 +3307,8 @@ export const register: Register = on => {
   on('classic.SubagentStart', async ($, e, next) => {
     try {
       const agent = M.agentOf(data, e.agent_id)
-      if (agent && M.reopen(agent)) touched($, await $.clock.now())
+      const now = await $.clock.now()
+      if (agent && M.reopen(agent, now)) touched($, now)
     } catch {
       // the start stands whatever the deck makes of it
     }
@@ -3345,7 +3376,15 @@ export const register: Register = on => {
   })
 
   on('session.send', async ($, e, next) => {
-    const result = await next(e)
+    // a resume this send causes (its agent had finished) is raised inside next(e): it knows the send logs the message
+    const flight = { from: e.agentId ?? M.MAIN, to: typeof e.to === 'string' ? e.to : '', text: e.text }
+    sendsInFlight.push(flight)
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } finally {
+      sendsInFlight.splice(sendsInFlight.indexOf(flight), 1)
+    }
     try {
       const isMine = e.origin.kind === 'plugin' && e.origin.name === $.plugin.name
       if (!isMine) {
@@ -3358,8 +3397,15 @@ export const register: Register = on => {
         // the Orchestrator passing your words on (a relay): your message, now delivered, and no second one
         const relay = from === M.MAIN && e.origin.kind === 'model' && result.isDelivered && target ? passRelay(target.id, e.text) : undefined
         const title = e.origin.kind === 'model' ? sendTitleOf(from, e.text) : ''
+        // the resume it caused logged its words already (raised before this send): that row is this send's
+        const woke = M.loggedSendOf(data, { to, text: e.text, at: now })
+        const resumeRow = woke && resumeRows.includes(woke.id) ? woke : undefined
         if (relay) await relayPassed($, relay, now)
-        else M.addMessage(data, { from, to, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered, ...(title !== '' ? { title } : {}) })
+        else if (resumeRow) {
+          resumeRow.from = from
+          resumeRow.isDelivered = result.isDelivered
+          if (title !== '') resumeRow.title = title
+        } else M.addMessage(data, { from, to, kind: 'message', text: e.text, at: now, isDelivered: result.isDelivered, ...(title !== '' ? { title } : {}) })
         touched($, now)
       }
     } catch {

@@ -438,7 +438,7 @@ function rowOf(r) {
     name: str(r.name), description: str(r.description), type: str(r.type), shortId: str(r.shortId),
     title: str(r.title) || str(r.name) || str(r.description) || str(r.type) || str(r.shortId) || r.id,
     live: live && typeof live.tool === 'string' ? { tool: live.tool, text: str(live.text), at: numOr(live.at, 0) } : null,
-    startedAt: numOr(r.startedAt, 0), endedAt: numOr(r.endedAt, null), elapsed: str(r.elapsed),
+    startedAt: numOr(r.startedAt, 0), endedAt: numOr(r.endedAt, null), resumedAt: numOr(r.resumedAt, null), elapsed: str(r.elapsed),
     background: r.background === true, model: str(r.model), avatar: numOr(r.avatar, 0), needs: numOr(r.needs, 0),
     fold: typeof r.fold === 'string' && r.fold ? r.fold : null,
     task: str(r.task), isTaskCut: r.isTaskCut === true, result: str(r.result), isResultCut: r.isResultCut === true,
@@ -1539,11 +1539,15 @@ function NowLine(a) {
 }
 const nowTitle = a => (a.live ? `${a.live.tool} ${a.live.text}` : a.result ? firstLine(a.result, 600) : '');
 
-/** "Started 4m ago" while it works, "Finished 2m ago" (or failed, stopped) once it ended. */
+/** When its run began: its start, or when a message last woke it (resumed). */
+const runStartOf = a => Math.max(a.startedAt || 0, a.resumedAt || 0);
+
+/** "Started 4m ago" while it works ("Resumed 1m ago" once a message woke it), "Finished 2m ago" (or failed, stopped) once it ended. */
 function runTime(a) {
   const st = stateOf(a);
   if (a.endedAt != null && !isLive(a.status)) return `${st === 'failed' ? 'Failed' : st === 'stopped' ? 'Stopped' : 'Finished'} ${agoText(a.endedAt)}`;
-  return a.startedAt ? `Started ${agoText(a.startedAt)}` : '';
+  const from = runStartOf(a);
+  return from ? `${from > (a.startedAt || 0) ? 'Resumed' : 'Started'} ${agoText(from)}` : '';
 }
 
 function RunCard(a) {
@@ -1725,7 +1729,7 @@ function treeRows() {
 /** An agent's elapsed time: the state's words, kept current on the page's clock while it is at work (the mod's elapsedOf). */
 function elapsedOf(a) {
   if (!a.elapsed || a.endedAt != null || !isLive(a.status)) return a.elapsed;
-  const from = a.id === 'main' ? (S.header.turn && S.header.turn.at) : a.startedAt;
+  const from = a.id === 'main' ? (S.header.turn && S.header.turn.at) : runStartOf(a);
   if (!from) return a.elapsed;
   const ms = Math.max(0, liveNow() - from);
   return ms < 60000 ? '<1m' : dur(ms);

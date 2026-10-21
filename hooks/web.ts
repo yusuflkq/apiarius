@@ -627,7 +627,9 @@ export type V2AgentRow = {
   live: { tool: string; text: string; at: number } | null
   startedAt: number
   endedAt: number | null
-  /** How long it has been at it, coarse ("<1m", "4m"), or how long its run took; the Orchestrator's: its turn's, '' between turns. */
+  /** When a message last woke it, finished or idle (a SendMessage resuming it): the same agent, no new spawn; null for one never resumed. */
+  resumedAt: number | null
+  /** How long it has been at it, coarse ("<1m", "4m"), or how long its run took (a resumed one's since it was woken); the Orchestrator's: its turn's, '' between turns. */
   elapsed: string
   /** Its spawn ran it in the background (every teammate's does): only such an agent can be stopped (`stopAgent`). */
   background: boolean
@@ -933,6 +935,7 @@ function agentRowOf(data: DeckData, agent: DeckAgent, now: number, needs: Readon
     live: liveOf(agent),
     startedAt: agent.startedAt,
     endedAt: agent.endedAt ?? null,
+    resumedAt: isMain ? null : (agent.resumedAt ?? null),
     elapsed: isMain ? (data.mainTurnId !== undefined && turnAt !== undefined ? M.elapsedOf({ ...agent, startedAt: turnAt, endedAt: undefined }, now) : '') : M.elapsedOf(agent, now),
     background: agent.kind === 'teammate' || agent.background === true,
     model: shortModel(agent.model),

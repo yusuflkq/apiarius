@@ -1068,6 +1068,7 @@ function healAgent(agent: DeckAgent): DeckAgent {
   for (const field of ['toolUseId', 'goal', 'workflow'] as const) if (typeof loose[field] !== 'string') delete agent[field]
   if (typeof loose.background !== 'boolean') delete agent.background
   if (num(loose.todosAt) === undefined) delete agent.todosAt
+  if (num(loose.resumedAt) === undefined) delete agent.resumedAt
   if (!['handback', 'answer', 'call', 'stop'].includes(String(loose.resultVia))) delete agent.resultVia
   // the words earlier builds made up for an Agent call that started no agent: no result of any agent's
   if (agent.resultVia === undefined && agent.kind !== 'main' && typeof agent.answer === 'string' && MADE_UP_RESULT.test(agent.answer)) delete agent.answer
@@ -1334,8 +1335,10 @@ export function statusOf(agent: DeckAgent, data?: DeckData): DeckShownStatus {
  * the figure changes at most once a minute and redraws for it are rare.
  */
 export function elapsedOf(agent: DeckAgent, now: number): string {
-  if (agent.endedAt !== undefined) return dur(Math.max(0, agent.endedAt - agent.startedAt))
-  const ms = Math.max(0, now - agent.startedAt)
+  // a resumed agent's run is the one since it was woken
+  const from = Math.max(agent.startedAt, agent.resumedAt ?? 0)
+  if (agent.endedAt !== undefined) return dur(Math.max(0, agent.endedAt - from))
+  const ms = Math.max(0, now - from)
   return ms < 60_000 ? '<1m' : dur(ms)
 }
 
@@ -1973,14 +1976,53 @@ export function seeLoop(data: DeckData, id: string, now: number): DeckAgent {
   return made
 }
 
-/** Sets an ended or idle agent going again (a message woke it, a step of its loop ran): its run's result is open again. */
-export function reopen(agent: DeckAgent): boolean {
+/** Sets an ended or idle agent going again (a message woke it, a step of its loop ran): its run's result is open again, and with `at` it was resumed then. */
+export function reopen(agent: DeckAgent, at?: number): boolean {
   if (agent.kind === 'main' || agent.kind === 'you' || agent.kind === 'peer') return false
   if (!isEnded(agent.status) && agent.status !== 'idle') return false
   agent.status = 'running'
   delete agent.endedAt
   delete agent.resultVia
+  if (at !== undefined) agent.resumedAt = at
   return true
+}
+
+/**
+ * A known agent resumed (`agent.spawn` with `resume`: a SendMessage woke it,
+ * or Claude Code brought it back): no new spawn, the same row, its task and
+ * description as its first spawn gave them, running again from `at`.
+ * Undefined for an agent the deck does not know.
+ */
+export function noteResume(data: DeckData, agentId: string, at: number): DeckAgent | undefined {
+  const agent = agentOf(data, agentId)
+  if (!agent || agent.kind === 'main' || agent.kind === 'you' || agent.kind === 'peer') return undefined
+  reopen(agent, at)
+  agent.status = 'running'
+  delete agent.endedAt
+  agent.resumedAt = at
+  agent.lastAt = Math.max(agent.lastAt, at)
+  return agent
+}
+
+/** How close in time a send and the resume it caused are, to be one message. */
+const RESUME_MS = 30_000
+
+/**
+ * The message row a send to `to` with these words logged lately (within
+ * half a minute of `at`): a SendMessage that wakes a finished agent raises
+ * its send and the agent's resume both, and is one message.
+ */
+export function loggedSendOf(data: DeckData, send: { to: string; text: string; at: number }): DeckMessage | undefined {
+  const words = oneLine(send.text)
+  if (words === '') return undefined
+  for (let i = data.messages.length - 1; i >= 0; i--) {
+    const one = data.messages[i]
+    if (!one) continue
+    if (send.at - one.at > RESUME_MS) return undefined
+    // the first words are enough: a row past its cut keeps them
+    if (one.kind === 'message' && one.to === send.to && oneLine(one.full ?? one.text).slice(0, 300) === words.slice(0, 300)) return one
+  }
+  return undefined
 }
 
 // Results: what each agent handed back.

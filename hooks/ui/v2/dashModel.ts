@@ -249,18 +249,25 @@ export function modelLine(row: V2AgentRow): string {
 /** When it ran, as a card's foot says it: "Started 4m ago", "Finished 2m ago", "Failed 1h ago", "Stopped 3m ago", "Waiting · 12m". */
 export function runTitle(row: V2AgentRow, now: number): string {
   const ended = row.endedAt ?? row.startedAt
+  const from = runStartOf(row)
   if (row.isStopped) return `Stopped ${agoText(ended, now)}`
   if (row.status === 'done') return `Finished ${agoText(ended, now)}`
   if (row.status === 'failed') return `Failed ${agoText(ended, now)}`
-  if (row.status === 'waiting') return `Waiting · ${span(now - row.startedAt)}`
-  return `Started ${agoText(row.startedAt, now)}`
+  if (row.status === 'waiting') return `Waiting · ${span(now - from)}`
+  // a message woke it: the same agent, resumed, no new start
+  return `${from > row.startedAt ? 'Resumed' : 'Started'} ${agoText(from, now)}`
+}
+
+/** When its run began: its start, or when a message last woke it. */
+function runStartOf(row: V2AgentRow): number {
+  return Math.max(row.startedAt, row.resumedAt ?? 0)
 }
 
 /** The same in fewer words, for a narrow card: "4m ago", "just now", "12m" while it waits. */
 export function runShort(row: V2AgentRow, now: number): string {
-  if (row.status === 'waiting' && !row.isStopped) return span(now - row.startedAt)
+  if (row.status === 'waiting' && !row.isStopped) return span(now - runStartOf(row))
   const isOver = row.isStopped || row.status === 'done' || row.status === 'failed'
-  return agoText(isOver ? (row.endedAt ?? row.startedAt) : row.startedAt, now)
+  return agoText(isOver ? (row.endedAt ?? row.startedAt) : runStartOf(row), now)
 }
 
 // The figures.

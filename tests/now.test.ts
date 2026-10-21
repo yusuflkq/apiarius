@@ -138,6 +138,10 @@ test('what a card says comes from the agent itself: its own todo in hand (else i
   expect(D.runTitle(scout, scout.endedAt! + 60_000)).toBe('Stopped 1m ago')
   expect(D.runTitle({ ...builder, status: 'running' }, builder.startedAt + 3 * 3_600_000)).toBe('Started 3h ago')
   expect(D.runTitle(builder, builder.startedAt + 29 * 60_000)).toBe('Waiting · 29m')
+  // a message woke it: resumed, its run since then, no new start
+  const woken = { ...tester, status: 'running' as const, endedAt: null, resumedAt: tester.startedAt + 20 * 60_000 }
+  expect(D.runTitle(woken, woken.resumedAt + 60_000)).toBe('Resumed 1m ago')
+  expect(D.runShort(woken, woken.resumedAt + 60_000)).toBe('1m ago')
 })
 
 test('a card an agent, in the order they started: the avatar, the name (keyed agent:<id>), its pill and Open →; the step box; the now line; model · tokens and when; every line of it opens the agent`s page', async ($, on) => {

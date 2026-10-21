@@ -339,6 +339,10 @@ test('the run cards: the Orchestrator, then each agent as it started; each its s
   assert.equal(find(card(BUILDER), 'run-step-n').length, 0)
   assert.equal(part(BUILDER, 'run-now'), 'Bash npm test -- rateLimit')
   assert.equal(part(BUILDER, 'run-foot'), 'sonnet-4.5 · 513k Started 29m ago')
+  // a message woke one that had finished: resumed, its run since then
+  p.load(sample(s => Object.assign(s.agents.find(r => r.id === TESTER), { status: 'running', endedAt: null, resumedAt: NOW - MIN })))
+  assert.equal(part(TESTER, 'run-foot'), 'haiku-4.5 · 76.9k Resumed 1m ago')
+  p.load(SAMPLE)
   // finished: what it handed back, and when; failed or stopped with nothing handed back: the word
   assert.equal(part(TESTER, 'run-head'), 'tester done')
   assert.equal(part(TESTER, 'run-now'), 'Wrote 6 tests in tests/rateLimit.test.ts ; all pass against the in-memory store.')

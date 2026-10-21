@@ -111,6 +111,12 @@ export type DeckAgent = {
   model?: string
   startedAt: number
   endedAt?: number
+  /**
+   * When it was last resumed, finished or idle (a SendMessage woke it, or
+   * Claude Code brought it back): the same agent, no new spawn, its run since
+   * then that wake's. Absent for an agent never resumed.
+   */
+  resumedAt?: number
   lastAt: number
   tools: number
   errors: number
