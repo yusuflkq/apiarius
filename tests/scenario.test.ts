@@ -260,24 +260,49 @@ async function cardsOf(ui: Drawing): Promise<string[]> {
   return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('card:') && !key.startsWith('card:open:')).map(key => key.slice('card:'.length))
 }
 
+/** An element of a drawing, as found under another. */
+type Node = { type?: string; key?: string; props?: Record<string, unknown>; children?: unknown[] }
+
+/** The elements under `el`, itself left out, in document order. */
+function nodesUnder(el: { children?: unknown[] }): Node[] {
+  const found: Node[] = []
+  const walk = (list: unknown[]) => {
+    for (const one of list) {
+      if (!one || typeof one !== 'object') continue
+      found.push(one as Node)
+      walk((one as Node).children ?? [])
+    }
+  }
+  walk(el.children ?? [])
+  return found
+}
+
 /**
  * Who spoke to whom, as Chat's group chat says it, in order: each group's
- * head (its sender, then "to X"; none to you, or for yours to the
- * Orchestrator), the line over a message stacked under it naming another.
+ * sender (the name its head presses, `chat:from:<key>`; you, for yours at
+ * the right) and recipient (the name "to" presses, `chat:to:<key>`; none to
+ * you, nor for yours to the Orchestrator), the line over a message stacked
+ * under it naming another.
  */
 function routesOf(boxes: readonly FoundElement[]): string[] {
   const routes: string[] = []
-  let from = ''
-  let to = ''
   for (const box of boxes) {
-    const key = box.key ?? ''
-    if (key.startsWith('grp:')) {
-      const head = /^[◆●▲■✦⬢★◉]?(.*?)(?:now|\d+[mhd])/.exec(box.text)?.[1] ?? ''
-      const [who = '', whom] = head.split(' to ')
-      from = who
-      to = whom ?? (who === 'You' ? 'Orchestrator' : 'you')
-    } else if ((key.startsWith('msg:') || key.startsWith('send:')) && !box.text.startsWith('Claude Code · ')) {
-      to = /^to (.+?) · /.exec(box.text)?.[1] ?? to
+    const group = box.key ?? ''
+    if (!group.startsWith('grp:')) continue
+    const nodes = nodesUnder(box)
+    const keyOf = (node: Node) => String(node.key ?? node.props?.key ?? '')
+    const label = (key: string) => String(nodes.find(node => keyOf(node) === key)?.props?.label ?? '')
+    const messages = nodes.filter(node => node.type === 'Box' && /^(msg|send):/.test(keyOf(node)))
+    const isMine = messages[0]?.props?.alignItems === 'flex-end'
+    const first = group.slice('grp:'.length)
+    const from = isMine ? 'You' : label(`chat:from:${first}`)
+    let to = label(`chat:to:${first}`) || (isMine ? 'Orchestrator' : 'you')
+    for (const message of messages) {
+      const key = keyOf(message)
+      if (key !== first) {
+        const line = nodes.find(node => keyOf(node) === `to:${key}`)
+        if (line) to = label(`chat:to:${key}`) || 'you'
+      }
       routes.push(`${from} → ${to}`)
     }
   }
@@ -387,9 +412,16 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     await ui.press({ key: 'tab:chat' })
     const boxes = await ui.findAll({ type: 'Box' })
     expect(routesOf(boxes)).toEqual(ROUTES)
-    const groups = boxes.filter(box => (box.key ?? '').startsWith('grp:'))
-    expect(groups.find(group => group.text.includes('reviewer to fixer'))?.text).toContain(ASK)
-    expect(groups.find(group => group.text.includes('fixer to reviewer'))?.text).toContain(REPLY)
+    // the group a sender's head names whom it went to: its words
+    const said = (from: string, to: string) =>
+      boxes.find(box => {
+        const key = (box.key ?? '').slice('grp:'.length)
+        const nodes = nodesUnder(box)
+        const label = (of: string) => nodes.find(node => (node.key ?? node.props?.key) === of)?.props?.label
+        return (box.key ?? '').startsWith('grp:') && label(`chat:from:${key}`) === from && label(`chat:to:${key}`) === to
+      })?.text
+    expect(said('reviewer', 'fixer')).toContain(ASK)
+    expect(said('fixer', 'reviewer')).toContain(REPLY)
 
     // Changes: the repository the agents edited, its three files and whose own edits touched each
     await ui.press({ key: 'tab:changes' })

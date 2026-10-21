@@ -1,19 +1,23 @@
 /**
- * Chat as a group chat, on the desktop and the terminal: yours at the right
- * in a blue bubble with what came of it under it; others' at the left under
- * the sender's avatar, name, "to <recipient>" and time, their words as
- * Markdown in a dark bubble; one sender's messages stacked under one name;
- * Claude Code's notices centred; a question held on you amber with "Answer
- * on Now →"; a long message folded with Show more; the one-row filter with
- * "+n more"; the window that keeps inside the pane's bounds; and the
- * terminal, which draws no image. Drawn by the deck itself (`/deck demo`
- * over the v2 sample, `/deck` over a live session).
+ * Chat as a group chat, on the desktop and the terminal: the member list at
+ * the top (Everyone, then every agent with its avatar, name and status; two
+ * or three columns, folded where the pane is narrow; one wrapped line on the
+ * terminal), an agent picked showing your conversation with it and pointing
+ * the composer at it; yours at the right in a blue bubble with what came of
+ * it and when under it; others' at the left under the sender's avatar, name,
+ * "to" the recipient's avatar and name, and time, each name opening that
+ * agent's page, their words as Markdown in a dark bubble; one sender's
+ * messages stacked under one name; Claude Code's notices centred; a question
+ * held on you amber with "Answer on Now →"; a long message folded with Show
+ * more; the window that keeps inside the pane's bounds; and "Did you mean"
+ * for a name several agents answer to. Drawn by the deck itself (`/deck
+ * demo` over the v2 sample, `/deck` over a live session).
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/testing'
 
 import * as M from '../hooks/model'
-import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from '../hooks/ui/v2/chat'
+import { chatEndOf, followStep, isAtEndOf, membersOf, routeFrom, type ChatFollow } from '../hooks/ui/v2/chat'
 import * as AV from '../web/avatars.mjs'
 import { P, mix } from '../hooks/ui/v2/palette'
 import * as W from '../hooks/web'
@@ -44,9 +48,9 @@ async function press(ui: Drawing, key: string) {
 }
 
 /** The v2 sample as `/deck demo` reads it: the sample session's state and its agent files, patches and cut messages. */
-function sample(on: On) {
+function sample(on: On, patch: (state: W.WebStateV2) => W.WebStateV2 = state => state) {
   const session = v2Session()
-  const v2 = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  const v2 = patch(W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable))
   const v1 = W.webStateOf(session.data, M.defaultView(), session.git, session.usage, session.now, session.sessionId, session.cwd)
   const agentFiles = new Map(W.agentFilesOf(session.data).map(one => [one.id, one.text]))
   const patches = new Map(session.data.edits.map(edit => [W.webIdOf(edit.id), edit.patch]))
@@ -65,9 +69,9 @@ function sample(on: On) {
 }
 
 /** The engine, the v2 sample read, and `/deck demo` shown. */
-async function demo($: Engine, on: On, w: World = newWorld()) {
+async function demo($: Engine, on: On, w: World = newWorld(), patch?: (state: W.WebStateV2) => W.WebStateV2) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
-  const v2 = sample(on)
+  const v2 = sample(on, patch)
   on('ui.focus', () => ({}))
   world(on, w)
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
@@ -110,8 +114,9 @@ async function buttonKeys(ui: { findAll: (q: { type: 'Button' }) => Promise<Foun
 
 const BLUE = '#2563eb'
 const BUBBLE = '#262626'
+const PICKED = mix(BLUE, P.ground, 0.8)
 
-test('Chat is a group chat: yours at the right in a blue bubble, others at the left under the sender`s avatar, name, "to <recipient>" and time, their words as Markdown in a dark bubble', async ($, on) => {
+test('Chat is a group chat: yours at the right in a blue bubble, when under it; others at the left under the sender`s avatar and name, "to" the recipient`s avatar and name, and time, their words as Markdown in a dark bubble; each name opens that agent`s page', async ($, on) => {
   const { v2 } = await demo($, on)
   const prompt = v2.chat.find(row => row.from === 'you' && row.kind === 'prompt')!
   const found = v2.chat.find(row => row.from === IDS.researcher && row.kind === 'result')!
@@ -121,10 +126,12 @@ test('Chat is a group chat: yours at the right in a blue bubble, others at the l
     // every message, oldest first
     expect(await boxKeys(ui, 'msg:')).toEqual(v2.chat.map(row => `msg:${row.id}`))
 
-    // yours: "You" and when over it, at the right, three quarters wide at most
+    // yours: at the right, three quarters wide at most, when under it; no head over a prompt to the Orchestrator
     const mine = await ui.find({ key: `msg:${prompt.id}` })
     expect(mine?.props).toMatchObject({ alignItems: 'flex-end', width: '75%' })
-    expect((await ui.find({ key: `grp:msg:${prompt.id}` }))?.text).toMatch(/^You\d+m/)
+    expect(mine?.text).toMatch(/\d+m$/)
+    expect(await ui.find({ key: `grp:msg:${prompt.id}` })).toBeDefined()
+    expect(await ui.find({ key: `head:msg:${prompt.id}` })).toBeUndefined()
     if (surface === 'desktop') {
       const bubble = under(mine, node => node.type === 'Box' && node.props?.backgroundColor === BLUE)
       expect(bubble.length).toBe(1)
@@ -133,33 +140,54 @@ test('Chat is a group chat: yours at the right in a blue bubble, others at the l
       expect(mine?.text.startsWith('›')).toBe(true)
     }
 
-    // others': the avatar beside the name, "to Orchestrator", the time; the words as Markdown
+    // others': the sender's avatar beside its name, "to", the recipient's avatar and name, the time; the words as Markdown
     const group = await ui.find({ key: `grp:msg:${found.id}` })
-    expect(group?.text).toMatch(/researcher to Orchestrator\d+m/)
+    expect((await ui.find({ key: `chat:from:msg:${found.id}` }))?.props).toMatchObject({ label: 'researcher', plain: true })
+    expect((await ui.find({ key: `chat:to:msg:${found.id}` }))?.props).toMatchObject({ label: 'Orchestrator', plain: true })
+    expect((await ui.find({ key: `head:msg:${found.id}` }))?.text).toMatch(/^researcher.*to.*Orchestrator\d+m$/)
     const theirs = await ui.find({ key: `msg:${found.id}` })
     expect(under(theirs, node => node.type === 'Markdown' && node.props?.text === found.text).length).toBe(1)
     if (surface === 'desktop') {
       const faces = under(group, node => node.type === 'Svg')
-      expect(faces.length).toBe(1)
-      expect(String(faces[0]?.props?.alt)).toContain('researcher')
+      expect(faces.map(node => [String(node.props?.alt), node.props?.width])).toEqual([
+        ["researcher's avatar", 20],
+        ["Orchestrator's avatar", 16],
+      ])
       expect(theirs?.props).toMatchObject({ alignItems: 'flex-start', width: '88%' })
       expect(under(theirs, node => node.type === 'Box' && node.props?.backgroundColor === BUBBLE && node.props?.borderStyle === 'round').length).toBe(1)
+      // a desktop draws a Button's label alone, in its own ink: the sender's lit, the recipient's dim
+      expect((await ui.find({ key: `chat:from:msg:${found.id}` }))?.props.dimColor).toBe(false)
+      expect((await ui.find({ key: `chat:to:msg:${found.id}` }))?.props.dimColor).toBe(true)
     }
+    // each name opens that agent's page; Back comes back to Chat
+    await press(ui, `chat:from:msg:${found.id}`)
+    expect(await ui.find({ key: `page:${IDS.researcher}` })).toBeDefined()
+    await press(ui, 'key:b')
+    await press(ui, `chat:to:msg:${found.id}`)
+    expect(await ui.find({ key: 'page:main' })).toBeDefined()
+    await press(ui, 'key:b')
+    expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
+
     // words to you name no recipient; to nobody in particular, none either
     const answer = v2.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
-    expect((await ui.find({ key: `grp:msg:${answer.id}` }))?.text).toMatch(/^[◆●▲■✦⬢★◉]?Orchestrator\d+m/)
+    expect(await ui.find({ key: `chat:to:msg:${answer.id}` })).toBeUndefined()
+    expect((await ui.find({ key: `head:msg:${answer.id}` }))?.text).toMatch(/^Orchestrator\d+m$/)
     const plain = v2.chat.find(row => row.to === null)!
-    expect((await ui.find({ key: `grp:msg:${plain.id}` }))?.text).toMatch(/^[◆●▲■✦⬢★◉]?builder\d+m/)
+    expect((await ui.find({ key: `head:msg:${plain.id}` }))?.text).toMatch(/^builder\d+m$/)
+    // a name SendMessage was given that no agent carries: said, no press, a grey dot for its face
+    const lost = v2.chat.find(row => row.to === 'ops-bot')!
+    expect(await ui.find({ key: `chat:to:msg:${lost.id}` })).toBeUndefined()
+    expect((await ui.find({ key: `head:msg:${lost.id}` }))?.text).toMatch(/^builder.*to.*ops-bot\d+m$/)
     // a SendMessage's summary, bold over its words
     const between = v2.chat.find(row => row.kind === 'message' && row.title === 'Limiter ready for review')!
-    expect((await ui.find({ key: `grp:msg:${between.id}` }))?.text).toMatch(/builder to reviewer\d+m/)
+    expect((await ui.find({ key: `chat:to:msg:${between.id}` }))?.props.label).toBe('reviewer')
     expect(under(await ui.find({ key: `msg:${between.id}` }), node => node.type === 'Text' && node.props?.bold === true && JSON.stringify(node).includes('Limiter ready for review')).length).toBe(1)
     await press(ui, 'tab:now')
     await ui.unmount()
   }
 })
 
-test('one sender`s messages within a few minutes stack under one avatar and name; one to another recipient says so over it', async ($, on) => {
+test('one sender`s messages within a few minutes stack under one avatar and name; one to another recipient says so over it, with that one`s avatar and name', async ($, on) => {
   const { v2 } = await demo($, on)
   // the Orchestrator answers you, then starts builder, docs and scout, each within minutes of the last
   const answer = v2.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
@@ -172,11 +200,20 @@ test('one sender`s messages within a few minutes stack under one avatar and name
     // one head for the four
     for (const row of spawns) expect(await ui.find({ key: `grp:msg:${row.id}` })).toBeUndefined()
     expect(under(group, node => keyOf(node).startsWith('msg:')).map(keyOf)).toEqual([answer, ...spawns].map(row => `msg:${row.id}`))
-    expect(under(group, node => node.type === (surface === 'desktop' ? 'Svg' : 'Text') && (surface === 'desktop' || AV.GLYPHS.some(glyph => JSON.stringify(node).includes(glyph)))).length).toBe(1)
-    // each spawn after the answer to you names whom it went to
-    expect((await ui.find({ key: `msg:${spawns[0]!.id}` }))?.text).toMatch(/^to builder · \d+m/)
-    expect((await ui.find({ key: `msg:${spawns[1]!.id}` }))?.text).toMatch(/^to docs · \d+m/)
-    expect((await ui.find({ key: `msg:${answer.id}` }))?.text.startsWith('to ')).toBe(false)
+    // each spawn after the answer to you names whom it went to: its face, its name a press, when
+    expect(await ui.find({ key: `to:msg:${answer.id}` })).toBeUndefined()
+    for (const [i, name] of ['builder', 'docs', 'scout'].entries()) {
+      const row = spawns[i]!
+      expect((await ui.find({ key: `to:msg:${row.id}` }))?.text).toMatch(new RegExp(`^to[◆●▲■✦⬢★◉]?${name}· [0-9]+m$`))
+      expect((await ui.find({ key: `chat:to:msg:${row.id}` }))?.props.label).toBe(name)
+    }
+    // the sender's face once, at the group's left; each recipient's beside its name
+    if (surface === 'desktop') {
+      expect(under(group, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["Orchestrator's avatar", "builder's avatar", "docs's avatar", "scout's avatar"])
+    } else {
+      const glyphs = under(group, node => node.type === 'Text' && typeof node.children?.[0] === 'string' && AV.GLYPHS.includes(node.children[0] as string))
+      expect(glyphs.length).toBe(4)
+    }
     // another sender between starts a group of its own
     const result = v2.chat.find(row => row.from === IDS.researcher)!
     expect(await ui.find({ key: `grp:msg:${result.id}` })).toBeDefined()
@@ -228,7 +265,7 @@ test('Claude Code`s notices are centred, small and dim; a question held on you i
   await ui.unmount()
 })
 
-test('under your message, what came of it: Not delivered, Queued, Delivered (dim once the agent spoke after it)', async ($, on) => {
+test('under your message, what came of it and when: Not delivered, Queued, Delivered (dim once the agent spoke after it); over it, whom it went to when that is not the Orchestrator', async ($, on) => {
   const { v2 } = await demo($, on)
   const failed = v2.chat.find(row => row.ackId === 'c-1')!
   const delivered = v2.chat.find(row => row.ackId === 'c-2')!
@@ -236,14 +273,19 @@ test('under your message, what came of it: Not delivered, Queued, Delivered (dim
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     await press(ui, 'tab:chat')
-    expect((await ui.find({ key: `msg:${failed.id}` }))?.text).toContain('✕ Not delivered: it has ended')
-    expect((await ui.find({ key: `msg:${queued.id}` }))?.text).toContain('◷ Queued: Claude reads it when it finishes its current turn')
+    expect((await ui.find({ key: `msg:${failed.id}` }))?.text).toMatch(/✕ Not delivered: it has ended · \d+m$/)
+    expect((await ui.find({ key: `msg:${queued.id}` }))?.text).toMatch(/◷ Queued: Claude reads it when it finishes its current turn · \d+m$/)
     const done = await ui.find({ key: `msg:${delivered.id}` })
-    expect(done?.text).toContain('✓ Delivered: it reads it at its next step')
+    expect(done?.text).toMatch(/✓ Delivered: it reads it at its next step · \d+m$/)
     // builder answered after it: old news, drawn dim
     expect(under(done, node => node.type === 'Text' && node.props?.color === P.muted2 && JSON.stringify(node).includes('Delivered')).length).toBe(1)
-    // yours to an agent names it over the bubble
-    expect((await ui.find({ key: `grp:msg:${delivered.id}` }))?.text).toMatch(/^You to builder\d+m/)
+    // yours to an agent names it over the bubble, at the right: its face, its name a press
+    const head = await ui.find({ key: `head:msg:${delivered.id}` })
+    expect(head?.props.justifyContent).toBe('flex-end')
+    expect(head?.text).toMatch(/^to[◆●▲■✦⬢★◉]?builder$/)
+    expect((await ui.find({ key: `chat:to:msg:${delivered.id}` }))?.props.label).toBe('builder')
+    // yours to the Orchestrator name no one
+    expect(await ui.find({ key: `head:msg:${queued.id}` })).toBeUndefined()
     await press(ui, 'tab:now')
     await ui.unmount()
   }
@@ -268,85 +310,134 @@ test('a long message shows about six lines and Show more; a cut one opens in pla
   }
 })
 
-test('the filter is one row: Filter · All · You · Between agents · the agents cut to 16 characters, as many as fit, then +n more opening the rest; f steps through them all', async ($, on) => {
+test('the member list: Everyone, then every agent with its avatar, name and status, two columns at 84 cells and three at 160; a pick shows your conversation with that agent, marked, and the composer goes to it', async ($, on) => {
   const { v2 } = await demo($, on)
-  const named = new Set(v2.chat.flatMap(row => [row.from, row.to ?? '', row.agent ?? '']))
-  const agents = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && named.has(row.id))
-  for (const surface of SURFACES) {
-    const ui = await $.ui.mount(pane(surface, 84))
+  const agents = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'engine')
+  expect(membersOf(v2, '').members.map(one => one.id)).toEqual(agents.map(row => row.id))
+  const all = v2.chat.map(row => `msg:${row.id}`)
+  for (const [cols, across] of [[84, 2], [160, 3]] as const) {
+    const ui = await $.ui.mount(pane('desktop', cols))
     await press(ui, 'tab:chat')
-    const row = (await ui.find({ key: 'chat:filters' }))!
-    const line = under(row, node => node.type === 'Box')[0]
-    expect(line?.props?.flexDirection).toBe('row')
-    const keys = await buttonKeys(ui, 'chat:filter:')
-    expect(keys.slice(0, 3)).toEqual(['chat:filter:all', 'chat:filter:you', 'chat:filter:between'])
-    const shown = keys.filter(key => !['chat:filter:all', 'chat:filter:you', 'chat:filter:between', 'chat:filter:more'].includes(key))
-    expect(shown.length).toBeGreaterThan(0)
-    expect(shown.length).toBeLessThan(agents.length)
-    for (const key of shown) expect(Array.from(String((await ui.find({ key }))?.props.label)).length).toBeLessThanOrEqual(16)
-    expect((await ui.find({ key: 'chat:filter:more' }))?.props.label).toBe(`+${agents.length - shown.length} more`)
-    expect((await ui.find({ key: 'key:f' }))?.props).toMatchObject({ hotkey: 'f', label: 'Filter' })
+    // no filter row, no dropdown
+    for (const key of ['key:f', 'chat:filter:more', 'chat:filter:you', 'chat:filters']) expect(await ui.find({ key })).toBeUndefined()
+    // a bordered list, in columns, down each: Everyone first
+    const list = await ui.find({ key: 'chat:members:list' })
+    expect(list?.props).toMatchObject({ borderStyle: 'round' })
+    expect(under(list, node => node.type === 'Box' && node.props?.width === `${Math.floor(100 / across)}%`).length).toBe(across)
+    expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:between', 'chat:filter:all', ...agents.map(row => `chat:filter:${row.id}`)])
+    expect((await ui.find({ key: 'chat:members:fold' }))?.props.label).toBe(`▾ ${agents.length} agents`)
+    // a row: the avatar, the name, the status word
+    const row = await ui.find({ key: `chat:member:${IDS.builder}` })
+    expect(under(row, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["builder's avatar"])
+    expect(row?.text).toBe('builderwaiting')
+    // Everyone picked: on blue, lit; the rest dim
+    expect((await ui.find({ key: 'chat:member:all' }))?.props.backgroundColor).toBe(PICKED)
+    expect((await ui.find({ key: 'chat:filter:all' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: `chat:filter:${IDS.builder}` }))?.props.dimColor).toBe(true)
+    expect((await ui.find({ type: 'Input' }))?.props.placeholder).toBe('Message the Orchestrator, or @name an agent…')
 
-    // +n more opens the rest as a list; a pick sets the filter, brings it into the row lit, and closes the list
-    await press(ui, 'chat:filter:more')
-    const rest = under(await ui.find({ key: 'chat:filters:more' }), node => node.type === 'Button').map(keyOf)
-    expect(rest.length).toBe(agents.length - shown.length)
-    const picked = rest[rest.length - 1]!
-    await press(ui, picked)
-    expect(await ui.find({ key: 'chat:filters:more' })).toBeUndefined()
-    expect((await ui.find({ key: picked }))?.props.dimColor).toBe(false)
-    const id = picked.slice('chat:filter:'.length)
-    expect(await boxKeys(ui, 'msg:')).toEqual(v2.chat.filter(one => one.from === id || one.to === id || one.agent === id).map(one => `msg:${one.id}`))
+    // a pick: your conversation with it (from it, to it), marked; the composer to it, no @ needed
+    await press(ui, `chat:filter:${IDS.builder}`)
+    expect(await boxKeys(ui, 'msg:')).toEqual(v2.chat.filter(one => one.from === IDS.builder || one.to === IDS.builder || one.agent === IDS.builder).map(one => `msg:${one.id}`))
+    expect((await ui.find({ key: `chat:member:${IDS.builder}` }))?.props.backgroundColor).toBe(PICKED)
+    expect((await ui.find({ key: 'chat:member:all' }))?.props.backgroundColor).toBeUndefined()
+    expect((await ui.find({ key: `chat:filter:${IDS.builder}` }))?.props.dimColor).toBe(false)
+    expect(await ui.find({ key: 'chat:filter:between' })).toBeUndefined()
+    expect((await ui.find({ type: 'Input' }))?.props.placeholder).toBe('Message builder…')
+    // yours to it name no one over them: it is whom you are talking with
+    expect(await ui.find({ key: `head:msg:${v2.chat.find(one => one.ackId === 'c-2')!.id}` })).toBeUndefined()
 
-    // f: All, You, Between agents, then each agent
+    // Everyone again; Between agents keeps to what agents said to each other, and lets go at a second press
     await press(ui, 'chat:filter:all')
-    await press(ui, 'key:f')
-    expect((await ui.find({ key: 'chat:filter:you' }))?.props.dimColor).toBe(false)
-    expect(await boxKeys(ui, 'msg:')).toEqual(v2.chat.filter(one => one.from === 'you' || one.to === 'you').map(one => `msg:${one.id}`))
-    await press(ui, 'key:f')
+    expect(await boxKeys(ui, 'msg:')).toEqual(all)
+    await press(ui, 'chat:filter:between')
     expect((await ui.find({ key: 'chat:filter:between' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: 'chat:member:all' }))?.props.backgroundColor).toBe(PICKED)
     const between = await boxKeys(ui, 'msg:')
     expect(between).toContain(`msg:${v2.chat.find(one => one.title === 'Limiter ready for review')!.id}`)
     expect(between).not.toContain(`msg:${v2.chat.find(one => one.ackId === 'c-2')!.id}`)
-    await press(ui, 'key:f')
-    expect((await ui.find({ key: 'chat:filter:main' }))?.props.dimColor).toBe(false)
-    await press(ui, 'chat:filter:all')
+    await press(ui, 'chat:filter:between')
+    expect(await boxKeys(ui, 'msg:')).toEqual(all)
     await press(ui, 'tab:now')
     await ui.unmount()
   }
-  // wide, every agent fits: no +n more
-  const wide = await $.ui.mount(pane('desktop', 160))
+})
+
+test('a narrow pane folds the member list to one line naming whom you are talking with: a press opens it, one column, and folds it again', async ($, on) => {
+  const { v2 } = await demo($, on)
+  const n = v2.agents.filter(row => row.row === 'agent' && row.kind !== 'engine').length
+  const ui = await $.ui.mount(pane('desktop', 68))
+  await press(ui, 'tab:chat')
+  expect(await ui.find({ key: 'chat:members:list' })).toBeUndefined()
+  expect((await ui.find({ key: 'chat:members:head' }))?.text).toMatch(new RegExp(`^▸ ${n} agents·Everyone`))
+  await press(ui, 'chat:members:fold')
+  const list = await ui.find({ key: 'chat:members:list' })
+  expect(under(list, node => node.type === 'Box' && node.props?.width === '100%').length).toBe(1)
+  expect((await ui.find({ key: 'chat:members:fold' }))?.props.label).toBe(`▾ ${n} agents`)
+  // picked, then folded: the line names it, with its face
+  await press(ui, `chat:filter:${IDS.docs}`)
+  await press(ui, 'chat:members:fold')
+  const head = await ui.find({ key: 'chat:members:head' })
+  expect(head?.text).toMatch(new RegExp(`^▸ ${n} agents·docs$`))
+  expect(under(head, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["docs's avatar"])
+  // folded, a pick of Everyone is a press away again
+  await press(ui, 'chat:members:fold')
+  await press(ui, 'chat:filter:all')
+  await press(ui, 'chat:members:fold')
+  expect(await ui.find({ key: 'chat:members:list' })).toBeUndefined()
+  await press(ui, 'tab:now')
+  await ui.unmount()
+  // wide again, the list is open: what the width has
+  const wide = await $.ui.mount(pane('desktop', 84))
   await press(wide, 'tab:chat')
-  expect(await wide.find({ key: 'chat:filter:more' })).toBeUndefined()
-  expect((await buttonKeys(wide, 'chat:filter:')).length).toBe(3 + agents.length)
+  expect(await wide.find({ key: 'chat:members:list' })).toBeDefined()
   await press(wide, 'tab:now')
   await wide.unmount()
 })
 
-test('the terminal draws the group chat with no image: an avatar is its glyph in its colour, yours a block at the right after a ›, others` an indented block under the name', async ($, on) => {
+test('the terminal draws the group chat with no image: the member list one wrapped line of glyphs and names (the one picked on blue), an avatar its glyph in its colour, yours a block at the right after a ›, others` an indented block under the name', async ($, on) => {
   const { v2 } = await demo($, on)
   const ui = await $.ui.mount(pane('terminal'))
   await press(ui, 'tab:chat')
   const chat = await ui.find({ key: 'chat' })
   expect(under(chat, node => node.type === 'Svg')).toEqual([])
   expect(under(chat, node => node.type === 'Box' && (node.props?.backgroundColor === BLUE || node.props?.backgroundColor === BUBBLE))).toEqual([])
+  // the member line: Everyone, each agent, Between agents
+  const agents = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'engine')
+  expect((await ui.find({ key: 'chat:members' }))?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' })
+  expect(await buttonKeys(ui, 'chat:filter:')).toEqual(['chat:filter:all', ...agents.map(row => `chat:filter:${row.id}`), 'chat:filter:between'])
+  const builder = agents.find(row => row.id === IDS.builder)!
+  const mark = AV.terminalFace({ id: builder.id, status: builder.status })
+  const chip = await ui.find({ key: `chat:filter:${IDS.builder}` })
+  expect(chip?.text).toBe(`${mark.glyph} builder`)
+  expect(under(chip, node => node.type === 'Text' && node.props?.color === mark.color).length).toBe(1)
+  const onBlue = (node: Node) => node.type === 'Text' && node.props?.backgroundColor === '#1e3a8a'
+  expect(under(await ui.find({ key: 'chat:filter:all' }), onBlue).length).toBe(1)
+  await press(ui, `chat:filter:${IDS.builder}`)
+  expect(under(await ui.find({ key: `chat:filter:${IDS.builder}` }), onBlue).length).toBe(1)
+  expect(under(await ui.find({ key: 'chat:filter:all' }), onBlue).length).toBe(0)
+  await press(ui, 'chat:filter:all')
+
+  // others': the sender's glyph in its colour at the left, its name, "to", the recipient's glyph and name
   const found = v2.chat.find(row => row.from === IDS.researcher && row.kind === 'result')!
-  const researcher = v2.agents.find((row): row is W.V2AgentRow => row.row === 'agent' && row.id === IDS.researcher)!
+  const researcher = agents.find(row => row.id === IDS.researcher)!
+  const main = agents.find(row => row.id === 'main')!
   const group = await ui.find({ key: `grp:msg:${found.id}` })
   expect(group?.props.flexDirection).toBe('row')
   const glyph = AV.terminalFace({ id: researcher.id, status: researcher.status })
-  expect(group?.text.startsWith(`${glyph.glyph}researcher to Orchestrator`)).toBe(true)
-  expect(under(group, node => node.type === 'Text' && node.props?.color === glyph.color).length).toBe(1)
+  const to = AV.terminalFace({ id: main.id, name: main.title, role: 'main', status: main.status })
+  expect(group?.text.startsWith(`${glyph.glyph}researcherto${to.glyph}Orchestrator`)).toBe(true)
+  expect(under(group, node => node.type === 'Text' && node.props?.color === glyph.color && node.children?.[0] === glyph.glyph).length).toBe(1)
   for (const row of v2.chat.filter(one => one.from === 'you')) {
     const mine = await ui.find({ key: `msg:${row.id}` })
     expect(mine?.props.alignItems).toBe('flex-end')
-    expect(mine?.text.startsWith('›')).toBe(true)
+    expect(under(mine, node => node.type === 'Text' && node.children?.[0] === '›' && node.props?.color === P.runText).length).toBe(1)
   }
   await press(ui, 'tab:now')
   await ui.unmount()
 })
 
-test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMessage (previewed so), a name no agent carries is refused; a send shows at once as your bubble and keeps its key once the state holds it', async ($, on) => {
+test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMessage (previewed so), a name no agent carries is refused; with an agent picked, words go to it with no @; a send shows at once as your bubble and keeps its key once the state holds it', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   on('ui.focus', () => ({}))
@@ -358,13 +449,15 @@ test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMe
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ type: 'Input' }))?.props.placeholder).toBe('Message the Orchestrator, or @name an agent…')
+    // nothing typed: nothing under the field
     await ui.input({ key: await field(ui), text: '', kind: 'change' })
     await ui.redraw()
-    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('No @: to the Orchestrator')
+    expect((await ui.find({ key: 'chat:compose' }))?.text).toBe('Send')
     // a name no agent carries: refused, said why, nothing sent
     await ui.input({ key: await field(ui), text: '@nobody look again' })
     await ui.redraw()
-    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('No agent named @nobody in this session')
+    expect((await ui.find({ key: 'chat:compose' }))?.text).toMatch(/@nobody/)
     expect(w.sent).toEqual([])
     // the preview says where the words go while they are typed
     await ui.input({ key: await field(ui), text: '@scout look', kind: 'change' })
@@ -391,13 +484,113 @@ test('the composer: no @ goes to the Orchestrator, @name to that agent by SendMe
   expect(mine?.text).toContain('look at src/range.js again')
   expect(mine?.text).toContain('✓ Delivered')
   expect(mine?.props).toMatchObject({ alignItems: 'flex-end', width: '75%' })
-  // under "You", with whom it went to: its group's head, or the line over it where it stacks under your prompt
-  const group = (await ui.findAll({ type: 'Box' })).find(box => (box.key ?? '').startsWith('grp:') && box.text.includes('look at src/range.js again'))
-  expect(group?.text.startsWith('You')).toBe(true)
-  expect(group?.text).toContain('to scout')
+  // whom it went to, over it (its group's head, or the line over it where it stacks under your prompt): scout, a press
+  expect(((await ui.find({ key: `head:${sent[0]}` })) ?? (await ui.find({ key: `to:${sent[0]}` })))?.text).toMatch(/^to.*scout$/)
+  expect((await ui.find({ key: `chat:to:${sent[0]}` }))?.props.label).toBe('scout')
   expect(await field(ui)).not.toBe(before)
   expect((await ui.find({ type: 'Input' }))?.props.value).toBe('')
+
+  // scout picked: words with no @ go to it, the composer says so
+  await press(ui, 'chat:filter:agent-x1')
+  expect((await ui.find({ type: 'Input' }))?.props.placeholder).toBe('Message scout…')
+  await ui.input({ key: await field(ui), text: 'and the tests', kind: 'change' })
+  await ui.redraw()
+  expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('→ scout via SendMessage')
+  await ui.input({ key: await field(ui), text: 'and the tests' })
+  await ui.redraw()
+  await clock.advance(400)
+  await ui.redraw()
+  expect(w.sent).toEqual([
+    { to: 'agent-x1', text: 'look at src/range.js again' },
+    { to: 'agent-x1', text: 'and the tests' },
+  ])
+  // in your conversation with it, yours name no one over them
+  const both = await boxKeys(ui, 'send:')
+  expect(both.length).toBe(2)
+  for (const key of both) expect(await ui.find({ key: `chat:to:${key}` })).toBeUndefined()
+  // the Orchestrator picked: words go to it
+  await press(ui, 'chat:filter:main')
+  expect((await ui.find({ type: 'Input' }))?.props.placeholder).toBe('Message the Orchestrator…')
+  await press(ui, 'chat:filter:all')
   await ui.unmount()
+})
+
+test('what W.recipientOf answers reads as a route or a refusal: today`s shapes, and a name several agents answer to, its candidates as ids, rows or names', async () => {
+  const session = v2Session()
+  const v2 = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  expect(routeFrom(v2, { agentId: IDS.builder, title: 'builder', text: 'hi' })).toEqual({ agentId: IDS.builder, title: 'builder', text: 'hi' })
+  expect(routeFrom(v2, { error: 'No agent named @x in this session' })).toEqual({ error: 'No agent named @x in this session', candidates: [] })
+  // W.recipientOf's: each candidate with the handle that names it alone
+  const tie = routeFrom(v2, { error: 'Did you mean: researcher (@a3f9c2e) or reviewer (@aa11bb2)?', ambiguous: [{ agentId: IDS.researcher, title: 'researcher', handle: 'a3f9c2e' }, { agentId: IDS.reviewer, title: 'reviewer', handle: 'aa11bb2' }] })
+  expect('error' in tie && tie.error).toBe('Did you mean: researcher (@a3f9c2e) or reviewer (@aa11bb2)?')
+  expect('error' in tie ? tie.candidates.map(one => [one.row.id, one.handle]) : []).toEqual([
+    [IDS.researcher, 'a3f9c2e'],
+    [IDS.reviewer, 'aa11bb2'],
+  ])
+  // other shapes: ids, rows, names; no handle given, one that names it alone
+  const many = routeFrom(v2, { error: 'Several agents go by @re', candidates: [{ agentId: IDS.researcher, title: 'researcher' }, IDS.reviewer, 'nobody'] })
+  expect('error' in many ? many.candidates.map(one => [one.row.id, one.handle]) : []).toEqual([
+    [IDS.researcher, 'researcher'],
+    [IDS.reviewer, 'reviewer'],
+  ])
+  const bare = routeFrom(v2, { status: 'ambiguous', matches: [{ id: IDS.docs }, { name: 'scout' }, '@docs'] })
+  expect('error' in bare && bare.error).toBe('More than one agent goes by that name')
+  expect('error' in bare ? bare.candidates.map(one => one.row.id) : []).toEqual([IDS.docs, IDS.scout])
+  // whatever W.recipientOf gives now, the composer reads
+  expect(routeFrom(v2, W.recipientOf(v2, '@builder hi'))).toMatchObject({ agentId: IDS.builder, text: 'hi' })
+  expect(routeFrom(v2, W.recipientOf(v2, 'hi'))).toMatchObject({ agentId: 'main', text: 'hi' })
+  expect('error' in routeFrom(v2, W.recipientOf(v2, '@nobody hi'))).toBe(true)
+})
+
+test('a name several agents answer to equally: "Did you mean" offers each, its face and name, in place of the refusal; a press puts the handle that names it alone in the composer', async ($, on) => {
+  // two agents at work, started together, both "native …"
+  const twins = (state: W.WebStateV2): W.WebStateV2 => {
+    const builder = state.agents.find((row): row is W.V2AgentRow => row.row === 'agent' && row.id === IDS.builder)!
+    const twin = (id: string, name: string): W.V2AgentRow => ({ ...builder, id, fileId: id, shortId: id.slice(0, 7), name, title: name, status: 'running', isStopped: false, startedAt: state.now - 60_000, needs: 0 })
+    return { ...state, agents: [...state.agents, twin('n1a2b3c4d5e6f708', 'native-chat'), twin('n9f8e7d6c5b4a302', 'native-pane')] }
+  }
+  const { v2 } = await demo($, on, newWorld(), twins)
+  const found = routeFrom(v2, W.recipientOf(v2, '@native look'))
+  // a W.recipientOf that matches no part of a name offers no one: refused, and nothing offered
+  if ((W.recipientOf(v2, '@native look') as { ambiguous?: unknown }).ambiguous === undefined) {
+    const ui = await $.ui.mount(pane('desktop'))
+    await press(ui, 'tab:chat')
+    await ui.input({ key: (await ui.find({ type: 'Input' }))?.key ?? '', text: '@native look', kind: 'change' })
+    await ui.redraw()
+    expect('error' in found && found.candidates).toEqual([])
+    expect(await ui.find({ key: 'chat:mean' })).toBeUndefined()
+    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('@native')
+    await press(ui, 'tab:now')
+    await ui.unmount()
+    return
+  }
+  expect('error' in found ? found.candidates.map(one => one.row.title) : []).toEqual(['native-chat', 'native-pane'])
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await press(ui, 'tab:chat')
+    const field = async () => (await ui.find({ type: 'Input' }))?.key ?? ''
+    await ui.input({ key: await field(), text: '@native look', kind: 'change' })
+    await ui.redraw()
+    const mean = await ui.find({ key: 'chat:mean' })
+    expect(mean?.text).toBe('Did you mean:' + (surface === 'desktop' ? 'native-chatnative-pane' : `${AV.terminalFace({ id: 'n1a2b3c4d5e6f708', status: 'running' }).glyph}native-chat${AV.terminalFace({ id: 'n9f8e7d6c5b4a302', status: 'running' }).glyph}native-pane`))
+    expect(await buttonKeys(ui, 'chat:mean:')).toEqual(['chat:mean:n1a2b3c4d5e6f708', 'chat:mean:n9f8e7d6c5b4a302'])
+    if (surface === 'desktop') expect(under(mean, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["native-chat's avatar", "native-pane's avatar"])
+    // the offer says it: no refusal over it
+    expect((await ui.find({ key: 'chat:compose' }))?.text).not.toContain('No agent')
+    expect((await ui.find({ key: 'chat:compose' }))?.text).not.toContain('(@')
+    // sent as it is: refused, the offer stays
+    await ui.input({ key: await field(), text: '@native look' })
+    await ui.redraw()
+    expect(await ui.find({ key: 'chat:mean' })).toBeDefined()
+    // a press: its handle in place of the @name, the words kept; where they go now
+    await press(ui, 'chat:mean:n9f8e7d6c5b4a302')
+    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('@n9f8e7d look')
+    expect(await ui.find({ key: 'chat:mean' })).toBeUndefined()
+    expect((await ui.find({ key: 'chat:compose' }))?.text).toContain('→ native-pane via SendMessage')
+    await ui.input({ key: await field(), text: '', kind: 'change' })
+    await press(ui, 'tab:now')
+    await ui.unmount()
+  }
 })
 
 /** The elements a drawn tree holds. */
