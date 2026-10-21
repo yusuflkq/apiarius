@@ -232,6 +232,38 @@ export function chatEndOf(state: WebStateV2, filter: string): string {
   return `${entries.length}|${last.key}|${ack ? `${ack.status}:${ack.text}` : ''}`
 }
 
+/** How Chat keeps to its newest message, as the hooks module holds it: whether Chat showed at the last drawing, what it ended with then, whether you are at the pane's end. */
+export type ChatFollow = { isShown: boolean; end: string; isAtEnd: boolean }
+
+/**
+ * One drawing's step of Chat keeping to its newest message, `follow`
+ * updated in place: `end` is what Chat ends with now (`chatEndOf`), null
+ * while Chat is not on show (which forgets it all). True when the pane is to
+ * go to its end: Chat came into view (you are at its end then), or
+ * something new is at its end while you were there.
+ */
+export function followStep(follow: ChatFollow, end: string | null): boolean {
+  if (end === null) {
+    follow.isShown = false
+    follow.isAtEnd = false
+    follow.end = ''
+    return false
+  }
+  const isNew = !follow.isShown
+  const isGoing = isNew || (end !== follow.end && follow.isAtEnd)
+  if (isNew) {
+    follow.isShown = true
+    follow.isAtEnd = true
+  }
+  follow.end = end
+  return isGoing
+}
+
+/** Whether a window `offset` rows down a tree `contentRows` tall, `bodyRows` of it showing, shows the tree's end (a row short counts). */
+export function isAtEndOf(scroll: { offset: number; bodyRows: number; contentRows: number }): boolean {
+  return scroll.offset >= scroll.contentRows - scroll.bodyRows - 1
+}
+
 /** Whether `next` stacks under `prev`'s name: the same sender (not Claude Code), on the same side, within a few minutes. */
 function joins(prev: Entry | undefined, next: Entry): boolean {
   if (!prev || next.side === 'notice' || prev.side !== next.side || prev.row.from !== next.row.from) return false

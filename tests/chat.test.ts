@@ -13,6 +13,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/testing'
 
 import * as M from '../hooks/model'
+import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from '../hooks/ui/v2/chat'
 import * as AV from '../web/avatars.mjs'
 import { P, mix } from '../hooks/ui/v2/palette'
 import * as W from '../hooks/web'
@@ -451,4 +452,77 @@ test('Chat draws a window of the newest messages, Show earlier adds more, and ev
     expect(charsOf(drawn)).toBeLessThan(90_000)
     await ui.unmount()
   }
+})
+
+test('Chat keeps to its newest message: to the end as Chat comes into view, and again for something new there while you were at the end; not once you scrolled up', async () => {
+  const follow: ChatFollow = { isShown: false, end: '', isAtEnd: false }
+  // Chat not on show: nothing moves
+  expect(followStep(follow, null)).toBe(false)
+  // Chat comes into view: to its end, and you are there
+  expect(followStep(follow, '3|msg:a|')).toBe(true)
+  expect(follow.isAtEnd).toBe(true)
+  // drawn again with nothing new: the pane stays
+  expect(followStep(follow, '3|msg:a|')).toBe(false)
+  // a new message, then its ack, while you are at the end: each follows
+  expect(followStep(follow, '4|msg:b|')).toBe(true)
+  expect(followStep(follow, '4|msg:b|delivered:It reads it at its next step')).toBe(true)
+  // you scroll up: something new leaves you where you are
+  follow.isAtEnd = isAtEndOf({ offset: 10, bodyRows: 30, contentRows: 120 })
+  expect(follow.isAtEnd).toBe(false)
+  expect(followStep(follow, '5|msg:c|')).toBe(false)
+  // back at the end (a row short counts): it follows again
+  follow.isAtEnd = isAtEndOf({ offset: 89, bodyRows: 30, contentRows: 120 })
+  expect(follow.isAtEnd).toBe(true)
+  expect(followStep(follow, '6|msg:d|')).toBe(true)
+  // a drawing that fits the window shows its end
+  expect(isAtEndOf({ offset: 0, bodyRows: 30, contentRows: 12 })).toBe(true)
+  // leaving Chat forgets it all; coming back goes to the end, though you had scrolled up
+  follow.isAtEnd = false
+  expect(followStep(follow, null)).toBe(false)
+  expect(followStep(follow, '6|msg:d|')).toBe(true)
+  expect(follow.isAtEnd).toBe(true)
+})
+
+test('what Chat ends with changes with a new message, the ack under its last one and the filter, and with nothing else', async () => {
+  const session = v2Session()
+  const v2 = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  const last = v2.chat[v2.chat.length - 1]!
+  const end = chatEndOf(v2, '')
+  expect(end).toBe(`${v2.chat.length}|msg:${last.id}|`)
+  expect(chatEndOf({ ...v2, now: v2.now + 60_000 }, '')).toBe(end)
+  expect(chatEndOf({ ...v2, chat: v2.chat.slice(0, -1) }, '')).not.toBe(end)
+  expect(chatEndOf(v2, 'between')).not.toBe(end)
+  const sent = v2.chat.find(row => row.ackId === 'c-3')!
+  const upTo = v2.chat.slice(0, v2.chat.indexOf(sent) + 1)
+  const queued = chatEndOf({ ...v2, chat: upTo }, '')
+  expect(queued).toBe(`${upTo.length}|msg:${sent.id}|queued:Claude reads it when it finishes its current turn`)
+  expect(chatEndOf({ ...v2, chat: upTo, acks: [...v2.acks, { id: 'c-3', ok: true, status: 'answered', text: 'Claude carries on', at: v2.now }] }, '')).not.toBe(queued)
+})
+
+test('the pane follows Chat through the engine: your scrolling passes through the deck`s ui.scroll hook untouched, and Chat opened by its tab, /deck chat and a new message draws on', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.focus', () => ({}))
+  on('ui.scroll', () => ({}))
+  world(on, newWorld())
+  await work($)
+  await clock.advance(1000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await press(ui, 'tab:chat')
+  await clock.advance(200)
+  // you scroll up, then back to the end: the deck lets each move through
+  const scroll = (offset: number) => $.ui.scroll({ component: 'Pane', requestId: 'agent-deck', offset, by: offset === 0 ? -50 : 50, bodyRows: 30, contentRows: 80, origin: { kind: 'person' } })
+  expect(await scroll(0)).toEqual({})
+  await $.turn.complete({ turnId: 't1', answer: 'Fixed: the loop now stops at `length - 1`.', durationMs: 1000, isAborted: false, reason: 'answer' })
+  await clock.advance(1000)
+  await ui.redraw()
+  await clock.advance(200)
+  expect((await ui.findAll({ type: 'Markdown' })).some(one => String(one.props.text).includes('Fixed: the loop now stops'))).toBe(true)
+  expect(await scroll(50)).toEqual({})
+  await $.command.run(deck('chat'))
+  await clock.advance(200)
+  await ui.redraw()
+  expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
+  await press(ui, 'tab:now')
+  await clock.advance(200)
+  await ui.unmount()
 })

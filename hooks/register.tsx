@@ -31,6 +31,7 @@ import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
 import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
+import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from './ui/v2/chat'
 import { newRenderMemo } from './renderMemo'
 import { bandOf, deckView, type DeckActions } from './views'
 import * as W from './web'
@@ -1831,6 +1832,41 @@ function scrollTo($: EngineInterface, key: string, block: 'start' | 'nearest' = 
 }
 
 /**
+ * Chat keeps to its newest message while you are at the pane's end, as a
+ * chat does (./ui/v2/chat's `followStep`): whether Chat showed at the last
+ * drawing, what it ended with then, and whether you are at the end. You
+ * are there once Chat comes into view (its tab, `/deck chat`, `m`, Back to
+ * it, a new filter) or you send from it, and while your own scrolling
+ * (`ui.scroll`) leaves you there; not once you scroll up.
+ */
+const chatFollow: ChatFollow = { isShown: false, end: '', isAtEnd: false }
+
+/**
+ * Takes the pane to its end, where the engine keeps it while the drawing
+ * grows and nothing else moves it, once the drawing is up. It scrolls and
+ * never redraws, so a click in flight still lands.
+ */
+function scrollToEnd($: EngineInterface) {
+  $.clock.after(SCROLL_MS, () => {
+    try {
+      void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
+    } catch {
+      // no scroll on this engine: the pane stays where it is
+    }
+  })
+}
+
+/**
+ * At each drawing of the pane: Chat coming into view takes the pane to its
+ * end, and something new at Chat's end does too while you were there.
+ * Anything else on show leaves the pane to you.
+ */
+function keepChat($: EngineInterface, now: number) {
+  const state = view.v2.tab === 'chat' && view.page === '' && !view.v2.isInspectOpen ? shownV2Of(now) : null
+  if (followStep(chatFollow, state ? chatEndOf(state, view.v2.chatFilter) : null)) scrollToEnd($)
+}
+
+/**
  * The whole text of message `id` the state cut (`isCut`), for an agent
  * page's Show more, as the web page's `/message/<id>` serves it: the deck's
  * own copy while it holds one (whole under 700 characters; a longer one's
@@ -1940,6 +1976,8 @@ function actionsFor($: EngineInterface): DeckActions {
     },
     // the v2 screens' own state: each field checked as a reload checks it; Changes reads the file it shows again
     setV2View: patch => {
+      // Chat opened by a press (its tab, m) or filtered anew: the next drawing takes the pane to its newest message
+      if (patch.tab === 'chat' || (patch.chatFilter !== undefined && patch.chatFilter !== view.v2.chatFilter)) chatFollow.isShown = false
       view.v2 = M.view2With(view.v2, patch)
       if (view.v2.tab === 'changes' && view.file && git.isRepo) void loadFileDiff($, view.file)
       changed($)
@@ -1968,8 +2006,15 @@ function actionsFor($: EngineInterface): DeckActions {
     setAvatarStyle: style => setAvatarStyle($, style),
 
     // the sample's chat sends nothing: its agents are a recording, and its Orchestrator is not this session's
-    // a send from the pane's composer carries an id: its ack says what came of it, under the message
-    sendChat: (agentId, text, ackId) => (view.isDemo ? $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.') : void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))),
+    // a send from the pane's composer carries an id: its ack says what came of it, under the message; Chat keeps to its end, where it shows
+    sendChat: (agentId, text, ackId) => {
+      if (view.isDemo) {
+        $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.')
+        return
+      }
+      chatFollow.isAtEnd = true
+      void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))
+    },
     review: text => fillReview($, text),
     // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
     open: tab => {
@@ -2700,6 +2745,7 @@ export const register: Register = on => {
     if (arg === 'close' || arg === 'off' || arg === 'hide') {
       await $.ui.close({ id: PANE })
       isPaneOpen = false
+      chatFollow.isShown = false
       return { text: 'Agent Deck closed.' }
     }
     if (arg === 'band') {
@@ -2729,6 +2775,8 @@ export const register: Register = on => {
     // anything else is this session's deck: /deck alone Now; now, chat, org or changes (or an earlier build's tab, on the one it folded into); inspect (or stats) Now with Inspect open
     leaveDemo()
     view.page = ''
+    // /deck chat takes the pane to Chat's newest message, though Chat showed already
+    chatFollow.isShown = false
     const isInspect = words[0] === 'inspect' || words[0] === 'stats'
     const tab = arg === '' || isInspect ? 'now' : M.v2TabFor(words[0] ?? '')
     if (tab) view.v2 = M.view2With(view.v2, { tab, isInspectOpen: isInspect })
@@ -2741,6 +2789,7 @@ export const register: Register = on => {
     const result = await next(e)
     isPaneOpen = false
     paneFocus = ''
+    chatFollow.isShown = false
     return result
   })
 
@@ -3365,6 +3414,7 @@ export const register: Register = on => {
     isPaneOpen = true
     const now = await $.clock.now()
     shownKey = screenKey(now)
+    keepChat($, now)
     return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, shownKey, view], () => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
       return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface))
@@ -3388,6 +3438,13 @@ export const register: Register = on => {
   on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     const result = await next(e)
     if (result.deny === undefined) paneFocus = e.element ?? ''
+    return result
+  })
+
+  // your own scrolling of the pane: whether it leaves you at the end, where Chat keeps to its newest message
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const result = await next(e)
+    if (e.origin.kind === 'person' && result.deny === undefined) chatFollow.isAtEnd = isAtEndOf(e)
     return result
   })
 
