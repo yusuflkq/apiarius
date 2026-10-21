@@ -91,15 +91,18 @@ test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s a
   const state = JSON.parse(first?.text ?? '{}')
   expect(state.meta).toMatchObject({ loadedAt: NOW, writes: 1 })
   expect(state.counts).toMatchObject({ agents: 3, shownAgents: 1, goals: 1 })
-  expect(state.goal).toMatchObject({ headline: 'Fix the off-by-one in src/range.js' })
-  expect(state.agents.find((agent: { id: string }) => agent.id === 'agent-x1')).toMatchObject({ label: 'scout', scope: 'Find the bug', origin: 'agent', status: 'running', parent: 'main', answer: null })
-  expect(state.messages).toContainEqual({ from: 'main', to: 'agent-x1', route: 'Orchestrator → scout', kind: 'spawn', text: 'Find the off-by-one in src/range.js' })
+  // as v2 has it: your latest request in your words, what needs you (nothing), no plan Claude did not make
+  expect(state.header).toMatchObject({ state: 'working', goal: { headline: 'Fix the off-by-one in src/range.js' } })
+  expect([state.needs, state.plan]).toEqual([[], null])
+  expect(state.view).toMatchObject({ page: '', v2: { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false }, focus: '', isDemo: false })
+  // each loop as Claude Code gave it, nothing made up for it
+  expect(state.agents.find((agent: { id: string }) => agent.id === 'agent-x1')).toMatchObject({ name: 'scout', description: 'Find the bug', type: 'Explore', origin: 'agent', status: 'running', parent: 'main', background: true, current: null, recent: [], answer: null })
+  expect(state.chat).toContainEqual({ from: 'main', to: 'agent-x1', who: 'Orchestrator → scout', kind: 'spawn', text: 'Find the off-by-one in src/range.js' })
   // the v2 tree, as every surface draws it: the Orchestrator, and scout at work under it (nothing folds while it works)
   expect(state.tree.map((row: { title: string; depth: number }) => `${row.depth}:${row.title}`)).toEqual(['0:Orchestrator', '1:scout'])
   expect(state.tree[1]).toMatchObject({ row: 'agent', id: 'agent-x1', kind: 'agent', status: 'running', fold: null, live: null, needs: 0 })
-  expect(state.outline).toBeUndefined()
-  expect(state.needs).toMatchObject({ kind: 'none' })
-  expect(state.fold).toBeNull()
+  // nothing of the made-up plan, summary, needs line, labels or fold of earlier builds
+  for (const gone of ['outline', 'goal', 'summary', 'fold', 'files', 'messages']) expect(state[gone]).toBeUndefined()
 
   // a change while a dump waits rides along with it: one write per 2 s at most
   await $.tool.call(scoutReads('/work/src/range.js'))
@@ -107,7 +110,7 @@ test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s a
   await clock.advance(2100)
   expect(disk.writes).toHaveLength(2)
   const second = JSON.parse(disk.writes[1]?.text ?? '{}')
-  expect(second.agents.find((agent: { id: string }) => agent.id === 'agent-x1').lastAction.text).toBe('Read /work/README.md')
+  expect(second.agents.find((agent: { id: string }) => agent.id === 'agent-x1').recent).toEqual(['Read /work/src/range.js', 'Read /work/README.md'])
   // its calls ended as they began: no call in flight on its row of the tree
   expect(second.tree[1]).toMatchObject({ title: 'scout', live: null })
 

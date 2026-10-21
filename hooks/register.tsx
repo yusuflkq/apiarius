@@ -30,7 +30,7 @@ import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
 import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
-import { T } from './ui/theme'
+
 import type { ChatLine, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { newRenderMemo } from './renderMemo'
 import { bandOf, deckView, type DeckActions } from './views'
@@ -95,7 +95,7 @@ let dataGen = 0
  * git was read or the usage loaded again, a minute turned (the ages and
  * times it words), or the questions the deck may answer changed.
  */
-const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usage: UsageInfo | null; state: W.WebStateV2 | null } = { key: '', data: null, git: null, usage: null, state: null }
+const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usage: UsageInfo | null; state: W.WebStateV2 | null; shows: string } = { key: '', data: null, git: null, usage: null, state: null, shows: '' }
 
 function v2Of(now: number): W.WebStateV2 {
   const asking = [...askers.keys()]
@@ -103,8 +103,14 @@ function v2Of(now: number): W.WebStateV2 {
   if (v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage) return v2Memo.state
   // a question the page may answer is one whose race runs in this module: none after a reload
   const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking))
-  Object.assign(v2Memo, { key, data, git, usage, state })
+  Object.assign(v2Memo, { key, data, git, usage, state, shows: W.v2KeyOf(state) })
   return state
+}
+
+/** What the v2 state shows (`W.v2KeyOf`), worked out once per state built. */
+function v2ShowsOf(now: number): string {
+  v2Of(now)
+  return v2Memo.shows
 }
 
 /**
@@ -178,7 +184,8 @@ function gitKeyOf(state: G.GitState): string {
  * (`M.deckKeyOf`); git (whether read, HEAD, branch, files and counts); the
  * usage figures rounded; the day history; the edits; on the Stats tab the
  * session's totals and the minute; and what the native dashboard shows
- * beside them (`dashKeyOf`). Equal keys draw the same screen.
+ * beside them (`dashKeyOf`); and all that the v2 state shows (`W.v2KeyOf`),
+ * which every v2 screen draws. Equal keys draw the same screen.
  */
 function screenKey(now: number): string {
   const figures = usage
@@ -190,7 +197,7 @@ function screenKey(now: number): string {
   const edits = `${data.edits.length}:${data.edits[data.edits.length - 1]?.id ?? ''}`
   const shown = webPaneOf()
   const webKey = `${shown.status}\t${shown.url}\t${shown.opened}\t${shown.note}`
-  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits, webKey, dashKeyOf(now)].join('\n\u0001')
+  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits, webKey, dashKeyOf(now), v2ShowsOf(now)].join('\n\u0001')
 }
 
 /**
@@ -427,21 +434,16 @@ async function writeDump($: EngineInterface): Promise<void> {
 }
 
 /**
- * What the deck believes now, as plain data: the raw counts; the goal, the
- * plan (steps and links), the summary, the needs-you line and the fold; per
- * agent its label, scope, origin, status, parent, step link, checklist, step,
- * last action and result; the files; the last 20 messages; the v2 tree's
- * rows (`W.deckStateOf`'s agents, folds and all); and how the web deck
- * stands (never its token).
+ * What the deck believes now, as plain data, nothing in it made up: the raw
+ * counts; git; the view (v2's own, and the pane's focus); from the v2 state
+ * every surface draws (`v2Of`), its header, needs, plan sources, latest chat
+ * rows and tree; per loop what Claude Code gave it (its name, description,
+ * type, origin, status, parent, background flag, calls, list and result);
+ * the latest edits; and how the web deck stands (never its token).
  */
 function debugStateOf(now: number) {
-  const plan = M.planOf(data)
-  const goal = M.goalOf(data)
-  const tree = v2Of(now).agents
-  const nameOf = (id: string) => {
-    const agent = M.agentOf(data, id)
-    return agent ? M.labelOf(agent) : id
-  }
+  const state = v2Of(now)
+  const callOf = (call: DeckActivity) => `${call.tool} ${F.oneLine(call.command || call.target)}`.trim()
   return {
     counts: {
       agents: data.agents.length,
@@ -455,44 +457,35 @@ function debugStateOf(now: number) {
       turns: data.turns,
     },
     git: { root: git.root, isRepo: git.isRepo, checkedAt: git.checkedAt, files: git.files.map(file => file.path) },
-    view: { tab: view.tab, selected: view.agent, zoom: view.zoom, folded: view.folded },
-    goal: goal
-      ? { id: goal.id, headline: goal.headline, text: F.trunc(F.oneLine(goal.text), 300), origin: goal.origin, at: goal.at, followUps: goal.followUps.map(one => F.trunc(F.oneLine(one.text), 120)), plan: goal.plan?.steps ?? null }
+    view: { tab: view.tab, page: view.page, v2: view.v2, focus: paneFocus, isDemo: view.isDemo },
+    // what every surface draws, as v2 has it: the header (your latest request, the word, the turn), what needs you, the plan's sources, the chat's latest rows
+    header: state.header,
+    needs: state.needs.map(need => ({ id: need.id, kind: need.kind, agent: need.agent, age: need.age, text: F.trunc(F.oneLine(need.text), 200), isAnswerable: need.isAnswerable })),
+    plan: state.plan
+      ? { board: state.plan.board.map(task => `${task.id} ${task.status}: ${task.subject}`), todos: state.plan.todos?.items.map(item => `${item.status}: ${item.text}`) ?? null, approved: state.plan.approved !== null, workflows: state.plan.workflows.map(run => `${run.name}: ${run.phases.join(' · ')}`) }
       : null,
-    plan: { source: plan.source, goal: plan.goal ?? null, steps: plan.steps, unlinked: plan.unlinked, links: plan.links },
-    summary: M.summaryOf(data, git, now),
-    needs: M.needsOf(data, git, now),
-    fold: M.foldOf(data) ?? null,
-    agents: data.agents.map(agent => {
-      const list = M.checklistOf(agent, data)
-      return {
-        id: agent.id,
-        kind: agent.kind,
-        label: M.labelOf(agent),
-        scope: M.scopeOf(agent),
-        origin: M.originOf(agent),
-        status: agent.status,
-        shown: M.statusOf(agent, data),
-        parent: M.parentIdOf(data, agent) ?? null,
-        step: plan.links[agent.id] ?? null,
-        checklist: { done: list.done, total: list.total, items: list.items.map(item => `${item.status}: ${item.text}`) },
-        stepOf: M.stepOf(agent),
-        lastAction: M.lastActionOf(agent) ?? null,
-        answer: agent.answer === undefined ? null : agent.answer.slice(0, 200),
-        resultVia: agent.resultVia ?? null,
-        tools: agent.tools,
-        files: agent.files,
-      }
-    }),
-    files: M.filesOf(data).map(file => ({ ...file, by: file.editors.map(nameOf) })),
-    messages: data.messages.slice(-20).map(message => ({
-      from: message.from,
-      to: message.to,
-      route: `${nameOf(message.from)} → ${nameOf(message.to)}`,
-      kind: message.kind,
-      text: F.oneLine(message.text).slice(0, 80),
+    // each loop as Claude Code gave it: its words, its status, its parent, its calls
+    agents: data.agents.map(agent => ({
+      id: agent.id,
+      kind: agent.kind,
+      name: agent.name,
+      description: agent.description,
+      type: agent.type,
+      origin: M.originOf(agent),
+      status: agent.status,
+      parent: M.parentIdOf(data, agent) ?? null,
+      background: agent.background ?? null,
+      current: agent.current ? callOf(agent.current) : null,
+      recent: agent.recent.slice(-3).map(callOf),
+      todos: (agent.todos ?? []).map(item => `${item.status}: ${item.text}`),
+      answer: agent.answer === undefined ? null : agent.answer.slice(0, 200),
+      resultVia: agent.resultVia ?? null,
+      tools: agent.tools,
+      files: agent.files,
     })),
-    tree: tree.map(row =>
+    edits: data.edits.slice(-20).map(edit => ({ agent: edit.agent, tool: edit.tool, path: edit.path, added: edit.added, removed: edit.removed })),
+    chat: state.chat.slice(-20).map(row => ({ from: row.from, to: row.to, who: row.who, kind: row.kind, ...(row.title ? { title: row.title } : {}), text: F.oneLine(row.text).slice(0, 80) })),
+    tree: state.agents.map(row =>
       row.row === 'fold'
         ? { row: row.row, id: row.id, depth: row.depth, text: row.text, ids: row.ids }
         : { row: row.row, id: row.id, depth: row.depth, title: row.title, kind: row.kind, status: row.status, fold: row.fold, live: row.live ? `${row.live.tool} ${row.live.text}` : null, needs: row.needs },
@@ -2720,6 +2713,9 @@ function jsonLine(value: unknown): string {
   return F.trunc(F.oneLine(text), 240)
 }
 
+/** The probe's own colours and label font: graphite ground, bone text, one copper accent (the screens' theme's, held here so the hooks module names no renderer file). */
+const PROBE_LOOK = { ground: '#161615', text: '#e9e4d8', copper: '#c9824f', font: "Bahnschrift,'Segoe UI',system-ui,sans-serif" } as const
+
 /**
  * The probe's Svg: markup far wider than any slot (2400×160 over a 900×60
  * viewBox), graphite ground, one 13px bone label carrying the tick `count`.
@@ -2728,8 +2724,8 @@ function jsonLine(value: unknown): string {
 function probeSvg(count: number): string {
   return [
     '<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="160" viewBox="0 0 900 60">',
-    `<rect x="0" y="0" width="900" height="60" fill="${T.bg}"/>`,
-    `<text x="16" y="35" font-family="${T.fontLabel}" font-size="13" fill="${T.text1}">tick ${count} &#183; this text is 13px</text>`,
+    `<rect x="0" y="0" width="900" height="60" fill="${PROBE_LOOK.ground}"/>`,
+    `<text x="16" y="35" font-family="${PROBE_LOOK.font}" font-size="13" fill="${PROBE_LOOK.text}">tick ${count} &#183; this text is 13px</text>`,
     '</svg>',
   ].join('')
 }
@@ -2757,7 +2753,7 @@ function probeView(
     <Box flexDirection="column" gap={1}>
       <Box flexDirection="row" columnGap={2}>
         <Text>{`bodyColumns=${e.props.bodyColumns}  viewport=${viewport}  placement=${e.props.placement}  bodyRows=${e.props.scroll.bodyRows}  surface=${e.surface}`}</Text>
-        <Text color={T.copper}>copper hex</Text>
+        <Text color={PROBE_LOOK.copper}>copper hex</Text>
       </Box>
       {client}
       {Svg ? (

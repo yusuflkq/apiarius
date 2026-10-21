@@ -1215,6 +1215,12 @@ export function recipientOf(state: Pick<WebStateV2, 'agents'>, words: string): {
   return { agentId: found.id, title: found.title, text }
 }
 
+/** What a v2 state shows, as one key: every field of it but when it was built. Equal keys draw the same screens. */
+export function v2KeyOf(state: WebStateV2): string {
+  const text = JSON.stringify({ ...state, now: 0 })
+  return `${F.hash(text).toString(36)}:${text.length}`
+}
+
 // The pane's focus (`j`, `k`, `n`): the rows it moves among, by the keys
 // their Buttons are drawn under.
 

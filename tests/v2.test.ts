@@ -682,3 +682,11 @@ test('/deck now, chat and changes open the pane on that v2 tab, /deck inspect (o
   expect(await v2After('org')).toMatchObject({ tab: 'now' })
   expect(await v2After('now')).toMatchObject({ tab: 'now' })
 })
+
+test('what a v2 state shows is one key: the same for the same state built at another moment, another once anything it shows moves', () => {
+  const session = v2Session()
+  const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  expect(W.v2KeyOf({ ...state, now: state.now + 5000 })).toBe(W.v2KeyOf(state))
+  expect(W.v2KeyOf({ ...state, acks: state.acks.slice(1) })).not.toBe(W.v2KeyOf(state))
+  expect(W.v2KeyOf({ ...state, header: { ...state.header, stateText: 'Idle' } })).not.toBe(W.v2KeyOf(state))
+})
