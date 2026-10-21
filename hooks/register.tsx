@@ -72,9 +72,17 @@ let gitKeyMemo: { of: G.GitState; key: string } | null = null
  * until it is read. `note` says why it could not be; `version` counts its
  * changes (an answer given in it), for the screen key. `v2` is the v2
  * sample (web/fixtures/state.v2.json, `W.v2StateFromText`), null while it
- * is read or when it could not be.
+ * is read or when it could not be; `v2Files` its lazy files
+ * (web/fixtures/v2/), as read.
  */
-const demo: { state: W.WebState | null; data: DeckData | null; v2: W.WebStateV2 | null; note: string; version: number } = { state: null, data: null, v2: null, note: '', version: 0 }
+const demo: { state: W.WebState | null; data: DeckData | null; v2: W.WebStateV2 | null; v2Files: W.V2Files; note: string; version: number } = {
+  state: null,
+  data: null,
+  v2: null,
+  v2Files: W.v2FilesFrom({ agents: {}, patches: {}, messages: {} }),
+  note: '',
+  version: 0,
+}
 
 /** Counts the saves (`save`): each change of the data the deck keeps moves it on. */
 let dataGen = 0
@@ -1983,6 +1991,11 @@ function actionsFor($: EngineInterface): DeckActions {
       view.page = ''
       changed($)
     },
+    // the v2 screens' own state: each field checked as a reload checks it
+    setV2View: patch => {
+      view.v2 = M.view2With(view.v2, patch)
+      changed($)
+    },
     // a row picked; with `outline`, the outline as it shows that row (Classic's select)
     pick: (id, outline) => {
       pickAgent($, id)
@@ -2084,6 +2097,7 @@ function dashOf(now: number, surface: RenderSurface): DashModel {
     // a question the deck may answer is one whose race runs in this module, as the page is told
     state: isDemo ? demo.state : W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())),
     v2: isDemo ? demo.v2 : v2Of(now),
+    v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data),
     isDemo,
     demoNote: demo.note,
     paneData: isDemo && demo.data ? demo.data : data,
@@ -2099,8 +2113,43 @@ function leaveDemo() {
   demo.state = null
   demo.data = null
   demo.v2 = null
+  demo.v2Files = W.v2FilesFrom({ agents: {}, patches: {}, messages: {} })
   demo.note = ''
   demo.version += 1
+}
+
+/**
+ * The v2 sample's lazy files under `dir` (web/fixtures/v2): each agent's
+ * file its rows name (its times moved by `by`, as the state's were), each
+ * edit's patch, each cut message's whole text. One that cannot be read is
+ * left out: its screen says so.
+ */
+async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2, by: number): Promise<W.V2Files> {
+  const isSafe = (id: string) => /^[A-Za-z0-9_-]{1,128}$/.test(id)
+  const agents: Record<string, W.V2AgentFile> = {}
+  const patches: Record<string, string> = {}
+  const messages: Record<string, string> = {}
+  const read = async (path: string, keep: (text: string) => void) => {
+    try {
+      keep(await $.fs.read(path))
+    } catch {
+      // not in the sample: left out
+    }
+  }
+  await Promise.all([
+    ...state.agents.flatMap(row =>
+      row.row === 'agent' && isSafe(row.fileId)
+        ? [
+            read(`${dir}/agents/${row.fileId}.json`, text => {
+              agents[row.fileId] = W.v2TimesMoved(JSON.parse(text) as W.V2AgentFile, by)
+            }),
+          ]
+        : [],
+    ),
+    ...state.changes.edits.filter(edit => isSafe(edit.id)).map(edit => read(`${dir}/patches/${edit.id}.diff`, text => (patches[edit.id] = text.replace(/\r\n/g, '\n')))),
+    ...state.chat.filter(row => row.isCut && isSafe(row.id)).map(row => read(`${dir}/messages/${row.id}.md`, text => (messages[row.id] = text.replace(/\r\n/g, '\n').trimEnd()))),
+  ])
+  return W.v2FilesFrom({ agents, patches, messages })
 }
 
 /**
@@ -2120,6 +2169,7 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   demo.state = null
   demo.data = null
   demo.v2 = null
+  demo.v2Files = W.v2FilesFrom({ agents: {}, patches: {}, messages: {} })
   demo.note = ''
   demo.version += 1
   redraw($)
@@ -2140,6 +2190,7 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   }
   const patches: Record<string, string> = {}
   let v2: W.WebStateV2 | null = null
+  let v2Files: W.V2Files | null = null
   await Promise.all([
     ...state.edits
       .filter(edit => /^[A-Za-z0-9_-]{1,120}$/.test(edit.id))
@@ -2150,10 +2201,14 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
           // an edit with no patch shows no lines
         }
       }),
-    // the v2 sample, for the screens that draw v2: its times moved to the same now
+    // the v2 sample, for the screens that draw v2, and its lazy files: its times moved to the same now
     (async () => {
       try {
-        v2 = W.v2StateFromText(await $.fs.read(`${root}/web/fixtures/state.v2.json`), readAt)
+        const text = await $.fs.read(`${root}/web/fixtures/state.v2.json`)
+        const shown = W.v2StateFromText(text, readAt)
+        if (!shown) return
+        v2 = shown
+        v2Files = await readV2Sample($, `${root}/web/fixtures/v2`, shown, readAt - (JSON.parse(text) as { now: number }).now)
       } catch {
         // no v2 sample: those screens say so
       }
@@ -2163,6 +2218,7 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   demo.state = state
   demo.data = demoDataOf(state, patches)
   demo.v2 = v2
+  if (v2Files) demo.v2Files = v2Files
   if (view.page !== '' && !state.agents.some(agent => agent.id === view.page)) view.page = ''
   demo.version += 1
   changed($)

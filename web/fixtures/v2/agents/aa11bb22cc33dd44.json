@@ -1,0 +1,18 @@
+{
+  "v": 2,
+  "id": "aa11bb22cc33dd44",
+  "task": "Review src/rateLimit.ts once builder says it is ready: correctness of the window, the Redis keys, the 429 answer.",
+  "result": "",
+  "todos": [],
+  "activity": [
+    {
+      "id": "toolu_01AskMany",
+      "at": 1792013460000,
+      "tool": "AskUserQuestion",
+      "target": "Which routes should skip the limiter?",
+      "ok": null,
+      "ms": null
+    }
+  ],
+  "edits": []
+}

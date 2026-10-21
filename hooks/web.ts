@@ -1159,6 +1159,41 @@ export function agentFilesOf(data: DeckData): { id: string; text: string }[] {
 }
 
 /**
+ * The lazy files of a v2 state as the pane opens them, by the ids the state
+ * names: an agent's file (a row's `fileId`), an edit's patch (an edit's
+ * `id`), a cut message's whole text (a chat row's `id`); null for none. The
+ * web page fetches the same from /agent/<id>, /patch/<id> and /message/<id>.
+ */
+export type V2Files = {
+  agent: (fileId: string) => V2AgentFile | null
+  patch: (id: string) => string | null
+  /** A cut message's whole text while the deck holds it whole; null once only its file has it (the pane's `loadMessage` reads that one). */
+  message: (id: string) => string | null
+}
+
+/** The live deck's lazy files, made from its model when asked for. */
+export function v2FilesOf(data: DeckData): V2Files {
+  return {
+    agent: id => {
+      const agent = data.agents.find(one => isTreeAgent(one) && webIdOf(one.id) === id)
+      return agent ? agentFileOf(data, agent) : null
+    },
+    patch: id => data.edits.find(edit => webIdOf(edit.id) === id)?.patch ?? null,
+    message: id => {
+      const own = data.messages.find(one => webIdOf(one.id) === id)
+      if (!own) return null
+      return own.full ?? (own.isSaved !== true && Array.from(own.text).length < M.LIMITS.messageChars ? own.text : null)
+    },
+  }
+}
+
+/** The sample's lazy files (web/fixtures/v2/), as read, by kind and id. */
+export function v2FilesFrom(files: { agents: Readonly<Record<string, V2AgentFile>>; patches: Readonly<Record<string, string>>; messages: Readonly<Record<string, string>> }): V2Files {
+  const own = <T>(record: Readonly<Record<string, T>>, id: string): T | null => (Object.hasOwn(record, id) ? (record[id] ?? null) : null)
+  return { agent: id => own(files.agents, id), patch: id => own(files.patches, id), message: id => own(files.messages, id) }
+}
+
+/**
  * Who a composer's words go to: `@name` first (an agent row's `name`, else
  * its `shortId`, any case) sends the rest to that agent, by SendMessage;
  * words with no `@` go to the Orchestrator. `error` says why it cannot be

@@ -1,0 +1,30 @@
+{
+  "v": 2,
+  "id": "c4d7e8f9a0b1263d",
+  "task": "Write tests for src/rateLimit.ts against the in-memory store: the window slides, a burst past the limit is refused, Retry-After rounds up.",
+  "result": "Wrote 6 tests in `tests/rateLimit.test.ts`; all pass against the in-memory store.",
+  "todos": [],
+  "activity": [
+    {
+      "id": "toolu_01TstW1",
+      "at": 1792012380000,
+      "tool": "Write",
+      "target": "tests/rateLimit.test.ts",
+      "ok": true,
+      "ms": 300
+    },
+    {
+      "id": "toolu_01TstB1",
+      "at": 1792012620000,
+      "tool": "Bash",
+      "target": "Run the limiter tests",
+      "command": "npm test -- rateLimit --runInBand",
+      "description": "Run the limiter tests",
+      "ok": true,
+      "ms": 8400
+    }
+  ],
+  "edits": [
+    "toolu_01TstW1"
+  ]
+}

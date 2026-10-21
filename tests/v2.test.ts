@@ -1,10 +1,11 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyGit, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
 import * as W from '../hooks/web'
 import type { DeckAgent, DeckData, DeckMessageKind } from '../types'
 import { IDS, SAMPLE_NOW, v2Session } from './v2session'
+import { command, deck, lastState, newWorld, work, world } from './world'
 
 /**
  * The v2 view model (`W.deckStateOf`, web/CONTRACT.md v2): the one state the
@@ -477,4 +478,94 @@ test('the commands v2 adds: stopAgent only for a background agent or a teammate 
   expect(stateOf(data).needs[0]?.id).toBe(W.webIdOf('call:7'))
   expect(W.routeOf({ cmd: 'answer', callId: W.webIdOf('call:7'), answers: { 'Which?': 'A' } }, data)).toEqual({ kind: 'answer', callId: 'call:7', answers: { 'Which?': 'A' } })
   expect(W.routeOf({ cmd: 'answer', callId: 'call:7', answers: { 'Which?': 'A' } }, data)).toEqual({ kind: 'answer', callId: 'call:7', answers: { 'Which?': 'A' } })
+})
+
+// ---------------------------------------------------------------------------
+// The pane's side of v2: its own view state, its lazy files, the sample, the commands.
+
+test('the v2 screens` own state in the pane: Now, nothing unfolded, all of Chat, no Inspect; each field set as it is checked, the rest kept, healed from a snapshot', () => {
+  const fresh = M.defaultView().v2
+  expect(fresh).toEqual({ tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false })
+  const set = M.view2With(fresh, { tab: 'chat', chatFilter: 'agent-x1' })
+  expect(set).toEqual({ tab: 'chat', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false })
+  // a tab of none of the three, folds that are no strings, a filter that is none: kept as they were
+  expect(M.view2With(set, { tab: 'dashboard', openFolds: ['fold:main', 7, '', 'fold:main', 'fold:b'], chatFilter: 3, isInspectOpen: 'yes' })).toEqual({ tab: 'chat', openFolds: ['fold:main', 'fold:b'], chatFilter: 'agent-x1', isInspectOpen: false })
+  expect(M.view2With(set, { openFolds: Array.from({ length: 60 }, (_, i) => `fold:${i}`) }).openFolds).toHaveLength(50)
+  // a reload: a view of an earlier build has none, a saved one keeps its own
+  expect(M.healView({ tab: 'plan' }).v2).toEqual(fresh)
+  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: true } }).v2).toEqual({ tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: true })
+})
+
+test('the lazy files as the pane opens them: an agent`s file, a patch and a cut message`s whole text by the ids the state names, from the live deck or as read', () => {
+  const session = v2Session()
+  const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd)
+  const files = W.v2FilesOf(session.data)
+  const builder = rowOf(state, IDS.builder)
+  expect(files.agent(builder.fileId)).toEqual(W.agentFileOf(session.data, M.agentOf(session.data, IDS.builder)!))
+  expect(files.agent('nobody')).toBeNull()
+  const edit = state.changes.edits[0]!
+  expect(files.patch(edit.id)).toBe(session.data.edits[0]!.patch)
+  const cut = state.chat.find(row => row.isCut)!
+  expect(files.message(cut.id)).toMatch(/^Here is where things stand\./)
+  expect(files.message(cut.id)?.length).toBeGreaterThan(cut.text.length)
+  // as read from the sample's folder: only what is there, never a key of every object's
+  const read = W.v2FilesFrom({ agents: { main: W.agentFileOf(session.data, M.agentOf(session.data, M.MAIN)!) }, patches: { p1: '@@ -1 +1 @@\n' }, messages: {} })
+  expect(read.agent('main')?.id).toBe(M.MAIN)
+  expect([read.agent('constructor'), read.patch('p1'), read.patch('toString'), read.message('m1')]).toEqual([null, '@@ -1 +1 @@\n', null, null])
+})
+
+test('/deck demo reads the v2 sample beside v1: web/fixtures/state.v2.json, then each agent`s file, patch and cut message its state names under web/fixtures/v2', async ($, on) => {
+  const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
+  const session = v2Session()
+  const v2 = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  const v1 = W.webStateOf(session.data, M.defaultView(), session.git, session.usage, session.now, session.sessionId, session.cwd)
+  const agentFiles = new Map(W.agentFilesOf(session.data).map(one => [one.id, one.text]))
+  const reads: string[] = []
+  on('fs.read', ($, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    reads.push(path)
+    if (path.endsWith('/web/fixtures/state.json')) return { value: JSON.stringify(v1) }
+    if (path.endsWith('/web/fixtures/state.v2.json')) return { value: JSON.stringify(v2) }
+    const agent = /\/web\/fixtures\/v2\/agents\/([^/]+)\.json$/.exec(path)?.[1]
+    if (agent && agentFiles.has(agent)) return { value: agentFiles.get(agent)! }
+    if (/\/web\/fixtures\/v2\/(patches|messages)\//.test(path)) return { value: 'text\n' }
+    return { deny: 'no such file' }
+  })
+  const w = newWorld()
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  expect((await $.command.run(deck('demo'))).text).toBeUndefined()
+  await clock.advance(1000)
+  const v2Reads = reads.filter(path => path.includes('/web/fixtures/v2') || path.endsWith('state.v2.json')).map(path => path.replace(/^.*\/web\/fixtures\//, ''))
+  expect(v2Reads[0]).toBe('state.v2.json')
+  expect(v2Reads.slice(1).sort()).toEqual(
+    [
+      ...v2.agents.flatMap(row => (row.row === 'agent' ? [`v2/agents/${row.fileId}.json`] : [])),
+      ...v2.changes.edits.map(edit => `v2/patches/${edit.id}.diff`),
+      ...v2.chat.filter(row => row.isCut).map(row => `v2/messages/${row.id}.md`),
+    ].sort(),
+  )
+})
+
+test('stopAgent and abortTurn from the page are checked and acked: not in this build yet, said so, never left waiting; refused ones say why', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  await clock.advance(400)
+  const child = w.children[0]
+  const submitted = w.submitted.length
+  command(child, { cmd: 'stopAgent', id: 's-1', agentId: 'agent-x1' })
+  command(child, { cmd: 'stopAgent', id: 's-2', agentId: M.MAIN })
+  command(child, { cmd: 'abortTurn', id: 't-1', turnId: 't1' })
+  command(child, { cmd: 'abortTurn', id: 't-2', turnId: 't0' })
+  await clock.advance(400)
+  expect(lastState(w).acks.map(ack => [ack.id, ack.status, ack.text])).toEqual([
+    ['s-1', 'failed', 'Not in this build yet: stop it in Claude Code'],
+    ['s-2', 'failed', 'The Orchestrator stops with its turn: Stop turn'],
+    ['t-1', 'failed', 'Not in this build yet: press Esc in Claude Code'],
+    ['t-2', 'failed', 'That turn has ended'],
+  ])
+  // nothing reached the session: no send, no prompt
+  expect([w.sent, w.submitted.length]).toEqual([[], submitted])
 })

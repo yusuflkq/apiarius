@@ -1,0 +1,20 @@
+{
+  "v": 2,
+  "id": "e5f6a7b8c9d0142b",
+  "task": "Document the limits and the 429 answer with its Retry-After header in docs/api.md.",
+  "result": "Documented the limits and the `Retry-After` header in `docs/api.md`.",
+  "todos": [],
+  "activity": [
+    {
+      "id": "toolu_01DocE1",
+      "at": 1792012200000,
+      "tool": "Edit",
+      "target": "docs/api.md",
+      "ok": true,
+      "ms": 250
+    }
+  ],
+  "edits": [
+    "toolu_01DocE1"
+  ]
+}

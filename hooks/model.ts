@@ -32,6 +32,7 @@ import type {
   DeckTask,
   DeckTodoItem,
   DeckView,
+  DeckView2,
   DeckWorkflow,
 } from '../types'
 import { baseName, dur, firstLine, hash, oneLine, plural, trunc, truncStart } from './format'
@@ -229,6 +230,33 @@ export function defaultView(): DeckView {
     isDemo: false,
     planOpen: [],
     collapsed: [],
+    v2: defaultView2(),
+  }
+}
+
+/** The v2 screens' own state as a fresh pane has it: Now, nothing unfolded, all of Chat, no Inspect. */
+export function defaultView2(): DeckView2 {
+  return { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false }
+}
+
+/** The v2 tabs, in their keys' order (1, 2, 3). */
+export const V2_TABS: readonly DeckView2['tab'][] = ['now', 'chat', 'changes']
+
+/** The fold rows `view.v2.openFolds` keeps open at most, the oldest dropped first. */
+const OPEN_FOLDS_KEPT = 50
+
+/**
+ * The v2 screens' state with `patch` laid over it, each field checked as a
+ * reload's would be (a tab of the three, fold ids and a filter as strings,
+ * the oldest folds dropped past 50); what `patch` leaves out stays.
+ */
+export function view2With(current: DeckView2, patch: unknown): DeckView2 {
+  const p = patch && typeof patch === 'object' ? (patch as Record<string, unknown>) : {}
+  return {
+    tab: oneOf(p.tab, V2_TABS, current.tab),
+    openFolds: Array.isArray(p.openFolds) ? [...new Set(p.openFolds.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-OPEN_FOLDS_KEPT) : current.openFolds,
+    chatFilter: typeof p.chatFilter === 'string' ? p.chatFilter : current.chatFilter,
+    isInspectOpen: typeof p.isInspectOpen === 'boolean' ? p.isInspectOpen : current.isInspectOpen,
   }
 }
 
@@ -313,6 +341,8 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     planOpen: Array.isArray(v.planOpen) ? [...new Set(v.planOpen.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-PLAN_OPEN_KEPT) : base.planOpen,
     // the sections folded to their heading: strings only, each once, the newest kept
     collapsed: Array.isArray(v.collapsed) ? [...new Set(v.collapsed.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-COLLAPSED_KEPT) : base.collapsed,
+    // the v2 screens' own, each field as it would be set
+    v2: view2With(base.v2, v.v2),
   }
   if (data) {
     const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)

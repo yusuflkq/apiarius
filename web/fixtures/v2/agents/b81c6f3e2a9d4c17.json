@@ -1,0 +1,48 @@
+{
+  "v": 2,
+  "id": "b81c6f3e2a9d4c17",
+  "task": "Write a sliding-window rate limiter in src/rateLimit.ts: 100 requests a minute per user by default, set per route. A Redis store (REDIS_URL) and an in-memory one for tests. Answer 429 with Retry-After. Mount it in src/app.ts after auth().",
+  "result": "",
+  "todos": [],
+  "activity": [
+    {
+      "id": "toolu_01BldW1",
+      "at": 1792011960000,
+      "tool": "Write",
+      "target": "src/rateLimit.ts",
+      "ok": true,
+      "ms": 400
+    },
+    {
+      "id": "toolu_01BldE1",
+      "at": 1792012140000,
+      "tool": "Edit",
+      "target": "src/app.ts",
+      "ok": true,
+      "ms": 300
+    },
+    {
+      "id": "toolu_01BldW2",
+      "at": 1792012920000,
+      "tool": "Write",
+      "target": "C:/Users/sam/AppData/Local/Temp/bench.js",
+      "ok": true,
+      "ms": 200
+    },
+    {
+      "id": "toolu_01BldB2",
+      "at": 1792013430000,
+      "tool": "Bash",
+      "target": "Run the limiter tests",
+      "command": "npm test -- rateLimit",
+      "description": "Run the limiter tests",
+      "ok": null,
+      "ms": null
+    }
+  ],
+  "edits": [
+    "toolu_01BldW1",
+    "toolu_01BldE1",
+    "toolu_01BldW2"
+  ]
+}

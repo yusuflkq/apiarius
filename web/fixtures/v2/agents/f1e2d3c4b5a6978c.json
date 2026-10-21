@@ -1,0 +1,18 @@
+{
+  "v": 2,
+  "id": "f1e2d3c4b5a6978c",
+  "task": "Read ioredis's options and say which matter for a limiter: retries, timeouts, the key prefix.",
+  "result": "",
+  "todos": [],
+  "activity": [
+    {
+      "id": "toolu_01SctF1",
+      "at": 1792012140000,
+      "tool": "WebFetch",
+      "target": "github.com/redis/ioredis#readme",
+      "ok": true,
+      "ms": 1800
+    }
+  ],
+  "edits": []
+}

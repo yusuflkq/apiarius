@@ -5,9 +5,9 @@
  */
 import type { Elements, RenderSurface } from 'claude-code'
 
-import type { DeckAgentPane, DeckData, DeckTab, DeckView } from '../../types'
+import type { DeckAgentPane, DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
-import type { WebState, WebStateV2 } from '../web'
+import type { V2Files, WebState, WebStateV2 } from '../web'
 
 type TerminalTable = Elements['terminal']
 
@@ -172,6 +172,13 @@ export type DashActions = Actions & {
   followTalk: () => void
   /** Leaves the sample (`/deck demo`) for this session's own deck. */
   exitDemo: () => void
+  /**
+   * Sets the v2 screens' own state (`DeckView.v2`: the tab, the open folds,
+   * Chat's filter, Inspect), each field checked, what `patch` leaves out
+   * kept; the pane draws again and the choice stays through reloads. An
+   * agent page is `openAgent` and `back`, as before.
+   */
+  setV2View: (patch: Partial<DeckView2>) => void
 }
 
 /** What the native dashboard draws from, beside the deck's model. */
@@ -185,6 +192,8 @@ export type DashModel = {
    * sample shows; null while that is read or could not be.
    */
   v2: WebStateV2 | null
+  /** The v2 state's lazy files (an agent's file, a patch, a cut message's whole text): the live deck's, or the sample's (web/fixtures/v2/). */
+  v2Files: V2Files
   /** The sample (`/deck demo`) is shown, not this session. */
   isDemo: boolean
   /** Why the sample could not be read; '' otherwise. */
