@@ -1,10 +1,10 @@
 /**
- * The deck's colours and avatars, as the web deck's (web/app.css,
+ * The deck's colours, as the web deck's (web/app.css,
  * web/app.js), so the pane, the terminal and the page look alike: neutral
- * greys for structure, colour only for status, the status glyphs, and the
- * ten gradient persona avatars (a gumdrop with a small face, indexed by a
- * row's `avatar`); and the web's small shapes as SVG documents a desktop
- * draws as images: a status pill, an icon.
+ * greys for structure, colour only for status, the status glyphs; and the
+ * web's small shapes as SVG documents a desktop draws as images: a status
+ * pill, an icon. The avatars are the deck's avatar library's
+ * (web/avatars.mjs, drawn by ./look).
  *
  * Native Text and Box take these hex values as given. Nothing here paints
  * the pane's own background: the host's dark theme shows through.
@@ -106,46 +106,6 @@ export function glyphOf(name: string): { icon: IconName; hue: string; mark: stri
   return GLYPH[name as GlyphName] ?? GLYPH.pending
 }
 
-// The avatars (web/app.js: AV, BLOB, AV_HTML).
-
-/** Paperclip's ten persona gradients, top colour then bottom. */
-export const AVATARS: readonly (readonly [string, string])[] = [
-  ['#f7cfdc', '#1f7a3a'],
-  ['#c9a9e8', '#ee79a1'],
-  ['#28164b', '#7a1530'],
-  ['#f3e6c4', '#e3a21a'],
-  ['#1f4dd6', '#3aa35c'],
-  ['#e94b27', '#5a1122'],
-  ['#7eb6e3', '#ee79a1'],
-  ['#9ce8a7', '#bd7ff0'],
-  ['#f3b49e', '#1f4ed4'],
-  ['#f2d95f', '#4fbcba'],
-]
-
-/** The gumdrop's outline on a 32 by 32 grid. */
-const BLOB = 'M16 2.6c7.1 0 12.4 5.3 12.4 12.4v9.2a5.2 5.2 0 0 1-5.2 5.2H8.8a5.2 5.2 0 0 1-5.2-5.2V15C3.6 7.9 8.9 2.6 16 2.6z'
-
-function luminance(hex: string): number {
-  const n = parseInt(hex.slice(1), 16)
-  const lin = [n >> 16, (n >> 8) & 255, n & 255].map(v => {
-    const c = v / 255
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  })
-  return 0.2126 * (lin[0] ?? 0) + 0.7152 * (lin[1] ?? 0) + 0.0722 * (lin[2] ?? 0)
-}
-
-/** An avatar index as the state gives it, folded into 0 to 9. */
-export function avatarIndex(avatar: number): number {
-  const i = Math.trunc(Number(avatar) || 0) % AVATARS.length
-  return i < 0 ? i + AVATARS.length : i
-}
-
-/** The colour that stands for an avatar where no image draws (the terminal): its gradient's middle. */
-export function avatarColor(avatar: number): string {
-  const [top, bottom] = AVATARS[avatarIndex(avatar)] ?? ['#888888', '#444444']
-  return mix(top, bottom, 0.5)
-}
-
 const shapeMemo = new Map<string, string>()
 
 /** `make()` once per `key` while the module lives (the newest 200 kept): the same shape gives the same string, so its image is never drawn anew. */
@@ -156,31 +116,6 @@ function memo(key: string, make: () => string): string {
   if (shapeMemo.size >= 200) shapeMemo.delete(shapeMemo.keys().next().value as string)
   shapeMemo.set(key, made)
   return made
-}
-
-/**
- * One avatar as a whole SVG document: the gradient gumdrop with its sheen
- * and face (eyes and a smile, light on a dark gradient, dark on a light one),
- * `px` CSS pixels square; with `dot`, a status dot at its foot as the web's
- * rows draw it, ringed in the pane's ground. Each document carries its own
- * gradients: it is drawn as an image of its own.
- */
-export function avatarSvg(avatar: number, px: number, dot?: string): string {
-  const i = avatarIndex(avatar)
-  return memo(`avatar|${i}|${px}|${dot ?? ''}`, () => {
-    const [top, bottom] = AVATARS[i] ?? ['#888888', '#444444']
-    const face = (luminance(top) + luminance(bottom)) / 2 < 0.18 ? 'rgba(255,255,255,.92)' : 'rgba(23,23,28,.82)'
-    return [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 32 32">`,
-      `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`,
-      '<linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>',
-      `<path d="${BLOB}" fill="url(#g)"/><path d="${BLOB}" fill="url(#s)"/>`,
-      `<circle cx="12.3" cy="16.4" r="1.45" fill="${face}"/><circle cx="19.7" cy="16.4" r="1.45" fill="${face}"/>`,
-      `<path d="M14.3 20.3q1.7 1.3 3.4 0" fill="none" stroke="${face}" stroke-width="1.2" stroke-linecap="round"/>`,
-      dot ? `<circle cx="27" cy="27.5" r="4.6" fill="${dot}" stroke="${P.ground}" stroke-width="2.4"/>` : '',
-      '</svg>',
-    ].join('')
-  })
 }
 
 /** Words for an SVG document, its markup characters escaped. */
@@ -232,48 +167,6 @@ export function tagSvg(word: string): string {
       '</svg>',
     ].join(''),
   )
-}
-
-/** The px a stack of `n` faces `px` square takes across: each after the first 5 px over the one before. */
-export function stackWidth(n: number, px: number): number {
-  return n <= 0 ? 0 : px + (n - 1) * (px - 5)
-}
-
-/**
- * The editors' faces stacked as the web's `.stack`: each `px` square, each
- * after the first 5 px over the one before, ringed in the pane's ground so
- * they read apart; an editor the state does not hold (null) a grey disc, as
- * the web's ghost. One document, a gradient a face.
- */
-export function stackSvg(avatars: readonly (number | null)[], px: number): string {
-  const indices = avatars.map(one => (one === null ? null : avatarIndex(one)))
-  return memo(`stack|${px}|${indices.map(i => i ?? '-').join(',')}`, () => {
-    const width = stackWidth(indices.length, px)
-    const scale = px / 32
-    const ring = (3 / scale).toFixed(2)
-    const stops = indices.map((i, j) => {
-      const [top, bottom] = (i === null ? undefined : AVATARS[i]) ?? ['#888888', '#444444']
-      return `<linearGradient id="g${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`
-    })
-    const faces = indices.map((i, j) => {
-      if (i === null) return `<g transform="translate(${j * (px - 5)} 0) scale(${scale})"><circle cx="16" cy="16" r="12.4" fill="#262626" stroke="${P.ground}" stroke-width="${ring}" paint-order="stroke"/></g>`
-      const [top, bottom] = AVATARS[i] ?? ['#888888', '#444444']
-      const ink = (luminance(top) + luminance(bottom)) / 2 < 0.18 ? 'rgba(255,255,255,.92)' : 'rgba(23,23,28,.82)'
-      return [
-        `<g transform="translate(${j * (px - 5)} 0) scale(${scale})">`,
-        `<path d="${BLOB}" fill="url(#g${j})" stroke="${P.ground}" stroke-width="${ring}" paint-order="stroke"/><path d="${BLOB}" fill="url(#s)"/>`,
-        `<circle cx="12.3" cy="16.4" r="1.45" fill="${ink}"/><circle cx="19.7" cy="16.4" r="1.45" fill="${ink}"/>`,
-        `<path d="M14.3 20.3q1.7 1.3 3.4 0" fill="none" stroke="${ink}" stroke-width="1.2" stroke-linecap="round"/>`,
-        '</g>',
-      ].join('')
-    })
-    return [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${px}" viewBox="0 0 ${width} ${px}">`,
-      `<defs>${stops.join('')}<linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>`,
-      faces.join(''),
-      '</svg>',
-    ].join('')
-  })
 }
 
 /** A divider between a list's rows, as the web's `.list` rule: a line 1 px high in `color`, drawn wider than any slot so it fills the one it is given. */

@@ -1,8 +1,10 @@
 /**
- * The pieces every v2 screen draws the same way: an agent's avatar (a small
- * static Svg of the web's gradient face where the surface draws Svg, with
- * its status dot at its foot; a dot of its colour on the terminal), a
+ * The pieces every v2 screen draws the same way: an agent's avatar (an Svg
+ * of the deck's avatar library, web/avatars.mjs, in the style the deck draws,
+ * its status dot at its foot, where the surface draws Svg; its glyph and
+ * status mark on the terminal), a
  * status dot, a status pill (an image on a desktop, its word on the
+
  * terminal), a status glyph, an icon, a section's head, a quiet line, and
  * how much room a character takes where it is drawn.
  *
@@ -15,9 +17,12 @@
  */
 import type { RenderElement } from 'claude-code'
 
+import * as AV from '../../../web/avatars.mjs'
+import type { V2AgentRow } from '../../web'
 import type { Kit } from '../types'
-import { P, PILL_HEIGHT, avatarColor, avatarSvg, glyphOf, iconSvg, pillSvg, pillWidth, toneOf, type IconName } from './palette'
+import { P, PILL_HEIGHT, glyphOf, iconSvg, pillSvg, pillWidth, toneOf, type IconName } from './palette'
 import { monoAdvance, uiAdvance, type Advance } from './text'
+
 
 /** The Svg element where the surface draws one as an image: every table but the terminal's, which answers to Svg with an empty box. */
 export function svgOf(kit: Kit): Kit['Svg'] {
@@ -33,16 +38,52 @@ export function advanceOf(kit: Kit): Advance {
 /** Avatar sizes in CSS px: a tree row's, the agent page's, an agent card's on Now, a row of Now's lists. */
 export const AVATAR = { row: 18, page: 32, card: 22, list: 20 } as const
 
+/** Who an avatar draws: an agent's row as the state gives it (its own TodoWrite list fills a progress ring). */
+export type Face = Pick<V2AgentRow, 'id' | 'title' | 'kind' | 'status' | 'isStopped'> & { todos?: V2AgentRow['todos'] }
+
+/** The style `kit` draws avatars in: the deck's setting, else the library's default (robots). */
+export function avatarStyleOf(kit: Kit): AV.AvatarStyle {
+  return AV.styleOf(kit.avatarStyle)
+}
+
+/** A row as the avatar library takes an agent: seeded by its id, the Orchestrator as `main`, a stopped one as stopped. */
+export function avatarAgentOf(row: Face): AV.AvatarAgent {
+  return {
+    id: row.id,
+    name: row.title,
+    role: row.kind === 'orchestrator' ? 'main' : '',
+    status: row.isStopped ? 'stopped' : row.status,
+    progress: AV.progressOf(row.todos),
+  }
+}
+
 /**
- * An agent's avatar: its gradient face (with its status dot at its foot in
- * `dot`'s colour, when given) where Svg draws; a dot of the avatar's colour
- * on the terminal.
+ * An agent's avatar in the deck's style (web/avatars.mjs), `px` square, with
+ * its status dot when `dot`, its status's motion when `animated`, where Svg
+ * draws: an image, as the web page draws it. The terminal draws its glyph in
+ * its colour, and with `dot` its status mark after it.
  */
-export function avatar(kit: Kit, index: number, px: number, name: string, dot?: string): RenderElement {
+export function avatar(kit: Kit, row: Face, px: number, opts: { dot?: boolean; animated?: boolean } = {}): RenderElement {
   const { Text } = kit
   const Svg = svgOf(kit)
-  if (Svg) return <Svg source={avatarSvg(index, px, dot)} alt={`${name}'s avatar`} width={px} height={px} />
-  return <Text color={avatarColor(index)}>●</Text>
+  const agent = avatarAgentOf(row)
+  if (Svg) {
+    const source = AV.avatarSvg(avatarStyleOf(kit), agent, { size: px, dot: opts.dot === true, animated: opts.animated === true, ground: P.ground })
+    return <Svg source={source} alt={`${row.title}'s avatar`} width={px} height={px} />
+  }
+  const face = AV.terminalFace(agent)
+  if (!opts.dot) return <Text color={face.color}>{face.glyph}</Text>
+  return (
+    <Text>
+      <Text color={face.color}>{face.glyph}</Text>
+      <Text color={face.markColor}>{face.mark}</Text>
+    </Text>
+  )
+}
+
+/** The cells `avatar` takes: its px in a desktop's cells (7.85 px each); on the terminal its glyph, and its mark with `dot`. */
+export function avatarCells(kit: Kit, px: number, dot = false): number {
+  return svgOf(kit) ? px / 7.85 : dot ? 2 : 1
 }
 
 /** The status dot: ● in its status's hue (amber waiting, blue at work, green done, red failed, grey idle). */

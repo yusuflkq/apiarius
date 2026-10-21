@@ -177,7 +177,8 @@ test('prints the ready line first, with the port it listens on', async () => {
 })
 
 test('refuses every route without the token (403), and answers with it', async () => {
-  for (const target of ['/', '/app.js', '/app.css', '/state', '/events', '/patch/toolu_01Abc-d_9', '/gitdiff/1kejm2g-1kfevo4-4g', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
+  for (const target of ['/', '/app.js', '/app.css', '/avatars.mjs', '/state', '/events', '/patch/toolu_01Abc-d_9', '/gitdiff/1kejm2g-1kfevo4-4g', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
+
     assert.equal((await request(main.port, { path: target })).status, 403, target)
     assert.equal((await request(main.port, { path: target, headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403, target)
   }
@@ -210,8 +211,8 @@ test('421 on a Host other than 127.0.0.1:<port> or localhost:<port>', async () =
   assert.equal((await request(main.port, { headers: { ...auth, Host: `localhost:${main.port}` } })).status, 200)
 })
 
-test('serves the page files with their types, or 404 while one is missing', async () => {
-  const types = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'] }
+test('serves the page files with their types (the avatar library app.js imports a script too), or 404 while one is missing', async () => {
+  const types = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/avatars.mjs': ['avatars.mjs', 'text/javascript'] }
   for (const [target, [file, type]] of Object.entries(types)) {
     const res = await request(main.port, { path: target, headers: { 'X-Deck-Token': TOKEN } })
     if (!fs.existsSync(path.join(__dirname, '..', file))) { assert.equal(res.status, 404, target); continue }

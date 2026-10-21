@@ -62,7 +62,7 @@ const KEYS: readonly (readonly [string, string])[] = [
   ['Enter', 'open what has the focus: an agent, a fold, a need, a file'],
   ['b', 'back, from an agent’s page, Inspect or this help'],
   ['n', 'the next thing that needs you'],
-  ['f', 'filter Chat: All · You · each agent · Between agents'],
+  ['f', 'filter Chat: All · You · Between agents · each agent'],
   ['m', 'message: the composer (on an agent’s page, @ that agent)'],
   ['i', 'Inspect: the context, the spend, each agent’s tokens'],
   ['h', 'this help'],

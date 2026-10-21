@@ -63,7 +63,7 @@ button, input, textarea { font: inherit; color: inherit; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 ::selection { background: rgba(59, 130, 246, 0.35); }
-.defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
 .mono { font-family: var(--mono); }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
@@ -232,7 +232,8 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 
 .dot { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--idle)); }
 .dot.hue-idle { background: #6b7075; }
-.dot.pulse::after, .avd-dot.pulse::after, .org-dot.pulse::after {
+.dot.pulse::after {
+
   content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--c);
   animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
@@ -243,7 +244,9 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 .glyph.spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.av { display: block; flex: none; overflow: visible; }
+/* An avatar is an image of its own SVG document (avatars.mjs): its status dot and its motion are inside it. */
+.av { display: block; flex: none; }
+
 .av-you, .av-engine {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   border-radius: 50%; background: #2b2b2b; color: var(--fg-2);
@@ -254,16 +257,13 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 .av-engine .ic { width: 62%; height: 62%; }
 .av-ghost { display: inline-block; flex: none; border-radius: 50%; background: #262626; }
 .avd { position: relative; display: inline-flex; flex: none; }
-.avd-dot {
-  position: absolute; right: -2px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%;
-  background: var(--c); box-shadow: 0 0 0 2px var(--ring-bg, var(--card));
-}
-.avd-dot.hue-idle { background: #6b7075; }
 
 .stack { display: inline-flex; align-items: center; flex: none; }
-.stack-item { display: inline-flex; border-radius: 50%; }
+.stack-item { display: inline-flex; border-radius: 32%; }
 .stack-item + .stack-item { margin-left: -5px; }
-.stack .av path:first-child { stroke: var(--ring-bg, var(--card)); stroke-width: 3px; paint-order: stroke; }
+/* each face on a plate of the ground beneath, so the overlapping faces read apart */
+.stack-item .av { border-radius: 32%; background: var(--ring-bg, var(--card)); box-shadow: 0 0 0 1.5px var(--ring-bg, var(--card)); }
+
 .stack-more { margin-left: 4px; font: 11px var(--mono); color: var(--muted-2); }
 
 .btn {
@@ -653,13 +653,8 @@ button.kpi:focus-visible { outline-offset: -2px; }
 .org-card.is-failed { border-color: color-mix(in srgb, var(--fail) 28%, transparent); }
 .org-av {
   position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 36px; height: 36px; border-radius: 50%; background: #242424;
+  width: 36px; height: 36px;
 }
-.org-dot {
-  position: absolute; right: -1px; bottom: -1px; width: 12px; height: 12px; border-radius: 50%;
-  background: var(--c); box-shadow: 0 0 0 2px var(--ring-bg);
-}
-.org-dot.hue-idle { background: #6b7075; }
 .org-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .org-name { font-size: 13.5px; font-weight: 600; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-type { margin-top: 1px; font-size: 11px; line-height: 1.3; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

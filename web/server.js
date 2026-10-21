@@ -35,6 +35,8 @@ const PAGE = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/app.css': ['app.css', 'text/css; charset=utf-8'],
+  // the avatar library app.js imports (the mod draws the pane's avatars from it too)
+  '/avatars.mjs': ['avatars.mjs', 'text/javascript; charset=utf-8'],
 }
 const HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' }
 // Scripts only from app.js, so agent text the page shows can never run as code.

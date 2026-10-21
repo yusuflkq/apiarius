@@ -13,7 +13,13 @@ const path = require('node:path')
 const vm = require('node:vm')
 
 const WEB = path.join(__dirname, '..')
-const SOURCE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8')
+// app.js is a module whose one import is the avatar library: here it runs as a script, the library handed in as AV
+const AVATARS = require('../avatars.mjs')
+const IMPORT = "import * as AV from './avatars.mjs';"
+const MODULE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8')
+assert.ok(MODULE.includes(IMPORT), 'app.js imports the avatar library')
+const SOURCE = MODULE.replace(IMPORT, 'const AV = __avatars;')
+
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.json'), 'utf8'))
 const NOW = SAMPLE.now
 const MIN = 60_000
@@ -65,6 +71,7 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
   }
   const context = vm.createContext({
     __deckTest: true,
+    __avatars: AVATARS,
     location: { search: '?t=test-token', hash },
     window: { addEventListener: noop },
     document: { title: '', querySelector: () => null, getElementById: () => null },
@@ -519,7 +526,10 @@ test('Org`s list: the state`s rows in its order, each a status dot, its name, it
     '2 done · 1 stopped',
   ])
   assert.deepEqual(rows().map(r => r.p.style['--d']), ['0', '1', '2', '1', '1'])
-  assert.deepEqual(find(rows()[0], 'avd-dot').map(d => d.p.class), ['avd-dot hue-wait'])
+  // each row leads with its avatar, an image of the library's SVG with its status dot inside: the Orchestrator's amber, waiting on you
+  const faces = findAll(rows()[0], v => v.t === 'img' && v.p.class === 'av')
+  assert.equal(faces.length, 1)
+  assert.ok(decodeURIComponent(faces[0].p.src.replace(/^data:image[/]svg[+]xml;charset=utf-8,/, '')).includes('cx="33" cy="33" r="6" fill="#f59e0b"'))
   // a fold opens on its members, each with its own last words; a description that is the title already says nothing
   click(rows()[2])
   click(rows().find(r => r.k === 'fold:main'))

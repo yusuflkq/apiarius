@@ -74,8 +74,9 @@ export function orgTree(kit: Kit, state: WebStateV2, actions: DashActions, selec
       {rows.slice(0, MOST_ROWS).map(({ row, depth }) => {
         const indent = Math.min(depth, LEVELS) * INDENT
         const lead = depth > 0 ? 4 : 3
-        // the name's room: the row less its indent, the corner, the avatar, the pill, "Open →" and the gaps between
-        const room = Math.max(8, kit.columns - indent - (depth > 0 ? 2 : 0) - 3 - pillCells(kit, row.status) - 1 - openCells - 1 - slack)
+        // the name's room: the row less its indent, the corner, the avatar (the terminal's glyph and status mark), the pill, "Open →" and the gaps between
+        const room = Math.max(8, kit.columns - indent - (depth > 0 ? 2 : 0) - (kit.surface === 'terminal' ? 4 : 3) - pillCells(kit, row.status) - 1 - openCells - 1 - slack)
+
         const name = cutCells(row.title, Math.min(NAME, room), adv)
         const word = row.isStopped ? 'stopped' : toneOf(row.status).word
         const open = () => actions.openAgent(row.id)
@@ -84,7 +85,7 @@ export function orgTree(kit: Kit, state: WebStateV2, actions: DashActions, selec
           <Box key={`org:${row.id}`} flexDirection="column" paddingLeft={indent}>
             <Box flexDirection="row" columnGap={1} alignItems="center">
               {depth > 0 ? <Text color={P.muted3}>└</Text> : null}
-              <Box flexShrink={0}>{avatar(kit, row.avatar, AVATAR.row, row.title, toneOf(row.status).hue)}</Box>
+              <Box flexShrink={0}>{avatar(kit, row, AVATAR.row, { dot: true, animated: true })}</Box>
               <Box flexShrink={1} minWidth={0}>
                 {row.id === selected ? (
                   <Button key={agentKeyOf(row.id)} label={name} variant="primary" onPress={open} />

@@ -253,7 +253,7 @@ test('i opens Inspect (the context, the spend, each agent`s tokens), h the keys;
     await press(ui, 'key:b')
     expect(await ui.find({ key: 'inspect' })).toBeUndefined()
     await press(ui, 'key:h')
-    expect((await ui.find({ key: 'help' }))?.text).toContain('filter Chat: All · You · each agent · Between agents')
+    expect((await ui.find({ key: 'help' }))?.text).toContain('filter Chat: All · You · Between agents · each agent')
     await press(ui, 'key:h')
     expect(await ui.find({ key: 'help' })).toBeUndefined()
 

@@ -81,7 +81,7 @@ function head(kit: Kit, state: WebStateV2, row: V2AgentRow, actions: DashActions
   const parent = row.parent ? titleOf(state, row.parent) : ''
   return (
     <Box key="page:head" flexDirection="row" columnGap={1} alignItems="center">
-      <Box flexShrink={0}>{avatar(kit, row.avatar, AVATAR.page, row.title)}</Box>
+      <Box flexShrink={0}>{avatar(kit, row, AVATAR.page, { dot: true, animated: true })}</Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
         <Box flexDirection="row" columnGap={1} alignItems="center">
           <Box flexShrink={1} minWidth={0}>

@@ -30,8 +30,10 @@
  *   "→ name via SendMessage". A send shows at once, "Sending…" until its
  *   ack, and keeps its key once the state holds it, so nothing flashes.
  *
- * The terminal draws no image: there an avatar is a dot in its colour, and
- * a bubble an indented block, yours at the right after a `›`.
+ * The terminal draws no image: there an avatar is its glyph in its colour
+ * (web/avatars.mjs `terminalFace`), and a bubble an indented block, yours
+ * at the right after a `›`.
+
  *
  * Pure: Kit, the state and DashActions come from the hooks module; the
  * window, the messages opened, the texts read, the draft, the list of more
@@ -431,7 +433,8 @@ function headOf(kit: Kit, state: WebStateV2, entry: Entry): RenderElement[] {
   }
   const name = senderOf(state, row)
   return [
-    face(kit, rowOf(state, row.from)?.avatar ?? null, AVATAR.list, name),
+    face(kit, rowOf(state, row.from) ?? null, AVATAR.list),
+
     <Box flexDirection="row" columnGap={1}>
       <Box flexShrink={1} minWidth={0}>
         <Text wrap="truncate-end">
@@ -738,7 +741,7 @@ function filterRow(kit: Kit, state: WebStateV2, filter: string, actions: DashAct
         <Box key="chat:filters:more" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
           {hidden.map(one => (
             <Box key={`chat:more-agent:${one.id}`} flexDirection="row" columnGap={1} alignItems="center">
-              <Box flexShrink={0}>{face(kit, rowOf(state, one.id)?.avatar ?? null, AVATAR.row, one.title)}</Box>
+              <Box flexShrink={0}>{face(kit, rowOf(state, one.id) ?? null, AVATAR.row)}</Box>
               <Box flexShrink={1} minWidth={0}>
                 <Button key={`chat:filter:${one.id}`} label={cut(one.title, 48)} plain dimColor onPress={() => pick(one.id)} />
               </Box>

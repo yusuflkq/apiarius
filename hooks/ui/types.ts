@@ -24,6 +24,8 @@ export type Kit = {
   /** Where the surface runs a plugin's surface module (the terminal and the desktop): Org's chart. */
   Client?: Elements['desktop']['Client']
   columns: number
+  /** The style the screens draw agents' avatars in (web/avatars.mjs `STYLE_IDS`): the deck's setting; absent, robots. */
+  avatarStyle?: string
 }
 
 export type UsageInfo = {

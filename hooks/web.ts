@@ -12,7 +12,9 @@
  * the server and acts on the commands.
  */
 import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView, DeckView2 } from '../types'
+import * as AV from '../web/avatars.mjs'
 import type { Hunk } from './diff'
+
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
@@ -203,9 +205,9 @@ export function cutMarkdown(text: string, max: number): string {
   return `${body.slice(0, at).trimEnd()}…`
 }
 
-/** An agent's persona, 0 to 9: the same id, the same avatar, in every write and session. */
+/** An agent's avatar colours, 0 to 9 (web/avatars.mjs `paletteIndexOf`): the same id, the same colours, in every write and session. */
 export function avatarOf(id: string): number {
-  return F.hash(id) % 10
+  return AV.paletteIndexOf({ id })
 }
 
 /** A model's short name: `claude-opus-5-5` is `opus-5.5`, `claude-haiku-4-5-20251001` is `haiku-4.5`; '' for none. */

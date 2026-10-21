@@ -272,7 +272,7 @@ function routesOf(boxes: readonly FoundElement[]): string[] {
   for (const box of boxes) {
     const key = box.key ?? ''
     if (key.startsWith('grp:')) {
-      const head = /^●?(.*?)(?:now|\d+[mhd])/.exec(box.text)?.[1] ?? ''
+      const head = /^[◆●▲■✦⬢★◉]?(.*?)(?:now|\d+[mhd])/.exec(box.text)?.[1] ?? ''
       const [who = '', whom] = head.split(' to ')
       from = who
       to = whom ?? (who === 'You' ? 'Orchestrator' : 'you')

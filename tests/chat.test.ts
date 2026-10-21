@@ -13,7 +13,9 @@ import type { On } from 'claude-code'
 import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/testing'
 
 import * as M from '../hooks/model'
-import { P, avatarColor, mix } from '../hooks/ui/v2/palette'
+import * as AV from '../web/avatars.mjs'
+import { P, mix } from '../hooks/ui/v2/palette'
+
 import * as W from '../hooks/web'
 import { IDS, SAMPLE_NOW, v2Session } from './v2session'
 import { deck, newWorld, NOW, work, world, type World } from './world'
@@ -145,9 +147,11 @@ test('Chat is a group chat: yours at the right in a blue bubble, others at the l
     }
     // words to you name no recipient; to nobody in particular, none either
     const answer = v2.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
-    expect((await ui.find({ key: `grp:msg:${answer.id}` }))?.text).toMatch(/^●?Orchestrator\d+m/)
+    expect((await ui.find({ key: `grp:msg:${answer.id}` }))?.text).toMatch(/^[◆●▲■✦⬢★◉]?Orchestrator\d+m/)
+
     const plain = v2.chat.find(row => row.to === null)!
-    expect((await ui.find({ key: `grp:msg:${plain.id}` }))?.text).toMatch(/^●?builder\d+m/)
+    expect((await ui.find({ key: `grp:msg:${plain.id}` }))?.text).toMatch(/^[◆●▲■✦⬢★◉]?builder\d+m/)
+
     // a SendMessage's summary, bold over its words
     const between = v2.chat.find(row => row.kind === 'message' && row.title === 'Limiter ready for review')!
     expect((await ui.find({ key: `grp:msg:${between.id}` }))?.text).toMatch(/builder to reviewer\d+m/)
@@ -170,7 +174,7 @@ test('one sender`s messages within a few minutes stack under one avatar and name
     // one head for the four
     for (const row of spawns) expect(await ui.find({ key: `grp:msg:${row.id}` })).toBeUndefined()
     expect(under(group, node => keyOf(node).startsWith('msg:')).map(keyOf)).toEqual([answer, ...spawns].map(row => `msg:${row.id}`))
-    expect(under(group, node => node.type === (surface === 'desktop' ? 'Svg' : 'Text') && (surface === 'desktop' || JSON.stringify(node).includes('●'))).length).toBe(1)
+    expect(under(group, node => node.type === (surface === 'desktop' ? 'Svg' : 'Text') && (surface === 'desktop' || AV.GLYPHS.some(glyph => JSON.stringify(node).includes(glyph)))).length).toBe(1)
     // each spawn after the answer to you names whom it went to
     expect((await ui.find({ key: `msg:${spawns[0]!.id}` }))?.text).toMatch(/^to builder · \d+m/)
     expect((await ui.find({ key: `msg:${spawns[1]!.id}` }))?.text).toMatch(/^to docs · \d+m/)
@@ -321,7 +325,8 @@ test('the filter is one row: Filter · All · You · Between agents · the agent
   await wide.unmount()
 })
 
-test('the terminal draws the group chat with no image: an avatar is a dot in its colour, yours a block at the right after a ›, others` an indented block under the name', async ($, on) => {
+test('the terminal draws the group chat with no image: an avatar is its glyph in its colour, yours a block at the right after a ›, others` an indented block under the name', async ($, on) => {
+
   const { v2 } = await demo($, on)
   const ui = await $.ui.mount(pane('terminal'))
   await press(ui, 'tab:chat')
@@ -332,8 +337,9 @@ test('the terminal draws the group chat with no image: an avatar is a dot in its
   const researcher = v2.agents.find((row): row is W.V2AgentRow => row.row === 'agent' && row.id === IDS.researcher)!
   const group = await ui.find({ key: `grp:msg:${found.id}` })
   expect(group?.props.flexDirection).toBe('row')
-  expect(group?.text.startsWith('●researcher to Orchestrator')).toBe(true)
-  expect(under(group, node => node.type === 'Text' && node.props?.color === avatarColor(researcher.avatar)).length).toBe(1)
+  const glyph = AV.terminalFace({ id: researcher.id, status: researcher.status })
+  expect(group?.text.startsWith(`${glyph.glyph}researcher to Orchestrator`)).toBe(true)
+  expect(under(group, node => node.type === 'Text' && node.props?.color === glyph.color).length).toBe(1)
   for (const row of v2.chat.filter(one => one.from === 'you')) {
     const mine = await ui.find({ key: `msg:${row.id}` })
     expect(mine?.props.alignItems).toBe('flex-end')

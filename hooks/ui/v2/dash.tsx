@@ -61,7 +61,8 @@ import {
   type FileRow,
   type TickPart,
 } from './dashModel'
-import { AVATAR, advanceOf, glyph, icon, quiet, statusPill, svgOf } from './look'
+import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf } from './look'
+
 import { P, mix, toneOf, type IconName } from './palette'
 import {
   CARD_CHROME,
@@ -202,7 +203,8 @@ const NAME_MIN = 11
 function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void): RenderElement {
   const { Box, Button, Text } = kit
   const adv = advanceOf(kit)
-  const before = (svgOf(kit) ? cellsForPx(AVATAR.card) : 1) + 1 + plainSlack(kit) + 1
+  const before = avatarCells(kit, AVATAR.card, true) + 1 + plainSlack(kit) + 1
+
   const beside = 1 + openCells(kit)
   const word = row.isStopped ? 'stopped' : toneOf(row.status).word
   const room = inner - before - pillCells(kit, row.status) - (row.isStopped ? 1 : 0)
@@ -210,7 +212,8 @@ function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void): R
   const name = cutCells(row.title, Math.max(4, isOpenShown ? room - beside : room), adv)
   return (
     <Box flexDirection="row" columnGap={1} alignItems="center">
-      <Box flexShrink={0}>{face(kit, row.avatar, AVATAR.card, row.title, toneOf(row.status).hue)}</Box>
+      <Box flexShrink={0}>{avatar(kit, row, AVATAR.card, { dot: true, animated: true })}</Box>
+
       <Box flexShrink={1} minWidth={0}>
         <Button key={agentKeyOf(row.id)} label={name} plain onPress={open}>
           <Text bold color={P.text}>
@@ -430,7 +433,8 @@ function activityRow(kit: Kit, state: WebStateV2, row: ActivityRow, actions: Das
   const text = row.text ? cutCells(row.text, Math.max(4, room - cellsOf(name, adv) - cellsOf(verb, adv) - 2 * slack), adv) : ''
   const said = row.outcome.mark ? `${row.outcome.mark} ${row.outcome.text}` : row.outcome.text
   return listRow(kit, `act:${row.key}`, [
-    <Box flexShrink={0}>{face(kit, row.avatar, AVATAR.list, row.name)}</Box>,
+    <Box flexShrink={0}>{face(kit, rowOf(state, row.agent) ?? null, AVATAR.list)}</Box>,
+
     <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" alignItems="center">
       <Box flexShrink={0}>
         <Button key={`now:act:${row.key}`} label={name} plain onPress={open}>
@@ -580,7 +584,7 @@ function fileRow(kit: Kit, state: WebStateV2, row: FileRow, actions: DashActions
       <Box flexShrink={0}>
         {faces(
           kit,
-          row.editors.map(id => rowOf(state, id)?.avatar ?? null),
+          row.editors.map(id => rowOf(state, id) ?? null),
           FACE,
           row.editors.map(id => rowOf(state, id)?.title ?? id),
           MOST_FACES,

@@ -12,9 +12,14 @@
  * the route, an open drawer, the folds, scroll positions, the chart's pan and
  * zoom, the focus and a half-typed message all survive it. Elements keep
  * their identity by key (lists) or by position (fixed structure).
+ *
+ * Its one import is the deck's avatar library (avatars.mjs), which the mod
+ * draws the pane's avatars from too.
  */
+import * as AV from './avatars.mjs';
 
 // ===================================================================== basics
+
 
 const TOKEN = new URLSearchParams(location.search).get('t') || '';
 const AUTH = TOKEN ? { 'X-Deck-Token': TOKEN } : {};
@@ -305,37 +310,40 @@ const TOOL_ICON = { Read: 'eye', Edit: 'pencil', MultiEdit: 'pencil', NotebookEd
 const PATHY = new Set(['Read', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write', 'Glob', 'Grep', 'Bash', 'PowerShell']);
 
 // ==================================================================== avatars
-// Paperclip's ten persona gradients, on a gumdrop character with a small face.
+// The deck's avatar library (avatars.mjs; the mod draws the pane's from it
+// too): each agent's face in the style the deck is set to (S.avatarStyle), as
+// an image of its own SVG document, so its ids and its motion stay inside it.
 
-const AV = [
-  ['#f7cfdc', '#1f7a3a'], ['#c9a9e8', '#ee79a1'], ['#28164b', '#7a1530'], ['#f3e6c4', '#e3a21a'], ['#1f4dd6', '#3aa35c'],
-  ['#e94b27', '#5a1122'], ['#7eb6e3', '#ee79a1'], ['#9ce8a7', '#bd7ff0'], ['#f3b49e', '#1f4ed4'], ['#f2d95f', '#4fbcba'],
-];
-const BLOB = 'M16 2.6c7.1 0 12.4 5.3 12.4 12.4v9.2a5.2 5.2 0 0 1-5.2 5.2H8.8a5.2 5.2 0 0 1-5.2-5.2V15C3.6 7.9 8.9 2.6 16 2.6z';
-function luminance(hex) {
-  const n = parseInt(hex.slice(1), 16), c = [n >> 16, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
-  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-}
-const AV_HTML = AV.map(([a, b], i) => {
-  const mid = (luminance(a) + luminance(b)) / 2;
-  const f = mid < 0.18 ? 'rgba(255,255,255,.92)' : 'rgba(23,23,28,.82)';
-  return `<path d="${BLOB}" fill="url(#ag${i})"/><path d="${BLOB}" fill="url(#agl)"/>` +
-    `<circle cx="12.3" cy="16.4" r="1.45" fill="${f}"/><circle cx="19.7" cy="16.4" r="1.45" fill="${f}"/>` +
-    `<path d="M14.3 20.3q1.7 1.3 3.4 0" fill="none" stroke="${f}" stroke-width="1.2" stroke-linecap="round"/>`;
-});
+/** The avatars stay still: the reader asked for less motion, or the session ended (a still picture). */
+const isStill = () => conn.status === 'ended' || (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
-function installDefs() {
-  const stops = AV.map(([a, b], i) => `<linearGradient id="ag${i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient>`).join('');
-  const sheen = '<linearGradient id="agl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>';
-  document.body.insertAdjacentHTML('afterbegin', `<svg class="defs" aria-hidden="true" focusable="false"><defs>${stops}${sheen}</defs></svg>`);
+/** An agent's row as the library takes one: seeded by its id, the Orchestrator `main`, a stopped one stopped, its own list's progress. */
+const faceOf = a => ({ id: a.id, name: a.title, role: a.kind === 'orchestrator' ? 'main' : '', status: stateOf(a), progress: AV.progressOf(a.todos) });
+
+const avatarUrls = new Map();
+/** An SVG document as an image's address (the newest 600 kept): the same face, the same string, so its image never loads again. */
+function urlOf(svg) {
+  let url = avatarUrls.get(svg);
+  if (url === undefined) {
+    url = AV.dataUrl(svg);
+    if (avatarUrls.size >= 600) avatarUrls.delete(avatarUrls.keys().next().value);
+    avatarUrls.set(svg, url);
+  }
+  return url;
 }
 
 const px = size => ({ width: `${size}px`, height: `${size}px` });
-function Avatar(a, size = 24) {
+/**
+ * An agent's avatar, `size` px square, in the deck's style: with `dot` its
+ * status dot, with `live` its status's motion (still while `isStill`). A grey
+ * ghost for one the state does not hold.
+ */
+function Avatar(a, size = 24, opts = NOPROPS) {
   if (!a) return h('span', { class: 'av-ghost', style: px(size) });
-  const i = (((a.avatar | 0) % 10) + 10) % 10;
-  return h('svg', { class: 'av', width: size, height: size, viewBox: '0 0 32 32', 'aria-hidden': 'true', html: AV_HTML[i] });
+  const svg = AV.avatarSvg(S ? S.avatarStyle : AV.DEFAULT_STYLE, faceOf(a), { size, dot: opts.dot === true, animated: opts.live === true && !isStill() });
+  return h('img', { class: 'av', width: size, height: size, alt: '', draggable: 'false', src: urlOf(svg) });
 }
+
 function YouAvatar(size = 24) {
   return h('span', { class: 'av-you', style: { ...px(size), 'font-size': `${Math.max(8, Math.round(size * 0.38))}px` } }, 'YO');
 }
@@ -345,13 +353,11 @@ function EngineAvatar(size = 24) {
 }
 const whoAvatar = (id, size) => (id === 'you' ? YouAvatar(size) : id === 'engine' ? EngineAvatar(size) : Avatar(IX && IX.byId.get(id), size));
 
-/** An avatar with its status dot. */
+/** An avatar with its status dot, moving as its status does. */
 function AvatarDot(a, size = 24) {
-  const st = stateOf(a);
-  return h('span', { class: 'avd', style: px(size) },
-    Avatar(a, size),
-    h('span', { class: `avd-dot hue-${statusOf(st).hue}${isRunning(a.status) ? ' pulse' : ''}` }));
+  return h('span', { class: 'avd', style: px(size) }, Avatar(a, size, { dot: true, live: true }));
 }
+
 
 function AvatarStack(ids, size = 18, max = 4) {
   const shown = ids.slice(0, max);
@@ -504,8 +510,10 @@ function normalize(s) {
     figures: figuresOf(s.figures),
     inspect: inspectOf(s.inspect),
     acks: arr(s.acks).filter(k => k && typeof k.id === 'string' && k.id),
+    avatarStyle: AV.styleOf(s.avatarStyle),
   };
 }
+
 
 /** Nothing to draw yet: the server's empty state before the mod wrote one ('empty'), or a state with no v2 in it, an older mod's ('old'). */
 function emptyState(why) {
@@ -1940,7 +1948,8 @@ function OrgCard(n) {
     title: `${a.title}: ${line || s.label}`, 'aria-label': `${a.title}, ${a.type || KIND_WORD[a.kind]}, ${s.label}`,
     onClick: e => { if (suppressClick) { e.preventDefault(); return; } openAgent(a.id); },
   },
-  h('span', { class: 'org-av' }, Avatar(a, 22), h('span', { class: `org-dot hue-${s.hue}${isRunning(a.status) ? ' pulse' : ''}` })),
+  h('span', { class: 'org-av' }, Avatar(a, 34, { dot: true, live: true })),
+
   h('span', { class: 'org-text' },
     h('span', { class: 'org-name' }, a.title),
     h('span', { class: 'org-type' }, [a.type || KIND_WORD[a.kind], elapsedOf(a)].filter(Boolean).join(' · ')),
@@ -2655,12 +2664,21 @@ function Unreachable() {
       denied ? null : h('button', { class: 'btn btn-sm', type: 'button', onClick: retryNow }, icon('refresh'), 'Try again'))));
 }
 
+/** The welcome's three agents: one done, one at work, one waiting on you. */
+const WELCOME = [
+  { id: 'bob', title: 'bob', kind: 'agent', status: 'done', todos: [] },
+  { id: 'helper', title: 'helper', kind: 'agent', status: 'running', todos: [] },
+  { id: 'deck-1', title: 'deck', kind: 'agent', status: 'waiting', todos: [] },
+];
+
 function Welcome() {
+
   const old = S && S.empty === 'old';
   return h('div', { key: 'welcome', class: 'page' },
     h('div', { class: 'card welcome' },
       h('div', { class: 'welcome-art', 'aria-hidden': 'true' },
-        [8, 1, 5].map((i, n) => h('span', { key: n, class: `welcome-av w${n}` }, Avatar({ avatar: i }, n === 1 ? 44 : 34)))),
+        WELCOME.map((a, n) => h('span', { key: n, class: `welcome-av w${n}` }, Avatar(a, n === 1 ? 44 : 34, { live: true })))),
+
       h('p', { class: 'welcome-title' }, old ? 'Waiting for the deck\'s state' : 'Nothing yet'),
       h('p', { class: 'welcome-text' }, old
         ? 'The mod writing this session\'s state is older than this page. Start a new session (or reload the mod) and run /deck web again.'
@@ -2869,7 +2887,6 @@ function boot() {
   setInterval(invalidate, 15000);
   setInterval(() => { if (conn.status === 'reconnecting') invalidate(); }, 1000);
 
-  installDefs();
   renderNow();
   connect();
 }

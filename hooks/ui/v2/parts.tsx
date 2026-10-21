@@ -16,10 +16,13 @@
  */
 import type { RenderElement } from 'claude-code'
 
+import * as AV from '../../../web/avatars.mjs'
 import type { DashActions, Kit } from '../types'
 import { ticks, uiWrapAdvance, type TickPart } from './dashModel'
-import { avatar, svgOf } from './look'
-import { P, avatarColor, pillWidth, ruleSvg, stackSvg, stackWidth, tagSvg, tagWidth, toneOf } from './palette'
+import { avatar, avatarAgentOf, avatarStyleOf, svgOf, type Face } from './look'
+import { P, pillWidth, ruleSvg, tagSvg, tagWidth, toneOf } from './palette'
+
+
 import { monoAdvance, type Advance } from './text'
 
 /** How much room a character takes in text laid into lines: on a desktop a little over, so no line runs past its room. */
@@ -35,12 +38,14 @@ export function cellsForPx(px: number): number {
   return px / CELL_PX
 }
 
-/** An agent's face, with its status dot in `dot`'s colour when given; a grey dot for an agent the state does not hold. */
-export function face(kit: Kit, index: number | null, px: number, name: string, dot?: string): RenderElement {
+/** An agent's face from its row (./look's `avatar`: still, its status dot with `dot`); a grey dot for one the state does not hold. */
+export function face(kit: Kit, who: Face | null, px: number, opts: { dot?: boolean; animated?: boolean } = {}): RenderElement {
   const { Text } = kit
-  if (index === null) return <Text color={P.muted3}>●</Text>
-  return avatar(kit, index, px, name, dot)
+  if (who === null) return <Text color={P.muted3}>●</Text>
+  return avatar(kit, who, px, opts)
 }
+
+
 
 /** The cells ./look's `statusPill` takes for `status`. */
 export function pillCells(kit: Kit, status: string): number {
@@ -67,19 +72,33 @@ export function tagCells(kit: Kit, word: string): number {
   return svgOf(kit) ? cellsForPx(tagWidth(word)) : Array.from(word).length + 2
 }
 
-/** The editors' faces, `px` square: one stacked image as the web's where Svg draws, else a dot each in its colour; at most `most`, then "+n". */
-export function faces(kit: Kit, avatars: readonly (number | null)[], px: number, names: readonly string[], most = 3): RenderElement {
+/**
+ * The editors' faces, `px` square: one stacked image in the deck's style
+ * (web/avatars.mjs) where Svg draws, else each one's glyph in its colour; at
+ * most `most`, then "+n". A null is one the state does not hold (grey).
+ */
+export function faces(kit: Kit, who: readonly (Face | null)[], px: number, names: readonly string[], most = 3): RenderElement {
   const { Box, Text } = kit
-  const shown = avatars.slice(0, most)
-  const more = avatars.length - shown.length
+  const shown = who.slice(0, most)
+  const more = who.length - shown.length
   const Svg = svgOf(kit)
   return (
     <Box flexDirection="row" alignItems="center">
       {Svg && shown.length > 0 ? (
-        <Svg source={stackSvg(shown, px)} alt={names.slice(0, most).join(', ')} width={stackWidth(shown.length, px)} height={px} />
+        <Svg
+          source={AV.avatarStackSvg(avatarStyleOf(kit), shown.map(one => (one === null ? null : avatarAgentOf(one))), { size: px, ground: P.ground })}
+          alt={names.slice(0, most).join(', ')}
+          width={AV.stackWidth(shown.length, px)}
+          height={px}
+        />
       ) : (
-        shown.map(one => <Text color={one === null ? P.muted3 : avatarColor(one)}>●</Text>)
+        shown.map(one => {
+          if (one === null) return <Text color={P.muted3}>●</Text>
+          const glyph = AV.terminalFace(avatarAgentOf(one))
+          return <Text color={glyph.color}>{glyph.glyph}</Text>
+        })
       )}
+
       {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
     </Box>
   )
@@ -89,7 +108,7 @@ export function faces(kit: Kit, avatars: readonly (number | null)[], px: number,
 export function facesCells(kit: Kit, n: number, px: number, most = 3): number {
   const shown = Math.min(n, most)
   const more = n > most ? String(n - most).length + 2 : 0
-  return (svgOf(kit) ? cellsForPx(stackWidth(shown, px)) : shown) + more
+  return (svgOf(kit) ? cellsForPx(AV.stackWidth(shown, px)) : shown) + more
 }
 
 /** The rule between a list's rows where Svg draws (1 px, in the card's edge, as the web's `.list`); nothing on the terminal, whose rows need none. */
