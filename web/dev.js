@@ -5,11 +5,12 @@
  * It serves a copy of the sample (web/fixtures/state.v2.json, with its lazy
  * files under web/fixtures/v2/) in a temp folder laid out as a session's
  * folder is: state.json holds the sample under `v2` as the mod writes it,
- * beside agents/, patches/ and messages/. Its times move to now, so ages read
- * as they would live. It plays the mod's part for the page's commands: each
- * gets its ack, a chat shows in the stream and its agent answers a moment
- * later, an answer resolves its question, and stopAgent and abortTurn get
- * this build's "Not in this build yet". Commands are printed here too.
+ * beside agents/, patches/, messages/ and gitdiffs/. Its times move to now,
+ * so ages read as they would live. It plays the mod's part for the page's
+ * commands: each gets its ack, a chat shows in the stream and its agent
+ * answers a moment later, an answer resolves its question, and stopAgent and
+ * abortTurn get this build's "Not in this build yet". Commands are printed
+ * here too.
  * Editing the sample starts the copy again from it. `--static` keeps the
  * sample's own times and only prints commands. Ctrl+C stops both processes.
  */
@@ -55,7 +56,7 @@ function reset() {
   let sample
   try { sample = JSON.parse(fs.readFileSync(SAMPLE, 'utf8')) } catch { return } // half-saved: the next change resets
   const by = isStatic ? 0 : Date.now() - sample.now
-  try { for (const name of ['agents', 'patches', 'messages']) copyFolder(name, by) } catch (err) { console.error(`dev: ${err.message}`); return }
+  try { for (const name of ['agents', 'patches', 'messages', 'gitdiffs']) copyFolder(name, by) } catch (err) { console.error(`dev: ${err.message}`); return }
   state = by ? shift(sample, by) : sample
   save()
 }

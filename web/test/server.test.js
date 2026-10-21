@@ -132,6 +132,7 @@ let main = null
 const writeState = value => fs.writeFileSync(path.join(dir, 'state.json'), typeof value === 'string' ? value : JSON.stringify(value, null, 2))
 
 const ANSWER = '**Done.** The limiter is in `src/middleware/rateLimit.ts`.\n\n- 100 requests a minute\n- 429 with Retry-After\n'
+const GIT_DIFF = "@@ -1,2 +1,3 @@\n import express from 'express'\n+import { rateLimit } from './middleware/rateLimit'\n const app = express()\n"
 const AGENT_FILE = `${JSON.stringify({ v: 2, id: 'b81c6f3e2a9d4c17', task: 'Write the limiter.', result: '', todos: [], activity: [{ id: 'toolu_01BldB2', at: 1, tool: 'Bash', target: 'Run the limiter tests', command: 'npm test -- rateLimit', ok: null, ms: null }], edits: ['toolu_01BldW1'] }, null, 2)}\n`
 
 before(async () => {
@@ -140,6 +141,7 @@ before(async () => {
   fs.mkdirSync(path.join(dir, 'patches'), { recursive: true })
   fs.mkdirSync(path.join(dir, 'messages'), { recursive: true })
   fs.mkdirSync(path.join(dir, 'agents'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'gitdiffs'), { recursive: true })
   fs.writeFileSync(path.join(root, 'secret.diff'), 'SECRET')
   fs.writeFileSync(path.join(root, 'secret.md'), 'SECRET')
   fs.writeFileSync(path.join(root, 'secret.json'), 'SECRET')
@@ -147,6 +149,7 @@ before(async () => {
   fs.writeFileSync(path.join(dir, 'agents', 'main.json'), '{"v":2,"id":"main","task":"","result":"","todos":[],"activity":[],"edits":[]}\n')
   fs.writeFileSync(path.join(dir, 'patches', 'toolu_01Abc-d_9.diff'), '@@ -1,1 +1,1 @@\n-old\n+new\n')
   fs.writeFileSync(path.join(dir, 'messages', '1791970900000-14-main-you.md'), ANSWER)
+  fs.writeFileSync(path.join(dir, 'gitdiffs', '1kejm2g-1kfevo4-4g.diff'), GIT_DIFF)
   writeState(STATE)
   main = await start({ dir })
 })
@@ -174,7 +177,7 @@ test('prints the ready line first, with the port it listens on', async () => {
 })
 
 test('refuses every route without the token (403), and answers with it', async () => {
-  for (const target of ['/', '/app.js', '/app.css', '/state', '/events', '/patch/toolu_01Abc-d_9', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
+  for (const target of ['/', '/app.js', '/app.css', '/state', '/events', '/patch/toolu_01Abc-d_9', '/gitdiff/1kejm2g-1kfevo4-4g', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
     assert.equal((await request(main.port, { path: target })).status, 403, target)
     assert.equal((await request(main.port, { path: target, headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403, target)
   }
@@ -275,6 +278,25 @@ test('/patch serves a patch by id and refuses anything else', async () => {
   assert.equal(res.body, '@@ -1,1 +1,1 @@\n-old\n+new\n')
   assert.equal((await request(main.port, { path: '/patch/toolu_missing', headers: auth })).status, 404)
   for (const target of ['/patch/..%2Fsecret', '/patch/..%5Csecret', '/patch/%2e%2e%2fsecret', '/patch/..\\secret', '/patch/a.b', '/patch/', '/patch/CON', '/patch/../../secret', `/patch/${'a'.repeat(129)}`]) {
+    const refused = await request(main.port, { path: target, headers: auth })
+    assert.ok([400, 404].includes(refused.status), `${target} -> ${refused.status}`)
+    assert.doesNotMatch(refused.body, /SECRET/)
+  }
+})
+
+test('/gitdiff serves git`s own diff of a file by id, with the token only, and refuses anything else', async () => {
+  const auth = { 'X-Deck-Token': TOKEN }
+  assert.equal((await request(main.port, { path: '/gitdiff/1kejm2g-1kfevo4-4g' })).status, 403)
+  const res = await request(main.port, { path: '/gitdiff/1kejm2g-1kfevo4-4g', headers: auth })
+  assert.equal(res.status, 200)
+  assert.equal(res.headers['content-type'], 'text/plain; charset=utf-8')
+  assert.equal(res.headers['cache-control'], 'no-store')
+  assert.equal(res.headers['x-content-type-options'], 'nosniff')
+  assert.equal(res.body, GIT_DIFF)
+  assert.equal((await request(main.port, { path: '/gitdiff/1kejm2g-1kfevo4-4h', headers: auth })).status, 404)
+  // a patch's id is no git diff's: each route reads its own folder
+  assert.equal((await request(main.port, { path: '/gitdiff/toolu_01Abc-d_9', headers: auth })).status, 404)
+  for (const target of ['/gitdiff/..%2Fsecret', '/gitdiff/..%5Csecret', '/gitdiff/%2e%2e%2fsecret', '/gitdiff/..\\secret', '/gitdiff/a.b', '/gitdiff/', '/gitdiff/PRN', '/gitdiff/../../secret', '/gitdiff/../patches/toolu_01Abc-d_9', `/gitdiff/${'a'.repeat(129)}`]) {
     const refused = await request(main.port, { path: target, headers: auth })
     assert.ok([400, 404].includes(refused.status), `${target} -> ${refused.status}`)
     assert.doesNotMatch(refused.body, /SECRET/)

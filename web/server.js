@@ -1,8 +1,9 @@
 /**
  * The Agent Deck web server: serves the page, the session's state, its
- * patches, the whole text of messages cut for the state and the agents' page
- * files, live updates over SSE, and turns the page's commands into stdout
- * lines for the mod. web/CONTRACT.md is the spec.
+ * patches, git's own diffs of the uncommitted files, the whole text of
+ * messages cut for the state and the agents' page files, live updates over
+ * SSE, and turns the page's commands into stdout lines for the mod.
+ * web/CONTRACT.md is the spec.
  *
  *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid>
  *
@@ -23,7 +24,7 @@ const MAX_BODY = 16 * 1024
 const MAX_TEXT = 4000
 const MAX_ANSWERS = 4 // AskUserQuestion asks 1 to 4 questions at once
 const MAX_ANSWER = 2000 // a question's text, and an answer's
-const FILE_ID = /^[A-Za-z0-9_-]{1,128}$/ // a patch's, a message's or an agent file's name: never a path
+const FILE_ID = /^[A-Za-z0-9_-]{1,128}$/ // a patch's, a git diff's, a message's or an agent file's name: never a path
 const CMD_ID = /^[A-Za-z0-9_-]{1,40}$/ // the page's id for a command, which the mod's ack names again
 const CALL_ID = /^[A-Za-z0-9_-]{1,100}$/ // a tool call's tool_use_id
 const TURN_ID = /^[A-Za-z0-9_-]{1,100}$/ // the main loop's running turn (abortTurn's)
@@ -162,10 +163,11 @@ function events(req, res) {
 
 /**
  * A file the mod wrote beside the state, by id: `patches/<id>.diff` for
- * /patch/<id>, `messages/<id>.md` (a cut message's whole text) for
- * /message/<id>, and `agents/<fileId>.json` (an agent's page detail, written
- * again when it changes) for /agent/<fileId>. Ids are [A-Za-z0-9_-] only, so
- * a request never names a path.
+ * /patch/<id>, `gitdiffs/<diffId>.diff` (git's own diff of one uncommitted
+ * file) for /gitdiff/<diffId>, `messages/<id>.md` (a cut message's whole
+ * text) for /message/<id>, and `agents/<fileId>.json` (an agent's page
+ * detail, written again when it changes) for /agent/<fileId>. Ids are
+ * [A-Za-z0-9_-] only, so a request never names a path.
  */
 function written(res, id, folder, ext, what, type = TEXT_TYPE) {
   if (!FILE_ID.test(id) || DEVICE.test(id)) return send(res, 400, `bad ${what} id\n`)
@@ -258,6 +260,7 @@ function handle(req, res) {
   if (route === '/state') return send(res, 200, state, JSON_TYPE)
   if (route === '/events') return events(req, res)
   if (route.startsWith('/patch/')) return written(res, route.slice('/patch/'.length), 'patches', '.diff', 'patch')
+  if (route.startsWith('/gitdiff/')) return written(res, route.slice('/gitdiff/'.length), 'gitdiffs', '.diff', 'git diff')
   if (route.startsWith('/message/')) return written(res, route.slice('/message/'.length), 'messages', '.md', 'message')
   if (route.startsWith('/agent/')) return written(res, route.slice('/agent/'.length), 'agents', '.json', 'agent file', JSON_TYPE)
   if (route === '/favicon.ico') return res.writeHead(204).end()
