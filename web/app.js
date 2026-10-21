@@ -2361,7 +2361,17 @@ function handleFor(r) {
   return m.row && m.row.id === r.id ? handleOf(r) : r.shortId || r.id;
 }
 /** A choice's name in "Did you mean": its title, with its short id when another choice has that title too. */
-const choiceName = (r, list) => (r.shortId && list.some(o => o !== r && o.title === r.title) ? `${r.title} (${r.shortId})` : r.title);
+/** The handle "Did you mean" offers an agent by, which names it alone: its short id, else its name, else its id (W's candidateOf). */
+const candidateHandle = r => r.shortId || r.name || r.id;
+/** How many agents "Did you mean" names at most. */
+const DID_YOU_MEAN = 4;
+/** "Did you mean: Native chat (@a1b2c3d) or Native pane (@e4f5a6b)?", four at most, in W.recipientOf's words. */
+function didYouMean(list) {
+  const said = list.slice(0, DID_YOU_MEAN).map(r => `${r.title} (@${candidateHandle(r)})`);
+  const more = list.length > DID_YOU_MEAN ? `, or ${list.length - DID_YOU_MEAN} more` : '';
+  const words = said.length > 1 && !more ? `${said.slice(0, -1).join(', ')} or ${said[said.length - 1]}` : said.join(', ');
+  return `Did you mean: ${words}${more}?`;
+}
 
 /** Who the chat's words go to, and what of them: W.recipientOf over this state's rows; with no @, member `to` (the Orchestrator for Everyone). */
 function recipientOf(words, to = 'all') {
@@ -2376,7 +2386,7 @@ function recipientOf(words, to = 'all') {
   }
   const found = matchHandle(at[1]);
   const text = at[2].trim();
-  if (found.tie) return { error: `Did you mean: ${found.tie.map(r => choiceName(r, found.tie)).join(', ')}?`, choices: found.tie };
+  if (found.tie) return { error: didYouMean(found.tie), choices: found.tie };
   if (!found.row) return { error: `No agent named @${at[1]} in this session` };
   if (text === '') return { error: 'Nothing to send' };
   return { agentId: found.row.id, title: found.row.title, text };
@@ -2470,14 +2480,16 @@ async function sendChat(scope) {
   renderNow();
 }
 
-/** The composer's foot: where the words go, or the agents an @name could be, each a button that @names it alone. */
+/** The composer's foot: where the words go; or the agents an @name could be (four at most), each a button that puts in the handle naming it alone. */
 function ToLine(scope, draft, to) {
   const cls = `composer-to${to.err ? ' is-err' : ''}${to.hint ? ' is-hint' : ''}`;
   if (!to.choices) return h('span', { class: cls }, to.text);
-  const pick = r => setDraft(scope, draft.replace(/^(\s*)@\S+/, (_, lead) => `${lead}@${handleFor(r)}`));
+  const pick = r => setDraft(scope, draft.replace(/^(\s*)@\S+/, (_, lead) => `${lead}@${candidateHandle(r)}`));
+  const more = to.choices.length - DID_YOU_MEAN;
   return h('span', { class: `${cls} has-choices` }, h('span', { key: 'ask' }, to.text),
-    to.choices.map(r => h('button', { key: r.id, type: 'button', class: 'choice', title: `@${handleFor(r)}`, onMouseDown: e => e.preventDefault(), onClick: () => pick(r) },
-      Avatar(r, 14), h('span', null, choiceName(r, to.choices)))));
+    to.choices.slice(0, DID_YOU_MEAN).map(r => h('button', { key: r.id, type: 'button', class: 'choice', title: `@${candidateHandle(r)}`, onMouseDown: e => e.preventDefault(), onClick: () => pick(r) },
+      Avatar(r, 14), h('span', null, r.title), h('span', { class: 'choice-handle' }, `@${candidateHandle(r)}`))),
+    more > 0 && h('span', { key: 'more' }, `or ${more} more`));
 }
 
 function Composer(scope) {

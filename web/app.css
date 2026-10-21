@@ -824,6 +824,7 @@ span.cg-av { cursor: default; }
   color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
 }
 .choice:hover { background: var(--hover-2); border-color: rgba(255, 255, 255, 0.3); }
+.choice-handle { font: 11px var(--mono); color: var(--muted); }
 .composer-status { display: inline-flex; flex: 1; min-width: 0; }
 .composer-keys { flex: none; color: var(--muted-3); white-space: nowrap; }
 

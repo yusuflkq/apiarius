@@ -839,10 +839,14 @@ test('@name is forgiving, as W.recipientOf is: names read lowercase in a–z and
   // none; never the Orchestrator (words with no @ go to it)
   assert.equal(to('@zz hi'), 'No agent named @zz in this session')
   assert.equal(to('@orchestrator hi'), 'No agent named @orchestrator in this session')
-  // a tie: as much at work, started at once
+  // a tie: as much at work, started at once; in W.recipientOf's words, each by the handle that names it alone
   const tie = p.run('recipientOf("@worker go on")')
-  assert.equal(tie.error, 'Did you mean: worker (w1aaaaa), worker (w2bbbbb)?')
-  assert.deepEqual(tie.choices.map(r => r.id).sort(), [W1, W2])
+  assert.equal(tie.error, 'Did you mean: worker (@w1aaaaa) or worker (@w2bbbbb)?')
+  assert.deepEqual(tie.choices.map(r => r.id), [W1, W2], 'in the state`s order')
+  // four at most, then how many more
+  const many = page({ hash: '#/chat' })
+  many.load(sample(s => { for (let i = 0; i < 6; i++) s.agents.push({ ...crowd().agents.at(-1), id: `w${i}cccccccccccccc`, shortId: `w${i}ccccc` }) }))
+  assert.equal(many.run('recipientOf("@worker go").error'), 'Did you mean: worker (@w0ccccc), worker (@w1ccccc), worker (@w2ccccc), worker (@w3ccccc), or 2 more?')
   // one of them done: the other, no question
   const one = page({ hash: '#/chat' })
   one.load(sample(s => { crowd().agents.slice(-2).forEach((r, i) => s.agents.push({ ...r, status: i ? 'done' : 'running' })) }))
@@ -853,10 +857,10 @@ test('@name is forgiving, as W.recipientOf is: names read lowercase in a–z and
   assert.deepEqual(preview('@NativeChat hi'), { text: '→ Native Chat as a group chat via SendMessage' })
   p.run('ui.drafts.set("chat", "@worker go on")')
   const foot = () => find(p.view('Composer("chat")'), 'composer-foot')[0]
-  assert.match(flat(textOf(foot())), /^Did you mean: worker \(w1aaaaa\) worker \(w2bbbbb\)/)
+  assert.match(flat(textOf(foot())), /^Did you mean: worker @w1aaaaa worker @w2bbbbb Enter sends/)
   await p.run('sendChat("chat")')
   assert.equal(p.commands().length, 0, 'a tie sends nothing')
-  click(find(foot(), 'choice').find(c => /w2bbbbb/.test(textOf(c))))
+  click(find(foot(), 'choice')[1])
   assert.equal(p.run('ui.drafts.get("chat")'), '@w2bbbbb go on')
   assert.deepEqual(preview('@w2bbbbb go on'), { text: '→ worker via SendMessage' })
   await p.run('sendChat("chat")')
