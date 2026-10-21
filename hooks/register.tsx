@@ -124,6 +124,9 @@ function isOrgDownOn(surface: RenderSurface): boolean {
 /** The agent whose page was opened last: the org chart marks it. */
 let lastAgent: string | null = null
 
+/** The key of the Button the pane's focus ring is on, as `ui.focus` last landed it ('' for none, or one of the engine's own stops): where `j`, `k` and `n` move it from. */
+let paneFocus = ''
+
 /** Draws every site of this plugin again; the engine folds calls to ten a second. Events that change the data call it. */
 function redraw($: EngineInterface) {
   drawn.clear()
@@ -1937,6 +1940,52 @@ function pickAgent($: EngineInterface, id: string) {
   if (view.agentPane === 'chat') void loadChat($, id)
 }
 
+/**
+ * Moves the pane's focus ring onto the Button keyed `key` (`$.ui.focus`; a
+ * row the next drawing brings is waited for), then brings it into view. A
+ * refusal (the pane does not hold the keys, no such row is drawn) leaves the
+ * ring where it was.
+ */
+async function focusOn($: EngineInterface, key: string): Promise<void> {
+  try {
+    const moved = await $.ui.focus({ requestId: PANE, key })
+    if (moved.deny !== undefined) return
+    paneFocus = key
+    scrollTo($, key, 'nearest')
+  } catch {
+    // no focus on this engine: the ring stays where it is
+  }
+}
+
+/** The v2 state the pane shows: the sample's while it shows (null while it is read), else this session's. */
+function shownV2Of(now: number): W.WebStateV2 | null {
+  return view.isDemo ? demo.v2 : v2Of(now)
+}
+
+/** `j` (1) and `k` (-1): the ring a row down or up among `keys`, else among the rows the v2 screen draws (`W.focusKeysOf`); held at either end. */
+async function focusNext($: EngineInterface, dir: 1 | -1, keys?: readonly string[]): Promise<void> {
+  const state = keys ? null : shownV2Of(await $.clock.now())
+  const rows = keys ?? (state ? W.focusKeysOf(state, view.v2, view.page) : [])
+  const key = W.focusStepOf(rows, paneFocus, dir)
+  if (key !== '' && key !== paneFocus) await focusOn($, key)
+}
+
+/** `n`: Now (off an agent's page and Inspect), the ring on the next thing that needs you, after the one it is on, round to the first. */
+async function focusNeed($: EngineInterface): Promise<void> {
+  const state = shownV2Of(await $.clock.now())
+  const key = state ? W.nextNeedKeyOf(state, paneFocus) : ''
+  if (key === '') {
+    $.ui.toast('Nothing needs you')
+    return
+  }
+  if (view.v2.tab !== 'now' || view.page !== '' || view.v2.isInspectOpen) {
+    view.page = ''
+    view.v2 = M.view2With(view.v2, { tab: 'now', isInspectOpen: false })
+    changed($)
+  }
+  await focusOn($, key)
+}
+
 /** The outline's folds and zoom as a press handed them over (views.tsx works them out): copies, so the view holds its own. */
 function setOutlineTo(outline: { folded?: readonly string[]; zoom?: string }) {
   if (outline.folded) view.folded = outline.folded.filter(one => typeof one === 'string')
@@ -1996,6 +2045,9 @@ function actionsFor($: EngineInterface): DeckActions {
       view.v2 = M.view2With(view.v2, patch)
       changed($)
     },
+    // j and k: the focus a row down or up; n: the next thing that needs you
+    focusNext: (dir, keys) => void focusNext($, dir, keys),
+    focusNeed: () => void focusNeed($),
     // a row picked; with `outline`, the outline as it shows that row (Classic's select)
     pick: (id, outline) => {
       pickAgent($, id)
@@ -2048,10 +2100,11 @@ function actionsFor($: EngineInterface): DeckActions {
     // a send from the page's Talk carries an id: its ack says what came of it, under the message
     sendChat: (agentId, text, ackId) => (view.isDemo ? $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.') : void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))),
     review: text => fillReview($, text),
-    // the band's Open: this session's deck on that tab
+    // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
     open: tab => {
       leaveDemo()
-      view.tab = tab
+      view.tab = M.tabNamed(tab) ?? 'dashboard'
+      view.v2 = M.view2With(view.v2, { tab: M.v2TabOf(tab), isInspectOpen: false })
       view.page = ''
       changed($)
       void openPane($)
@@ -2255,6 +2308,8 @@ function modelOf(now: number): DeckModel {
     now,
     cwd,
     web: webPaneOf(),
+    // what the band says: this session's, never the sample's
+    band: W.bandOf(v2Of(now)),
   }
 }
 
@@ -2577,10 +2632,12 @@ function answerFromPane($: EngineInterface, callId: string, answers: Record<stri
   redraw($)
 }
 
-/** An answer given in the sample: the sample's question taken down there alone; nothing reaches Claude. */
+/** An answer given in the sample: its question taken down there alone (the v2 sample's need, else v1's), nothing sent to Claude. */
 async function answerInSample($: EngineInterface, callId: string, answers: Record<string, string>): Promise<void> {
-  if (!demo.state || !demo.data) return
-  const words = answerDemo(demo.state, demo.data, callId, answers, await $.clock.now())
+  const now = await $.clock.now()
+  const inV2 = demo.v2 ? W.answeredInSample(demo.v2, callId, answers, now) : null
+  if (inV2) demo.v2 = inV2.state
+  const words = inV2 ? inV2.words : demo.state && demo.data ? answerDemo(demo.state, demo.data, callId, answers, now) : ''
   if (!words) return
   demo.version += 1
   $.ui.toast(`Sample data: you answered ${F.trunc(words, 120)}. Nothing was sent to Claude.`)
@@ -2787,9 +2844,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: the dashboard of your agents (what needs you, the goal, each agent, the figures, the activity), the org chart, the plan, the diffs they make (/deck demo: sample data; /deck web: in the Browser pane)',
-        // stats, classic and details still open the views off the tab row, unlisted
-        argumentHint: '[dashboard|org|plan [step]|changes|demo|web|web stop|band|close|probe]',
+        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck now, chat or changes; /deck inspect; /deck demo: sample data; /deck web: in the Browser pane)',
+        // an earlier build's tabs (dashboard, org, plan, stats, classic, details) still open, unlisted: on Now, or the view they were
+        argumentHint: '[now|chat|changes|inspect|demo|web|web stop|band|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2855,6 +2912,10 @@ export const register: Register = on => {
     // a tab's name or its start; an earlier build's name (overview, diffs, commits, graph) lands on the tab that replaced it
     const tab = arg === 'details' ? undefined : M.tabFor(isStepAsked ? 'plan' : arg)
     if (tab) view.tab = tab
+    // the v2 screens: /deck alone Now; now, chat or changes (an earlier build's tab on the one it folded into); inspect (or stats) Now with Inspect open
+    const isInspect = words[0] === 'inspect' || words[0] === 'stats'
+    const v2Tab = arg === '' || isInspect || isStepAsked ? 'now' : M.v2TabFor(words[0] ?? '')
+    if (v2Tab) view.v2 = M.view2With(view.v2, { tab: v2Tab, isInspectOpen: isInspect })
     const isPlaced = await openPane($)
     if (step) showStep($, step)
     else changed($)
@@ -2865,6 +2926,7 @@ export const register: Register = on => {
   on('ui.close', { id: PANE }, async ($, e, next) => {
     const result = await next(e)
     isPaneOpen = false
+    paneFocus = ''
     return result
   })
 
@@ -3520,12 +3582,19 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // the pane's focus ring, wherever it moved (your Tab, arrows or click; the deck's j, k and n): where they move it from next
+  on('ui.focus', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const result = await next(e)
+    if (result.deny === undefined) paneFocus = e.element ?? ''
+    return result
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // a workflow's agents and the engine's own loops fold away: they raise no band
-    const isLive = M.hasLiveAgents(data)
-    if (view.isBandHidden || e.props.hasSurvey || !isLive) return next(e)
-    const theirs: RenderElement = await next(e)
+    if (view.isBandHidden || e.props.hasSurvey) return next(e)
     const now = await $.clock.now()
+    // one line, this session's: only while an agent is at work or something needs you (`W.bandOf`); Claude Code's own loops raise none
+    if (!W.bandOf(v2Of(now))) return next(e)
+    const theirs: RenderElement = await next(e)
     // the band speaks for the screen only while the pane, which shows more, is shut
     const key = screenKey(now)
     if (!isPaneOpen) shownKey = key

@@ -11,7 +11,7 @@
  * the same thing. The hooks module (register.tsx) writes the files, starts
  * the server and acts on the commands.
  */
-import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView } from '../types'
+import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView, DeckView2 } from '../types'
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
@@ -1213,6 +1213,112 @@ export function recipientOf(state: Pick<WebStateV2, 'agents'>, words: string): {
   if (!found) return { error: `No agent named @${at[1] ?? ''} in this session` }
   if (text === '') return { error: 'Nothing to send' }
   return { agentId: found.id, title: found.title, text }
+}
+
+// The pane's focus (`j`, `k`, `n`): the rows it moves among, by the keys
+// their Buttons are drawn under.
+
+/** The pane's Button key of a need's card: `need:` and the need's id. */
+export function needKeyOf(id: string): string {
+  return `need:${id}`
+}
+
+/** The pane's Button key of an agent's row: `agent:` and its id. A fold row's key is its own id (`fold:` and its parent's id). */
+export function agentKeyOf(id: string): string {
+  return `agent:${id}`
+}
+
+/** The pane's Button key of a file of Changes: `file:` and its path as git gave it. */
+export function fileKeyOf(path: string): string {
+  return `file:${path}`
+}
+
+/**
+ * The rows `j` and `k` move the pane's focus among, by their Buttons' keys,
+ * in the order the screen draws them. Now: each need (`needKeyOf`), then
+ * the tree's rows: each agent row drawn (`agentKeyOf`; a fold's member only
+ * while that fold is open) and each fold row (its id). Changes: git's files
+ * (`fileKeyOf`). None on Chat, an agent's page (`page` its id) or Inspect.
+ */
+export function focusKeysOf(state: Pick<WebStateV2, 'needs' | 'agents' | 'changes'>, view2: Pick<DeckView2, 'tab' | 'openFolds' | 'isInspectOpen'>, page: string): string[] {
+  if (page !== '' || view2.isInspectOpen) return []
+  if (view2.tab === 'changes') return state.changes.files.map(file => fileKeyOf(file.path))
+  if (view2.tab !== 'now') return []
+  const open = new Set(view2.openFolds)
+  const rows = state.agents.flatMap(row => (row.row === 'fold' ? [row.id] : row.fold === null || open.has(row.fold) ? [agentKeyOf(row.id)] : []))
+  return [...state.needs.map(need => needKeyOf(need.id)), ...rows]
+}
+
+/**
+ * Where `j` (1) or `k` (-1) takes the focus from the row keyed `current`
+ * among `keys`: the next or the one before, held at either end. From none
+ * (or one not among them), `j` takes the first and `k` the last; '' when
+ * there is no row.
+ */
+export function focusStepOf(keys: readonly string[], current: string, dir: 1 | -1): string {
+  if (keys.length === 0) return ''
+  const at = keys.indexOf(current)
+  if (at < 0) return (dir > 0 ? keys[0] : keys[keys.length - 1]) ?? ''
+  return keys[Math.min(keys.length - 1, Math.max(0, at + dir))] ?? ''
+}
+
+/** `n`: the key of the need after the one keyed `current` (round to the first; the first from anything else); '' when nothing needs you. */
+export function nextNeedKeyOf(state: Pick<WebStateV2, 'needs'>, current: string): string {
+  const keys = state.needs.map(need => needKeyOf(need.id))
+  if (keys.length === 0) return ''
+  return keys[(keys.indexOf(current) + 1) % keys.length] ?? ''
+}
+
+// The band above the prompt: one line, "● 3 working · ? 1 question".
+
+/** One part of the band's line: the agents at work, or the needs of one kind; `text` its words ("3 working", "1 question"). */
+export type V2BandPart = { kind: 'working' | V2Need['kind']; glyph: '●' | '?'; count: number; text: string }
+
+/** The band's line, made once here: its parts in order (at work, then questions, permissions, notifications) and them as one string. */
+export type V2Band = { parts: V2BandPart[]; text: string }
+
+const BAND_NOUNS: Readonly<Record<V2Need['kind'], readonly [string, string]>> = { question: ['question', 'questions'], permission: ['permission', 'permissions'], notification: ['notification', 'notifications'] }
+
+/**
+ * What the band says, from the v2 state: how many agents are at work (each
+ * row but the Orchestrator's and Claude Code's own loops, starting or
+ * running), then how many of each kind of need wait on you. Null when no
+ * agent is at work and nothing needs you: the band then shows nothing.
+ */
+export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs'>): V2Band | null {
+  const working = state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine' && (row.status === 'running' || row.status === 'starting')).length
+  const parts: V2BandPart[] = working > 0 ? [{ kind: 'working', glyph: '●', count: working, text: `${working} working` }] : []
+  for (const kind of ['question', 'permission', 'notification'] as const) {
+    const count = state.needs.filter(need => need.kind === kind).length
+    const [one, many] = BAND_NOUNS[kind]
+    if (count > 0) parts.push({ kind, glyph: '?', count, text: `${count} ${count === 1 ? one : many}` })
+  }
+  if (parts.length === 0) return null
+  return { parts, text: parts.map(part => `${part.glyph} ${part.text}`).join(' · ') }
+}
+
+// The sample (`/deck demo`): an answer given in it, there alone.
+
+/**
+ * The sample's state with its question `callId` (a need's id) answered in
+ * it alone, nothing sent: the need taken down, a `choice` row from you to
+ * the agent that asked ("You answered: …"), that agent's row at work again
+ * once nothing else of its waits on you, and the header's word. Null when
+ * the sample holds no such question, or the answer says nothing.
+ */
+export function answeredInSample(state: WebStateV2, callId: string, answers: Readonly<Record<string, string>>, now: number): { state: WebStateV2; words: string } | null {
+  const need = state.needs.find(one => one.id === callId && one.kind === 'question')
+  if (!need) return null
+  const words = M.answeredOf(need.questions ?? [], answers)
+  if (words === '') return null
+  const needs = state.needs.filter(one => one !== need)
+  const left = needs.filter(one => one.agent === need.agent).length
+  const agents = state.agents.map(row => (row.row === 'agent' && row.id === need.agent ? { ...row, needs: left, status: left === 0 && row.status === 'waiting' ? ('running' as const) : row.status } : row))
+  const choice: V2ChatRow = { id: webIdOf(`sample-choice-${now}`), at: now, from: M.YOU, to: need.agent, who: `You → ${need.agentName}`, kind: 'choice', text: `You answered: ${words}`, callId: need.id }
+  const isWorking = agents.some(row => row.row === 'agent' && (row.status === 'running' || row.status === 'starting'))
+  const word: V2Header['state'] = needs.length > 0 ? 'waiting' : isWorking ? 'working' : 'idle'
+  const header = { ...state.header, state: word, stateText: STATE_TEXT[word] }
+  return { state: { ...state, header, needs, agents, chat: [...state.chat, choice].slice(-V2_CAPS.chat) }, words }
 }
 
 /** The fields of a v2 state, or of its agent files, that hold a time: moved together when a recorded state is shown now. */

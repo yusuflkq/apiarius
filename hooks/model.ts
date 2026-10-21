@@ -242,6 +242,25 @@ export function defaultView2(): DeckView2 {
 /** The v2 tabs, in their keys' order (1, 2, 3). */
 export const V2_TABS: readonly DeckView2['tab'][] = ['now', 'chat', 'changes']
 
+/** The v2 tab a tab of either build is: Changes stays Changes, Chat stays Chat; the Dashboard, Org, Plan, Stats and Classic all fold into Now. */
+export function v2TabOf(tab: DeckTab | DeckView2['tab']): DeckView2['tab'] {
+  return tab === 'changes' || tab === 'chat' ? tab : 'now'
+}
+
+/**
+ * The v2 tab a `/deck` argument asks for: `now`, `chat` or `changes`, or
+ * the start of one (`c` is Chat); else an earlier build's tab, where it
+ * went (`v2TabOf` of `tabFor`). Undefined for anything else.
+ */
+export function v2TabFor(arg: string): DeckView2['tab'] | undefined {
+  const wanted = arg.trim().toLowerCase()
+  if (wanted === '') return undefined
+  const tab = V2_TABS.find(one => one.startsWith(wanted))
+  if (tab) return tab
+  const old = tabFor(wanted)
+  return old ? v2TabOf(old) : undefined
+}
+
 /** The fold rows `view.v2.openFolds` keeps open at most, the oldest dropped first. */
 const OPEN_FOLDS_KEPT = 50
 

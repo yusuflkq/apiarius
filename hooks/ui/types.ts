@@ -7,7 +7,7 @@ import type { Elements, RenderSurface } from 'claude-code'
 
 import type { DeckAgentPane, DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
-import type { V2Files, WebState, WebStateV2 } from '../web'
+import type { V2Band, V2Files, WebState, WebStateV2 } from '../web'
 
 type TerminalTable = Elements['terminal']
 
@@ -76,6 +76,8 @@ export type DeckModel = {
   cwd: string
   /** The web deck; absent reads as off. */
   web?: WebPane
+  /** What the band above the prompt says, from this session's v2 state (`W.bandOf`): null (or absent) when it says nothing. */
+  band?: V2Band | null
 }
 
 export type Actions = {
@@ -107,7 +109,8 @@ export type Actions = {
    */
   sendChat: (agentId: string, text: string, ackId?: string) => void
   review: (text: string) => void
-  open: (tab: DeckTab) => void
+  /** The band's Open: this session's deck (out of the sample, off an agent's page and Inspect) on that tab, the pane opened; a v1 tab lands on the v2 tab it folded into (`M.v2TabOf`). */
+  open: (tab: DeckTab | DeckView2['tab']) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
   selectRepo: (root: string) => void
   /** What `/deck web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
@@ -179,6 +182,16 @@ export type DashActions = Actions & {
    * agent page is `openAgent` and `back`, as before.
    */
   setV2View: (patch: Partial<DeckView2>) => void
+  /**
+   * `j` (1) and `k` (-1): moves the pane's focus ring one row down or up
+   * (`$.ui.focus`) among `keys`, the rows' Button keys in the order drawn;
+   * left out, the v2 screen's own (`W.focusKeysOf`: Now's needs and tree
+   * rows, Changes' files). It holds at either end; from no row, `j` takes
+   * the first and `k` the last. The deck follows the ring (`ui.focus`).
+   */
+  focusNext: (dir: 1 | -1, keys?: readonly string[]) => void
+  /** `n`: Now, the focus on the next thing that needs you (`W.nextNeedKeyOf`: after the need focused, round to the first). */
+  focusNeed: () => void
 }
 
 /** What the native dashboard draws from, beside the deck's model. */

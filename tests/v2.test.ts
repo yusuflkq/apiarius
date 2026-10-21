@@ -569,3 +569,116 @@ test('stopAgent and abortTurn from the page are checked and acked: not in this b
   // nothing reached the session: no send, no prompt
   expect([w.sent, w.submitted.length]).toEqual([[], submitted])
 })
+
+// ---------------------------------------------------------------------------
+// The pane's focus (j, k, n), the band's line, /deck's tabs, and an answer in the sample.
+
+test('j and k move among the rows a v2 screen draws, by their Buttons` keys: Now`s needs then its tree (a fold`s members while it is open), Changes` files; none on Chat, a page or Inspect', () => {
+  const session = v2Session()
+  const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  const needs = state.needs.map(need => `need:${need.id}`)
+  const now = { tab: 'now' as const, openFolds: [] as string[], isInspectOpen: false }
+  expect(W.focusKeysOf(state, now, '')).toEqual([...needs, 'agent:main', `agent:${IDS.builder}`, `fold:${IDS.builder}`, `agent:${IDS.reviewer}`, 'fold:main'])
+  expect(W.focusKeysOf(state, { ...now, openFolds: ['fold:main'] }, '')).toEqual([...needs, 'agent:main', `agent:${IDS.builder}`, `fold:${IDS.builder}`, `agent:${IDS.reviewer}`, 'fold:main', `agent:${IDS.researcher}`, `agent:${IDS.docs}`, `agent:${IDS.scout}`])
+  expect(W.focusKeysOf(state, { ...now, tab: 'changes' }, '')).toEqual(state.changes.files.map(file => `file:${file.path}`))
+  expect([W.focusKeysOf(state, { ...now, tab: 'chat' }, ''), W.focusKeysOf(state, now, IDS.builder), W.focusKeysOf(state, { ...now, isInspectOpen: true }, '')]).toEqual([[], [], []])
+  expect([W.needKeyOf('toolu_1'), W.agentKeyOf('main'), W.fileKeyOf('src/a.ts')]).toEqual(['need:toolu_1', 'agent:main', 'file:src/a.ts'])
+
+  // one row on, held at either end; from none (or one gone), j takes the first and k the last
+  const keys = ['a', 'b', 'c']
+  expect([W.focusStepOf(keys, 'a', 1), W.focusStepOf(keys, 'c', 1), W.focusStepOf(keys, 'b', -1), W.focusStepOf(keys, 'a', -1)]).toEqual(['b', 'c', 'a', 'a'])
+  expect([W.focusStepOf(keys, '', 1), W.focusStepOf(keys, '', -1), W.focusStepOf(keys, 'gone', 1), W.focusStepOf([], '', 1)]).toEqual(['a', 'c', 'a', ''])
+  // n: the need after the one focused, round to the first; the first from a row that is none
+  expect([W.nextNeedKeyOf(state, ''), W.nextNeedKeyOf(state, needs[0]!), W.nextNeedKeyOf(state, needs[needs.length - 1]!), W.nextNeedKeyOf(state, 'agent:main')]).toEqual([needs[0], needs[1], needs[0], needs[0]])
+  expect(W.nextNeedKeyOf({ needs: [] }, '')).toBe('')
+})
+
+test('the band says in one line how many agents are at work and what waits on you, by kind; the Orchestrator and Claude Code`s own loops count for none, and with neither it says nothing', () => {
+  const data = M.emptyData(NOW - 600_000)
+  M.agentOf(data, M.MAIN)!.status = 'running'
+  // only the Orchestrator at work, a finished agent, Claude Code's own compaction: no band
+  agent(data, 'agent-done', 'done', { status: 'completed', endedAt: NOW - 60_000 })
+  agent(data, 'agent-compact', 'compact', { origin: 'engine' })
+  expect(W.bandOf(stateOf(data))).toBeNull()
+  agent(data, 'agent-a', 'a')
+  agent(data, 'agent-b', 'b', { status: 'starting' })
+  agent(data, 'agent-c', 'c', { kind: 'teammate' })
+  expect(W.bandOf(stateOf(data))).toEqual({ parts: [{ kind: 'working', glyph: '●', count: 3, text: '3 working' }], text: '● 3 working' })
+  const question = { question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'Redis', description: '' }] }
+  M.notePending(data, { id: 'toolu_q', agentId: M.MAIN, kind: 'question', tool: 'AskUserQuestion', at: NOW - 60_000, questions: [question] })
+  expect(W.bandOf(stateOf(data))?.text).toBe('● 3 working · ? 1 question')
+
+  // the sample: no agent runs (builder and reviewer wait on you), so only its needs, each kind counted
+  const session = v2Session()
+  const sample = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  expect(W.bandOf(sample)).toEqual({
+    parts: [
+      { kind: 'question', glyph: '?', count: 2, text: '2 questions' },
+      { kind: 'permission', glyph: '?', count: 1, text: '1 permission' },
+      { kind: 'notification', glyph: '?', count: 1, text: '1 notification' },
+    ],
+    text: '? 2 questions · ? 1 permission · ? 1 notification',
+  })
+})
+
+test('an answer in the sample stays there: its need goes, a choice row from you says what you answered, the agent that asked works again once nothing else of its waits on you, and the header follows', () => {
+  const session = v2Session()
+  const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  const [first, , many] = state.needs
+  const at = SAMPLE_NOW + 1000
+  const one = W.answeredInSample(state, first!.id, { [first!.questions![0]!.question]: 'Redis' }, at)!
+  expect(one.words).toBe('Redis')
+  expect(one.state.needs.map(need => need.id)).toEqual(state.needs.slice(1).map(need => need.id))
+  expect(one.state.chat[one.state.chat.length - 1]).toEqual({ id: W.webIdOf(`sample-choice-${at}`), at, from: 'you', to: M.MAIN, who: 'You → Orchestrator', kind: 'choice', text: 'You answered: Redis', callId: first!.id })
+  // the Orchestrator still has the MCP server's notification waiting on it; the session still waits on you
+  expect([rowOf(one.state, M.MAIN).needs, rowOf(one.state, M.MAIN).status, one.state.header.state]).toEqual([rowOf(state, M.MAIN).needs - 1, 'waiting', 'waiting'])
+  // reviewer's one question answered: reviewer works again
+  const two = W.answeredInSample(one.state, many!.id, { [many!.questions![0]!.question]: '/health, /metrics' }, at + 1000)!
+  expect([two.words, rowOf(two.state, IDS.reviewer).needs, rowOf(two.state, IDS.reviewer).status]).toEqual(['/health, /metrics', 0, 'running'])
+  // the sample itself is left as it was; a permission, a need it does not hold, or an answer of nothing is no answer
+  expect(state.needs).toHaveLength(4)
+  expect([W.answeredInSample(state, state.needs[1]!.id, { x: 'y' }, at), W.answeredInSample(state, 'nobody', { x: 'y' }, at), W.answeredInSample(state, first!.id, {}, at)]).toEqual([null, null, null])
+
+  // the last need answered, with an agent at work: Working
+  const data = M.emptyData(NOW - 600_000)
+  agent(data, 'agent-a', 'a')
+  const question = { question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'Redis', description: '' }] }
+  M.notePending(data, { id: 'toolu_q', agentId: M.MAIN, kind: 'question', tool: 'AskUserQuestion', at: NOW - 60_000, questions: [question] })
+  const held = stateOf(data)
+  expect(held.header.state).toBe('waiting')
+  const done = W.answeredInSample(held, 'toolu_q', { 'Which store?': 'Redis' }, NOW)!
+  expect([done.state.header.state, done.state.header.stateText, rowOf(done.state, M.MAIN).status, done.state.needs]).toEqual(['working', 'Working', 'running', []])
+})
+
+test('/deck`s v2 tabs: now, chat and changes, or the start of one; an earlier build`s tab lands on the one it folded into', () => {
+  expect([M.v2TabFor('now'), M.v2TabFor('n'), M.v2TabFor('c'), M.v2TabFor('chat'), M.v2TabFor('chan'), M.v2TabFor(' Changes ')]).toEqual(['now', 'now', 'chat', 'chat', 'changes', 'changes'])
+  expect([M.v2TabFor('dashboard'), M.v2TabFor('org'), M.v2TabFor('plan'), M.v2TabFor('stats'), M.v2TabFor('classic'), M.v2TabFor('diffs')]).toEqual(['now', 'now', 'now', 'now', 'now', 'changes'])
+  expect([M.v2TabFor(''), M.v2TabFor('web'), M.v2TabFor('demo'), M.v2TabFor('inspect')]).toEqual([undefined, undefined, undefined, undefined])
+  expect([M.v2TabOf('dashboard'), M.v2TabOf('changes'), M.v2TabOf('chat'), M.v2TabOf('stats')]).toEqual(['now', 'changes', 'chat', 'now'])
+})
+
+test('/deck now, chat and changes open the pane on that v2 tab, /deck inspect (or stats) on Now with Inspect open, and /deck alone on Now; each choice is kept', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  const saved: unknown[] = []
+  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+    saved.push(JSON.parse(JSON.stringify(e.value)))
+    return { value: { isSet: true as const, version: saved.length } }
+  })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  const v2After = async (args: string) => {
+    await $.command.run(deck(args))
+    await clock.advance(2000)
+    return (saved[saved.length - 1] as { view: { v2: { tab: string; isInspectOpen: boolean } } }).view.v2
+  }
+  expect(await v2After('chat')).toMatchObject({ tab: 'chat', isInspectOpen: false })
+  expect(await v2After('changes')).toMatchObject({ tab: 'changes', isInspectOpen: false })
+  expect(await v2After('inspect')).toMatchObject({ tab: 'now', isInspectOpen: true })
+  expect(await v2After('c')).toMatchObject({ tab: 'chat', isInspectOpen: false })
+  expect(await v2After('stats')).toMatchObject({ tab: 'now', isInspectOpen: true })
+  expect(await v2After('')).toMatchObject({ tab: 'now', isInspectOpen: false })
+  expect(await v2After('changes')).toMatchObject({ tab: 'changes' })
+  expect(await v2After('org')).toMatchObject({ tab: 'now' })
+  expect(await v2After('now')).toMatchObject({ tab: 'now' })
+})
