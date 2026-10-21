@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { hunksOf } from '../hooks/diff'
 import { emptyGit, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
 import * as W from '../hooks/web'
@@ -387,8 +388,8 @@ test('changes: git`s uncommitted files, each with the agents` own edits of it be
   const { changes } = stateOf(data, { git })
   expect(changes.repo).toMatchObject({ name: 'repo', root: '/repo', branch: 'main' })
   expect(changes.files).toEqual([
-    { path: 'src/a.ts', code: 'M', added: 3, removed: 2, edits: ['toolu_e1', W.webIdOf('toolu_e2:1')] },
-    { path: 'package.json', code: 'M', added: 1, removed: 0, edits: [] },
+    { path: 'src/a.ts', code: 'M', added: 3, removed: 2, edits: ['toolu_e1', W.webIdOf('toolu_e2:1')], diffId: null },
+    { path: 'package.json', code: 'M', added: 1, removed: 0, edits: [], diffId: null },
   ])
   expect(changes.edits.map(one => [one.id, one.agent, one.isOutside ?? false])).toEqual([
     ['toolu_e1', fixer.id, false],
@@ -701,4 +702,76 @@ test('what a v2 state shows is one key: the same for the same state built at ano
   expect(W.v2KeyOf({ ...state, now: state.now + 5000 })).toBe(W.v2KeyOf(state))
   expect(W.v2KeyOf({ ...state, acks: state.acks.slice(1) })).not.toBe(W.v2KeyOf(state))
   expect(W.v2KeyOf({ ...state, header: { ...state.header, stateText: 'Idle' } })).not.toBe(W.v2KeyOf(state))
+})
+
+// ---------------------------------------------------------------------------
+// Git's own diff of each uncommitted file: changes.files[].diffId and gitdiffs/<id>.diff.
+
+test('git`s own diff of a file: its hunks whole as gitdiffs/<id>.diff holds them, an id that changes with them, on its row of changes.files; null for one the mod has not read', () => {
+  const text = W.gitDiffTextOf(hunksOf(['diff --git a/src/a.ts b/src/a.ts', '--- a/src/a.ts', '+++ b/src/a.ts', '@@ -1,2 +1,2 @@', ' one', '-two', '+three', '@@ -9 +9,2 @@', ' nine', '+ten', ''].join('\n')))
+  expect(text).toBe('@@ -1,2 +1,2 @@\n one\n-two\n+three\n@@ -9,1 +9,2 @@\n nine\n+ten\n')
+  expect(W.gitDiffTextOf([])).toBe('')
+  const id = W.gitDiffIdOf('src/a.ts', text)
+  expect(id).toMatch(/^[A-Za-z0-9_-]+$/)
+  expect([W.gitDiffIdOf('src/a.ts', text), W.gitDiffIdOf('src/b.ts', text) === id, W.gitDiffIdOf('src/a.ts', `${text}+more\n`) === id]).toEqual([id, false, false])
+
+  const session = v2Session()
+  const read = new Map([['src/app.ts', { id, text }]])
+  const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable, read)
+  expect(state.changes.files.map(file => [file.path, file.diffId])).toEqual([
+    ['src/app.ts', id],
+    ['src/rateLimit.ts', null],
+    ['tests/rateLimit.test.ts', null],
+    ['docs/api.md', null],
+    ['package.json', null],
+  ])
+  // each written once, and the pane opens it by its id
+  expect(W.newGitDiffsOf(read, new Set())).toEqual([{ id, text }])
+  expect(W.newGitDiffsOf(read, new Set([id]))).toEqual([])
+  expect([W.v2FilesOf(session.data, read).gitDiff(id), W.v2FilesOf(session.data).gitDiff(id), W.v2FilesFrom({ agents: {}, patches: {}, messages: {}, gitDiffs: { [id]: text } }).gitDiff(id)]).toEqual([text, null, text])
+
+  // the sample: every git file's diff, its lazy files beside it
+  const sample = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable, session.gitDiffs)
+  expect(sample.changes.files.every(file => file.diffId !== null && file.diffId === session.gitDiffs.get(file.path)?.id)).toBe(true)
+})
+
+test('while the web deck is on, the mod reads git`s diff of each uncommitted file after git, writes each once as gitdiffs/<id>.diff, and names it on its row; a changed diff is another file', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const HEAD = 'b'.repeat(40)
+  let appDiff = ['diff --git a/src/app.ts b/src/app.ts', '--- a/src/app.ts', '+++ b/src/app.ts', '@@ -1,3 +1,3 @@', ' const a = 1', '-const b = 2', '+const b = 3', ' export { a, b }', ''].join('\n')
+  const diffs: string[][] = []
+  const git = (argv: readonly string[]) => {
+    const line = argv.join(' ')
+    const out = (stdout: string, exitCode = 0) => ({ exitCode, stdout })
+    if (line.includes('rev-parse --show-toplevel')) return out('/work\n')
+    if (line.includes('rev-parse --abbrev-ref HEAD')) return out('main\n')
+    if (line.includes('rev-parse --verify --quiet HEAD')) return out(`${HEAD}\n`)
+    if (line.includes('status --porcelain')) return out(' M src/app.ts\0?? notes.txt\0')
+    if (line.includes('--numstat -z HEAD')) return out('1\t1\tsrc/app.ts\0')
+    if (line.endsWith('-M -U3 HEAD --')) {
+      diffs.push([...argv])
+      return out(appDiff)
+    }
+    return out('', 1)
+  }
+  const w = newWorld({ git, files: { '/work/notes.txt': 'hello\nworld\n' } })
+  world(on, w)
+  await work($)
+  await clock.advance(2000)
+
+  const written = () => w.writes.filter(one => /[\\/]gitdiffs[\\/][A-Za-z0-9_-]+\.diff$/.test(one.path)).map(one => one.text)
+  const lastV2 = () => (JSON.parse([...w.writes].reverse().find(one => /[\\/]state\.json$/.test(one.path))?.text ?? '{}') as { v2: W.WebStateV2 }).v2
+  const appText = '@@ -1,3 +1,3 @@\n const a = 1\n-const b = 2\n+const b = 3\n export { a, b }\n'
+  expect(diffs.length).toBeGreaterThan(0)
+  expect(written().sort()).toEqual([appText, '@@ -0,0 +1,2 @@\n+hello\n+world\n'].sort())
+  const idsOf = () => Object.fromEntries(lastV2().changes.files.map(file => [file.path, file.diffId]))
+  expect(idsOf()).toEqual({ 'src/app.ts': W.gitDiffIdOf('src/app.ts', appText), 'notes.txt': W.gitDiffIdOf('notes.txt', '@@ -0,0 +1,2 @@\n+hello\n+world\n') })
+
+  // the next read of git finds the file changed again: its new diff is another file, written once; the one before stays as written
+  appDiff = appDiff.replace('+const b = 3', '+const b = 4')
+  const before = written().length
+  await clock.advance(8000)
+  const changed = appText.replace('+const b = 3', '+const b = 4')
+  expect(written().slice(before)).toEqual([changed])
+  expect(idsOf()['src/app.ts']).toBe(W.gitDiffIdOf('src/app.ts', changed))
 })

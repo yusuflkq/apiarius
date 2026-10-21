@@ -1,0 +1,5 @@
+@@ -0,0 +1,4 @@
++import { limiter } from '../src/rateLimit'
++test('a burst past the limit is refused', async () => {
++  expect(await burst(101)).toBe(false)
++})

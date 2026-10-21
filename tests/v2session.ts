@@ -24,6 +24,7 @@ import type { DeckAgent, DeckData, DeckEdit, DeckQuestion } from '../types'
 import { emptyGit, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
 import type { UsageInfo } from '../hooks/ui/types'
+import { gitDiffIdOf, type GitDiffs } from '../hooks/web'
 
 /** The moment the sample is built at (2026-10-14, 21:33 UTC). */
 export const SAMPLE_NOW = 1_792_013_580_000
@@ -120,7 +121,17 @@ function spawn(data: DeckData, one: { toolUseId: string; agentId: string; parent
   return agent
 }
 
-export type V2Session = { data: DeckData; git: GitState; usage: UsageInfo; now: number; sessionId: string; cwd: string; answerable: Set<string> }
+export type V2Session = { data: DeckData; git: GitState; usage: UsageInfo; now: number; sessionId: string; cwd: string; answerable: Set<string>; gitDiffs: GitDiffs }
+
+/** Git's own diff of each uncommitted file, as the mod reads them (hunks whole, `W.gitDiffTextOf`'s form), by path, with their ids. */
+function gitDiffsOf(texts: Record<string, string[]>): GitDiffs {
+  return new Map(
+    Object.entries(texts).map(([path, lines]) => {
+      const text = `${lines.join('\n')}\n`
+      return [path, { id: gitDiffIdOf(path, text), text }]
+    }),
+  )
+}
 
 export function v2Session(): V2Session {
   const data = M.emptyData(ago(42))
@@ -377,6 +388,29 @@ export function v2Session(): V2Session {
     commits: [{ hash: '9c1e4b7a2f58d03e6b1c47f9a2d8e5b0c3f6a914', short: '9c1e4b7', author: 'sam', at: ago(15), subject: 'Add the sliding-window limiter', files: 1, added: 6, removed: 0 }],
     checkedAt: ago(0.2),
   }
+  // git's own diff of each: the agents' edits as they landed, and package.json's line no agent's edit holds
+  const gitDiffs = gitDiffsOf({
+    'src/app.ts': ['@@ -1,3 +1,4 @@', " import { auth } from './auth'", "+import { limiter } from './rateLimit'", ' app.use(auth())', '-app.use(routes)', '+app.use(limit(limiter(store)), routes)'],
+    'src/rateLimit.ts': [
+      '@@ -0,0 +1,6 @@',
+      '+export type Store = { hit(key: string, now: number): Promise<number> }',
+      '+',
+      '+export function limiter(store: Store, perMinute = 100) {',
+      '+  return async (key: string, now = Date.now()) => (await store.hit(key, now)) <= perMinute',
+      '+}',
+      '+',
+    ],
+    'tests/rateLimit.test.ts': ['@@ -0,0 +1,4 @@', "+import { limiter } from '../src/rateLimit'", "+test('a burst past the limit is refused', async () => {", '+  expect(await burst(101)).toBe(false)', '+})'],
+    'docs/api.md': [
+      '@@ -12,2 +12,4 @@',
+      ' ## Limits',
+      '-None yet.',
+      '+Each user may make 100 requests a minute; a route may set its own limit.',
+      '+Past it the API answers `429 Too Many Requests` with `Retry-After`, in seconds.',
+      '+',
+    ],
+    'package.json': ['@@ -8,4 +8,5 @@', '   "dependencies": {', '     "express": "^4.19.2",', '+    "ioredis": "^5.4.1",', '     "zod": "^3.23.8"', '   },'],
+  })
   const usage: UsageInfo = { startedAt: ago(42), contextPercent: 41, costUsd: 4.12, limits: [] }
-  return { data, git, usage, now: SAMPLE_NOW, sessionId: '5f2c8a1e-7b3d-4c9a-9e61-2d4f8b0c3a17', cwd: ROOT, answerable: new Set(['toolu_01AskOne', 'toolu_01AskMany']) }
+  return { data, git, usage, now: SAMPLE_NOW, sessionId: '5f2c8a1e-7b3d-4c9a-9e61-2d4f8b0c3a17', cwd: ROOT, answerable: new Set(['toolu_01AskOne', 'toolu_01AskMany']), gitDiffs }
 }

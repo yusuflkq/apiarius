@@ -24,7 +24,7 @@ import type {
 } from 'claude-code'
 
 import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckMessage, DeckStatus, DeckView } from '../types'
-import { addedFileHunks, countOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
+import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
 import * as M from './model'
@@ -83,17 +83,32 @@ let dataGen = 0
  * loaded again, a minute turned (the ages and times it words), or the
  * questions the deck may answer changed.
  */
-const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usage: UsageInfo | null; state: W.WebStateV2 | null; shows: string } = { key: '', data: null, git: null, usage: null, state: null, shows: '' }
+const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usage: UsageInfo | null; diffs: W.GitDiffs | null; state: W.WebStateV2 | null; shows: string } = {
+  key: '',
+  data: null,
+  git: null,
+  usage: null,
+  diffs: null,
+  state: null,
+  shows: '',
+}
 
 function v2Of(now: number, isFresh = false): W.WebStateV2 {
   const asking = [...askers.keys()]
   const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd].join('\u0001')
-  if (!isFresh && v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage) return v2Memo.state
+  if (!isFresh && v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage && v2Memo.diffs === gitDiffs) return v2Memo.state
   // a question the page may answer is one whose race runs in this module: none after a reload
-  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking))
-  Object.assign(v2Memo, { key, data, git, usage, state, shows: W.v2KeyOf(state) })
+  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs)
+  Object.assign(v2Memo, { key, data, git, usage, diffs: gitDiffs, state, shows: W.v2KeyOf(state) })
   return state
 }
+
+/**
+ * Git's own diff of each uncommitted file, by path, as the web deck serves
+ * it (gitdiffs/<id>.diff, `W.GitDiffs`): read after each read of git while
+ * the web deck is on (`readGitDiffs`), and replaced whole when one changes.
+ */
+let gitDiffs: W.GitDiffs = new Map()
 
 /** The key of the Button the pane's focus ring is on, as `ui.focus` last landed it ('' for none, or one of the engine's own stops): where `j`, `k` and `n` move it from. */
 let paneFocus = ''
@@ -489,13 +504,34 @@ const web: {
   waiters: ((isUp: boolean) => void)[]
   /** The patches written, by their web id. */
   written: Set<string>
+  /** Git's diffs written (gitdiffs/<id>.diff), by their id. */
+  gitDiffsWritten: Set<string>
   /** The state last written, its time left out. */
   lastKey: string
   /** Each agent's file (`agents/<id>.json`) as last written, by its web id: one is written again only when it changed. */
   agentFiles: Map<string, string>
   isWriting: boolean
   isWriteQueued: boolean
-} = { isOn: false, token: '', port: 0, keptPort: 0, dir: '', status: 'off', note: '', opened: '', pid: '', epoch: 0, isAsked: false, waiters: [], written: new Set(), lastKey: '', agentFiles: new Map(), isWriting: false, isWriteQueued: false }
+} = {
+  isOn: false,
+  token: '',
+  port: 0,
+  keptPort: 0,
+  dir: '',
+  status: 'off',
+  note: '',
+  opened: '',
+  pid: '',
+  epoch: 0,
+  isAsked: false,
+  waiters: [],
+  written: new Set(),
+  gitDiffsWritten: new Set(),
+  lastKey: '',
+  agentFiles: new Map(),
+  isWriting: false,
+  isWriteQueued: false,
+}
 
 /** The web deck as the pane draws it. */
 function webPaneOf(): WebPane {
@@ -536,8 +572,9 @@ function scheduleWeb($: EngineInterface) {
  * Writes what the page reads: each edit's patch not written yet
  * (`patches/<id>.diff`, once), each cut message's whole text not written yet
  * (`messages/<id>.md`, once: it is then marked saved and its whole text let
- * go), each agent's file that changed (`agents/<id>.json`, v2's), then
- * `state.json` (v1, and the v2 view model the pane draws under `v2`),
+ * go), each agent's file that changed (`agents/<id>.json`, v2's), git's
+ * diff of each uncommitted file not written yet (`gitdiffs/<id>.diff`,
+ * once), then `state.json` (v1, and the v2 view model the pane draws under `v2`),
  * unless it says what the last write said (its time aside). One write at a
  * time: a change during one writes again after it.
  */
@@ -562,6 +599,10 @@ async function writeWeb($: EngineInterface): Promise<void> {
       if (web.agentFiles.get(file.id) === file.text) continue
       await $.fs.write(`${web.dir}/agents/${file.id}.json`, file.text)
       web.agentFiles.set(file.id, file.text)
+    }
+    for (const diff of W.newGitDiffsOf(gitDiffs, web.gitDiffsWritten)) {
+      await $.fs.write(`${web.dir}/gitdiffs/${diff.id}.diff`, diff.text)
+      web.gitDiffsWritten.add(diff.id)
     }
     const now = await $.clock.now()
     // a question the page may answer is one whose race runs in this module: none after a reload
@@ -645,6 +686,7 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
   redraw($)
   web.lastKey = ''
   web.agentFiles.clear()
+  void readGitDiffs($)
   await writeWeb($)
   if (web.pid === '') web.pid = await enginePidOf($)
   // a newer session.start took over: the web deck is its supervisor's now
@@ -1203,7 +1245,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     }
 
     git = next
-    if (view.file && view.tab === 'changes') void loadFileDiff($, view.file)
+    if (view.file && view.v2.tab === 'changes') void loadFileDiff($, view.file)
   } finally {
     isGitBusy = false
     savePin($)
@@ -1212,6 +1254,74 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     if (isGitQueued) {
       isGitQueued = false
       scheduleGit($, 300)
+    }
+  }
+  void readGitDiffs($)
+}
+
+/** The most untracked files whose whole text one read of git's diffs takes. */
+const GIT_DIFF_UNTRACKED = 30
+
+/** One read of git's diffs at a time; another asked for meanwhile runs after it. */
+const gitDiffRead = { isBusy: false, isQueued: false }
+
+/**
+ * Git's own diff of each uncommitted file, while the web deck is on (none
+ * otherwise): one `git diff` against HEAD for the tracked files, split per
+ * file, and the whole text of the first 30 untracked ones. A binary file, or
+ * one past `W.GIT_DIFF_MOST`, has none. Kept (and the state redrawn) only
+ * when one changed, and only for the repository the deck still shows.
+ */
+async function readGitDiffs($: EngineInterface): Promise<void> {
+  if (!web.isOn || git.isRepo !== true || git.root === '') {
+    if (gitDiffs.size > 0) gitDiffs = new Map()
+    return
+  }
+  if (gitDiffRead.isBusy) {
+    gitDiffRead.isQueued = true
+    return
+  }
+  gitDiffRead.isBusy = true
+  try {
+    const { root, head, files } = git
+    const next = new Map<string, { id: string; text: string }>()
+    const keep = (path: string, hunks: readonly Hunk[]) => {
+      const text = W.gitDiffTextOf(hunks)
+      if (text !== '' && text.length <= W.GIT_DIFF_MOST) next.set(path, { id: W.gitDiffIdOf(path, text), text })
+    }
+    const tracked = files.filter(file => !file.isUntracked)
+    if (tracked.length > 0) {
+      const ran = await runGit($, G.argv.fileDiff(head ? 'HEAD' : G.EMPTY_TREE, []), 20_000, root)
+      if (ran.ok) {
+        for (const one of filePatchesOf(ran.out)) {
+          const row = tracked.find(file => file.path === one.path)
+          if (row && !one.isBinary) keep(row.path, hunksOf(one.text))
+        }
+      }
+    }
+    for (const file of files.filter(one => one.isUntracked).slice(0, GIT_DIFF_UNTRACKED)) {
+      try {
+        const abs = joinPath(root, file.path)
+        if ((await $.fs.stat(abs)).size > W.GIT_DIFF_MOST) continue
+        const text = await $.fs.read(abs)
+        if (!text.includes('\u0000')) keep(file.path, addedFileHunks(text))
+      } catch {
+        // a file that cannot be read has no diff
+      }
+    }
+    // read in a repository the deck has since left: not this one's
+    if (!R.sameRoot(root, git.root)) return
+    const isSame = next.size === gitDiffs.size && [...next].every(([path, one]) => gitDiffs.get(path)?.id === one.id)
+    if (isSame) return
+    gitDiffs = next
+    redrawIfChanged($, await $.clock.now())
+  } catch {
+    // the diffs stand as they were
+  } finally {
+    gitDiffRead.isBusy = false
+    if (gitDiffRead.isQueued) {
+      gitDiffRead.isQueued = false
+      void readGitDiffs($)
     }
   }
 }
@@ -1827,7 +1937,7 @@ function dashOf(now: number): DashModel {
   const isDemo = view.isDemo
   return {
     v2: isDemo ? demo.v2 : v2Of(now),
-    v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data),
+    v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data, gitDiffs),
     isDemo,
     demoNote: demo.note,
   }
@@ -1854,6 +1964,7 @@ async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2
   const agents: Record<string, W.V2AgentFile> = {}
   const patches: Record<string, string> = {}
   const messages: Record<string, string> = {}
+  const gitDiffsRead: Record<string, string> = {}
   const read = async (path: string, keep: (text: string) => void) => {
     try {
       keep(await $.fs.read(path))
@@ -1873,8 +1984,9 @@ async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2
     ),
     ...state.changes.edits.filter(edit => isSafe(edit.id)).map(edit => read(`${dir}/patches/${edit.id}.diff`, text => (patches[edit.id] = text.replace(/\r\n/g, '\n')))),
     ...state.chat.filter(row => row.isCut && isSafe(row.id)).map(row => read(`${dir}/messages/${row.id}.md`, text => (messages[row.id] = text.replace(/\r\n/g, '\n').trimEnd()))),
+    ...state.changes.files.flatMap(file => (file.diffId !== null && isSafe(file.diffId) ? [file.diffId] : [])).map(id => read(`${dir}/gitdiffs/${id}.diff`, text => (gitDiffsRead[id] = text.replace(/\r\n/g, '\n')))),
   ])
-  return W.v2FilesFrom({ agents, patches, messages })
+  return W.v2FilesFrom({ agents, patches, messages, gitDiffs: gitDiffsRead })
 }
 
 /**

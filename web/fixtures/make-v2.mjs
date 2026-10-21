@@ -2,7 +2,7 @@
 // session recorded through hooks/model.ts's recorders) into hooks/web.ts's
 // deckStateOf, written as web/fixtures/state.v2.json, with its lazy files
 // beside it as a session's folder holds them: web/fixtures/v2/agents/<id>.json,
-// v2/patches/<id>.diff and v2/messages/<id>.md.
+// v2/patches/<id>.diff, v2/messages/<id>.md and v2/gitdiffs/<id>.diff.
 //
 //   node web/fixtures/make-v2.mjs           writes them (the v2 folder afresh)
 //   node web/fixtures/make-v2.mjs --check   exits 1 when what is written is not what the builder makes now
@@ -31,8 +31,8 @@ const repo = path.resolve(here, '..', '..')
 const { v2Session } = await import(pathToFileURL(path.join(repo, 'tests', 'v2session.ts')).href)
 const W = await import(pathToFileURL(path.join(repo, 'hooks', 'web.ts')).href)
 
-const { data, git, usage, now, sessionId, cwd, answerable } = v2Session()
-const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, answerable)
+const { data, git, usage, now, sessionId, cwd, answerable, gitDiffs } = v2Session()
+const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, answerable, gitDiffs)
 
 /** Every file the sample is, by its path under web/fixtures: the state, then its lazy files. */
 const files = new Map()
@@ -40,6 +40,7 @@ files.set('state.v2.json', `${JSON.stringify(state, null, 2)}\n`)
 for (const file of W.agentFilesOf(data)) files.set(`v2/agents/${file.id}.json`, `${JSON.stringify(JSON.parse(file.text), null, 2)}\n`)
 for (const patch of W.newPatchesOf(data, new Set())) files.set(`v2/patches/${patch.id}.diff`, patch.text)
 for (const file of W.newMessageFilesOf(data)) files.set(`v2/messages/${file.id}.md`, file.text)
+for (const diff of W.newGitDiffsOf(gitDiffs, new Set())) files.set(`v2/gitdiffs/${diff.id}.diff`, diff.text)
 
 /** What is on disk now under web/fixtures: state.v2.json and everything in v2/, line ends as LF. */
 function onDisk() {

@@ -47,6 +47,10 @@ export type World = {
   verdict: 'allow' | 'ask' | 'deny'
   /** A settings hook decides the permission dialog itself: none shows. */
   isDecided: boolean
+  /** What git prints for a command, in a repository the test stands up; left out, there is no repository. */
+  git?: (argv: readonly string[]) => { exitCode: number; stdout: string }
+  /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
+  files?: Readonly<Record<string, string>>
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -97,8 +101,17 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('process.run', ($, e) =>
     e.argv[0] === 'node'
       ? { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-      : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } },
+      : w.git && e.argv[0] === 'git'
+        ? { value: { ...w.git(e.argv), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+        : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } },
   )
+  const files = w.files
+  if (files) {
+    on('fs.read', ($, e) => {
+      const text = files[e.path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')]
+      return text !== undefined ? { value: text } : { deny: 'no such file' }
+    })
+  }
   on('fs.exists', () => ({ value: false }))
   on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }))
   on('fs.write', ($, e) => {

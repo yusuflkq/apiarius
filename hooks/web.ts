@@ -12,6 +12,7 @@
  * the server and acts on the commands.
  */
 import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView, DeckView2 } from '../types'
+import type { Hunk } from './diff'
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
@@ -713,8 +714,14 @@ export type V2Plan = {
 
 export type V2Changes = {
   repo: WebState['repo']
-  /** Git's uncommitted files; `edits` the ids of the agents' own edits of that path (patches at /patch/<id>). Git's hunks are never tagged by agent. */
-  files: { path: string; code: string; added: number; removed: number; edits: string[] }[]
+  /**
+   * Git's uncommitted files; `edits` the ids of the agents' own edits of that
+   * path (patches at /patch/<id>). `diffId` names git's own diff of the file
+   * (gitdiffs/<id>.diff, at /gitdiff/<id>): null until the mod has read it
+   * (it reads them while the web deck is on), and for a binary file or one
+   * past 200,000 characters. Git's hunks are never tagged by agent.
+   */
+  files: { path: string; code: string; added: number; removed: number; edits: string[]; diffId: string | null }[]
   /** Each agent's own edit patches, the newest 300, oldest first. */
   edits: { id: string; agent: string; tool: string; path: string; at: number; added: number; removed: number; isOutside?: true }[]
   /** The newest 20, newest first; `agent` the one whose shell call made it. */
@@ -1075,7 +1082,16 @@ function headerLineOf(model: string, usage: UsageInfo | null): string {
  * `answerable` holds the questions whose race is live in this mod instance.
  * Pure: the same data, git, usage and `now` build the same state.
  */
-export function deckStateOf(data: DeckData, git: GitState, usage: UsageInfo | null, now: number, sessionId: string, cwd: string, answerable: ReadonlySet<string> = new Set()): WebStateV2 {
+export function deckStateOf(
+  data: DeckData,
+  git: GitState,
+  usage: UsageInfo | null,
+  now: number,
+  sessionId: string,
+  cwd: string,
+  answerable: ReadonlySet<string> = new Set(),
+  gitDiffs: GitDiffs = new Map(),
+): WebStateV2 {
   const root = git.root || ''
   const isRepo = git.isRepo === true && root !== ''
   const main = M.agentOf(data, M.MAIN)
@@ -1111,7 +1127,16 @@ export function deckStateOf(data: DeckData, git: GitState, usage: UsageInfo | nu
       .sort((a, b) => a.at - b.at),
     changes: {
       repo: isRepo ? { name: F.baseName(root.replace(/[\\/]+$/, '')), root, branch: git.branch, ahead: git.ahead, behind: git.behind, head: git.head } : null,
-      files: isRepo ? git.files.map(file => ({ path: file.path, code: file.code, added: file.added, removed: file.removed, edits: edits.filter(edit => M.samePath(edit.path, file.path)).map(edit => webIdOf(edit.id)) })) : [],
+      files: isRepo
+        ? git.files.map(file => ({
+            path: file.path,
+            code: file.code,
+            added: file.added,
+            removed: file.removed,
+            edits: edits.filter(edit => M.samePath(edit.path, file.path)).map(edit => webIdOf(edit.id)),
+            diffId: gitDiffs.get(file.path)?.id ?? null,
+          }))
+        : [],
       edits: edits.map(edit => ({ id: webIdOf(edit.id), agent: edit.agent, tool: edit.tool, path: edit.path, at: edit.at, added: edit.added, removed: edit.removed, ...(root !== '' && ABSOLUTE.test(edit.path) ? { isOutside: true as const } : {}) })),
       commits: isRepo
         ? git.commits.slice(0, V2_CAPS.commits).map(commit => ({ hash: commit.hash, short: commit.short, subject: commit.subject, author: commit.author, at: commit.at, added: commit.added, removed: commit.removed, files: commit.files, agent: data.commitsBy[commit.hash] ?? null }))
@@ -1164,13 +1189,16 @@ export function agentFilesOf(data: DeckData): { id: string; text: string }[] {
 export type V2Files = {
   agent: (fileId: string) => V2AgentFile | null
   patch: (id: string) => string | null
+  /** Git's own diff of an uncommitted file, by its `diffId`; null for none. */
+  gitDiff: (id: string) => string | null
   /** A cut message's whole text while the deck holds it whole; null once only its file has it (the pane's `loadMessage` reads that one). */
   message: (id: string) => string | null
 }
 
 /** The live deck's lazy files, made from its model when asked for. */
-export function v2FilesOf(data: DeckData): V2Files {
+export function v2FilesOf(data: DeckData, gitDiffs: GitDiffs = new Map()): V2Files {
   return {
+    gitDiff: id => [...gitDiffs.values()].find(one => one.id === id)?.text ?? null,
     agent: id => {
       const agent = data.agents.find(one => isTreeAgent(one) && webIdOf(one.id) === id)
       return agent ? agentFileOf(data, agent) : null
@@ -1185,9 +1213,42 @@ export function v2FilesOf(data: DeckData): V2Files {
 }
 
 /** The sample's lazy files (web/fixtures/v2/), as read, by kind and id. */
-export function v2FilesFrom(files: { agents: Readonly<Record<string, V2AgentFile>>; patches: Readonly<Record<string, string>>; messages: Readonly<Record<string, string>> }): V2Files {
+export function v2FilesFrom(files: {
+  agents: Readonly<Record<string, V2AgentFile>>
+  patches: Readonly<Record<string, string>>
+  messages: Readonly<Record<string, string>>
+  gitDiffs?: Readonly<Record<string, string>>
+}): V2Files {
   const own = <T>(record: Readonly<Record<string, T>>, id: string): T | null => (Object.hasOwn(record, id) ? (record[id] ?? null) : null)
-  return { agent: id => own(files.agents, id), patch: id => own(files.patches, id), message: id => own(files.messages, id) }
+  return { agent: id => own(files.agents, id), patch: id => own(files.patches, id), message: id => own(files.messages, id), gitDiff: id => own(files.gitDiffs ?? {}, id) }
+}
+
+// Git's own diff of each uncommitted file (gitdiffs/<id>.diff): what the mod read, by path.
+
+/** Git's diff of each uncommitted file the mod read, by its path as git gave it: its id and its text (`gitDiffTextOf`). */
+export type GitDiffs = ReadonlyMap<string, { id: string; text: string }>
+
+/** The most characters of one file's diff the mod keeps; a longer one has no `diffId`. */
+export const GIT_DIFF_MOST = 200_000
+
+/** A file's hunks as gitdiffs/<id>.diff holds them, as a patch file does: each `@@ -a,b +c,d @@` header and its lines, whole, ending in a newline; '' for none. */
+export function gitDiffTextOf(hunks: readonly Hunk[]): string {
+  if (hunks.length === 0) return ''
+  return `${hunks.map(hunk => [`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`, ...hunk.lines].join('\n')).join('\n')}\n`
+}
+
+/**
+ * The id of `path`'s diff `text`, `[A-Za-z0-9_-]`: the path's hash, the
+ * text's and its length, in base 36. A diff that changes gets another id, so
+ * each file is written once and a page never holds a stale one.
+ */
+export function gitDiffIdOf(path: string, text: string): string {
+  return `${F.hash(path).toString(36)}-${F.hash(text).toString(36)}-${text.length.toString(36)}`
+}
+
+/** The git diffs to write, each once: those whose id `written` does not hold yet. */
+export function newGitDiffsOf(gitDiffs: GitDiffs, written: ReadonlySet<string>): { id: string; text: string }[] {
+  return [...gitDiffs.values()].filter(one => !written.has(one.id))
 }
 
 /**
