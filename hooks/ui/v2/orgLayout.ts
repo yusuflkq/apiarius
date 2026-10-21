@@ -265,7 +265,7 @@ function trunkShift(start: number, widths: readonly number[]): number {
 }
 
 /** A level laid out as these rows: each centred under the parent (a lone card right under it), the trunk kept clear. */
-function rowsOf(groups: readonly OrgAgent[][], boxes: ReadonlyMap<string, Measure>): Measure {
+function rowsOf(groups: readonly OrgAgent[][], boxes: ReadonlyMap<string, Measure>, isColumn = false): Measure {
   let lo = -HALF
   let hi = HALF
   let y = CARD_H + GAP_Y
@@ -274,7 +274,8 @@ function rowsOf(groups: readonly OrgAgent[][], boxes: ReadonlyMap<string, Measur
     const widths = list.map(k => boxes.get(k.id)!.w)
     const span = widths.reduce((sum, w) => sum + w, 0) + GAP_X * (list.length - 1)
     let start = list.length === 1 ? -boxes.get(list[0]!.id)!.cx : -Math.floor(span / 2)
-    if (ri < groups.length - 1) start -= trunkShift(start, widths)
+    // a column of lone subtrees stands right of the trunk, its last too, so it is no wider than its widest
+    if (ri < groups.length - 1 || isColumn) start -= trunkShift(start, widths)
     rows.push({ kids: list, start, top: y })
     lo = Math.min(lo, start)
     hi = Math.max(hi, start + span - 1)
@@ -283,29 +284,38 @@ function rowsOf(groups: readonly OrgAgent[][], boxes: ReadonlyMap<string, Measur
   return { w: hi - lo + 1, h: y - GAP_Y, cx: -lo, rows }
 }
 
+/** How far right of its parent's left edge a column's subtree starts: the parent's centre, then two cells past the trunk. */
+const COLUMN_INDENT = HALF + Math.floor(GAP_X / 2) + 1
+
 /**
  * Measures each subtree bottom up. A level wider than `budget` wraps into the
  * fewest rows that fit (its leaves first, the agents with subtrees last, so
  * the trunk stays short); when none fits, the narrowest, and the person pans.
+ *
+ * With `lone`, for a pane that cannot pan: a level that fits in no rows of
+ * two or more goes one subtree a row, a column right of the trunk; and each
+ * level below is measured in the room such a column leaves it
+ * (COLUMN_INDENT less a level), so the whole fits where it can.
  */
-function measureAll(tree: Tree, budget: number): Map<string, Measure> {
+function measureAll(tree: Tree, budget: number, lone = false): Map<string, Measure> {
   const boxes = new Map<string, Measure>()
-  const measure = (a: OrgAgent) => {
+  const least = lone ? 1 : 2
+  const measure = (a: OrgAgent, room: number) => {
     const kids = tree.kids.get(a.id) ?? []
-    for (const k of kids) measure(k)
+    for (const k of kids) measure(k, lone ? Math.max(CARD_W, room - COLUMN_INDENT) : room)
     if (kids.length === 0) {
       boxes.set(a.id, { w: CARD_W, h: CARD_H, cx: HALF, rows: [] })
       return
     }
     let best = rowsOf([kids], boxes)
-    if (best.w > budget && kids.length > 2) {
+    if (best.w > room && kids.length > least) {
       const isDeep = (k: OrgAgent) => (tree.kids.get(k.id) ?? []).length > 0
       const order = [...kids.filter(k => !isDeep(k)), ...kids.filter(isDeep)]
       let narrowest = best
       let fits = false
-      for (let k = kids.length - 1; k >= 2 && !fits; k--) {
-        const option = rowsOf(groupsOf(order, k), boxes)
-        if (option.w <= budget) {
+      for (let k = kids.length - 1; k >= least && !fits; k--) {
+        const option = rowsOf(groupsOf(order, k), boxes, k === 1)
+        if (option.w <= room) {
           best = option
           fits = true
         } else if (option.w < narrowest.w) narrowest = option
@@ -314,7 +324,7 @@ function measureAll(tree: Tree, budget: number): Map<string, Measure> {
     }
     boxes.set(a.id, best)
   }
-  for (const r of tree.roots) measure(r)
+  for (const r of tree.roots) measure(r, budget)
   return boxes
 }
 
@@ -416,12 +426,14 @@ class Grid {
  * The chart for these agents in a region `columns` wide: card positions and
  * connector segments, in cells, the chart's own top-left at (0, 0).
  *
- * `columns` is the wrapping budget; 0 or less wraps nothing.
+ * `columns` is the wrapping budget; 0 or less wraps nothing. `lone` lets a
+ * level that fits no other way go one subtree a row (the pane's own chart,
+ * which cannot pan); the Client's chart keeps rows of two and pans.
  */
-export function orgLayoutOf(agents: readonly OrgAgent[], columns: number): OrgLayout {
+export function orgLayoutOf(agents: readonly OrgAgent[], columns: number, opts: { lone?: boolean } = {}): OrgLayout {
   const tree = treeOf(orgAgentsOf(agents))
   const budget = columns > 0 ? columns : Number.POSITIVE_INFINITY
-  const boxes = measureAll(tree, budget)
+  const boxes = measureAll(tree, budget, opts.lone === true)
   const cards: OrgCard[] = []
   const grid = new Grid()
 

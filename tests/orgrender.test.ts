@@ -21,8 +21,10 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import * as M from '../hooks/model'
 import Org from '../hooks/ui/v2/org.client'
+import { MOST_MOVING } from '../hooks/ui/v2/orgChart'
 import {
   CARD_H,
+  CARD_W,
   CARD_TEXT,
   MAX_AGENTS,
   MAX_NODES,
@@ -385,7 +387,7 @@ function cardKeys(tree: unknown, out: string[] = []): string[] {
   return out
 }
 
-test('through the deck, on the desktop and the terminal: the Org tab`s Client, measured 1 row tall as the desktop first measures it, draws its whole chart, and the same told its rows', async ($, on) => {
+test('through the deck, on a desktop pane too narrow for the chart of its own: the Org tab`s Client, measured 1 row tall as the desktop first measures it, draws its chart, and the same told its rows; the terminal lists the tree', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   on('ui.message', () => ({}))
   on('ui.fault', () => ({}))
@@ -394,26 +396,78 @@ test('through the deck, on the desktop and the terminal: the Org tab`s Client, m
   await $.command.run(deck(''))
   await clock.advance(1000)
 
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount(pane(surface))
+  const ui = await $.ui.mount(pane('desktop', 24))
+  await press(ui, 'tab:org')
+  expect(await ui.find({ key: 'org:chart' })).toBeUndefined()
+  const client = await ui.find({ type: 'Client' })
+  expect(client?.key).toBe('org')
+  const height = client?.props.height as number
+  const props = client?.props.props as Required<OrgProps>
+  expect(props.rows).toBe(height)
+  expect(props.columns).toBe(24)
+  expect(height).toBeGreaterThan(CARD_H * 2)
+
+  // the desktop's first measure of a fresh Client: its region's holder holds nothing yet, 1 row
+  await ui.resize({ columns: 24, rows: 1, in: 'org' })
+  const tree = (await ui.drawn({ in: 'org' })) as unknown as { props: Record<string, unknown> }
+  expect(tree.props).toMatchObject({ height })
+  expect(cardKeys(tree)).toContain('card:main')
+  // told what it drew, it draws the same
+  await ui.resize({ columns: 24, rows: height, in: 'org' })
+  expect(JSON.stringify(await ui.drawn({ in: 'org' }))).toBe(JSON.stringify(tree))
+  await press(ui, 'tab:now')
+  await ui.unmount()
+
+  // the terminal runs Clients too, but lists Org as the tree, each agent's glyph in its colour
+  const terminal = await $.ui.mount(pane('terminal'))
+  await press(terminal, 'tab:org')
+  expect(await terminal.find({ type: 'Client' })).toBeUndefined()
+  expect(await terminal.find({ key: 'org:tree' })).toBeDefined()
+  await press(terminal, 'tab:now')
+  await terminal.unmount()
+})
+
+/** The elements a drawn tree holds, its strings counted as the desktop counts them. */
+function nodesOf(node: unknown): number {
+  if (node === null || node === undefined || typeof node === 'boolean') return 0
+  if (typeof node !== 'object') return 1
+  const children = (node as { children?: unknown[] }).children ?? []
+  return 1 + children.reduce((sum: number, child) => sum + nodesOf(child), 0)
+}
+
+/** The characters a drawn tree holds: its strings and its string props (an Svg's document too). */
+function charsOf(node: unknown): number {
+  if (node === null || node === undefined || typeof node === 'boolean') return 0
+  if (typeof node !== 'object') return String(node).length
+  const props = (node as { props?: Record<string, unknown> }).props ?? {}
+  const own = Object.values(props).reduce((sum: number, value) => sum + (typeof value === 'string' ? value.length : 0), 0)
+  return own + ((node as { children?: unknown[] }).children ?? []).reduce((sum: number, child) => sum + charsOf(child), 0)
+}
+
+test('the desktop`s own chart keeps inside the pane`s bounds: 60 agents nested under three, at the usual width and the widest, as wide as the pane at most, under 2000 elements and 90k characters, 24 avatars moving at most', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.message', () => ({}))
+  on('ui.fault', () => ({}))
+  world(on, newWorld(), { v: M.SNAPSHOT_VERSION, data: M.copyOf(sessionOf(60)), view: M.defaultView() })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
+  await $.command.run(deck(''))
+  await clock.advance(1000)
+
+  for (const columns of [84, 244]) {
+    const ui = await $.ui.mount(pane('desktop', columns))
     await press(ui, 'tab:org')
-    const client = await ui.find({ type: 'Client' })
-    expect(client?.key).toBe('org')
-    const height = client?.props.height as number
-    const props = client?.props.props as Required<OrgProps>
-    expect(props.rows).toBe(height)
-    expect(props.columns).toBe(95)
-    expect(height).toBeGreaterThan(CARD_H * 2)
-
-    // the desktop's first measure of a fresh Client: its region's holder holds nothing yet, 1 row
-    await ui.resize({ columns: 96, rows: 1, in: 'org' })
-    const tree = (await ui.drawn({ in: 'org' })) as unknown as { props: Record<string, unknown> }
-    expect(tree.props).toMatchObject({ height })
-    expect(cardKeys(tree).sort()).toEqual(['card:main', ...Array.from({ length: 6 }, (_, i) => `card:agent-${i + 1}`)].sort())
-    // told what it drew, it draws the same
-    await ui.resize({ columns: 96, rows: height, in: 'org' })
-    expect(JSON.stringify(await ui.drawn({ in: 'org' }))).toBe(JSON.stringify(tree))
-
+    expect(await ui.find({ type: 'Client' })).toBeUndefined()
+    const chart = await ui.find({ key: 'org:chart' })
+    expect(chart?.props.width).toBe(columns - 1)
+    const cards = (await ui.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith('org:card:'))
+    expect(cards).toHaveLength(60)
+    for (const card of cards) expect((card.props.left as number) + CARD_W).toBeLessThanOrEqual(columns - 1)
+    const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith("'s avatar"))
+    expect(faces).toHaveLength(60)
+    expect(faces.filter(svg => svg.props.isInteractive === true)).toHaveLength(MOST_MOVING)
+    const drawn = await ui.drawn()
+    expect(nodesOf(drawn)).toBeLessThan(2000)
+    expect(charsOf(drawn)).toBeLessThan(90_000)
     await press(ui, 'tab:now')
     await ui.unmount()
   }

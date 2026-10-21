@@ -265,7 +265,7 @@ test('5 opens Settings: Inspect (the context, the spend, the tokens and requests
     expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Open in browser')
     // Help: each tab, then the keys that are left
     const help = (await ui.find({ key: 'help' }))?.text ?? ''
-    for (const said of ['1  Dashboard', '2  Chat', '3  Org', '4  Changes', '5  Settings', 'filters Chat: All · You · Between agents · each agent', 'back from an agent’s page']) expect(help).toContain(said)
+    for (const said of ['1  Dashboard', '2  Chat', '3  Org', '4  Changes', '5  Settings', 'pick Everyone or one agent', 'back from an agent’s page']) expect(help).toContain(said)
     expect(help).not.toMatch(/\bj\b.*down|Inspect: the context/)
     // a name in Inspect opens its page
     await press(ui, `inspect:open:${IDS.builder}`)

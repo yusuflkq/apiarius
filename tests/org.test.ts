@@ -510,6 +510,30 @@ describe('orgLayout, past one screen', () => {
       }
     }
   })
+
+  test('`lone`, for a pane that cannot pan: a level that fits no rows of two goes one subtree a row right of the trunk, so a chart too wide wrapped fits; sound, and the same as before wherever that fitted', () => {
+    // the chart too wide even wrapped (109 at 68) fits as a column
+    const column = orgLayoutOf(WIDE, 68, { lone: true })
+    expect(column.width).toBeLessThanOrEqual(68)
+    expect(column.cards).toHaveLength(WIDE.length)
+    expectSound(column, 'WIDE as a column')
+    // A and B one a row, each right of the trunk under the Orchestrator's centre
+    const trunk = mid(card(column, 'main'))
+    expect(card(column, 'A').x).toBeGreaterThan(trunk)
+    expect(card(column, 'B').x).toBeGreaterThan(trunk)
+    expect(card(column, 'B').y).toBeGreaterThan(card(column, 'A').y)
+    for (let seed = 1; seed <= 60; seed++) {
+      const agents = randomTeam(seed, 2 + (seed % 44))
+      for (const columns of [68, 84, 120]) {
+        const plain = orgLayoutOf(agents, columns)
+        const L = orgLayoutOf(agents, columns, { lone: true })
+        expect(L.cards.length).toBe(agents.length)
+        expectSound(L, `seed ${seed} at ${columns}, lone`)
+        // the rows of two or more are tried first: no narrower than needed, and never wider than the plain layout
+        expect(L.width).toBeLessThanOrEqual(Math.max(columns, plain.width))
+      }
+    }
+  })
 })
 
 describe('orgLayout, hit-test and clipping', () => {

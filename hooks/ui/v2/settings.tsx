@@ -345,7 +345,7 @@ function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): R
 /** What each tab shows, by its key. */
 export const TAB_HELP: readonly (readonly [string, string, string])[] = [
   ['1', 'Dashboard', 'what needs you, the agents at work, the figures, the plan, recent activity and files'],
-  ['2', 'Chat', 'every message between you, the Orchestrator and the agents; @name sends to one agent'],
+  ['2', 'Chat', 'the session as a group chat: pick Everyone or one agent, and your words go to the one picked, or @name another'],
   ['3', 'Org', 'who started whom: each agent under the one that started it'],
   ['4', 'Changes', 'git’s diff of each changed file, and the agents’ own edits'],
   ['5', 'Settings', 'Inspect, the avatar style, the web page and this help'],
@@ -356,7 +356,6 @@ export const KEYS: readonly (readonly [string, string])[] = [
   ['1 – 5', 'the tabs'],
   ['Enter', 'opens what has the focus: an agent, a fold, a need, a file'],
   ['b', 'back from an agent’s page'],
-  ['f', 'filters Chat: All · You · Between agents · each agent'],
 ]
 
 /** Help: the tabs, then the keys. */

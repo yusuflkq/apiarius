@@ -1,6 +1,7 @@
 /**
- * The org chart as an indented tree: where the surface runs no Client (VS
- * Code, the mobile app) and where the chart's Client failed. Each agent one
+ * The org chart as an indented tree: on the terminal (its avatars coloured
+ * glyphs), VS Code and the mobile app, and on the desktop where the chart's
+ * Client failed. Each agent one
  * row under the agent that started it: its avatar with its status dot, its
  * name (a Button keyed `agent:<id>`, W.agentKeyOf; the one opened last the
  * primary plate), its pill and "Open →"; its one line under it (its call in
