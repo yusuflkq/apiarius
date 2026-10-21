@@ -33,7 +33,6 @@
  * The terminal draws no image: there an avatar is its glyph in its colour
  * (web/avatars.mjs `terminalFace`), and a bubble an indented block, yours
  * at the right after a `›`.
-
  *
  * Pure: Kit, the state and DashActions come from the hooks module; the
  * window, the messages opened, the texts read, the draft, the list of more
@@ -434,7 +433,6 @@ function headOf(kit: Kit, state: WebStateV2, entry: Entry): RenderElement[] {
   const name = senderOf(state, row)
   return [
     face(kit, rowOf(state, row.from) ?? null, AVATAR.list),
-
     <Box flexDirection="row" columnGap={1}>
       <Box flexShrink={1} minWidth={0}>
         <Text wrap="truncate-end">

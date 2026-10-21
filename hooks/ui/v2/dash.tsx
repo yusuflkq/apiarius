@@ -62,7 +62,6 @@ import {
   type TickPart,
 } from './dashModel'
 import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf } from './look'
-
 import { P, mix, toneOf, type IconName } from './palette'
 import {
   CARD_CHROME,
@@ -204,7 +203,6 @@ function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void): R
   const { Box, Button, Text } = kit
   const adv = advanceOf(kit)
   const before = avatarCells(kit, AVATAR.card, true) + 1 + plainSlack(kit) + 1
-
   const beside = 1 + openCells(kit)
   const word = row.isStopped ? 'stopped' : toneOf(row.status).word
   const room = inner - before - pillCells(kit, row.status) - (row.isStopped ? 1 : 0)
@@ -213,7 +211,6 @@ function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void): R
   return (
     <Box flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>{avatar(kit, row, AVATAR.card, { dot: true, animated: true })}</Box>
-
       <Box flexShrink={1} minWidth={0}>
         <Button key={agentKeyOf(row.id)} label={name} plain onPress={open}>
           <Text bold color={P.text}>
@@ -434,7 +431,6 @@ function activityRow(kit: Kit, state: WebStateV2, row: ActivityRow, actions: Das
   const said = row.outcome.mark ? `${row.outcome.mark} ${row.outcome.text}` : row.outcome.text
   return listRow(kit, `act:${row.key}`, [
     <Box flexShrink={0}>{face(kit, rowOf(state, row.agent) ?? null, AVATAR.list)}</Box>,
-
     <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" alignItems="center">
       <Box flexShrink={0}>
         <Button key={`now:act:${row.key}`} label={name} plain onPress={open}>

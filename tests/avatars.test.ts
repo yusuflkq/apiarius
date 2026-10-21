@@ -12,12 +12,13 @@
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 
+import * as M from '../hooks/model'
 import * as D from '../hooks/ui/v2/dashModel'
 import { P } from '../hooks/ui/v2/palette'
 import * as W from '../hooks/web'
 import * as AV from '../web/avatars.mjs'
 import { IDS, SAMPLE_NOW, v2Session } from './v2session'
-import { deck, newWorld, world } from './world'
+import { NOW, command, deck, lastState, newWorld, work, world } from './world'
 
 function pane<S extends 'terminal' | 'desktop'>(surface: S, bodyColumns = 84) {
   return {
@@ -42,8 +43,8 @@ function sampleState(): W.WebStateV2 {
   return W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
 }
 
-/** The engine with `state` served as the sample and `/deck demo` shown. */
-async function demo($: Engine, on: On, state: W.WebStateV2) {
+/** The engine with `state` served as the sample and `/deck demo` shown; `store` the plugin's own store, where the deck keeps the person's prefs, when the test reads it back. */
+async function demo($: Engine, on: On, state: W.WebStateV2, store?: Map<string, unknown>) {
   const session = v2Session()
   const agentFiles = new Map(W.agentFilesOf(session.data).map(one => [one.id, one.text]))
   on('fs.read', ($, e) => {
@@ -55,7 +56,7 @@ async function demo($: Engine, on: On, state: W.WebStateV2) {
   })
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   on('ui.focus', () => ({}))
-  world(on, newWorld())
+  world(on, newWorld(store ? { store } : {}))
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await $.command.run(deck('demo'))
   await clock.advance(1000)
@@ -84,7 +85,6 @@ test('a desktop draws each agent`s face as the library`s own document, robots by
     expect(faces[i]?.props.isInteractive).toBe(true)
     expect(String(faces[i]?.props.source)).toContain('@keyframes')
   }
-
   // a stopped agent looks idle; the Orchestrator is `main`
   const scout = rows.find(row => row.id === IDS.scout)!
   expect(scout.isStopped).toBe(true)
@@ -97,7 +97,6 @@ test('a desktop draws each agent`s face as the library`s own document, robots by
     expect(one.props.isInteractive).toBeUndefined()
     expect(String(one.props.source)).not.toContain('<style>')
   }
-
   // Files: a file's editors as one stacked image of the library's faces
   const file = state.files.find(one => one.editors.length > 1)!
   const editors = file.editors.map(id => rows.find(row => row.id === id)!)
@@ -134,4 +133,92 @@ test('the state`s avatar index is the library`s palette index: the same id, the 
     expect(row.avatar).toBe(AV.paletteIndexOf({ id: row.id }))
     expect(W.avatarOf(row.id)).toBe(row.avatar)
   }
+})
+
+test('the avatar style is the person`s own: read from the store`s prefs as a session starts, /deck avatars <style> keeps another there beside the band`s, and the pane (/deck demo too) draws it at once', async ($, on) => {
+  const kept = new Map<string, unknown>([['prefs', { isBandHidden: false, avatarStyle: 'mood' }]])
+  const state = sampleState()
+  await demo($, on, state, kept)
+  const order = D.cardAgentsOf(state).shown
+  const ui = await $.ui.mount(pane('desktop'))
+  const cardFaces = async () => (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar')).slice(0, order.length).map(svg => svg.props.source)
+  expect(await cardFaces()).toEqual(order.map(row => faceOf(row, 22, { dot: true, animated: true }, 'mood')))
+  // /deck avatars lists the ten, the one drawn marked
+  const listed = await $.command.run(deck('avatars'))
+  expect(listed.text).toContain('Avatar styles (now Mood faces)')
+  expect(listed.text).toContain('▸ mood     Mood faces')
+  expect(listed.text).toContain('  critter  Critters')
+  // a style by the start of its name: kept beside the band's, and drawn
+  const set = await $.command.run(deck('avatars Crit'))
+  expect(set.text).toContain('Avatars: Critters')
+  expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'critter' })
+  await ui.redraw()
+  expect(await cardFaces()).toEqual(order.map(row => faceOf(row, 22, { dot: true, animated: true }, 'critter')))
+  // by its name too; one it does not know changes nothing
+  expect((await $.command.run(deck('avatars pixel sprites'))).text).toContain('Avatars: Pixel sprites')
+  expect((await $.command.run(deck('avatars plaid'))).text).toContain('No avatar style called "plaid"')
+  expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'pixel' })
+  // the band's toggle keeps the style it found
+  await $.command.run(deck('band'))
+  expect(kept.get('prefs')).toEqual({ isBandHidden: true, avatarStyle: 'pixel' })
+  await ui.unmount()
+})
+
+test('Help`s "Style: Robots ▸" steps to the next of the ten, round to the first; its faces show the style, and the step is kept as /deck avatars keeps one', async ($, on) => {
+  const kept = new Map<string, unknown>()
+  await demo($, on, sampleState(), kept)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    await press(ui, 'key:h')
+    expect((await ui.find({ key: 'avatars:next' }))?.props).toMatchObject({ label: 'Style: Robots ▸', plain: true })
+    await press(ui, 'avatars:next')
+    expect((await ui.find({ key: 'avatars:next' }))?.props.label).toBe('Style: Mood faces ▸')
+    expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'mood' })
+    if (surface === 'desktop') {
+      const orchestrator = (await ui.findAll({ type: 'Svg' })).find(svg => svg.props.alt === "Orchestrator's avatar")
+      expect(orchestrator?.props.source).toBe(AV.avatarSvg('mood', { id: 'main', name: 'Orchestrator', role: 'main', status: 'running' }, { size: 22, dot: true, ground: P.ground }))
+    } else expect(await ui.findAll({ type: 'Svg' })).toEqual([])
+    for (let i = 1; i < AV.STYLE_IDS.length; i++) await press(ui, 'avatars:next')
+    expect((await ui.find({ key: 'avatars:next' }))?.props.label).toBe('Style: Robots ▸')
+    await press(ui, 'key:h')
+    await ui.unmount()
+  }
+})
+
+test('the web page`s avatarStyle command: a style the deck knows is kept as the person`s, named in the next state.json (v2 `avatarStyle`) with its ack; one it does not know is refused and changes nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const kept = new Map<string, unknown>()
+  const w = newWorld({ store: kept })
+  world(on, w)
+  await work($)
+  await clock.advance(1000)
+  const v2 = () => (lastState(w) as unknown as { v2: W.WebStateV2 }).v2
+  expect(v2().avatarStyle).toBe('robot')
+  command(w.children[0], { cmd: 'avatarStyle', id: 'av-1', style: 'pixel' })
+  await clock.settle()
+  await clock.advance(1000)
+  expect(v2().avatarStyle).toBe('pixel')
+  expect(v2().acks.find(one => one.id === 'av-1')).toMatchObject({ ok: true, status: 'delivered', text: 'Avatars: Pixel sprites' })
+  expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'pixel' })
+  command(w.children[0], { cmd: 'avatarStyle', id: 'av-2', style: 'plaid' })
+  await clock.settle()
+  await clock.advance(1000)
+  expect(v2().avatarStyle).toBe('pixel')
+  expect(v2().acks.find(one => one.id === 'av-2')).toMatchObject({ ok: false, status: 'failed', text: 'Not an avatar style the deck knows: plaid' })
+  // the route the mod reads it by
+  expect(W.routeOf({ cmd: 'avatarStyle', style: 'glyph' }, M.emptyData(0))).toEqual({ kind: 'avatarStyle', style: 'glyph' })
+  expect(W.routeOf({ cmd: 'avatarStyle', style: 'Glyph' }, M.emptyData(0))).toBeNull()
+  expect(W.refusalOf({ cmd: 'avatarStyle', style: 7 }, M.emptyData(0))).toBe('Not an avatar style the deck knows: 7')
+})
+
+test('the state names the style (deckStateOf`s last argument; robots by default, an unknown one robots), and a view healed from an older snapshot draws robots', () => {
+  const session = v2Session()
+  const state = (style?: string) => W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable, new Map(), style)
+  expect(state().avatarStyle).toBe('robot')
+  expect(state('orbit').avatarStyle).toBe('orbit')
+  expect(state('plaid').avatarStyle).toBe('robot')
+  expect(Object.keys(state()).slice(0, 4)).toEqual(['v', 'now', 'session', 'avatarStyle'])
+  expect(M.healView({ tab: 'now' }).avatarStyle).toBe('robot')
+  expect(M.healView({ avatarStyle: 'blob' }).avatarStyle).toBe('blob')
+  expect(M.healView({ avatarStyle: 'plaid' }).avatarStyle).toBe('robot')
 })

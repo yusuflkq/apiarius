@@ -181,10 +181,14 @@ function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, a
   const { view } = model
   const v2 = view.v2
   if (isHelpOpen) {
-    return helpPage(kit, () => {
-      isHelpOpen = false
-      actions.redraw()
-    })
+    return helpPage(
+      kit,
+      () => {
+        isHelpOpen = false
+        actions.redraw()
+      },
+      style => actions.setAvatarStyle(style),
+    )
   }
   if (v2.isInspectOpen) return inspectPage(kit, state, actions)
   if (view.page !== '') return agentPage(kit, state, files, view.page, actions)

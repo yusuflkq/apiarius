@@ -233,7 +233,6 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 .dot { position: relative; display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--idle)); }
 .dot.hue-idle { background: #6b7075; }
 .dot.pulse::after {
-
   content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--c);
   animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
@@ -246,7 +245,6 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 
 /* An avatar is an image of its own SVG document (avatars.mjs): its status dot and its motion are inside it. */
 .av { display: block; flex: none; }
-
 .av-you, .av-engine {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   border-radius: 50%; background: #2b2b2b; color: var(--fg-2);
@@ -263,7 +261,6 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 .stack-item + .stack-item { margin-left: -5px; }
 /* each face on a plate of the ground beneath, so the overlapping faces read apart */
 .stack-item .av { border-radius: 32%; background: var(--ring-bg, var(--card)); box-shadow: 0 0 0 1.5px var(--ring-bg, var(--card)); }
-
 .stack-more { margin-left: 4px; font: 11px var(--mono); color: var(--muted-2); }
 
 .btn {
@@ -997,6 +994,19 @@ button.kpi:focus-visible { outline-offset: -2px; }
 .keys { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: baseline; gap: 9px 14px; margin-top: 16px; }
 .keys dt { display: flex; flex-wrap: wrap; gap: 4px; }
 .keys dd { margin: 0; font-size: 13px; color: var(--fg-2); }
+.modal-sub { margin-top: 22px; }
+/* the avatar styles: each a small sample (done, at work, waiting on you) and its name; the one drawn ringed in blue */
+.styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; margin-top: 12px; }
+.style-pick {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 7px; padding: 9px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: transparent; color: var(--fg-2);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.style-pick:hover { background: var(--hover-2); border-color: var(--border-strong); }
+.style-pick:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.style-pick.on { border-color: color-mix(in srgb, var(--run) 70%, transparent); background: color-mix(in srgb, var(--run) 9%, transparent); color: var(--fg); }
+.style-faces { display: inline-flex; gap: 5px; }
+.style-name { font-size: 12.5px; font-weight: 500; }
 kbd {
   display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px;
   border-radius: 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; background: #1e1e1e;

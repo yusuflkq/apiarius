@@ -28,6 +28,7 @@ const FILE_ID = /^[A-Za-z0-9_-]{1,128}$/ // a patch's, a git diff's, a message's
 const CMD_ID = /^[A-Za-z0-9_-]{1,40}$/ // the page's id for a command, which the mod's ack names again
 const CALL_ID = /^[A-Za-z0-9_-]{1,100}$/ // a tool call's tool_use_id
 const TURN_ID = /^[A-Za-z0-9_-]{1,100}$/ // the main loop's running turn (abortTurn's)
+const STYLE = /^[a-z]{1,20}$/ // an avatar style's id (web/avatars.mjs STYLE_IDS); the mod says whether it knows it
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never open them as files
 const JSON_TYPE = 'application/json; charset=utf-8'
 const TEXT_TYPE = 'text/plain; charset=utf-8'
@@ -191,7 +192,7 @@ function answersOf(value) {
  * The command a body holds, rebuilt from exactly its known keys; null for any
  * other shape. Every command may carry the page's `id`, which the mod's ack
  * names again; it stays optional. `stopAgent` names its agent; `abortTurn`
- * may name the running turn it means.
+ * may name the running turn it means; `avatarStyle` names a style.
  */
 function commandOf(value) {
   if (!isRecord(value)) return null
@@ -207,6 +208,7 @@ function commandOf(value) {
   if (value.cmd === 'stopAgent' && keys === 'agentId,cmd' && isAgent(value.agentId)) return { cmd: 'stopAgent', ...id, agentId: value.agentId }
   if (value.cmd === 'abortTurn' && keys === 'cmd') return { cmd: 'abortTurn', ...id }
   if (value.cmd === 'abortTurn' && keys === 'cmd,turnId' && typeof value.turnId === 'string' && TURN_ID.test(value.turnId)) return { cmd: 'abortTurn', ...id, turnId: value.turnId }
+  if (value.cmd === 'avatarStyle' && keys === 'cmd,style' && typeof value.style === 'string' && STYLE.test(value.style)) return { cmd: 'avatarStyle', ...id, style: value.style }
   if (value.cmd === 'answer' && keys === 'answers,callId,cmd' && typeof value.callId === 'string' && CALL_ID.test(value.callId)) {
     const answers = answersOf(value.answers)
     if (answers) return { cmd: 'answer', ...id, callId: value.callId, answers }

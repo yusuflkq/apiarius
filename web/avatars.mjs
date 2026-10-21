@@ -17,7 +17,6 @@
  * slow and dim. The other styles pulse their status dot while at work, and
  * a progress ring with no progress to show spins.
  *
-
  * Who draws it:
  * - the web page imports this module (web/app.js) and shows each document
  *   as an image;
@@ -146,7 +145,6 @@ export function colorsOf(agent) {
   return PALETTE[paletteIndexOf(agent)]
 }
 
-
 /** How far through its own TodoWrite list an agent is, 0 to 1; undefined with no list. */
 export function progressOf(todos) {
   const list = Array.isArray(todos) ? todos : []
@@ -228,7 +226,6 @@ function robotMotion(u, look) {
   return `.${at('bob')}{animation:${at('breathe')} 4.8s ease-in-out infinite}@keyframes ${at('breathe')}{0%,100%{opacity:.8;transform:translateY(0)}50%{opacity:.6;transform:translateY(.7px)}}`
 }
 
-
 /** The robot's eyes, open, as its seed has them: two bars or two round lamps. */
 function robotEyes(c2, isBar) {
   return isBar
@@ -277,7 +274,6 @@ function robot(c) {
   return { body: `<g class="${u}-bob"${look === 'idle' ? ' opacity=".8"' : ''}>${parts}</g>`, isDotted: true, css: c.animated ? robotMotion(u, look) : '' }
 }
 
-
 function mood(c) {
   const { c1, c2, look } = c
   const k = INK
@@ -294,7 +290,6 @@ function critter(c) {
   const { c1, c2, seed } = c
   const k = INK
   const t = pickOf(`${seed}c`) % 6
-
   const ears = [
     `<polygon points="8,15 11,4 17,11" fill="${c1}"/><polygon points="32,15 29,4 23,11" fill="${c1}"/>`,
     `<circle cx="10" cy="10" r="5" fill="${c1}"/><circle cx="30" cy="10" r="5" fill="${c1}"/>`,
@@ -316,7 +311,6 @@ function critter(c) {
 function pixel(c) {
   const { c1, c2, seed } = c
   const h = pickOf(`${seed}#`)
-
   let out = '<rect x="2" y="2" width="36" height="36" rx="9" fill="#232323"/>'
   for (let y = 0; y < 5; y++) {
     for (let x = 0; x < 3; x++) {
@@ -365,7 +359,6 @@ function orbit(c) {
 function bauhaus(c) {
   const { c1, c2, seed, u } = c
   const h = pickOf(`${seed}b`)
-
   const clip = `${u}-clip`
   const shape = [
     `<rect x="20" y="0" width="20" height="40" fill="${c2}"/>`,
@@ -392,7 +385,6 @@ function ring(c) {
     isDotted: false,
     isSpun: !known && look === 'running',
   }
-
 }
 
 function glyph(c) {
@@ -422,7 +414,6 @@ function partsOf(style, agent, opts) {
   const h = pickOf(seed)
   const [c1, c2] = PALETTE[h % PALETTE.length]
   const look = lookOf(agent && agent.status)
-
   const name = agent && typeof agent.name === 'string' && agent.name.trim() ? agent.name : seed
   const role = agent && agent.role === 'main' ? 'main' : ''
   const progress = agent && typeof agent.progress === 'number' && Number.isFinite(agent.progress) ? agent.progress : undefined
@@ -430,7 +421,8 @@ function partsOf(style, agent, opts) {
   const isDotted = opts.dot !== false
   const ground = typeof opts.ground === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(opts.ground) ? opts.ground : GROUND
   const size = typeof opts.size === 'number' && opts.size > 0 && Number.isFinite(opts.size) ? opts.size : 40
-  const u = opts.id ? idOf(opts.id) : `av${hash([which, seed, look, which === 'mono' || which === 'ring' ? name : '', role, progress ?? '', size, animated, isDotted, ground].join('|')).toString(36)}`
+  const u = opts.id ? idOf(opts.id) : `av${hash([which, seed, look, which === 'mono' || which === 'ring' ? name : '', role, which === 'ring' ? progress ?? '' : '', size, animated, isDotted, ground].join('|')).toString(36)}`
+  // the prefix names only what this style draws: a robot whose todo list moves on keeps its document, so its image or frame never loads again for it
   const c = { c1, c2, seed, h, look, name, role, progress, u, animated }
   const drawn = DRAW[which](c)
   const dotted = isDotted && drawn.isDotted
@@ -446,7 +438,6 @@ function partsOf(style, agent, opts) {
   const css = motion ? `${motion}@media (prefers-reduced-motion:reduce){.${u} *{animation:none!important}}` : ''
   return { ...drawn, c, isDotted: dotted, ground, size, css }
 }
-
 
 /** The status dot, as the gallery drew it: at the face's foot, ringed in the ground. */
 function dotOf(c, ground) {

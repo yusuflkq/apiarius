@@ -14,7 +14,6 @@
 import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView, DeckView2 } from '../types'
 import * as AV from '../web/avatars.mjs'
 import type { Hunk } from './diff'
-
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
@@ -797,6 +796,8 @@ export type WebStateV2 = {
   /** When it was built, ms since the epoch. */
   now: number
   session: { id: string; cwd: string; startedAt: number }
+  /** The style the deck draws agents' avatars in (web/avatars.mjs): the person's setting, robots by default. */
+  avatarStyle: AV.AvatarStyle
   header: V2Header
   /** What needs you, oldest first; empty when nothing does. */
   needs: V2Need[]
@@ -1228,6 +1229,7 @@ export function deckStateOf(
   cwd: string,
   answerable: ReadonlySet<string> = new Set(),
   gitDiffs: GitDiffs = new Map(),
+  avatarStyle: string = AV.DEFAULT_STYLE,
 ): WebStateV2 {
   const root = git.root || ''
   const isRepo = git.isRepo === true && root !== ''
@@ -1246,6 +1248,7 @@ export function deckStateOf(
     v: 2,
     now,
     session: { id: sessionId, cwd, startedAt: data.startedAt },
+    avatarStyle: AV.styleOf(avatarStyle),
     header: {
       state,
       stateText: STATE_TEXT[state],
@@ -1598,6 +1601,8 @@ export type WebRoute =
   | { kind: 'stopAgent'; agentId: string }
   /** Ends the main loop's running turn (`$.turn.abort`), as Esc in Claude Code does. */
   | { kind: 'abortTurn'; turnId: string }
+  /** Draws the agents' avatars in another style (web/avatars.mjs `STYLE_IDS`): the person's setting, on every surface. */
+  | { kind: 'avatarStyle'; style: AV.AvatarStyle }
   | { kind: 'ping' }
 
 /** The most a line may grow without a newline before it is dropped: past any command the server passes (16 KB). */
@@ -1697,6 +1702,7 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
     if (turnId === undefined || (cmd.turnId !== undefined && cmd.turnId !== turnId)) return null
     return { kind: 'abortTurn', turnId }
   }
+  if (cmd.cmd === 'avatarStyle') return AV.isStyle(cmd.style) ? { kind: 'avatarStyle', style: cmd.style } : null
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '' || text.length > MOST_TEXT) return null
   if (cmd.cmd === 'review') return { kind: 'review', text }
@@ -1731,6 +1737,7 @@ export function refusalOf(cmd: unknown, data: DeckData): string {
     return 'Not stopped'
   }
   if (cmd.cmd === 'abortTurn') return data.mainTurnId === undefined ? 'No turn is running' : 'That turn has ended'
+  if (cmd.cmd === 'avatarStyle') return `Not an avatar style the deck knows: ${F.trunc(F.oneLine(String(cmd.style ?? '')), 40)}`
   if (cmd.cmd !== 'chat' && cmd.cmd !== 'review') return `Not a command the deck knows: ${F.trunc(F.oneLine(cmd.cmd), 40)}`
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '') return 'Nothing to send'

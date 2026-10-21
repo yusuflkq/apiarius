@@ -413,6 +413,14 @@ export type DeckView = {
   filter: string
   showFiles: boolean
   isBandHidden: boolean
+  /**
+   * The style the deck draws agents' avatars in (web/avatars.mjs
+   * `STYLE_IDS`; robots by default): the person's own, kept in the store's
+   * `prefs` beside `isBandHidden`, so it holds in every session. The pane
+   * (its Kit), the web page (the v2 state's `avatarStyle`) and `/deck demo`
+   * follow it.
+   */
+  avatarStyle: string
   /** The delegation map's view. */
   map: DeckMapView
   /** The id of the message picked in the messages log; '' when none is. */

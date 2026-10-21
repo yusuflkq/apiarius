@@ -245,3 +245,13 @@ test('the other styles move lightly, only when animated: their status dot pulses
   assert.ok(A.avatarSvg('ring', { id: 'q', name: 'q', status: 'running' }, { animated: true }).includes('-spin 1.6s linear infinite'))
   assert.ok(!A.avatarSvg('ring', { id: 'q', name: 'q', status: 'running', progress: 0.25 }, { animated: true }).includes('<style>'), 'a ring with progress to show holds still')
 })
+
+test('a document changes only with what its style draws: a robot`s todo list moving on, or its name, leaves it as it was (its image or frame never loads again for that); a ring`s progress and a monogram`s name change theirs', () => {
+  for (const style of A.STYLE_IDS) {
+    const one = A.avatarSvg(style, { id: 'x', name: 'builder', status: 'running', progress: 0.25 }, { size: 22, dot: true, animated: true })
+    const moved = A.avatarSvg(style, { id: 'x', name: 'builder', status: 'running', progress: 0.75 }, { size: 22, dot: true, animated: true })
+    assert.equal(one === moved, style !== 'ring', style)
+    const renamed = A.avatarSvg(style, { id: 'x', name: 'tester', status: 'running', progress: 0.25 }, { size: 22, dot: true, animated: true })
+    assert.equal(one === renamed, style !== 'ring' && style !== 'mono', style)
+  }
+})

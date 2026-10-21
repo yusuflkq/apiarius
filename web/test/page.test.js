@@ -19,7 +19,6 @@ const IMPORT = "import * as AV from './avatars.mjs';"
 const MODULE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8')
 assert.ok(MODULE.includes(IMPORT), 'app.js imports the avatar library')
 const SOURCE = MODULE.replace(IMPORT, 'const AV = __avatars;')
-
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.json'), 'utf8'))
 const NOW = SAMPLE.now
 const MIN = 60_000
@@ -974,4 +973,54 @@ test('a live update keeps what you were doing: a half-typed message, an open fol
   p.run('ui.orgView = "list"')
   assert.ok(find(p.view('OrgPage()'), 'arow').some(r => r.k === LINT), 'the fold stays open')
   assert.ok(find(p.view('NeedsSection()'), 'need')[2].p.class.includes('open'))
+})
+
+// ---- Avatars
+
+test('the avatars are drawn in the state`s style (robots by default; one the page does not know, robots); Help lists the ten, the one drawn checked, and a pick posts avatarStyle and draws it at once, until the state names it', async () => {
+  const p = page()
+  const svgOf = v => decodeURIComponent(v.p.src.replace(/^data:image[/]svg[+]xml;charset=utf-8,/, ''))
+  const face = () => svgOf(p.view("Avatar(IX.byId.get('main'), 24)"))
+  const ROBOT = '<rect x="7" y="9" width="26" height="22" rx="7"'
+  const MOOD = '<circle cx="20" cy="20" r="17"'
+  p.load(SAMPLE)
+  assert.equal(SAMPLE.avatarStyle, 'robot')
+  assert.ok(face().includes(ROBOT))
+  // the Orchestrator's own face, seeded by its id: the very document the mod draws in the pane
+  assert.equal(face(), AVATARS.avatarSvg('robot', { id: 'main', name: 'Orchestrator', role: 'main', status: 'waiting' }, { size: 24, dot: false, animated: false }))
+  p.load(sample(s => { s.avatarStyle = 'mood' }))
+  assert.ok(face().includes(MOOD))
+  p.load(sample(s => { s.avatarStyle = 'plaid' }))
+  assert.ok(face().includes(ROBOT))
+  // Help: the ten styles, each with its sample faces drawn in it, the one drawn checked
+  p.load(sample(s => { s.avatarStyle = 'mood' }))
+  p.run('ui.help = true')
+  const picks = () => find(p.view('Help()'), 'style-pick')
+  assert.deepEqual(picks().map(b => flat(textOf(b))), ['Robots', 'Mood faces', 'Critters', 'Pixel sprites', 'Monogram tiles', 'Orbits', 'Bauhaus', 'Progress rings', 'Terminal glyphs', 'Blob faces'])
+  const checked = () => picks().filter(b => b.p['aria-checked'] === 'true').map(b => flat(textOf(b)))
+  assert.deepEqual(checked(), ['Mood faces'])
+  for (const [i, b] of picks().entries()) {
+    const faces = findAll(b, v => v.t === 'img')
+    assert.equal(faces.length, 3)
+    assert.equal(svgOf(faces[0]), AVATARS.avatarSvg(AVATARS.STYLE_IDS[i], { id: 'bob', name: 'bob', role: '', status: 'done' }, { size: 26, dot: true, animated: false }))
+  }
+  // a pick: the command goes, and the page draws it at once
+  click(picks()[2])
+  await settle()
+  const sent = p.commands().at(-1)
+  assert.equal(sent.cmd, 'avatarStyle')
+  assert.equal(sent.style, 'critter')
+  assert.match(sent.id, /^av-/)
+  assert.equal(p.run('styleNow()'), 'critter')
+  assert.deepEqual(checked(), ['Critters'])
+  // the state names it; from then on the state's is drawn, whoever picks next (the pane, /deck avatars)
+  p.load(sample(s => { s.avatarStyle = 'critter' }))
+  assert.equal(p.run('styleNow()'), 'critter')
+  p.load(sample(s => { s.avatarStyle = 'blob' }))
+  assert.equal(p.run('styleNow()'), 'blob')
+  // picking the one drawn sends nothing
+  const count = p.commands().length
+  click(picks()[9])
+  await settle()
+  assert.equal(p.commands().length, count)
 })

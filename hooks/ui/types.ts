@@ -142,6 +142,12 @@ export type DashActions = Actions & {
   focusNext: (dir: 1 | -1, keys?: readonly string[]) => void
   /** `n`: Now, the focus on the next thing that needs you (`W.nextNeedKeyOf`: after the need focused, round to the first). */
   focusNeed: () => void
+  /**
+   * Draws the agents' avatars in `style` (web/avatars.mjs `STYLE_IDS`) from
+   * now on, as `/deck avatars <style>` does: kept in the person's prefs, for
+   * every session; the pane draws again and the web page follows.
+   */
+  setAvatarStyle: (style: string) => void
 }
 
 /** What the pane draws from, beside the deck's model. */

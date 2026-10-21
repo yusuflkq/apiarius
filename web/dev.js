@@ -132,6 +132,12 @@ function play(cmd) {
     later(300, () => ack(cmd.id, false, 'failed', 'Not in this build yet: stop it in Claude Code'))
   } else if (cmd.cmd === 'abortTurn') {
     later(300, () => ack(cmd.id, false, 'failed', 'Not in this build yet: press Esc in Claude Code'))
+  } else if (cmd.cmd === 'avatarStyle') {
+    // as the mod: the style is the person's own, and the next state names it (the dev deck keeps it while it runs)
+    later(200, () => {
+      state.avatarStyle = cmd.style
+      ack(cmd.id, true, 'delivered', `Avatars: ${cmd.style}`)
+    })
   }
 }
 

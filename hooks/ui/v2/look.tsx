@@ -4,7 +4,6 @@
  * its status dot at its foot, where the surface draws Svg; its glyph and
  * status mark on the terminal), a
  * status dot, a status pill (an image on a desktop, its word on the
-
  * terminal), a status glyph, an icon, a section's head, a quiet line, and
  * how much room a character takes where it is drawn.
  *
@@ -22,7 +21,6 @@ import type { V2AgentRow } from '../../web'
 import type { Kit } from '../types'
 import { P, PILL_HEIGHT, glyphOf, iconSvg, pillSvg, pillWidth, toneOf, type IconName } from './palette'
 import { monoAdvance, uiAdvance, type Advance } from './text'
-
 
 /** The Svg element where the surface draws one as an image: every table but the terminal's, which answers to Svg with an empty box. */
 export function svgOf(kit: Kit): Kit['Svg'] {

@@ -15,7 +15,6 @@ import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/
 import * as M from '../hooks/model'
 import * as AV from '../web/avatars.mjs'
 import { P, mix } from '../hooks/ui/v2/palette'
-
 import * as W from '../hooks/web'
 import { IDS, SAMPLE_NOW, v2Session } from './v2session'
 import { deck, newWorld, NOW, work, world, type World } from './world'
@@ -148,10 +147,8 @@ test('Chat is a group chat: yours at the right in a blue bubble, others at the l
     // words to you name no recipient; to nobody in particular, none either
     const answer = v2.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
     expect((await ui.find({ key: `grp:msg:${answer.id}` }))?.text).toMatch(/^[◆●▲■✦⬢★◉]?Orchestrator\d+m/)
-
     const plain = v2.chat.find(row => row.to === null)!
     expect((await ui.find({ key: `grp:msg:${plain.id}` }))?.text).toMatch(/^[◆●▲■✦⬢★◉]?builder\d+m/)
-
     // a SendMessage's summary, bold over its words
     const between = v2.chat.find(row => row.kind === 'message' && row.title === 'Limiter ready for review')!
     expect((await ui.find({ key: `grp:msg:${between.id}` }))?.text).toMatch(/builder to reviewer\d+m/)
@@ -326,7 +323,6 @@ test('the filter is one row: Filter · All · You · Between agents · the agent
 })
 
 test('the terminal draws the group chat with no image: an avatar is its glyph in its colour, yours a block at the right after a ›, others` an indented block under the name', async ($, on) => {
-
   const { v2 } = await demo($, on)
   const ui = await $.ui.mount(pane('terminal'))
   await press(ui, 'tab:chat')

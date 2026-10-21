@@ -21,8 +21,6 @@ import type { DashActions, Kit } from '../types'
 import { ticks, uiWrapAdvance, type TickPart } from './dashModel'
 import { avatar, avatarAgentOf, avatarStyleOf, svgOf, type Face } from './look'
 import { P, pillWidth, ruleSvg, tagSvg, tagWidth, toneOf } from './palette'
-
-
 import { monoAdvance, type Advance } from './text'
 
 /** How much room a character takes in text laid into lines: on a desktop a little over, so no line runs past its room. */
@@ -44,8 +42,6 @@ export function face(kit: Kit, who: Face | null, px: number, opts: { dot?: boole
   if (who === null) return <Text color={P.muted3}>●</Text>
   return avatar(kit, who, px, opts)
 }
-
-
 
 /** The cells ./look's `statusPill` takes for `status`. */
 export function pillCells(kit: Kit, status: string): number {
@@ -98,7 +94,6 @@ export function faces(kit: Kit, who: readonly (Face | null)[], px: number, names
           return <Text color={glyph.color}>{glyph.glyph}</Text>
         })
       )}
-
       {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
     </Box>
   )

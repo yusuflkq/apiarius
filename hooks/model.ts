@@ -35,6 +35,7 @@ import type {
   DeckView2,
   DeckWorkflow,
 } from '../types'
+import * as AV from '../web/avatars.mjs'
 import { baseName, dur, firstLine, hash, oneLine, plural, trunc, truncStart } from './format'
 import type { GitState } from './git'
 
@@ -221,6 +222,7 @@ export function defaultView(): DeckView {
     filter: 'all',
     showFiles: true,
     isBandHidden: false,
+    avatarStyle: AV.DEFAULT_STYLE,
     map: 'tree',
     message: '',
     folded: [],
@@ -348,6 +350,7 @@ export function healView(value: unknown, data?: DeckData): DeckView {
     filter: text(v.filter, base.filter),
     showFiles: flag(v.showFiles, base.showFiles),
     isBandHidden: flag(v.isBandHidden, base.isBandHidden),
+    avatarStyle: AV.styleOf(v.avatarStyle),
     map: oneOf(v.map, MAP_VIEWS, base.map),
     message: text(v.message, base.message),
     // the outline's folds: strings only, each once, the newest kept

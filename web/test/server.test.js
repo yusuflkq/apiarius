@@ -178,7 +178,6 @@ test('prints the ready line first, with the port it listens on', async () => {
 
 test('refuses every route without the token (403), and answers with it', async () => {
   for (const target of ['/', '/app.js', '/app.css', '/avatars.mjs', '/state', '/events', '/patch/toolu_01Abc-d_9', '/gitdiff/1kejm2g-1kfevo4-4g', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
-
     assert.equal((await request(main.port, { path: target })).status, 403, target)
     assert.equal((await request(main.port, { path: target, headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403, target)
   }
@@ -377,6 +376,26 @@ test('POST /cmd passes stopAgent and abortTurn on in exactly their shapes, with 
     '{"cmd":"abortTurn","id":"t-2","turnId":"turn-7c1e"}',
     '{"cmd":"abortTurn","turnId":"turn_8"}',
   ])
+})
+
+test('POST /cmd passes avatarStyle on in exactly its shape: a style`s id, lowercase letters, with the page`s id', async () => {
+  const count = main.lines.length
+  const good = [{ cmd: 'avatarStyle', id: 'a-1', style: 'critter' }, { style: 'robot', cmd: 'avatarStyle' }]
+  for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const bad = [
+    { cmd: 'avatarStyle' },
+    { cmd: 'avatarStyle', style: '' },
+    { cmd: 'avatarStyle', style: 'Robot' },
+    { cmd: 'avatarStyle', style: 'pixel sprites' },
+    { cmd: 'avatarStyle', style: '../robot' },
+    { cmd: 'avatarStyle', style: 'x'.repeat(21) },
+    { cmd: 'avatarStyle', style: 7 },
+    { cmd: 'avatarStyle', style: 'mood', agentId: 'main' },
+    { cmd: 'avatarStyle', id: 'bad id', style: 'mood' },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
+  await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"avatarStyle","id":"a-1","style":"critter"}', '{"cmd":"avatarStyle","style":"robot"}'])
 })
 
 test('POST /cmd: every command may carry the page`s id, which is printed with it; a bad id is refused', async () => {

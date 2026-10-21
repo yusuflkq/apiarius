@@ -76,7 +76,6 @@ export function orgTree(kit: Kit, state: WebStateV2, actions: DashActions, selec
         const lead = depth > 0 ? 4 : 3
         // the name's room: the row less its indent, the corner, the avatar (the terminal's glyph and status mark), the pill, "Open →" and the gaps between
         const room = Math.max(8, kit.columns - indent - (depth > 0 ? 2 : 0) - (kit.surface === 'terminal' ? 4 : 3) - pillCells(kit, row.status) - 1 - openCells - 1 - slack)
-
         const name = cutCells(row.title, Math.min(NAME, room), adv)
         const word = row.isStopped ? 'stopped' : toneOf(row.status).word
         const open = () => actions.openAgent(row.id)

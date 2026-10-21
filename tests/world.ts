@@ -51,6 +51,8 @@ export type World = {
   git?: (argv: readonly string[]) => { exitCode: number; stdout: string }
   /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
   files?: Readonly<Record<string, string>>
+  /** The plugin's own store (`$.store`: the person's prefs), when the test reads it back; left out, the testing kit's store in memory. */
+  store?: Map<string, unknown>
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -76,7 +78,19 @@ export function newWorld(extra: Partial<World> = {}): World {
 
 /** Answers every engine call the deck makes, outside a repository; `restored` is the snapshot a reload finds. */
 export function world(on: On, w: World, restored?: DeckSnapshot) {
-  mock.store(on)
+  const store = w.store
+  if (store) {
+    on('store.get', ($, e) => ({ value: store.get(e.key) }))
+    on('store.set', ($, e) => {
+      store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+      return { value: undefined }
+    })
+    on('store.delete', ($, e) => {
+      store.delete(e.key)
+      return { value: undefined }
+    })
+    on('store.keys', () => ({ value: [...store.keys()] }))
+  } else mock.store(on)
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.panes', () => ({ value: [] }))

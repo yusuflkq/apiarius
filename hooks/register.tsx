@@ -24,6 +24,7 @@ import type {
 } from 'claude-code'
 
 import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckMessage, DeckStatus, DeckView } from '../types'
+import * as AV from '../web/avatars.mjs'
 import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
@@ -95,10 +96,10 @@ const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usag
 
 function v2Of(now: number, isFresh = false): W.WebStateV2 {
   const asking = [...askers.keys()]
-  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd].join('\u0001')
+  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd, view.avatarStyle].join('\u0001')
   if (!isFresh && v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage && v2Memo.diffs === gitDiffs) return v2Memo.state
   // a question the page may answer is one whose race runs in this module: none after a reload
-  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs)
+  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs, view.avatarStyle)
   Object.assign(v2Memo, { key, data, git, usage, diffs: gitDiffs, state, shows: W.v2KeyOf(state) })
   return state
 }
@@ -826,7 +827,49 @@ function onWebLine($: EngineInterface, line: string): boolean {
   // Stop agent and Stop turn come with the deck's next build: the page is told so, never left waiting
   else if (route.kind === 'stopAgent') void ack($, ackId, 'failed', 'Not in this build yet: stop it in Claude Code')
   else if (route.kind === 'abortTurn') void ack($, ackId, 'failed', 'Not in this build yet: press Esc in Claude Code')
+  else if (route.kind === 'avatarStyle') {
+    setAvatarStyle($, route.style)
+    void ack($, ackId, 'delivered', `Avatars: ${AV.styleName(route.style)}`)
+  }
   return false
+}
+
+/** Keeps the person's own settings in the store (`prefs`), for every session: the band hidden or not, and the avatar style. */
+function savePrefs($: EngineInterface) {
+  void $.store.set('prefs', { isBandHidden: view.isBandHidden, avatarStyle: view.avatarStyle }).catch(() => undefined)
+}
+
+/**
+ * Draws the agents' avatars in `style` (web/avatars.mjs `STYLE_IDS`; one it
+ * does not know is let go): kept in the person's prefs, so it holds in every
+ * session; the pane draws again, and the web page follows with the state it
+ * is written next (its `avatarStyle`).
+ */
+function setAvatarStyle($: EngineInterface, style: string) {
+  if (!AV.isStyle(style) || style === view.avatarStyle) return
+  view.avatarStyle = style
+  savePrefs($)
+  changed($)
+}
+
+/** The style `/deck avatars <words>` names: by its id or its name, any case, spaces or not, or the start of one alone ("crit"); undefined for none. */
+function avatarStyleNamed(words: string): AV.AvatarStyle | undefined {
+  const said = words.toLowerCase().replace(/[\s_-]+/g, '')
+  if (said === '') return undefined
+  const exact = AV.STYLES.find(one => one.id === said || one.name.toLowerCase().replace(/\s+/g, '') === said)
+  if (exact) return exact.id
+  const starts = AV.STYLES.filter(one => one.id.startsWith(said) || one.name.toLowerCase().replace(/\s+/g, '').startsWith(said))
+  return starts.length === 1 ? starts[0]?.id : undefined
+}
+
+/** `/deck avatars`: the styles, the one drawn marked; `/deck avatars <style>` draws that one from now on, in every session. */
+function avatarsCommand($: EngineInterface, words: string): CommandRunResult {
+  const list = AV.STYLES.map(one => `${one.id === view.avatarStyle ? '▸' : ' '} ${one.id.padEnd(8)} ${one.name}`).join('\n')
+  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/deck avatars <style> draws another, here and on the web page, in every session. The pane's Help (h) picks one too.` }
+  const style = avatarStyleNamed(words)
+  if (style === undefined) return { text: `No avatar style called "${F.trunc(F.oneLine(words), 40)}". One of: ${AV.STYLE_IDS.join(', ')}.` }
+  setAvatarStyle($, style)
+  return { text: `Avatars: ${AV.styleName(style)}. The pane, the web page and /deck demo draw them, in every session; /deck avatars lists the others.` }
 }
 
 /** Says what came of the page's command `id` in the state it reads (`acks`); a command with no id is told nothing. */
@@ -1919,9 +1962,10 @@ function actionsFor($: EngineInterface): DeckActions {
     },
     toggleBand: () => {
       view.isBandHidden = !view.isBandHidden
-      void $.store.set('prefs', { isBandHidden: view.isBandHidden }).catch(() => undefined)
+      savePrefs($)
       changed($)
     },
+    setAvatarStyle: style => setAvatarStyle($, style),
 
     // the sample's chat sends nothing: its agents are a recording, and its Orchestrator is not this session's
     // a send from the pane's composer carries an id: its ack says what came of it, under the message
@@ -1948,6 +1992,7 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
     Code: ui.Code,
     Markdown: ui.Markdown,
     columns,
+    avatarStyle: view.avatarStyle,
     ...('Input' in ui ? { Input: ui.Input } : {}),
     ...('Select' in ui ? { Select: ui.Select } : {}),
     // the terminal's table answers to Svg but draws nothing for it: there the screens draw text
@@ -2571,6 +2616,8 @@ export const register: Register = on => {
     try {
       const prefs = await $.store.get('prefs')
       if (prefs && typeof prefs === 'object' && 'isBandHidden' in prefs) view.isBandHidden = Boolean((prefs as { isBandHidden: unknown }).isBandHidden)
+      // the avatar style is the person's own: it holds in every session (robots until they pick another)
+      if (prefs && typeof prefs === 'object' && 'avatarStyle' in prefs) view.avatarStyle = AV.styleOf((prefs as { avatarStyle: unknown }).avatarStyle)
     } catch {
       // defaults stand
     }
@@ -2628,7 +2675,7 @@ export const register: Register = on => {
         name: 'deck',
         description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck now, chat, org or changes; /deck inspect; /deck demo: sample data; /deck web: in the Browser pane)',
         // an earlier build's tabs (dashboard, org, plan, stats, classic, details) still open, unlisted: on Now, or the view they were
-        argumentHint: '[now|chat|org|changes|inspect|demo|web|web stop|band|close|probe]',
+        argumentHint: '[now|chat|org|changes|inspect|demo|web|web stop|band|avatars [style]|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2657,10 +2704,11 @@ export const register: Register = on => {
     }
     if (arg === 'band') {
       view.isBandHidden = !view.isBandHidden
-      void $.store.set('prefs', { isBandHidden: view.isBandHidden }).catch(() => undefined)
+      savePrefs($)
       changed($)
       return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /deck band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
     }
+    if (arg === 'avatars' || arg.startsWith('avatars ')) return avatarsCommand($, arg.slice('avatars'.length).trim())
     if (arg === 'probe') return toggleProbe($)
     // the live dashboard: started if need be, its link answered, opened in the Browser pane when it can be
     const words = arg.split(/\s+/)

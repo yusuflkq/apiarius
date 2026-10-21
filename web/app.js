@@ -20,7 +20,6 @@ import * as AV from './avatars.mjs';
 
 // ===================================================================== basics
 
-
 const TOKEN = new URLSearchParams(location.search).get('t') || '';
 const AUTH = TOKEN ? { 'X-Deck-Token': TOKEN } : {};
 const QT = TOKEN ? `?t=${encodeURIComponent(TOKEN)}` : '';
@@ -340,10 +339,30 @@ const px = size => ({ width: `${size}px`, height: `${size}px` });
  */
 function Avatar(a, size = 24, opts = NOPROPS) {
   if (!a) return h('span', { class: 'av-ghost', style: px(size) });
-  const svg = AV.avatarSvg(S ? S.avatarStyle : AV.DEFAULT_STYLE, faceOf(a), { size, dot: opts.dot === true, animated: opts.live === true && !isStill() });
+  const svg = AV.avatarSvg(opts.style || styleNow(), faceOf(a), { size, dot: opts.dot === true, animated: opts.live === true && !isStill() });
   return h('img', { class: 'av', width: size, height: size, alt: '', draggable: 'false', src: urlOf(svg) });
 }
 
+/** The style the avatars are drawn in: one picked here until the state names it (10 s at most), else the state's (the person's setting). */
+function styleNow() {
+  const picked = ui.picked;
+  if (picked && S && S.avatarStyle !== picked.style && Date.now() < picked.until) return picked.style;
+  return S ? S.avatarStyle : AV.DEFAULT_STYLE;
+}
+
+/** Draws the agents in another style: the mod keeps it as the person's own (the Desktop pane and every session follow), and its next state says so; drawn here at once. */
+async function pickStyle(style) {
+  if (!AV.isStyle(style) || style === styleNow()) return;
+  ui.picked = { style, until: Date.now() + 10000 };
+  setTimeout(invalidate, 10100);
+  renderNow();
+  try {
+    await command({ cmd: 'avatarStyle', id: newCmdId('av'), style });
+  } catch (err) {
+    ui.picked = null;
+    toast(err.message);
+  }
+}
 function YouAvatar(size = 24) {
   return h('span', { class: 'av-you', style: { ...px(size), 'font-size': `${Math.max(8, Math.round(size * 0.38))}px` } }, 'YO');
 }
@@ -357,7 +376,6 @@ const whoAvatar = (id, size) => (id === 'you' ? YouAvatar(size) : id === 'engine
 function AvatarDot(a, size = 24) {
   return h('span', { class: 'avd', style: px(size) }, Avatar(a, size, { dot: true, live: true }));
 }
-
 
 function AvatarStack(ids, size = 18, max = 4) {
   const shown = ids.slice(0, max);
@@ -514,7 +532,6 @@ function normalize(s) {
   };
 }
 
-
 /** Nothing to draw yet: the server's empty state before the mod wrote one ('empty'), or a state with no v2 in it, an older mod's ('old'). */
 function emptyState(why) {
   const s = normalize({});
@@ -581,6 +598,8 @@ function apply(next) {
   }
   IX = buildIndex(S);
   noteResolved();
+  // a style picked here holds until the state names it: from then on the state's (the person's setting) is drawn
+  if (ui.picked && S.avatarStyle === ui.picked.style) ui.picked = null;
   invalidate();
 }
 
@@ -879,6 +898,7 @@ const ui = {
   pinChat: false,          // the next render takes the chat to its newest row (a send)
   goalOpen: false,         // the header's goal, open on its whole text
   help: false,
+  picked: null,            // { style, until }: an avatar style picked here, drawn until the state names it
   toast: null,             // { text, until }
   needAt: -1,              // the need `n` went to last
 };
@@ -1949,7 +1969,6 @@ function OrgCard(n) {
     onClick: e => { if (suppressClick) { e.preventDefault(); return; } openAgent(a.id); },
   },
   h('span', { class: 'org-av' }, Avatar(a, 34, { dot: true, live: true })),
-
   h('span', { class: 'org-text' },
     h('span', { class: 'org-name' }, a.title),
     h('span', { class: 'org-type' }, [a.type || KIND_WORD[a.kind], elapsedOf(a)].filter(Boolean).join(' · ')),
@@ -2615,11 +2634,21 @@ const KEYS = [
 
 function Help() {
   if (!ui.help) return null;
+  const now = styleNow();
   return h('div', { key: 'help', class: 'modal-wrap', onClick: e => { if (e.target === e.currentTarget) toggleHelp(); } },
-    h('div', { class: 'modal', role: 'dialog', 'aria-label': 'Keys' },
+    h('div', { class: 'modal', role: 'dialog', 'aria-label': 'Keys and avatars' },
       h('div', { class: 'modal-head' }, h('h2', { class: 'modal-title' }, 'Keys'), h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onClick: toggleHelp }, icon('x'))),
       h('p', { class: 'modal-note' }, 'The same keys work in the Desktop pane and the terminal, but for /, @, ? and Esc, which are this page\'s own.'),
-      h('dl', { class: 'keys' }, KEYS.map(([k, what]) => [h('dt', { key: `k:${k}` }, k.split(/\s+/).map((one, i) => h('kbd', { key: i }, one))), h('dd', { key: `d:${k}` }, what)]))));
+      h('dl', { class: 'keys' }, KEYS.map(([k, what]) => [h('dt', { key: `k:${k}` }, k.split(/\s+/).map((one, i) => h('kbd', { key: i }, one))), h('dd', { key: `d:${k}` }, what)])),
+      h('h2', { class: 'modal-title modal-sub' }, 'Avatars'),
+      h('p', { class: 'modal-note' }, 'How the agents look here, in the Desktop pane and in /deck demo, in every session. /deck avatars <style> picks one too.'),
+      h('div', { class: 'styles', role: 'radiogroup', 'aria-label': 'Avatar style' },
+        AV.STYLES.map(s => h('button', {
+          key: s.id, type: 'button', role: 'radio', class: `style-pick${s.id === now ? ' on' : ''}`, 'aria-checked': s.id === now ? 'true' : 'false',
+          title: `Draw the agents as ${s.name}`, onClick: () => pickStyle(s.id),
+        },
+        h('span', { class: 'style-faces', 'aria-hidden': 'true' }, WELCOME.map(a => h('span', { key: a.id }, Avatar(a, 26, { dot: true, style: s.id })))),
+        h('span', { class: 'style-name' }, s.name))))));
 }
 
 function Toast() {
@@ -2672,13 +2701,11 @@ const WELCOME = [
 ];
 
 function Welcome() {
-
   const old = S && S.empty === 'old';
   return h('div', { key: 'welcome', class: 'page' },
     h('div', { class: 'card welcome' },
       h('div', { class: 'welcome-art', 'aria-hidden': 'true' },
         WELCOME.map((a, n) => h('span', { key: n, class: `welcome-av w${n}` }, Avatar(a, n === 1 ? 44 : 34, { live: true })))),
-
       h('p', { class: 'welcome-title' }, old ? 'Waiting for the deck\'s state' : 'Nothing yet'),
       h('p', { class: 'welcome-text' }, old
         ? 'The mod writing this session\'s state is older than this page. Start a new session (or reload the mod) and run /deck web again.'

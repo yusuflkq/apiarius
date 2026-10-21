@@ -3,15 +3,17 @@
  * spend and each agent's tokens, requests, tool calls and errors, as the
  * v2 state's `inspect` holds them (Phase 2 adds what fills the context,
  * what is loaded, the permission decisions and the background work). And
- * Help (`h`): the keys, the same on every surface.
+ * Help (`h`): the keys, the same on every surface, and the avatars' style
+ * ("Style: Robots ▸" steps to the next of web/avatars.mjs's ten).
  *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
+import * as AV from '../../../web/avatars.mjs'
 import type { WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
-import { keyButton, quiet, sectionHead } from './look'
+import { avatar, avatarStyleOf, keyButton, quiet, sectionHead, type Face } from './look'
 import { P } from './palette'
 import { num, usd } from './text'
 
@@ -68,8 +70,48 @@ const KEYS: readonly (readonly [string, string])[] = [
   ['h', 'this help'],
 ]
 
-/** Help: the key table. */
-export function helpPage(kit: Kit, onBack: () => void): RenderElement {
+/** The faces the avatars' section shows its style on: the Orchestrator at work, one waiting on you, one done. */
+const SAMPLES: readonly Face[] = [
+  { id: 'main', title: 'Orchestrator', kind: 'orchestrator', status: 'running', isStopped: false },
+  { id: 'helper', title: 'helper', kind: 'agent', status: 'waiting', isStopped: false },
+  { id: 'bob', title: 'bob', kind: 'agent', status: 'done', isStopped: false },
+]
+
+/** The style after `style` in the pickers' order, round to the first. */
+export function nextAvatarStyle(style: string): AV.AvatarStyle {
+  const at = AV.STYLE_IDS.indexOf(AV.styleOf(style))
+  return AV.STYLE_IDS[(at + 1) % AV.STYLE_IDS.length] ?? AV.DEFAULT_STYLE
+}
+
+/**
+ * The avatars' style: three faces drawn in it where Svg draws, then "Style:
+ * Robots ▸" (keyed `avatars:next`), which steps to the next style; `/deck
+ * avatars <style>` picks one by name.
+ */
+function avatarsSection(kit: Kit, onStyle: (style: string) => void): RenderElement {
+  const { Box, Button, Text } = kit
+  const style = avatarStyleOf(kit)
+  return (
+    <Box key="help:avatars" flexDirection="column">
+      {sectionHead(kit, 'Avatars', null)}
+      <Box flexDirection="row" columnGap={1} alignItems="center">
+        {kit.surface === 'terminal' ? null : SAMPLES.map(one => <Box flexShrink={0}>{avatar(kit, one, 22, { dot: true })}</Box>)}
+        <Box flexShrink={0}>
+          <Button key="avatars:next" label={`Style: ${AV.styleName(style)} ▸`} plain onPress={() => onStyle(nextAvatarStyle(style))} />
+        </Box>
+        <Box flexShrink={1} minWidth={0}>
+          <Text color={P.muted2} wrap="truncate-end">
+            {`${AV.STYLE_IDS.indexOf(style) + 1} of ${AV.STYLE_IDS.length}`}
+          </Text>
+        </Box>
+      </Box>
+      {quiet(kit, 'Each press draws the next style, here, on the web page and in /deck demo, in every session. /deck avatars <style> picks one by name; the web page’s Help shows them all.')}
+    </Box>
+  )
+}
+
+/** Help: the key table, then the avatars' style. */
+export function helpPage(kit: Kit, onBack: () => void, onStyle: (style: string) => void = () => undefined): RenderElement {
   const { Box, Text } = kit
   return (
     <Box key="help" flexDirection="column" gap={1}>
@@ -92,6 +134,7 @@ export function helpPage(kit: Kit, onBack: () => void): RenderElement {
         ))}
       </Box>
       {quiet(kit, 'The keys work while the pane has the keyboard: click it, or ctrl+x tab. Esc stays Claude Code’s.')}
+      {avatarsSection(kit, onStyle)}
     </Box>
   )
 }

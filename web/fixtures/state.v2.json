@@ -6,6 +6,7 @@
     "cwd": "C:\\Users\\sam\\code\\acme-api",
     "startedAt": 1792011060000
   },
+  "avatarStyle": "robot",
   "header": {
     "state": "waiting",
     "stateText": "Waiting on you",
