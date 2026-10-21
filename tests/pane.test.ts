@@ -428,3 +428,23 @@ test('Chat draws a window of the newest rows, Show earlier adds more, and even t
     await ui.unmount()
   }
 })
+
+test('from 120 cells Now stands in two columns, what needs you at the left and the agents and the plan at the right; below, one column in that order', async ($, on) => {
+  await demo($, on)
+  for (const surface of SURFACES) {
+    const wide = await $.ui.mount(pane(surface, 140))
+    const left = await wide.find({ key: 'now:left' })
+    const right = await wide.find({ key: 'now:right' })
+    expect(left?.text).toContain('NEEDS YOU')
+    expect(left?.text).not.toContain('AGENTS')
+    expect(right?.text).toContain('AGENTS')
+    expect(right?.text).toContain('PLAN')
+    await wide.unmount()
+    const narrow = await $.ui.mount(pane(surface, 84))
+    expect(await narrow.find({ key: 'now:left' })).toBeUndefined()
+    const now = (await narrow.find({ key: 'now' }))?.text ?? ''
+    expect(now.indexOf('NEEDS YOU')).toBeLessThan(now.indexOf('AGENTS'))
+    expect(now.indexOf('AGENTS')).toBeLessThan(now.indexOf('PLAN'))
+    await narrow.unmount()
+  }
+})

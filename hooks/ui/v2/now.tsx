@@ -35,9 +35,28 @@ const MOST_ROWS = 80
 /** The approved plans opened (by when each was approved), while the module lives. */
 const plansOpen = new Set<number>()
 
-/** Now: Needs you, the agents' tree, the plan. */
+/** The width from which Now stands in two columns: what needs you (or the agents) at the left, the rest at the right. */
+const TWO_COLUMNS = 120
+
+/** Now: Needs you, the agents' tree, the plan; from 120 cells in two columns, the first of them at the left. */
 export function nowTab(kit: Kit, state: WebStateV2, view2: DeckView2, actions: DashActions): RenderElement {
   const { Box } = kit
+  const hasNeeds = state.needs.length > 0
+  if (kit.columns >= TWO_COLUMNS && (hasNeeds || state.plan)) {
+    const half = { ...kit, columns: Math.floor((kit.columns - 3) / 2) }
+    const left = hasNeeds ? [needsSection(half, state, state.needs, actions, 'now')] : [agentsSection(half, state, view2, actions)]
+    const right = hasNeeds ? [agentsSection(half, state, view2, actions), state.plan ? planSection(half, state.plan, state.now, actions) : null] : [state.plan ? planSection(half, state.plan, state.now, actions) : null]
+    return (
+      <Box key="now" flexDirection="row" columnGap={3}>
+        <Box key="now:left" flexDirection="column" gap={1} width="50%" flexShrink={1} minWidth={0}>
+          {left}
+        </Box>
+        <Box key="now:right" flexDirection="column" gap={1} width="50%" flexShrink={1} minWidth={0}>
+          {right}
+        </Box>
+      </Box>
+    )
+  }
   return (
     <Box key="now" flexDirection="column" gap={1}>
       {needsSection(kit, state, state.needs, actions, 'now')}
