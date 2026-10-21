@@ -866,7 +866,7 @@ function avatarStyleNamed(words: string): AV.AvatarStyle | undefined {
 /** `/deck avatars`: the styles, the one drawn marked; `/deck avatars <style>` draws that one from now on, in every session. */
 function avatarsCommand($: EngineInterface, words: string): CommandRunResult {
   const list = AV.STYLES.map(one => `${one.id === view.avatarStyle ? '▸' : ' '} ${one.id.padEnd(8)} ${one.name}`).join('\n')
-  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/deck avatars <style> draws another, here and on the web page, in every session. The pane's Help (h) picks one too.` }
+  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/deck avatars <style> draws another, here and on the web page, in every session. The pane's Settings (5) picks one too.` }
   const style = avatarStyleNamed(words)
   if (style === undefined) return { text: `No avatar style called "${F.trunc(F.oneLine(words), 40)}". One of: ${AV.STYLE_IDS.join(', ')}.` }
   setAvatarStyle($, style)
@@ -2718,9 +2718,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck now, chat, org or changes; /deck inspect; /deck demo: sample data; /deck web: in the Browser pane)',
-        // an earlier build's tabs (dashboard, org, plan, stats, classic, details) still open, unlisted: on Now, or the view they were
-        argumentHint: '[now|chat|org|changes|inspect|demo|web|web stop|band|avatars [style]|close|probe]',
+        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes or settings; /deck demo: sample data; /deck web: in the Browser pane)',
+        // now (the Dashboard's id), inspect and help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
+        argumentHint: '[dashboard|chat|org|changes|settings|demo|web|web stop|band|avatars [style]|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2772,14 +2772,13 @@ export const register: Register = on => {
       if (why) return { text: why }
       return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
     }
-    // anything else is this session's deck: /deck alone Now; now, chat, org or changes (or an earlier build's tab, on the one it folded into); inspect (or stats) Now with Inspect open
+    // anything else is this session's deck: /deck alone the Dashboard; dashboard (or now), chat, org, changes or settings (inspect, help and stats too), or an earlier build's tab, on the one it folded into
     leaveDemo()
     view.page = ''
     // /deck chat takes the pane to Chat's newest message, though Chat showed already
     chatFollow.isShown = false
-    const isInspect = words[0] === 'inspect' || words[0] === 'stats'
-    const tab = arg === '' || isInspect ? 'now' : M.v2TabFor(words[0] ?? '')
-    if (tab) view.v2 = M.view2With(view.v2, { tab, isInspectOpen: isInspect })
+    const tab = arg === '' ? 'now' : M.v2TabFor(words[0] ?? '')
+    if (tab) view.v2 = M.view2With(view.v2, { tab })
     const isPlaced = await openPane($)
     changed($)
     return isPlaced ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }

@@ -3,9 +3,9 @@
  * the one state the web page, the Desktop pane and the terminal draw:
  *
  * - the pane (`deckView`): in the sample (`/deck demo`) a header saying so,
- *   then ./ui/v2: the header, the tabs (1 Now · 2 Chat · 3 Org · 4 Changes)
- *   and the open tab, or an agent's page, Inspect or help over it; Org's
- *   chart as the surface's Client allows (`dash.isOrgDown`, `dash.selected`);
+ *   then ./ui/v2: the header, the tabs (1 Dashboard · 2 Chat · 3 Org ·
+ *   4 Changes · 5 Settings) and the open tab, or an agent's page over it;
+ *   Org's chart as the surface allows (`dash.isOrgDown`, `dash.selected`);
  * - the band above the prompt (`bandOf`): one line, ./ui/band.
  *
  * Pure: Kit, DeckModel, DashModel and DeckActions come from the hooks module.

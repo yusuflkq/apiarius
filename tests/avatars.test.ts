@@ -164,23 +164,36 @@ test('the avatar style is the person`s own: read from the store`s prefs as a ses
   await ui.unmount()
 })
 
-test('Help`s "Style: Robots ▸" steps to the next of the ten, round to the first; its faces show the style, and the step is kept as /deck avatars keeps one', async ($, on) => {
+test('Settings` avatar style: the ten, each its name beside a face drawn in it, the one drawn marked; a press draws that one, kept as /deck avatars keeps one', async ($, on) => {
   const kept = new Map<string, unknown>()
   await demo($, on, sampleState(), kept)
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount(pane(surface))
-    await press(ui, 'key:h')
-    expect((await ui.find({ key: 'avatars:next' }))?.props).toMatchObject({ label: 'Style: Robots ▸', plain: true })
-    await press(ui, 'avatars:next')
-    expect((await ui.find({ key: 'avatars:next' }))?.props.label).toBe('Style: Mood faces ▸')
+    await press(ui, 'tab:settings')
+    const picks = (await ui.findAll({ type: 'Button' })).filter(one => /^avatars:[a-z]+$/.test(one.key ?? ''))
+    expect(picks.map(one => [one.key, one.props.label])).toEqual(AV.STYLES.map(one => [`avatars:${one.id}`, one.name]))
+    expect((await ui.find({ key: 'avatars:robot' }))?.props).toMatchObject({ label: 'Robots', plain: true, dimColor: false })
+    expect((await ui.find({ key: 'avatars:mood' }))?.props.dimColor).toBe(true)
+    await press(ui, 'avatars:mood')
     expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'mood' })
+    expect((await ui.find({ key: 'avatars:mood' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: 'avatars:robot' }))?.props.dimColor).toBe(true)
     if (surface === 'desktop') {
-      const orchestrator = (await ui.findAll({ type: 'Svg' })).find(svg => svg.props.alt === "Orchestrator's avatar")
-      expect(orchestrator?.props.source).toBe(AV.avatarSvg('mood', { id: 'main', name: 'Orchestrator', role: 'main', status: 'running' }, { size: 22, dot: true, ground: P.ground }))
-    } else expect(await ui.findAll({ type: 'Svg' })).toEqual([])
-    for (let i = 1; i < AV.STYLE_IDS.length; i++) await press(ui, 'avatars:next')
-    expect((await ui.find({ key: 'avatars:next' }))?.props.label).toBe('Style: Robots ▸')
-    await press(ui, 'key:h')
+      // each style's face: the Orchestrator at work, drawn in it, still
+      const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith(': the Orchestrator drawn in it'))
+      expect(faces.map(svg => svg.props.source)).toEqual(AV.STYLE_IDS.map(id => AV.avatarSvg(id, { id: 'main', name: 'Orchestrator', role: 'main', status: 'running' }, { size: 24, dot: false, ground: P.ground })))
+      expect(faces.every(svg => svg.props.isInteractive === undefined)).toBe(true)
+      // the one drawn is ringed and ticked
+      expect((await ui.find({ key: 'avatars:chip:mood' }))?.text).toContain('✓')
+      expect((await ui.find({ key: 'avatars:chip:robot' }))?.text).not.toContain('✓')
+    } else {
+      expect(await ui.findAll({ type: 'Svg' })).toEqual([])
+      expect((await ui.find({ key: 'avatars:chip:mood' }))?.text).toContain('◉')
+      expect((await ui.find({ key: 'avatars:chip:robot' }))?.text).toContain('○')
+    }
+    await press(ui, 'avatars:robot')
+    expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'robot' })
+    await press(ui, 'tab:now')
     await ui.unmount()
   }
 })

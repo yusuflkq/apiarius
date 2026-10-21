@@ -70,7 +70,7 @@ async function keysOf(ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: 
   return (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith(prefix))
 }
 
-test('the tabs are 1 Now · 2 Chat · 3 Org · 4 Changes; Org draws the chart`s Client keyed org, as tall as its props say, its agents each under the one that started it', async ($, on) => {
+test('the tabs are 1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Settings; Org draws the chart`s Client keyed org, as tall as its props say, its agents each under the one that started it', async ($, on) => {
   const state = sampleState()
   await demo($, on, state)
   for (const surface of SURFACES) {
@@ -80,6 +80,7 @@ test('the tabs are 1 Now · 2 Chat · 3 Org · 4 Changes; Org draws the chart`s 
       ['tab:chat', '2'],
       ['tab:org', '3'],
       ['tab:changes', '4'],
+      ['tab:settings', '5'],
     ])
     await press(ui, 'tab:org')
     expect((await ui.find({ key: 'tab:org' }))?.props).toMatchObject({ label: 'Org', dimColor: false })

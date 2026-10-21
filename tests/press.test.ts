@@ -57,7 +57,7 @@ test('the click that gives the pane the keyboard keeps every Button`s press hand
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     const before = handles(await ui.drawn())
-    expect(Object.keys(before)).toEqual(expect.arrayContaining(['tab:now', 'tab:chat', 'agent:main', 'key:i', 'key:h']))
+    expect(Object.keys(before)).toEqual(expect.arrayContaining(['tab:now', 'tab:chat', 'tab:settings', 'agent:main']))
     expect(Object.values(before).every(handle => typeof handle === 'number')).toBe(true)
 
     await ui.redraw({ ...PANE, isFocused: true })

@@ -79,7 +79,7 @@ async function keysOf(ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: 
   return (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith(prefix))
 }
 
-test('Now: the header says the state, your request and model · context · $; the tabs and every key are Buttons with one-character hotkeys', async ($, on) => {
+test('the Dashboard: the header says the state, your request and model · context · $, and holds no keys; the tabs are Buttons with their digits as hotkeys, and nothing else has one', async ($, on) => {
   const { v2 } = await demo($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
@@ -88,16 +88,18 @@ test('Now: the header says the state, your request and model · context · $; th
     expect(header?.text).toContain('Also exempt /health and /metrics from the limiter.')
     expect(header?.text).toContain(v2.header.line)
     expect(v2.header.line).toBe('opus-5.5 · context 41% · $4.12')
-    // the tabs: 1 Now · 2 Chat · 3 Org · 4 Changes, Now lit; Changes counts git's files
-    expect((await ui.find({ key: 'tab:now' }))?.props).toMatchObject({ label: 'Now', hotkey: '1', plain: true, dimColor: false })
+    // the tabs: 1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Settings, the Dashboard (`now`) lit; Changes counts git's files
+    expect((await ui.find({ key: 'tab:now' }))?.props).toMatchObject({ label: 'Dashboard', hotkey: '1', plain: true, dimColor: false })
     expect((await ui.find({ key: 'tab:chat' }))?.props).toMatchObject({ label: 'Chat', hotkey: '2', dimColor: true })
     expect((await ui.find({ key: 'tab:org' }))?.props).toMatchObject({ label: 'Org', hotkey: '3', dimColor: true })
     expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ label: `Changes ${v2.changes.files.length}`, hotkey: '4' })
-    // every key a plain Button with its hotkey: n i h in the header, m j k beside the tabs
+    expect((await ui.find({ key: 'tab:settings' }))?.props).toMatchObject({ label: 'Settings', hotkey: '5', dimColor: true })
+    // the tabs alone have hotkeys: no Message, ↓, ↑, Inspect, Help or Next need
     const hotkeys = Object.fromEntries((await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined).map(one => [one.props.hotkey, one.key]))
-    expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:org', '4': 'tab:changes', n: 'key:n', i: 'key:i', h: 'key:h', m: 'key:m', j: 'key:j', k: 'key:k' })
-    for (const key of Object.keys(hotkeys)) expect(key).toMatch(/^[0-9a-z]$/)
-    // Now is the dashboard: a card an agent, the figures
+    expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:org', '4': 'tab:changes', '5': 'tab:settings' })
+    for (const key of ['key:n', 'key:i', 'key:h', 'key:m', 'key:j', 'key:k']) expect(await ui.find({ key })).toBeUndefined()
+    expect(header?.text ?? '').not.toMatch(/Inspect|Help|Next need/)
+    // the Dashboard: a card an agent, the figures
     expect(await ui.find({ key: 'card:main' })).toBeDefined()
     expect(await ui.find({ key: 'tile:running' })).toBeDefined()
     await ui.unmount()
@@ -242,23 +244,37 @@ test('Changes: git`s files as Buttons keyed file:<path>, one opened with the age
   }
 })
 
-test('i opens Inspect (the context, the spend, each agent`s tokens), h the keys; b, or the key again, closes each; m on an agent`s page opens Chat filtered to it with @ it in the composer', async ($, on) => {
-  await demo($, on)
+test('5 opens Settings: Inspect (the context, the spend, the tokens and requests, a row an agent), the avatar style, Open in browser and Help; Chat with <agent> on its page opens Chat filtered to it with @ it in the composer', async ($, on) => {
+  const { v2 } = await demo($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await press(ui, 'key:i')
-    const inspect = await ui.find({ key: 'inspect' })
-    expect(inspect?.text).toContain('context 41% · $4.12 spent')
-    expect((await ui.find({ key: `inspect:${IDS.builder}` }))?.text).toContain('sonnet-4.5 · 96k in · 14.8k out · 402k cache · 18 requests · 4 tools')
+    await press(ui, 'tab:settings')
+    expect((await ui.find({ key: 'tab:settings' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(true)
+    // Inspect: the figures in tiles, then a row an agent, in the state's order
+    expect((await ui.find({ key: 'inspect:tile:context' }))?.text).toContain('41%')
+    expect((await ui.find({ key: 'inspect:tile:spend' }))?.text).toContain('$4.12')
+    expect((await ui.find({ key: 'inspect:tile:tokens' }))?.text).toContain('Tokens')
+    expect((await ui.find({ key: 'inspect:tile:requests' }))?.text).toContain(String(v2.inspect.agents.reduce((n, one) => n + one.requests, 0)))
+    const builder = (await ui.find({ key: `inspect:${IDS.builder}` }))?.text ?? ''
+    for (const said of ['builder', 'sonnet-4.5', '96k', '14.8k', '402k', '18']) expect(builder).toContain(said)
+    expect(await keysOf(ui, 'inspect:open:')).toEqual(v2.inspect.agents.map(one => `inspect:open:${one.id}`))
+    // the linter's failed call counts in red under Errors
+    expect((await ui.find({ key: 'inspect:head' }))?.text).toContain('Errors')
+    // the web page, as /deck web opens it
+    expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Open in browser')
+    // Help: each tab, then the keys that are left
+    const help = (await ui.find({ key: 'help' }))?.text ?? ''
+    for (const said of ['1  Dashboard', '2  Chat', '3  Org', '4  Changes', '5  Settings', 'filters Chat: All · You · Between agents · each agent', 'back from an agent’s page']) expect(help).toContain(said)
+    expect(help).not.toMatch(/\bj\b.*down|Inspect: the context/)
+    // a name in Inspect opens its page
+    await press(ui, `inspect:open:${IDS.builder}`)
+    expect((await ui.find({ key: 'page:head' }))?.text).toContain('builder')
     await press(ui, 'key:b')
-    expect(await ui.find({ key: 'inspect' })).toBeUndefined()
-    await press(ui, 'key:h')
-    expect((await ui.find({ key: 'help' }))?.text).toContain('filter Chat: All · You · Between agents · each agent')
-    await press(ui, 'key:h')
-    expect(await ui.find({ key: 'help' })).toBeUndefined()
+    expect((await ui.find({ key: 'tab:settings' }))?.props.dimColor).toBe(false)
 
-    await press(ui, `agent:${IDS.builder}`)
-    await press(ui, 'key:m')
+    await press(ui, `inspect:open:${IDS.builder}`)
+    await press(ui, 'page:chatwith')
     expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
     expect(await ui.find({ key: 'page:head' })).toBeUndefined()
     expect((await ui.find({ key: `chat:filter:${IDS.builder}` }))?.props.dimColor).toBe(false)

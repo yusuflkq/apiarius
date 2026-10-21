@@ -154,7 +154,7 @@ export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions,
               </Box>
             )
           })}
-          {hidden > 0 && !openOrg ? quiet(kit, `${plural(hidden, 'more agent')}: more than Now shows. /deck web lists them all.`) : null}
+          {hidden > 0 && !openOrg ? quiet(kit, `${plural(hidden, 'more agent')}: more than the Dashboard shows. /deck web lists them all.`) : null}
         </Box>
       )}
     </Box>
@@ -366,7 +366,7 @@ export function listsOf(kit: Kit, state: WebStateV2, actions: DashActions, activ
 }
 
 /** A list as the web's `.card.list`: a bordered box its rows fill edge to edge, a rule between them. */
-function listBox(kit: Kit, key: string, rows: readonly (RenderElement | null)[]): RenderElement {
+export function listBox(kit: Kit, key: string, rows: readonly (RenderElement | null)[]): RenderElement {
   const { Box } = kit
   return (
     <Box key={key} flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={0} paddingY={0} overflow="hidden">
@@ -376,7 +376,7 @@ function listBox(kit: Kit, key: string, rows: readonly (RenderElement | null)[])
 }
 
 /** A list's row: its parts in a line, padded so a desktop gives it the web's 48 px, washed under the pointer as the web's rows are. */
-function listRow(kit: Kit, key: string, parts: readonly (RenderElement | null)[]): RenderElement {
+export function listRow(kit: Kit, key: string, parts: readonly (RenderElement | null)[]): RenderElement {
   const { Box } = kit
   return (
     <Box key={key} flexDirection="row" columnGap={1} alignItems="center" paddingX={1} paddingY={isAiry(kit) ? 1 : 0} hover={{ backgroundColor: P.rowHover }}>
