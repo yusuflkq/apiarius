@@ -2878,7 +2878,7 @@ function HelpSection() {
       h('dd', null, what)))),
     h('div', { key: 'keys', class: 'card help-keys' },
       h('p', { class: 'ins-caption' }, 'Keys'),
-      h('p', { class: 'sec-text' }, 'The same keys work in the Desktop pane and the terminal, but for /, @, ? and Esc, which are this page\'s own. None fires while you type.'),
+      h('p', { class: 'sec-text' }, '1 to 5, Enter, b and f work in the Desktop pane and the terminal too; the rest are this page\'s own. None fires while you type.'),
       h('dl', { class: 'keys' }, KEYS.map(([k, what]) => [h('dt', { key: `k:${k}` }, k.split(/\s+/).map((one, i) => h('kbd', { key: i }, one))), h('dd', { key: `d:${k}` }, what)])))));
 }
 
