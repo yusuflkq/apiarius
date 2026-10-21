@@ -29,8 +29,9 @@
  * - Claude Code's own notices (`engine`: its notifications, a task's end)
  *   centred, small and dim: "Claude Code · Agent "X" completed · 12m". A
  *   slash command you ran alone sits there too: "You ran /login · 12m".
- * - A question held on you: its bubble edged amber, and "Answer on Now →",
- *   which takes Now's card for it into view, the focus on it.
+ * - A question held on you: its bubble edged amber, and "Answer on
+ *   Dashboard →", which takes the Dashboard's card for it into view, the
+ *   focus on it.
  * - A long message shows about six lines, then Show more opens it in place,
  *   its whole text read when the state cut it (`loadMessage`).
  * - A window: the newest messages only, "Show earlier" adding more, so the
@@ -497,7 +498,7 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
     picked === '' ? (
       <Button key="chat:filter:between" label="Between agents" plain dimColor={filter !== 'between'} onPress={() => actions.setV2View({ chatFilter: filter === 'between' ? '' : 'between' })} />
     ) : null
-  const more = hidden > 0 ? <Text color={P.muted2}>{`and ${hidden} more on Now`}</Text> : null
+  const more = hidden > 0 ? <Text color={P.muted2}>{`and ${hidden} more on the Dashboard`}</Text> : null
   if (isTerminal) {
     const items = [
       memberChip(ctx, '', 'Everyone', picked === '', () => pick('')),
@@ -785,7 +786,7 @@ function toLine(ctx: Ctx, entry: Entry): RenderElement | null {
 /**
  * Another's message: its words in the dark bubble as Markdown (a
  * SendMessage's summary bold over them); a question held on you amber-edged
- * with "Answer on Now →"; on the terminal, an indented block. What came of
+ * with "Answer on Dashboard →"; on the terminal, an indented block. What came of
  * it under it, when Claude Code said it was not delivered.
  */
 function theirsOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
@@ -803,7 +804,7 @@ function theirsOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
   }
   const answer = need ? (
     <Box flexDirection="row">
-      <Button key={`chat:answer:${row.id}`} label="Answer on Now →" plain hover={{ color: P.waitText }} onPress={go(need.id)} />
+      <Button key={`chat:answer:${row.id}`} label="Answer on Dashboard →" plain hover={{ color: P.waitText }} onPress={go(need.id)} />
     </Box>
   ) : null
   const body = [

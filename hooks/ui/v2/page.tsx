@@ -5,7 +5,8 @@
  * (the prompt it was given), its own TodoWrite list, its result, then on
  * demand its Activity (its latest tool calls, from its lazy agent file,
  * `v2Files.agent(fileId)`) and its edits (its own patches), and "Chat with
- * <agent>": Chat filtered to it, `@` it in the composer.
+ * <agent>": Chat with that agent picked in its member list, so the
+ * composer's words go to it with no `@`.
  *
  * Pure: Kit, the state, its lazy files and DashActions come from the hooks
  * module; what is unfolded is this module's own.
@@ -16,7 +17,7 @@ import { clean } from '../../format'
 import { MAIN } from '../../model'
 import type { V2AgentFile, V2AgentRow, V2Files, WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
-import { composerKey, draftFor, handleOf } from './chat'
+import { composerKey } from './chat'
 import { editBlock, titleOf, type Budget } from './diffs'
 import { AVATAR, avatar, glyph, keyButton, quiet, sectionHead, statusPill } from './look'
 import { needsSection } from './needs'
@@ -252,12 +253,10 @@ function editsPart(kit: Kit, state: WebStateV2, files: V2Files, row: V2AgentRow,
   )
 }
 
-/** "Chat with <agent>": Chat filtered to it, the focus on the composer, `@` it there (but the Orchestrator, which words with no `@` reach). */
+/** "Chat with <agent>": Chat with it picked in the member list (words with no `@` go to it), the focus on the composer. */
 function chatLine(kit: Kit, row: V2AgentRow, actions: DashActions): RenderElement {
   const { Box, Button } = kit
   const chat = () => {
-    const handle = handleOf(row)
-    if (handle) draftFor(`@${handle} `)
     actions.setV2View({ tab: 'chat', chatFilter: row.id })
     actions.back()
     actions.focusNext(1, [composerKey()])

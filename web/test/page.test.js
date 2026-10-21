@@ -788,25 +788,23 @@ test('Chat`s members replace the filter chips: Everyone, then each agent with it
   p.load(sample(s => { s.now += 1000; s.figures.running = 2 }))
   assert.equal(flat(textOf(find(members()[0], 'member-sub')[0])), '2 at work')
   assert.equal(flat(textOf(find(members()[2], 'member-sub')[0])), 'waiting on you')
-  // f: the next member, round again to Everyone
+  // no key cycles the members: f is no key of the page's
   p.run('navigate("now")')
-  assert.equal(p.key('f'), true)
-  assert.equal(p.run('route.tab'), 'chat')
-  assert.equal(p.run('ui.chatFilter'), 'main')
-  p.key('f')
-  assert.equal(p.run('ui.chatFilter'), BUILDER)
-  p.run(`ui.chatFilter = "${SCOUT}"`)
-  p.key('f')
+  assert.equal(p.key('f'), false)
+  assert.equal(p.run('route.tab'), 'now')
   assert.equal(p.run('ui.chatFilter'), 'all')
   // one gone from the session reads as Everyone
   p.run('ui.chatFilter = "gone"')
   assert.ok(members()[0].p.class.includes(' on'))
   assert.equal(p.run('recipientOf("hi", filterOf()).agentId'), 'main')
-  // the drawer's "Chat with": that member
+  // the drawer's "Chat with": that member picked, no @ typed for it
   p.open(`{ kind: "agent", id: "${TESTER}" }`)
   click(byText(p.view('Drawer()'), 'btn', 'Chat with tester'))
+  assert.equal(p.run('route.tab'), 'chat')
   assert.equal(p.run('filterOf()'), TESTER)
+  assert.ok(find(p.view('ChatPage()'), 'member').find(m => m.k === TESTER).p.class.includes(' on'))
   assert.equal(placeholder(), 'Message tester…')
+  assert.doesNotMatch(p.run('ui.drafts.get("chat") || ""'), /@/)
 })
 
 const NATIVE = 'n1a2b3c4d5e6f708', SHELL = 'n2b3c4d5e6f70819', BUILD = 'b0b1b2b3b4b5b6b7', W1 = 'w1aaaaaaaaaaaaaa', W2 = 'w2bbbbbbbbbbbbbb'
@@ -1118,6 +1116,9 @@ test('Settings (5, #/settings) holds Inspect, the avatar style and Help, laid ou
   const help = p.text('HelpSection()')
   assert.match(help, /^Help Dashboard What needs you, a card per agent.* Chat The session as a group chat\..* Org Every agent under the one that started it.* Changes Git's uncommitted files.* Settings This page/)
   assert.match(help, /Keys .* 1 2 3 4 5 Dashboard · Chat · Org · Changes · Settings j k Move the focus down, up/)
+  // no f key, said or kept
+  assert.match(help, /1 to 5, Enter and b work in the Desktop pane and the terminal too/)
+  assert.equal(findAll(p.view('HelpSection()'), one => one.t === 'dt' && flat(textOf(one)) === 'f').length, 0)
   assert.deepEqual(find(p.view('HelpSection()'), 'help-tab-name').map(a => a.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/settings'])
   // the only drawer is an agent's: an old link to Inspect, and #/inspect and #/help, open Settings
   for (const hash of ['#/chat/inspect', '#/inspect', '#/help']) {

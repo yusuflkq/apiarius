@@ -8,7 +8,7 @@
  * "to" the recipient's avatar and name, and time, each name opening that
  * agent's page, their words as Markdown in a dark bubble; one sender's
  * messages stacked under one name; Claude Code's notices centred; a question
- * held on you amber with "Answer on Now →"; a long message folded with Show
+ * held on you amber with "Answer on Dashboard →"; a long message folded with Show
  * more; the window that keeps inside the pane's bounds; and "Did you mean"
  * for a name several agents answer to. Drawn by the deck itself (`/deck
  * demo` over the v2 sample, `/deck` over a live session).
@@ -222,7 +222,7 @@ test('one sender`s messages within a few minutes stack under one avatar and name
   }
 })
 
-test('Claude Code`s notices are centred, small and dim; a question held on you is amber-edged with Answer on Now →, which takes Now`s card for it into view', async ($, on) => {
+test('Claude Code`s notices are centred, small and dim; a question held on you is amber-edged with Answer on Dashboard →, which takes the Dashboard`s card for it into view', async ($, on) => {
   const { v2 } = await demo($, on)
   const done = v2.chat.find(row => row.from === 'engine' && row.kind === 'task')!
   const asked = v2.chat.find(row => row.kind === 'question' && row.callId === 'toolu_01AskOne')!
@@ -242,7 +242,7 @@ test('Claude Code`s notices are centred, small and dim; a question held on you i
     // the question held on you
     const held = await ui.find({ key: `msg:${asked.id}` })
     expect(held?.text).toContain('Which store should back the limiter in production?')
-    expect((await ui.find({ key: `chat:answer:${asked.id}` }))?.props).toMatchObject({ label: 'Answer on Now →', plain: true })
+    expect((await ui.find({ key: `chat:answer:${asked.id}` }))?.props).toMatchObject({ label: 'Answer on Dashboard →', plain: true })
     if (surface === 'desktop') expect(under(held, node => node.type === 'Box' && node.props?.borderColor === mix(P.wait, P.card, 0.45)).length).toBe(1)
     else expect(under(held, node => node.type === 'Text' && node.props?.color === P.waitText && JSON.stringify(node).includes('?')).length).toBe(1)
     // a press takes the pane to Now, where the card for it is

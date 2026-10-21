@@ -2866,7 +2866,6 @@ const KEYS = [
   ['Enter', 'Open the focused row: an agent, a fold, a need, a file'],
   ['b', 'Back: close the agent'],
   ['n', 'The next thing that needs you'],
-  ['f', 'Chat with the next one: Everyone, then each agent'],
   ['m', 'Message: the composer (in an agent\'s drawer, that agent)'],
   ['i', 'Inspect, here in Settings'],
   ['h  ?', 'Help, here in Settings'],
@@ -2882,7 +2881,7 @@ function HelpSection() {
       h('dd', null, what)))),
     h('div', { key: 'keys', class: 'card help-keys' },
       h('p', { class: 'ins-caption' }, 'Keys'),
-      h('p', { class: 'sec-text' }, '1 to 5, Enter, b and f work in the Desktop pane and the terminal too; the rest are this page\'s own. None fires while you type.'),
+      h('p', { class: 'sec-text' }, '1 to 5, Enter and b work in the Desktop pane and the terminal too; the rest are this page\'s own. None fires while you type.'),
       h('dl', { class: 'keys' }, KEYS.map(([k, what]) => [h('dt', { key: `k:${k}` }, k.split(/\s+/).map((one, i) => h('kbd', { key: i }, one))), h('dd', { key: `d:${k}` }, what)])))));
 }
 
@@ -3010,13 +3009,6 @@ function nextNeed() {
   goToNeed(S.needs[ui.needAt]);
 }
 
-/** f: Chat with the next member, Everyone then each agent, round again. */
-function cycleFilter() {
-  const ids = ['all', ...membersOf().map(r => r.id)];
-  ui.chatFilter = ids[(ids.indexOf(filterOf()) + 1) % ids.length];
-  ui.pinChat = true;
-  navigate('chat', isWide() ? route.drawer : null);
-}
 
 /** The chat's composer, focused (`/`), with `@` typed when it is empty (`@`). */
 function composeInChat(withAt) {
@@ -3059,7 +3051,6 @@ function keyAction(key) {
     case 'k': moveFocus(-1); return true;
     case 'b': return back();
     case 'n': nextNeed(); return true;
-    case 'f': cycleFilter(); return true;
     case 'm': message(); return true;
     case 'i': openSettings('inspect'); return true;
     case 'h': case '?': openSettings('help'); return true;

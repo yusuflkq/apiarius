@@ -404,7 +404,7 @@ export type DeckView2 = {
   tab: 'now' | 'chat' | 'org' | 'changes' | 'settings'
   /** The fold rows opened, by their id (`fold:` and the parent's id); oldest first, at most 50. Every other stays folded. */
   openFolds: string[]
-  /** Chat's filter: '' for all, `you` (yours and what came to you), `between` (agent to agent), or an agent's id. */
+  /** Chat's filter: '' for Everyone, `between` (agent to agent), or the id of the agent picked in its member list. */
   chatFilter: string
   /**
    * Inspect over the tab, as earlier builds had it: always false now, as

@@ -244,7 +244,7 @@ test('Changes: git`s files as Buttons keyed file:<path>, one opened with the age
   }
 })
 
-test('5 opens Settings: Inspect (the context, the spend, the tokens and requests, a row an agent), the avatar style, Open in browser and Help; Chat with <agent> on its page opens Chat filtered to it with @ it in the composer', async ($, on) => {
+test('5 opens Settings: Inspect (the context, the spend, the tokens and requests, a row an agent), the avatar style, Open in browser and Help; Chat with <agent> on its page opens Chat with it picked in the member list, no @ typed', async ($, on) => {
   const { v2 } = await demo($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
@@ -278,7 +278,8 @@ test('5 opens Settings: Inspect (the context, the spend, the tokens and requests
     expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
     expect(await ui.find({ key: 'page:head' })).toBeUndefined()
     expect((await ui.find({ key: `chat:filter:${IDS.builder}` }))?.props.dimColor).toBe(false)
-    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('@builder ')
+    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('')
+    expect((await ui.find({ type: 'Input' }))?.props.placeholder).toBe('Message builder…')
     await press(ui, 'chat:filter:all')
     await press(ui, 'tab:now')
     await ui.unmount()

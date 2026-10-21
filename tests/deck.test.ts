@@ -189,8 +189,10 @@ test('a subagent shows as a card, its page has its task and the Orchestrator`s p
     expect((await ui.find({ key: 'page:task' }))?.text).toContain('Find the bug in src/app.ts')
     await ui.press({ key: 'page:chatwith' })
     const field = (await ui.find({ type: 'Input' }))?.key ?? ''
-    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('@scout ')
-    await ui.input({ key: field, text: `@scout hello from ${surface}` })
+    // scout picked in the member list: no @ needed
+    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('')
+    expect((await ui.find({ key: 'chat:filter:agent-x1' }))?.props.dimColor).toBe(false)
+    await ui.input({ key: field, text: `hello from ${surface}` })
     await ui.press({ key: 'tab:now' })
     await ui.unmount()
   }
