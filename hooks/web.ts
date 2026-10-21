@@ -1396,13 +1396,90 @@ export function newGitDiffsOf(gitDiffs: GitDiffs, written: ReadonlySet<string>):
   return [...gitDiffs.values()].filter(one => !written.has(one.id))
 }
 
+/** Where a composer's words go: the agent, its row's title, and the words after the `@name`. */
+export type Recipient = { agentId: string; title: string; text: string }
+
+/** An agent an `@name` could mean, as `recipientOf` offers it when the name fits several: its id, its title, and an `@` handle that names it alone. */
+export type RecipientCandidate = { agentId: string; title: string; handle: string }
+
+/** Why the words cannot go; `ambiguous`, the agents the `@name` fits equally well, when it fits several ("Did you mean: …"). */
+export type RecipientMiss = { error: string; ambiguous?: RecipientCandidate[] }
+
+/** How `@` compares names: lowercased, and nothing but a–z and 0–9 kept ("Native Chat!" is "nativechat"). */
+export function mentionKeyOf(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/** The words of an `@name`: split at anything but a letter or a digit, and where a lowercase letter or digit meets a capital ("NativeChat", "native-chat": native, chat), each as `mentionKeyOf` has it. */
+export function mentionWordsOf(text: string): string[] {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .map(mentionKeyOf)
+    .filter(word => word !== '')
+}
+
+/** An agent's `@` handle that names it alone: its short id, else its name, else its id. */
+function candidateOf(row: V2AgentRow): RecipientCandidate {
+  return { agentId: row.id, title: row.title, handle: row.shortId || row.name || row.id }
+}
+
 /**
- * Who a composer's words go to: `@name` first (an agent row's `name`, else
- * its `shortId`, any case) sends the rest to that agent, by SendMessage;
- * words with no `@` go to the Orchestrator. `error` says why it cannot be
- * sent: no agent of that name, or nothing after it.
+ * The agents `handle` (an `@name` less its `@`) means, by the first rule any
+ * agent passes, each over its `name` and its `title` as `mentionKeyOf` has
+ * them:
+ *
+ * 1. its id or its short id, exactly (any case);
+ * 2. a name that is the handle;
+ * 3. a name that starts with it;
+ * 4. a name that holds it;
+ * 5. a name that holds each of its words (`mentionWordsOf`).
+ *
+ * Of those, the agents at work or waiting on you (starting, running,
+ * waiting) win over the rest, then the newest (`startedAt`); those left
+ * tied are what it returns, in the state's order (one: the agent it means).
  */
-export function recipientOf(state: Pick<WebStateV2, 'agents'>, words: string): { agentId: string; title: string; text: string } | { error: string } {
+export function mentionedBy(rows: readonly V2AgentRow[], handle: string): V2AgentRow[] {
+  const raw = handle.toLowerCase()
+  const key = mentionKeyOf(handle)
+  const words = mentionWordsOf(handle)
+  const names = (row: V2AgentRow) => [row.name, row.title].map(mentionKeyOf).filter(name => name !== '')
+  const rules: ((row: V2AgentRow) => boolean)[] = [
+    row => row.id.toLowerCase() === raw || (row.shortId !== '' && row.shortId.toLowerCase() === raw),
+    row => key !== '' && names(row).some(name => name === key),
+    row => key !== '' && names(row).some(name => name.startsWith(key)),
+    row => key !== '' && names(row).some(name => name.includes(key)),
+    row => words.length > 0 && names(row).some(name => words.every(word => name.includes(word))),
+  ]
+  const isLive = (row: V2AgentRow) => !row.isStopped && (row.status === 'starting' || row.status === 'running' || row.status === 'waiting')
+  for (const rule of rules) {
+    const hits = rows.filter(rule)
+    if (hits.length === 0) continue
+    const live = hits.some(isLive) ? hits.filter(isLive) : hits
+    const newest = Math.max(...live.map(row => row.startedAt))
+    return live.filter(row => row.startedAt === newest)
+  }
+  return []
+}
+
+/** "Did you mean: Native chat (@a1b2c3d) or Native pane (@e4f5a6b)?", four at most. */
+function didYouMean(candidates: readonly RecipientCandidate[]): string {
+  const said = candidates.slice(0, 4).map(one => `${one.title} (@${one.handle})`)
+  const more = candidates.length > 4 ? `, or ${candidates.length - 4} more` : ''
+  const list = said.length > 1 && more === '' ? `${said.slice(0, -1).join(', ')} or ${said[said.length - 1]}` : said.join(', ')
+  return `Did you mean: ${list}${more}?`
+}
+
+/**
+ * Who a composer's words go to: `@name` first sends the rest to the agent it
+ * means (`mentionedBy`: its id or short id, else its name or title, whole,
+ * at its start, inside it, or word by word, the agents at work or waiting
+ * first, then the newest), by SendMessage; words with no `@` go to the
+ * Orchestrator. `error` says why they cannot be sent: no agent of that
+ * name, a name that fits several equally (`ambiguous`, the composer's "Did
+ * you mean: …"), or nothing after it.
+ */
+export function recipientOf(state: Pick<WebStateV2, 'agents'>, words: string): Recipient | RecipientMiss {
   const said = words.trim()
   const at = /^@(\S+)\s*([\s\S]*)$/.exec(said)
   const rows = state.agents.filter((row): row is V2AgentRow => row.row === 'agent')
@@ -1410,12 +1487,20 @@ export function recipientOf(state: Pick<WebStateV2, 'agents'>, words: string): {
     const main = rows.find(row => row.id === M.MAIN)
     return said === '' ? { error: 'Nothing to send' } : { agentId: M.MAIN, title: main?.title ?? M.ORCHESTRATOR, text: said }
   }
-  const handle = (at[1] ?? '').toLowerCase()
+  const handle = at[1] ?? ''
   const text = (at[2] ?? '').trim()
-  const found = rows.find(row => row.id !== M.MAIN && row.name.toLowerCase() === handle) ?? rows.find(row => row.id !== M.MAIN && row.shortId !== '' && row.shortId.toLowerCase() === handle)
-  if (!found) return { error: `No agent named @${at[1] ?? ''} in this session` }
+  const found = mentionedBy(
+    rows.filter(row => row.id !== M.MAIN),
+    handle,
+  )
+  if (found.length === 0) return { error: `No agent named @${handle} in this session` }
+  if (found.length > 1) {
+    const ambiguous = found.map(candidateOf)
+    return { error: didYouMean(ambiguous), ambiguous }
+  }
+  const agent = found[0]!
   if (text === '') return { error: 'Nothing to send' }
-  return { agentId: found.id, title: found.title, text }
+  return { agentId: agent.id, title: agent.title, text }
 }
 
 /** What a v2 state shows, as one key: every field of it but when it was built. Equal keys draw the same screens. */

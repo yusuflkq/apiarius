@@ -487,6 +487,68 @@ test('the composer: @name sends to that agent (its name, else its short id, any 
   expect(W.recipientOf(state, '  ')).toEqual({ error: 'Nothing to send' })
 })
 
+test('@ forgives: an id or short id, then the name (or title) whole, at its start, inside it, word by word, lowercased with only a-z and 0-9 kept; those at work or waiting first, then the newest; a tie asks "Did you mean"', () => {
+  const session = v2Session()
+  const sample = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd)
+  const base = rowOf(sample, IDS.builder)
+  const row = (id: string, shortId: string, title: string, status: W.V2AgentRow['status'], startedAt: number, name = ''): W.V2AgentRow => ({ ...base, id, shortId, title, name, status, startedAt, isStopped: false, parent: M.MAIN })
+  const chat = row('agent-chat', 'a1b2c3d', 'Native Chat as a group chat', 'running', 1000)
+  const pane = row('agent-pane', 'b2c3d4e', 'Pane: restore dashboard and org chart', 'done', 2000)
+  const web = row('agent-web', 'c3d4e5f', 'Web: restore dashboard, Org tab, git diff', 'running', 3000)
+  const robots = row('agent-robots', 'd4e5f6a', 'Robot avatars, first cut', 'done', 500)
+  const animated = row('agent-anim', 'e5f6a7b', 'Animated robot avatars + style switcher', 'done', 4000)
+  const main = rowOf(sample, M.MAIN)
+  const state = { agents: [main, chat, pane, web, robots, animated] }
+  const to = (agent: W.V2AgentRow, text = 'hello') => ({ agentId: agent.id, title: agent.title, text })
+
+  // the owner's: the name run together, its start, with a dash, any case
+  expect(W.recipientOf(state, '@NativeChat hello')).toEqual(to(chat))
+  expect(W.recipientOf(state, '@native hello')).toEqual(to(chat))
+  expect(W.recipientOf(state, '@native-chat hello')).toEqual(to(chat))
+  expect(W.recipientOf(state, '@NATIVE_CHAT, hello')).toEqual(to(chat))
+  // the short id, and the id itself
+  expect(W.recipientOf(state, '@A1B2C3D hello')).toEqual(to(chat))
+  expect(W.recipientOf(state, '@agent-chat hello')).toEqual(to(chat))
+  // inside the name; then each word inside it, in any order
+  expect(W.recipientOf(state, '@group hello')).toEqual(to(chat))
+  expect(W.recipientOf(state, '@chat-group hello')).toEqual(to(chat))
+  expect(W.recipientOf(state, '@GroupNative hello')).toEqual(to(chat))
+  // a name that starts with it wins over a newer one that only holds it
+  expect(W.recipientOf(state, '@robot hello')).toEqual(to(robots))
+  // two hold it: the one at work wins over the one done, though it is older
+  expect(W.recipientOf(state, '@dashboard hello')).toEqual(to(web))
+  // two done hold it: the newer
+  const older = row('agent-old', 'f6a7b8c', 'Old pane polish', 'done', 100)
+  const newer = row('agent-new', 'a7b8c9d', 'New pane polish', 'done', 2000)
+  expect(W.recipientOf({ agents: [main, older, newer] }, '@polish hello')).toEqual(to(newer))
+  // a waiting one counts as at work
+  const waiting = { ...older, status: 'waiting' as const }
+  expect(W.recipientOf({ agents: [main, waiting, newer] }, '@polish hello')).toEqual(to(waiting))
+  // nothing fits, or nothing after the name
+  expect(W.recipientOf(state, '@nobody hi')).toEqual({ error: 'No agent named @nobody in this session' })
+  expect(W.recipientOf(state, '@--- hi')).toEqual({ error: 'No agent named @--- in this session' })
+  expect(W.recipientOf(state, '@NativeChat')).toEqual({ error: 'Nothing to send' })
+  // the Orchestrator is the words with no @, never an @name
+  expect(W.recipientOf(state, '@Orchestrator hi')).toEqual({ error: 'No agent named @Orchestrator in this session' })
+
+  // two at work, started at once, both start with it: the composer asks which
+  const twin = row('agent-twin', 'a9b8c7d', 'Native pane polish', 'running', 1000)
+  const tied = W.recipientOf({ agents: [main, chat, twin, pane] }, '@native hello')
+  expect(tied).toEqual({
+    error: 'Did you mean: Native Chat as a group chat (@a1b2c3d) or Native pane polish (@a9b8c7d)?',
+    ambiguous: [
+      { agentId: chat.id, title: chat.title, handle: 'a1b2c3d' },
+      { agentId: twin.id, title: twin.title, handle: 'a9b8c7d' },
+    ],
+  })
+  // either one, named closer, is found
+  expect(W.recipientOf({ agents: [main, chat, twin, pane] }, '@NativeChat hello')).toEqual(to(chat))
+  expect(W.recipientOf({ agents: [main, chat, twin, pane] }, '@a9b8c7d hello')).toEqual(to(twin))
+  // the rule's pieces
+  expect(W.mentionKeyOf('Native Chat: a group chat!')).toBe('nativechatagroupchat')
+  expect([W.mentionWordsOf('NativeChat'), W.mentionWordsOf('native-chat'), W.mentionWordsOf('v2Pane_fix')]).toEqual([['native', 'chat'], ['native', 'chat'], ['v2', 'pane', 'fix']])
+})
+
 test('the commands v2 adds: stopAgent only for a background agent or a teammate at work, abortTurn only for the main loop`s running turn, answer by the call v2 names', () => {
   const data = M.emptyData(NOW - 600_000)
   agent(data, 'agent-bg', 'bg', { background: true })
