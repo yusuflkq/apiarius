@@ -94,6 +94,12 @@ export type DashActions = Actions & {
   /** Leaves the agent page for the tab it was opened from. */
   back: () => void
   /**
+   * Folds one of Now's sections to its head and one line, or opens it again,
+   * by its `DeckView.collapsed` id (./v2/dashModel's FOLD): it stays so
+   * through redraws, live updates and reloads.
+   */
+  toggleSection: (id: string) => void
+  /**
    * Answers the question held on call `callId`, by question text: through
    * the resolver the web deck's `answer` command takes; in the sample, in
    * the sample alone.

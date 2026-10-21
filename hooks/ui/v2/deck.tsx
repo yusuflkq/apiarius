@@ -27,7 +27,7 @@ import { changesTab } from './changes'
 import { chatTab, composerKey, draftFor, handleOf } from './chat'
 import { helpPage, inspectPage } from './inspect'
 import { keyButton } from './look'
-import { nowTab } from './now'
+import { nowFocusKeys, nowTab } from './now'
 import { agentPage } from './page'
 import { P } from './palette'
 
@@ -155,11 +155,18 @@ function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
       </Box>
       <Box flexShrink={0} flexDirection="row" columnGap={2}>
         {keyButton(kit, 'key:m', 'm', 'Message', message)}
-        {keyButton(kit, 'key:j', 'j', '↓', () => actions.focusNext(1))}
-        {keyButton(kit, 'key:k', 'k', '↑', () => actions.focusNext(-1))}
+        {keyButton(kit, 'key:j', 'j', '↓', () => actions.focusNext(1, focusKeysOf(state, model)))}
+        {keyButton(kit, 'key:k', 'k', '↑', () => actions.focusNext(-1, focusKeysOf(state, model)))}
       </Box>
     </Box>
   )
+}
+
+/** The rows `j` and `k` move among: Now's own (its needs, then its cards); left out elsewhere, the v2 screen's own (W.focusKeysOf). */
+function focusKeysOf(state: WebStateV2, model: DeckModel): readonly string[] | undefined {
+  const { view } = model
+  if (isHelpOpen || view.page !== '' || view.v2.isInspectOpen || view.v2.tab !== 'now') return undefined
+  return nowFocusKeys(state, view.collapsed)
 }
 
 /** Help, else Inspect, else an agent's page, else the open tab. */
@@ -176,5 +183,5 @@ function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, a
   if (view.page !== '') return agentPage(kit, state, files, view.page, actions)
   if (v2.tab === 'chat') return chatTab(kit, state, files, v2, actions, isDemo)
   if (v2.tab === 'changes') return changesTab(kit, state, files, model, actions, isDemo)
-  return nowTab(kit, state, v2, actions)
+  return nowTab(kit, state, view.collapsed, actions)
 }

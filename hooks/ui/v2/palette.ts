@@ -44,6 +44,13 @@ export const P = {
   ground: '#1a1a1a',
   /** An idle agent's status dot (the web's `.avd-dot.hue-idle`). */
   idleDot: '#6b7075',
+  /** A card's edge under the pointer, for a status with no hue of its own. */
+  borderStrong: '#4a4a4a',
+  /** An agent card's step box: a shade lighter than the pane, and its soft edge. */
+  stepBox: '#212121',
+  stepEdge: '#2e2e2e',
+  /** A list row under the pointer: the web's hover wash over the pane. */
+  rowHover: '#222222',
 } as const
 
 /** `a` blended toward `b` by `t` (0 is all `a`, 1 all `b`), as hex: how the web's translucent edges flatten here. */
@@ -54,19 +61,23 @@ export function mix(a: string, b: string, t: number): string {
   return `#${x.map((one, i) => Math.round(one + ((y[i] ?? one) - one) * t).toString(16).padStart(2, '0')).join('')}`
 }
 
-/** What a status is drawn in: its hue (the dot), its pill (dark tint behind the hue's light text), its word. */
-export type Tone = { hue: string; pillBg: string; pillFg: string; word: string }
+/**
+ * What a status is drawn in: its hue (the dot), its pill (dark tint behind
+ * the hue's light text), an agent card's edge at rest and under the pointer,
+ * its word.
+ */
+export type Tone = { hue: string; pillBg: string; pillFg: string; edge: string; hot: string; word: string }
 
-const RUN: Tone = { hue: P.run, pillBg: '#172554', pillFg: P.runText, word: 'running' }
+const RUN: Tone = { hue: P.run, pillBg: '#172554', pillFg: P.runText, edge: mix(P.run, P.card, 0.5), hot: P.run, word: 'running' }
 
-/** Each status's tone. */
+/** Each status's tone: running and waiting cards carry their hue's edge, a failed one a red edge, the rest grey; every card lights in its hue under the pointer. */
 export const TONE: Readonly<Record<V2Status, Tone>> = {
   running: RUN,
   starting: { ...RUN, word: 'starting' },
-  waiting: { hue: P.wait, pillBg: '#451a03', pillFg: P.waitText, word: 'waiting' },
-  done: { hue: P.done, pillBg: '#052e16', pillFg: P.doneText, word: 'done' },
-  failed: { hue: P.fail, pillBg: '#450a0a', pillFg: P.failText, word: 'failed' },
-  idle: { hue: P.idleDot, pillBg: '#262626', pillFg: P.idle, word: 'idle' },
+  waiting: { hue: P.wait, pillBg: '#451a03', pillFg: P.waitText, edge: mix(P.wait, P.card, 0.5), hot: P.wait, word: 'waiting' },
+  done: { hue: P.done, pillBg: '#052e16', pillFg: P.doneText, edge: P.border, hot: mix(P.done, P.card, 0.35), word: 'done' },
+  failed: { hue: P.fail, pillBg: '#450a0a', pillFg: P.failText, edge: mix(P.fail, P.card, 0.55), hot: P.fail, word: 'failed' },
+  idle: { hue: P.idleDot, pillBg: '#262626', pillFg: P.idle, edge: P.border, hot: P.borderStrong, word: 'idle' },
 }
 
 /** The tone of a status the state names; idle for one it does not. */
@@ -204,10 +215,92 @@ export function pillSvg(word: string, hue: string): string {
   )
 }
 
+/** The px a tag of `word` takes across: its words at 11 px and 8 px either side, as the web's `.tag`. */
+export function tagWidth(word: string): number {
+  return Math.round(Array.from(word).length * 6.4 + 18)
+}
+
+/** A tag as the web's `.tag-wait` (a file more than one agent edited, "shared"): its word in amber on a 12% amber wash, fully rounded, 20 px high. */
+export function tagSvg(word: string): string {
+  const width = tagWidth(word)
+  const height = 20
+  return memo(`tag|${word}`, () =>
+    [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<rect width="${width}" height="${height}" rx="${height / 2}" fill="${P.wait}" fill-opacity=".12"/>`,
+      `<text x="${width / 2}" y="14" text-anchor="middle" font-size="11" font-weight="500" fill="${P.waitText}">${esc(word)}</text>`,
+      '</svg>',
+    ].join(''),
+  )
+}
+
+/** The px a stack of `n` faces `px` square takes across: each after the first 5 px over the one before. */
+export function stackWidth(n: number, px: number): number {
+  return n <= 0 ? 0 : px + (n - 1) * (px - 5)
+}
+
+/**
+ * The editors' faces stacked as the web's `.stack`: each `px` square, each
+ * after the first 5 px over the one before, ringed in the pane's ground so
+ * they read apart; an editor the state does not hold (null) a grey disc, as
+ * the web's ghost. One document, a gradient a face.
+ */
+export function stackSvg(avatars: readonly (number | null)[], px: number): string {
+  const indices = avatars.map(one => (one === null ? null : avatarIndex(one)))
+  return memo(`stack|${px}|${indices.map(i => i ?? '-').join(',')}`, () => {
+    const width = stackWidth(indices.length, px)
+    const scale = px / 32
+    const ring = (3 / scale).toFixed(2)
+    const stops = indices.map((i, j) => {
+      const [top, bottom] = (i === null ? undefined : AVATARS[i]) ?? ['#888888', '#444444']
+      return `<linearGradient id="g${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`
+    })
+    const faces = indices.map((i, j) => {
+      if (i === null) return `<g transform="translate(${j * (px - 5)} 0) scale(${scale})"><circle cx="16" cy="16" r="12.4" fill="#262626" stroke="${P.ground}" stroke-width="${ring}" paint-order="stroke"/></g>`
+      const [top, bottom] = AVATARS[i] ?? ['#888888', '#444444']
+      const ink = (luminance(top) + luminance(bottom)) / 2 < 0.18 ? 'rgba(255,255,255,.92)' : 'rgba(23,23,28,.82)'
+      return [
+        `<g transform="translate(${j * (px - 5)} 0) scale(${scale})">`,
+        `<path d="${BLOB}" fill="url(#g${j})" stroke="${P.ground}" stroke-width="${ring}" paint-order="stroke"/><path d="${BLOB}" fill="url(#s)"/>`,
+        `<circle cx="12.3" cy="16.4" r="1.45" fill="${ink}"/><circle cx="19.7" cy="16.4" r="1.45" fill="${ink}"/>`,
+        `<path d="M14.3 20.3q1.7 1.3 3.4 0" fill="none" stroke="${ink}" stroke-width="1.2" stroke-linecap="round"/>`,
+        '</g>',
+      ].join('')
+    })
+    return [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${px}" viewBox="0 0 ${width} ${px}">`,
+      `<defs>${stops.join('')}<linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>`,
+      faces.join(''),
+      '</svg>',
+    ].join('')
+  })
+}
+
+/** A divider between a list's rows, as the web's `.list` rule: a line 1 px high in `color`, drawn wider than any slot so it fills the one it is given. */
+export function ruleSvg(color: string): string {
+  return memo(`rule|${color}`, () => `<svg xmlns="http://www.w3.org/2000/svg" width="4096" height="1" viewBox="0 0 4096 1" preserveAspectRatio="none"><rect width="4096" height="1" fill="${color}"/></svg>`)
+}
+
 // The web's icons (web/app.js IC: Lucide-style 24 px strokes) the deck draws.
 
 /** The icon names the deck draws. */
-export type IconName = 'help' | 'shield' | 'bell' | 'circleCheck' | 'circle' | 'circleX' | 'circlePause' | 'circleDashed' | 'progress'
+export type IconName =
+  | 'help'
+  | 'shield'
+  | 'bell'
+  | 'circleCheck'
+  | 'circle'
+  | 'circleX'
+  | 'circlePause'
+  | 'circleDashed'
+  | 'progress'
+  | 'bot'
+  | 'listChecks'
+  | 'dollar'
+  | 'hand'
+  | 'file'
+  | 'chevronRight'
+  | 'chevronDown'
 
 const ICONS: Readonly<Record<IconName, string>> = {
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
@@ -220,6 +313,14 @@ const ICONS: Readonly<Record<IconName, string>> = {
   circleDashed:
     '<path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/>',
   progress: '<circle cx="12" cy="12" r="10" pathLength="100" stroke-dasharray="78 22"/>',
+  // Now's figures, each at its right, and its Files list
+  bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
+  listChecks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+  dollar: '<line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
 }
 
 /** An icon as a whole SVG document, its strokes in `color`, `px` CSS pixels square. */

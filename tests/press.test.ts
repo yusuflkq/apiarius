@@ -67,9 +67,10 @@ test('the click that gives the pane the keyboard keeps every Button`s press hand
     await ui.redraw({ ...PANE, isFocused: false })
     expect(handles(await ui.drawn())).toEqual(before)
 
-    // a pane of another width is drawn for it, and a press on it lands
+    // a pane of another width is drawn for it (its cards narrower, so "Open →" may stand aside), and a press on it lands
+    const stable = (keys: string[]) => keys.filter(key => !key.startsWith('card:open:'))
     await ui.redraw({ ...PANE, bodyColumns: 140 })
-    expect(Object.keys(handles(await ui.drawn()))).toEqual(Object.keys(before))
+    expect(stable(Object.keys(handles(await ui.drawn())))).toEqual(stable(Object.keys(before)))
     await ui.press({ key: 'tab:chat' })
     await ui.redraw({ ...PANE, bodyColumns: 140 })
     expect((await ui.find({ key: 'tab:chat' }))?.props.dimColor).toBe(false)
@@ -108,25 +109,25 @@ test('a press on a tree handed back runs the newest view`s closure, and what it 
   await ui.unmount()
 })
 
-test('a row`s elapsed time changes with the minute, not with the draw: a new minute draws the pane anew, a focus flip inside one does not', async ($, on) => {
+test('a card`s time changes with the minute, not with the draw: a new minute draws the pane anew, a focus flip inside one does not', async ($, on) => {
   const clock = await opened($, on)
   await $.prompt.submit({ text: 'Fix the off-by-one in src/range.js', origin: { kind: 'composer' }, wait: false })
   await $.turn.start({ text: 'Fix the off-by-one in src/range.js', turnId: 't1' })
   await clock.advance(1000)
   const ui = await $.ui.mount(pane('desktop'))
-  const first = (await ui.find({ key: 'row:main' }))?.text
+  const first = (await ui.find({ key: 'card:time:main' }))?.props.label
   const firstHandles = handles(await ui.drawn())
 
   await clock.advance(20_000)
   await ui.redraw({ ...PANE, isFocused: true })
-  expect((await ui.find({ key: 'row:main' }))?.text).toBe(first)
+  expect((await ui.find({ key: 'card:time:main' }))?.props.label).toBe(first)
   expect(handles(await ui.drawn())).toEqual(firstHandles)
 
   await clock.advance(180_000)
   await ui.redraw({ ...PANE, isFocused: false })
-  const later = (await ui.find({ key: 'row:main' }))?.text
+  const later = (await ui.find({ key: 'card:time:main' }))?.props.label
   expect(later).not.toBe(first)
-  expect(String(later)).toMatch(/3m$/)
+  expect(String(later)).toMatch(/3m ago$/)
   await ui.unmount()
 })
 

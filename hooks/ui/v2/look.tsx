@@ -30,8 +30,8 @@ export function advanceOf(kit: Kit): Advance {
 }
 
 
-/** Avatar sizes in CSS px: a tree row's, the agent page's. */
-export const AVATAR = { row: 18, page: 32 } as const
+/** Avatar sizes in CSS px: a tree row's, the agent page's, an agent card's on Now, a row of Now's lists. */
+export const AVATAR = { row: 18, page: 32, card: 22, list: 20 } as const
 
 /**
  * An agent's avatar: its gradient face (with its status dot at its foot in
@@ -83,6 +83,13 @@ const ICON_ALT: Readonly<Record<IconName, string>> = {
   circlePause: 'Waiting on you',
   circleDashed: 'Idle',
   progress: 'In progress',
+  bot: 'Agents',
+  listChecks: 'Plan',
+  dollar: 'Spend',
+  hand: 'Waiting on you',
+  file: 'File',
+  chevronRight: 'Shut',
+  chevronDown: 'Open',
 }
 
 /** An icon where the surface draws Svg; else `mark` in `color` (the terminal draws text alone). */

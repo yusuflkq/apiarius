@@ -1,142 +1,70 @@
 /**
- * Now, the deck's first screen: does anything need me, who is working on
- * what, and Claude's plan, only where Claude made one.
+ * Now, the deck's first screen: the dashboard, on the v2 state's own data,
+ * top to bottom as the web deck's page lays it out:
  *
  * - Needs you (./needs): only when Claude Code holds something on you.
- * - Agents: the tree of who started whom, as the v2 state orders it, each
- *   row indented by its depth: its avatar with its status dot at its foot
- *   (on the terminal, which draws no image, the status dot alone), its
- *   name as a plain Button keyed `agent:<id>` (W.agentKeyOf) that
- *   opens its page, its call in flight verbatim ("Bash npm test"), and how
- *   long it has been at it. The finished and idle fold into one row ("2 done
- *   · 1 stopped"), a plain Button keyed by its own id that opens or folds
- *   its members (`DeckView.v2.openFolds`).
- * - Plan: every source Claude used, each as Claude made it: its task board,
- *   its TodoWrite list, the approved plan as written (Markdown, folded to
- *   its first line until opened) and each Workflow's phases (no status).
+ * - Agents (./dash): a card each, in rows of as many as fit, every line of a
+ *   card a press that opens the agent's page.
+ * - Figures (./dash): agents running, the plan's steps where Claude made a
+ *   plan, the session's spend, what waits on you.
+ * - Plan: only where Claude made one, every source it used, each as Claude
+ *   made it: its task board, its TodoWrite list, the approved plan as
+ *   written (Markdown, folded to its first line until opened) and each
+ *   Workflow's phases (no status).
+ * - Recent activity and Files (./dash), side by side from 120 cells.
+ *
+ * Every section but Needs you sits under a head that folds it ("▾ AGENTS 8",
+ * ./parts `foldHead`), what is folded kept in the deck's view
+ * (`DeckView.collapsed`), so redraws, live updates and reloads keep it.
  *
  * Pure: Kit, the state and DashActions come from the hooks module; the
  * approved plan's fold is this module's own.
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckView2 } from '../../../types'
 import { clean } from '../../format'
-import { agentKeyOf, type V2AgentRow, type V2FoldRow, type V2Plan, type V2Todo, type WebStateV2 } from '../../web'
+import { agentKeyOf, needKeyOf, type V2Plan, type V2Todo, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
-import { AVATAR, advanceOf, avatar, glyph, quiet, sectionHead, statusDot, svgOf } from './look'
+import { agentsSection, figuresSection, isAiry, listsOf } from './dash'
+import { FOLD, activityFoldOf, agentsFoldOf, cardAgentsOf, figuresFoldOf, filesFoldOf, planFoldOf } from './dashModel'
+import { glyph, quiet } from './look'
 import { needsSection } from './needs'
-import { P, toneOf } from './palette'
-import { cutCells, flat, ago } from './text'
-
-/** The tree's rows the pane draws at most, so its drawing keeps inside its bounds. */
-const MOST_ROWS = 80
+import { P } from './palette'
+import { foldHead, sectionFold, type Fold } from './parts'
+import { ago, flat } from './text'
 
 /** The approved plans opened (by when each was approved), while the module lives. */
 const plansOpen = new Set<number>()
 
-/** The width from which Now stands in two columns: what needs you (or the agents) at the left, the rest at the right. */
-const TWO_COLUMNS = 120
-
-/** Now: Needs you, the agents' tree, the plan; from 120 cells in two columns, the first of them at the left. */
-export function nowTab(kit: Kit, state: WebStateV2, view2: DeckView2, actions: DashActions): RenderElement {
+/**
+ * Now: Needs you, the agents' cards, the figures, the plan, then Recent
+ * activity and Files; each section but Needs you folded where `collapsed`
+ * (the view's `DeckView.collapsed`) holds its FOLD id. `openOrg`, where
+ * given, is the way to the org chart beside the agents' head.
+ */
+export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[], actions: DashActions, openOrg?: () => void): RenderElement {
   const { Box } = kit
-  const hasNeeds = state.needs.length > 0
-  if (kit.columns >= TWO_COLUMNS && (hasNeeds || state.plan)) {
-    const half = { ...kit, columns: Math.floor((kit.columns - 3) / 2) }
-    const left = hasNeeds ? [needsSection(half, state, state.needs, actions, 'now')] : [agentsSection(half, state, view2, actions)]
-    const right = hasNeeds ? [agentsSection(half, state, view2, actions), state.plan ? planSection(half, state.plan, state.now, actions) : null] : [state.plan ? planSection(half, state.plan, state.now, actions) : null]
-    return (
-      <Box key="now" flexDirection="row" columnGap={3}>
-        <Box key="now:left" flexDirection="column" gap={1} width="50%" flexShrink={1} minWidth={0}>
-          {left}
-        </Box>
-        <Box key="now:right" flexDirection="column" gap={1} width="50%" flexShrink={1} minWidth={0}>
-          {right}
-        </Box>
-      </Box>
-    )
-  }
+  const fold = (id: string, summary: string) => sectionFold(collapsed, id, summary)
   return (
-    <Box key="now" flexDirection="column" gap={1}>
+    <Box key="now" flexDirection="column" gap={isAiry(kit) ? 2 : 1}>
       {needsSection(kit, state, state.needs, actions, 'now')}
-      {agentsSection(kit, state, view2, actions)}
-      {state.plan ? planSection(kit, state.plan, state.now, actions) : null}
+      {agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg)}
+      {figuresSection(kit, state, actions, fold(FOLD.figures, figuresFoldOf(state)))}
+      {state.plan ? planSection(kit, state.plan, state.now, actions, fold(FOLD.plan, planFoldOf(state))) : null}
+      {listsOf(kit, state, actions, fold(FOLD.activity, activityFoldOf(state)), fold(FOLD.files, filesFoldOf(state)))}
     </Box>
   )
 }
 
-/** The word a row without a call in flight says after its name: its status as Claude Code gave it; '' while it runs. */
-export function statusWordOf(row: V2AgentRow): string {
-  if (row.isStopped) return 'stopped'
-  if (row.status === 'waiting') return 'waiting on you'
-  if (row.status === 'running') return ''
-  return row.status
-}
-
-
-function agentsSection(kit: Kit, state: WebStateV2, view2: DeckView2, actions: DashActions): RenderElement {
-  const { Box } = kit
-  const open = new Set(view2.openFolds)
-  const shown = state.agents.filter(row => row.row === 'fold' || row.fold === null || open.has(row.fold))
-  const count = state.agents.filter(row => row.row === 'agent').length
-  return (
-    <Box key="now:agents" flexDirection="column">
-      {sectionHead(kit, 'Agents', count)}
-      {shown.slice(0, MOST_ROWS).map(row => (row.row === 'fold' ? foldRow(kit, row, open.has(row.id), view2, actions) : agentRow(kit, row, actions)))}
-      {shown.length > MOST_ROWS ? quiet(kit, `${shown.length - MOST_ROWS} more rows: more than the pane holds. Fold a group, or /deck web.`) : null}
-    </Box>
-  )
-}
-
-/** One agent's row: avatar or dot, name (a Button to its page), its live call, its elapsed time. */
-export function agentRow(kit: Kit, row: V2AgentRow, actions: DashActions): RenderElement {
-  const { Box, Text, Button } = kit
-  const advance = advanceOf(kit)
-  const indent = row.depth * 2
-  // stopped reads as failed, as the state has it
-  const lead = svgOf(kit) ? avatar(kit, row.avatar, AVATAR.row, row.title, toneOf(row.status).hue) : statusDot(kit, row.status)
-  const name = cutCells(row.title, Math.max(10, Math.min(28, Math.floor(kit.columns / 3))), advance)
-  const word = statusWordOf(row)
-  const live = row.live ? `${row.live.tool} ${flat(row.live.text)}`.trim() : word
-  const liveColor = row.live ? P.muted : row.status === 'waiting' ? P.waitText : row.status === 'failed' ? P.failText : P.muted2
-  return (
-    <Box key={`row:${row.id}`} flexDirection="row" columnGap={1} paddingLeft={indent} alignItems="center">
-      <Box flexShrink={0}>{lead}</Box>
-      <Box flexShrink={0}>
-        <Button key={agentKeyOf(row.id)} label={name} plain onPress={() => actions.openAgent(row.id)}>
-          <Text bold color={P.text}>
-            {name}
-          </Text>
-        </Button>
-      </Box>
-      <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text color={liveColor} wrap="truncate-end">
-          {live}
-        </Text>
-      </Box>
-      <Box flexShrink={0}>
-        <Text color={P.muted2}>{row.elapsed}</Text>
-      </Box>
-    </Box>
-  )
-}
-
-/** A fold row: "▸ 2 done · 1 stopped", a plain Button keyed by its id that opens or folds its members. */
-function foldRow(kit: Kit, row: V2FoldRow, isOpen: boolean, view2: DeckView2, actions: DashActions): RenderElement {
-  const { Box, Text, Button } = kit
-  const label = `${isOpen ? '▾' : '▸'} ${row.text}`
-  const toggle = () => actions.setV2View({ openFolds: isOpen ? view2.openFolds.filter(id => id !== row.id) : [...view2.openFolds, row.id] })
-  return (
-    <Box key={`frow:${row.id}`} flexDirection="row" paddingLeft={row.depth * 2}>
-      <Box flexShrink={1} minWidth={0}>
-        <Button key={row.id} label={label} plain dimColor={kit.surface !== 'terminal'} onPress={toggle}>
-          <Text color={P.muted2}>{`${isOpen ? '▾' : '▸'} `}</Text>
-          <Text color={P.muted}>{row.text}</Text>
-        </Button>
-      </Box>
-    </Box>
-  )
+/**
+ * The rows `j` and `k` move the pane's focus among on Now, in the order it
+ * draws them: each need (W.needKeyOf), then each agent card's name
+ * (W.agentKeyOf) while the agents are open.
+ */
+export function nowFocusKeys(state: WebStateV2, collapsed: readonly string[]): string[] {
+  const needs = state.needs.map(need => needKeyOf(need.id))
+  if (collapsed.includes(FOLD.agents)) return needs
+  return [...needs, ...cardAgentsOf(state).shown.map(row => agentKeyOf(row.id))]
 }
 
 /** A plan item's glyph name: Claude's own status. */
@@ -171,8 +99,17 @@ function sourceHead(kit: Kit, text: string, note = ''): RenderElement {
   )
 }
 
-function planSection(kit: Kit, plan: V2Plan, now: number, actions: DashActions): RenderElement {
+/** The plan under its head, "▾ PLAN": every source Claude used; folded, its head and its items done of all. */
+function planSection(kit: Kit, plan: V2Plan, now: number, actions: DashActions, fold: Fold): RenderElement {
   const { Box, Text, Button, Markdown } = kit
+  const head = foldHead(kit, fold, 'Plan', null, actions)
+  if (!fold.isOpen) {
+    return (
+      <Box key="now:plan" flexDirection="column">
+        {head}
+      </Box>
+    )
+  }
   const parts: RenderElement[] = []
   if (plan.board.length > 0) {
     const done = plan.board.filter(task => task.status === 'done').length
@@ -239,7 +176,7 @@ function planSection(kit: Kit, plan: V2Plan, now: number, actions: DashActions):
   }
   return (
     <Box key="now:plan" flexDirection="column" gap={1}>
-      {sectionHead(kit, 'Plan', null)}
+      {head}
       {parts.length > 0 ? parts : quiet(kit, 'Claude made no plan.')}
     </Box>
   )

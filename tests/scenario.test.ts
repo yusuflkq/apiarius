@@ -255,15 +255,9 @@ function exactly(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 }
 
-/** The tree's agent rows, top to bottom, by the id each stands for. */
-async function rowsOf(ui: Drawing): Promise<string[]> {
-  return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('row:')).map(key => key.slice('row:'.length))
-}
-
-/** The cells a tree row is indented: its left padding, two a level. */
-async function indentOf(ui: Drawing, id: string): Promise<number> {
-  const row = (await ui.findAll({ type: 'Box' })).find(box => box.key === `row:${id}`)
-  return Number(row?.props.paddingLeft ?? -1)
+/** Now's agent cards, in the order drawn, by the id each stands for. */
+async function cardsOf(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('card:') && !key.startsWith('card:open:')).map(key => key.slice('card:'.length))
 }
 
 const ROUTES = [
@@ -308,17 +302,20 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
   await $.tool.call(inLoop('agent-fixer', bash({ command: 'node --test', description: 'Run the unit tests' })))
   await clock.advance(1000)
 
-  // while they work: the state, your request, who is at work under whom, each one's call; the finished folded
+  // while they work: the state, your request, a card each in the order they started, how each stands; scout done
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     const header = await shown(ui, { key: 'deck:header' })
     expect(header.text).toContain('Working')
     expect(header.text).toContain(PROMPT)
     expect(await ui.find({ key: 'needs:now' })).toBeUndefined()
-    expect(await rowsOf(ui)).toEqual(['main', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
-    expect(await indentOf(ui, 'agent-helper')).toBe((await indentOf(ui, 'agent-fixer')) + 2)
-    expect((await shown(ui, { key: 'row:agent-fixer' })).text).toContain('fixer')
-    expect((await shown(ui, { key: 'fold:main' })).props.label).toBe('▸ 1 done')
+    const cards = await cardsOf(ui)
+    expect(cards[0]).toBe('main')
+    expect([...cards].sort()).toEqual(['agent-fixer', 'agent-helper', 'agent-reviewer', 'agent-scout', 'main'])
+    expect((await shown(ui, { key: 'card:agent-fixer' })).text).toContain('fixer')
+    expect((await shown(ui, { key: 'card:agent-scout' })).text).toContain('Finished')
+    expect((await shown(ui, { key: 'card:agent-scout' })).text).toContain(ANSWERS.scout.slice(0, 20))
+    expect((await shown(ui, { key: 'card:agent-helper' })).text).toContain('Started')
     await ui.unmount()
   }
 
@@ -332,13 +329,11 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    // all done: idle, the agents folded under the Orchestrator, opened on a press, fixer's helper under it
+    // all done: idle, every card done and saying what it handed back
     expect((await shown(ui, { key: 'deck:header' })).text).toContain('Idle')
-    expect(await rowsOf(ui)).toEqual(['main'])
-    await ui.press({ key: 'fold:main' })
-    expect(await rowsOf(ui)).toEqual(['main', 'agent-scout', 'agent-fixer', 'agent-helper', 'agent-reviewer'])
-    expect(await indentOf(ui, 'agent-helper')).toBe((await indentOf(ui, 'agent-fixer')) + 2)
-    expect((await shown(ui, { key: 'row:agent-scout' })).text).toContain('done')
+    expect((await cardsOf(ui)).sort()).toEqual(['agent-fixer', 'agent-helper', 'agent-reviewer', 'agent-scout', 'main'])
+    for (const id of ['agent-scout', 'agent-fixer', 'agent-reviewer', 'agent-helper']) expect((await shown(ui, { key: `card:${id}` })).text).toContain('Finished')
+    expect((await shown(ui, { key: 'card:agent-fixer' })).text).toContain(ANSWERS.fixer.slice(0, 30))
 
     // fixer's page: its task, its result, its own patches
     await ui.press({ key: 'agent:agent-fixer' })
@@ -363,7 +358,6 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     expect(notes[0]?.text).toContain(NOTE_LINE)
     await ui.press({ key: 'page:fold:edits' })
     await ui.press({ key: 'key:b' })
-    await ui.press({ key: 'fold:main' })
 
     // Chat: the whole conversation in order, each row a sentence; the agents' words to each other among it
     await ui.press({ key: 'tab:chat' })

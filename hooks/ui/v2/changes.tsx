@@ -131,12 +131,18 @@ function fileRow(kit: Kit, state: WebStateV2, file: File, isOpen: boolean, actio
   )
 }
 
-/** An open file: git's diff (read by the hooks module), and beside it (under it, below 140 cells) each agent's own edits of it. */
+/**
+ * An open file: git's own diff of it (the state's, `diffId` through
+ * `files.gitDiff`, as the web page reads it; else the one the hooks module
+ * read), and beside it (under it, below 140 cells) each agent's own edits of it.
+ */
 function fileDetail(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, file: File, isDemo: boolean, budget: Budget): RenderElement {
   const { Box, Text } = kit
+  const own = file.diffId !== null ? files.gitDiff(file.diffId) : null
   const diff = !isDemo && model.fileDiff !== null && model.fileDiff.path === file.path ? model.fileDiff : null
   let git: RenderElement | RenderElement[]
-  if (isDemo) git = quiet(kit, 'The sample holds no git diff of its own: its agents’ edits are beside it.')
+  if (own !== null) git = own.trim() === '' ? quiet(kit, 'Git shows no line changes in it.') : diffBlocks(kit, hunksOf(own), file.path, budget)
+  else if (isDemo) git = quiet(kit, 'The sample holds no git diff of its own: its agents’ edits are beside it.')
   else if (diff === null) git = <Text color={P.muted2}>Reading the diff…</Text>
   else if (diff.isBinary) git = quiet(kit, 'Binary file: no line diff.')
   else if (diff.note) git = quiet(kit, clean(diff.note))

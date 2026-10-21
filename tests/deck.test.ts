@@ -162,7 +162,7 @@ test('/deck opens the pane on Now; Changes shows git`s files (one opened to git`
   }
 })
 
-test('a subagent shows in the tree, its page has its task and the Orchestrator`s page its edit as a diff, and the composer`s @name reaches it', async ($, on) => {
+test('a subagent shows as a card, its page has its task and the Orchestrator`s page its edit as a diff, and the composer`s @name reaches it', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const sent: { to: string; text: string }[] = []
   world(on, sent)
@@ -198,9 +198,10 @@ test('a subagent shows in the tree, its page has its task and the Orchestrator`s
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it: b was 2.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-x1' })
   const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
-  // done, it folds under the Orchestrator: open the fold, then its page
-  expect((await ui.find({ key: 'fold:main' }))?.props.label).toBe('▸ 1 done')
-  await ui.press({ key: 'fold:main' })
+  // done: its card says so and what it handed back, and opens its page
+  const card = await ui.find({ key: 'card:agent-x1' })
+  expect(card?.text).toContain('done')
+  expect(card?.text).toContain('Found it: b was 2.')
   await ui.press({ key: 'agent:agent-x1' })
   expect((await ui.find({ key: 'page:result' }))?.text).toContain('Found it: b was 2.')
   await ui.unmount()

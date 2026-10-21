@@ -1863,6 +1863,11 @@ function actionsFor($: EngineInterface): DeckActions {
       view.page = ''
       changed($)
     },
+    // Now's sections fold to their heads, and the choice stays (the view's `collapsed`)
+    toggleSection: id => {
+      view.collapsed = M.collapsedWith(view.collapsed, id)
+      changed($)
+    },
     answer: (callId, answers) => (view.isDemo ? void answerInSample($, callId, answers) : answerFromPane($, callId, answers)),
     redraw: () => redraw($),
     loadMessage: (id, onRead) => void readMessage($, id, onRead),

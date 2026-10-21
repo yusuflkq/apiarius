@@ -1,7 +1,9 @@
 /**
  * The deck's pane on the v2 view model, on the terminal and the desktop:
  * the header, the tabs and every key as a Button's hotkey; Now (Needs you,
- * the agents' tree with its folds, the plan from every source Claude used);
+ * the agents' cards, the figures, the plan from every source Claude used,
+ * Recent activity and Files, each section folding by its head; more of it
+ * in tests/now.test.ts);
  * an agent's page and Back; Chat (its sentence rows, its filters, `f`, its
  * window, the composer and what came of a send); Changes; Inspect and help;
  * and the band's one line. Drawn by the deck itself (`/deck demo` over the
@@ -94,13 +96,14 @@ test('Now: the header says the state, your request and model · context · $; th
     const hotkeys = Object.fromEntries((await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined).map(one => [one.props.hotkey, one.key]))
     expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:changes', n: 'key:n', i: 'key:i', h: 'key:h', m: 'key:m', j: 'key:j', k: 'key:k' })
     for (const key of Object.keys(hotkeys)) expect(key).toMatch(/^[0-9a-z]$/)
-    // no KPI strip, no cards of agents: the old Dashboard is gone
-    expect(await ui.find({ key: 'kpi:running' })).toBeUndefined()
+    // Now is the dashboard: a card an agent, the figures
+    expect(await ui.find({ key: 'card:main' })).toBeDefined()
+    expect(await ui.find({ key: 'tile:running' })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('Now: Needs you as Claude Code holds them (a question answerable here, a permission with its command, a notification verbatim, each its age), the tree of who started whom with its folds, the plan from every source', async ($, on) => {
+test('Now: Needs you as Claude Code holds them (a question answerable here, a permission with its command, a notification verbatim, each its age), a card an agent, the plan from every source', async ($, on) => {
   const { v2 } = await demo($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
@@ -125,17 +128,16 @@ test('Now: Needs you as Claude Code holds them (a question answerable here, a pe
     const note = v2.needs.find(need => need.kind === 'notification')!
     expect((await ui.find({ key: `needs:${note.id}` }))?.text).toContain('The github MCP server is asking for your input')
 
-    // the tree: a row an agent, indented by its depth; the fold rows folded, their members not drawn
-    expect(await keysOf(ui, 'agent:')).toEqual(['agent:main', `agent:${IDS.builder}`, `agent:${IDS.reviewer}`])
-    expect(await keysOf(ui, 'fold:')).toEqual([`fold:${IDS.builder}`, 'fold:main'])
-    expect((await ui.find({ key: 'fold:main' }))?.props.label).toBe('▸ 2 done · 1 stopped')
-    const builder = await ui.find({ key: `row:${IDS.builder}` })
-    expect(builder?.props.paddingLeft).toBe(2)
+    // the agents: a card each, every one of them, the Orchestrator first and then as they started; each name keyed as `j` and `k` move to (W.agentKeyOf)
+    const cards = v2.agents.filter((row): row is W.V2AgentRow => row.row === 'agent').sort((x, y) => Number(y.id === 'main') - Number(x.id === 'main') || x.startedAt - y.startedAt)
+    expect(await keysOf(ui, 'agent:')).toEqual(cards.map(row => W.agentKeyOf(row.id)))
+    expect(await keysOf(ui, 'fold:')).toEqual(['fold:dash:agents', 'fold:dash:figures', 'fold:dash:plan', 'fold:dash:activity', 'fold:dash:files'])
+    const builder = await ui.find({ key: `card:${IDS.builder}` })
     expect(builder?.text).toContain('Bash npm test -- rateLimit')
-    expect(builder?.text).toContain('29m')
-    // avatars: the gradient face with its status dot where Svg draws; the status dot alone on the terminal
+    expect(builder?.text).toContain('Waiting · 29m')
+    // avatars: the gradient face with its status dot where Svg draws, the cards' first; none on the terminal
     const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar'))
-    if (surface === 'desktop') expect(faces.map(face => face.props.alt)).toEqual(["Orchestrator's avatar", "builder's avatar", "reviewer's avatar"])
+    if (surface === 'desktop') expect(faces.slice(0, cards.length).map(face => face.props.alt)).toEqual(cards.map(row => `${row.title}'s avatar`))
     else expect(faces).toEqual([])
 
     // the plan: the board, the Orchestrator's own list, the approved plan folded to its first line, the Workflow's phases
@@ -153,16 +155,19 @@ test('Now: Needs you as Claude Code holds them (a question answerable here, a pe
   }
 })
 
-test('a fold row opens its members (and they stay open), an agent`s row opens its page, and b goes back', async ($, on) => {
-  await demo($, on)
+test('a section`s head folds it to one line (and it stays so), another press opens it; an agent`s card opens its page, and b goes back', async ($, on) => {
+  const { v2 } = await demo($, on)
+  const n = v2.agents.filter(row => row.row === 'agent').length
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    await press(ui, 'fold:main')
-    expect((await ui.find({ key: 'fold:main' }))?.props.label).toBe('▾ 2 done · 1 stopped')
-    expect(await keysOf(ui, 'agent:')).toEqual(['agent:main', `agent:${IDS.builder}`, `agent:${IDS.reviewer}`, `agent:${IDS.researcher}`, `agent:${IDS.docs}`, `agent:${IDS.scout}`])
-    expect((await ui.find({ key: `row:${IDS.scout}` }))?.text).toContain('stopped')
-    await press(ui, 'fold:main')
+    await press(ui, 'fold:dash:agents')
+    expect((await ui.find({ key: 'fold:dash:agents' }))?.props.label).toBe(`▸ AGENTS ${n}`)
     expect(await ui.find({ key: `agent:${IDS.scout}` })).toBeUndefined()
+    await ui.redraw()
+    expect(await ui.find({ key: `agent:${IDS.scout}` })).toBeUndefined()
+    await press(ui, 'fold:dash:agents')
+    expect((await ui.find({ key: 'fold:dash:agents' }))?.props.label).toBe(`▾ AGENTS ${n}`)
+    expect((await ui.find({ key: `card:${IDS.scout}` }))?.text).toContain('Stopped')
 
     // builder's page: who it is, its live call, what it waits on you for, its task; Activity and Edits on demand
     await press(ui, `agent:${IDS.builder}`)
@@ -429,22 +434,20 @@ test('Chat draws a window of the newest rows, Show earlier adds more, and even t
   }
 })
 
-test('from 120 cells Now stands in two columns, what needs you at the left and the agents and the plan at the right; below, one column in that order', async ($, on) => {
+test('from 120 cells Recent activity and Files stand side by side, the cards four a row at 140; below, one under the other, two cards a row; top to bottom what needs you, the agents, the figures, the plan', async ($, on) => {
   await demo($, on)
   for (const surface of SURFACES) {
     const wide = await $.ui.mount(pane(surface, 140))
-    const left = await wide.find({ key: 'now:left' })
-    const right = await wide.find({ key: 'now:right' })
-    expect(left?.text).toContain('NEEDS YOU')
-    expect(left?.text).not.toContain('AGENTS')
-    expect(right?.text).toContain('AGENTS')
-    expect(right?.text).toContain('PLAN')
+    expect((await wide.find({ key: 'now:lists' }))?.props.flexDirection).toBe('row')
+    expect((await wide.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith('cards:'))[0]?.text).toContain('Orchestrator')
     await wide.unmount()
     const narrow = await $.ui.mount(pane(surface, 84))
-    expect(await narrow.find({ key: 'now:left' })).toBeUndefined()
+    expect((await narrow.find({ key: 'now:lists' }))?.props.flexDirection).toBe('column')
     const now = (await narrow.find({ key: 'now' }))?.text ?? ''
     expect(now.indexOf('NEEDS YOU')).toBeLessThan(now.indexOf('AGENTS'))
-    expect(now.indexOf('AGENTS')).toBeLessThan(now.indexOf('PLAN'))
+    expect(now.indexOf('AGENTS')).toBeLessThan(now.indexOf('FIGURES'))
+    expect(now.indexOf('FIGURES')).toBeLessThan(now.indexOf('PLAN'))
+    expect(now.indexOf('PLAN')).toBeLessThan(now.indexOf('RECENT ACTIVITY'))
     await narrow.unmount()
   }
 })
