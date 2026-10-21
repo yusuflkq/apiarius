@@ -379,7 +379,8 @@ test('an Agent call shows its agent at once, keyed by the call and labelled from
   // the second call's result named its agent: no spawn was told, the row is bound by the call
   expect(data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-n1', 'agent-bound', 'toolu_c'])
   const stopped = agentIn(data, 'toolu_c')
-  expect([stopped.status, stopped.answer]).toEqual(['killed', 'Not started: The person declined to start it'])
+  // its row ends, with no words the agent never said
+  expect([stopped.status, stopped.answer]).toEqual(['killed', undefined])
 })
 
 test('labels: the name, else the description`s marker (its scope after), else the description cut at a word; at most 18 characters (24 when that keeps little), fixed at spawn, never an id', () => {

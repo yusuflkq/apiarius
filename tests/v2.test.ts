@@ -253,15 +253,27 @@ test('a row`s call in flight is shown verbatim, tool and what it was given; its 
   M.beginTool(data, main, M.activityOf('toolu_2', 'Edit', { file_path: '/repo/src/a.ts' }, '/repo', NOW - 5000))
   const done = agent(data, 'agent-done', 'done', { status: 'completed', endedAt: NOW - 30_000, startedAt: NOW - 270_000 })
   M.noteResult(data, done, `All good. ${'y'.repeat(700)}`, NOW - 30_000, 'handback')
-  // an Agent call that started no agent: the deck's own words for it are no result of the agent's
-  agent(data, 'agent-none', 'none', { status: 'failed', endedAt: NOW - 30_000, answer: 'Not started: the call was refused' })
+  // an Agent call that started no agent (refused), and one that runs in a cloud session: the deck words no result for either
+  for (const [id, end] of [
+    ['toolu_none', { isStarted: false, why: 'The person declined to start it' }],
+    ['toolu_cloud', { isStarted: true, isRemote: true }],
+  ] as const) {
+    M.addPlaceholder(data, { toolUseId: id, parentId: M.MAIN, description: id, prompt: 'Go', at: NOW - 40_000 })
+    M.settleAgentCall(data, { toolUseId: id, at: NOW - 30_000, ...end })
+  }
 
   const state = stateOf(data)
   expect(rowOf(state, 'agent-fixer')).toMatchObject({ live: { tool: 'Bash', text: 'npm test -- rateLimit', at: NOW - 20_000 }, model: 'haiku-4.5', tokens: 60, elapsed: '4m', isTaskCut: true })
   expect(rowOf(state, 'agent-fixer').task).toHaveLength(600)
   expect(rowOf(state, M.MAIN)).toMatchObject({ live: { tool: 'Edit', text: 'src/a.ts' }, elapsed: '5m', task: '' })
   expect(rowOf(state, 'agent-done')).toMatchObject({ live: null, status: 'done', elapsed: '4m', isResultCut: true })
-  expect(rowOf(state, 'agent-none').result).toBe('')
+  expect([rowOf(state, 'toolu_none').result, rowOf(state, 'toolu_none').status, rowOf(state, 'toolu_none').isStopped]).toEqual(['', 'failed', true])
+  expect([rowOf(state, 'toolu_cloud').result, rowOf(state, 'toolu_cloud').status]).toEqual(['', 'idle'])
+  // a snapshot of an earlier build, which wrote words of its own there: healed to none
+  const old = M.copyOf(data)
+  old.agents.find(one => one.id === 'toolu_none')!.answer = 'Not started: The person declined to start it'
+  old.agents.find(one => one.id === 'toolu_cloud')!.answer = 'Runs in a cloud session, outside this view'
+  expect(M.healData(old, NOW).agents.filter(one => one.id.startsWith('toolu_')).map(one => one.answer)).toEqual([undefined, undefined])
 
   const file = JSON.parse(W.agentFilesOf(data).find(one => one.id === W.webIdOf('agent-fixer'))?.text ?? '{}') as W.V2AgentFile
   expect(file).toMatchObject({ v: 2, id: 'agent-fixer', task: fixer.prompt, result: '', todos: [], edits: [] })

@@ -768,8 +768,6 @@ export const V2_CAPS = { chat: 200, text: 600, edits: 300, commits: 20, acks: 50
 
 const STATE_TEXT: Readonly<Record<V2Header['state'], string>> = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' }
 
-/** The results the deck made up for a row its Agent call ended without an agent: no report of the agent's. */
-const MADE_UP_RESULT = /^(?:Not started: |Runs in a cloud session, outside this view$)/
 
 /** The loops that are rows of the tree: the Orchestrator, its agents (a Workflow's and Claude Code's own among them) and teammates; never you or a peer of earlier builds. */
 function isTreeAgent(agent: DeckAgent): boolean {
@@ -833,10 +831,9 @@ function todosOf(items: readonly { text: string; status: V2Todo['status']; doing
   return (items ?? []).map(item => ({ text: item.text, status: item.status, ...(item.doing ? { doing: item.doing } : {}) }))
 }
 
-/** What an agent handed back, as Claude Code gave it: never the words the deck made up for an Agent call that started no agent. */
+/** What an agent handed back, as Claude Code gave it ('' until it reports). */
 function resultOf(agent: DeckAgent): string {
-  const said = agent.answer ?? ''
-  return agent.kind === 'main' || agent.resultVia !== undefined || !MADE_UP_RESULT.test(said) ? said : ''
+  return agent.answer ?? ''
 }
 
 /** Whether a row folds: finished or idle, nothing of its waits on you. */

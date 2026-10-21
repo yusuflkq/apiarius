@@ -1037,6 +1037,9 @@ function num(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+/** The results earlier builds wrote for an Agent call that started no agent, or one in a cloud session. */
+const MADE_UP_RESULT = /^(?:Not started: |Runs in a cloud session, outside this view$)/
+
 /** One restored agent's newer fields, each kept only in its own shape. */
 function healAgent(agent: DeckAgent): DeckAgent {
   const loose = agent as unknown as Record<string, unknown>
@@ -1050,6 +1053,8 @@ function healAgent(agent: DeckAgent): DeckAgent {
   if (typeof loose.background !== 'boolean') delete agent.background
   if (num(loose.todosAt) === undefined) delete agent.todosAt
   if (!['handback', 'answer', 'call', 'stop'].includes(String(loose.resultVia))) delete agent.resultVia
+  // the words earlier builds made up for an Agent call that started no agent: no result of any agent's
+  if (agent.resultVia === undefined && agent.kind !== 'main' && typeof agent.answer === 'string' && MADE_UP_RESULT.test(agent.answer)) delete agent.answer
   const during = loose.during
   if (!isRecord(during) || (during.kind !== 'todo' && during.kind !== 'task') || typeof during.key !== 'string' || typeof during.text !== 'string') delete agent.during
   if (Array.isArray(loose.todos)) {
@@ -2369,8 +2374,10 @@ export type AgentCallEnd = {
 
 /**
  * Settles the row an Agent call made once the call returns: bound to the
- * agent its result names when no spawn bound it; ended "Not started: why"
- * when no agent started; a foreground agent's report recorded and its row ended.
+ * agent its result names when no spawn bound it; ended (stopped) when no
+ * agent started, and idle when it runs in a cloud session, neither with a
+ * word the agent never said; a foreground agent's report recorded and its
+ * row ended.
  */
 export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: DeckAgent; from?: string } | undefined {
   const row = data.agents.find(agent => agent.toolUseId === end.toolUseId)
@@ -2384,12 +2391,10 @@ export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: Dec
     } else if (!end.isStarted) {
       row.status = 'killed'
       row.endedAt = end.at
-      row.answer = trunc(`Not started: ${oneLine(end.why ?? '') || 'the call was refused'}`, LIMITS.answerChars)
       return { agent: row }
     } else if (end.isRemote) {
       row.status = 'idle'
       row.endedAt = end.at
-      row.answer = 'Runs in a cloud session, outside this view'
       return { agent: row }
     }
   }
