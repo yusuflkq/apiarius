@@ -11,42 +11,14 @@
  */
 import type { RenderElement } from 'claude-code'
 
-import type { DeckView } from '../types'
 import { bandView } from './ui/band'
 import type { DashActions, DashModel, DeckModel, Kit } from './ui/types'
 import { v2Deck } from './ui/v2/deck'
 import { quiet } from './ui/v2/look'
 import { P } from './ui/v2/palette'
 
-/** The outline's folds and zoom, as `DeckView` keeps them (an earlier build's; nothing draws them now). */
-export type OutlineSpot = Pick<DeckView, 'folded' | 'zoom'>
-
-/**
- * What the hooks module's presses run (its `actionsFor`): the deck's own,
- * and three an earlier build's outline took (`pick`, `setOutline`,
- * `openDetails`), which no screen presses now.
- */
-export type DeckActions = Omit<DashActions, 'select' | 'toggleFold' | 'zoomTo' | 'selectAgent' | 'showDetails'> & {
-  /** Opens row `id` in the detail block (an agent's id, a plan step's key, `file:` and a path); with `outline`, the outline's folds and zoom become it. */
-  pick: (id: string, outline?: OutlineSpot) => void
-  /** Sets the outline's folds, its zoom, or both; what is left out stays. */
-  setOutline: (outline: Partial<OutlineSpot>) => void
-  /** Shows the Agents tab's full outline (Details); with `id` ('' for none), that row picked as `pick` picks it. */
-  openDetails: (id: string, outline?: OutlineSpot) => void
-}
-
-/** The actions the screens press, of the hooks module's. */
-function dashActionsOf(actions: DeckActions): DashActions {
-  const { pick, setOutline, openDetails, ...rest } = actions
-  return {
-    ...rest,
-    select: id => pick(id),
-    selectAgent: id => pick(id),
-    toggleFold: () => undefined,
-    zoomTo: () => undefined,
-    showDetails: id => openDetails(id),
-  }
-}
+/** What the hooks module's presses run (its `actionsFor`): the screens' own, as they press them. */
+export type DeckActions = DashActions
 
 /** The band above the prompt (./ui/band): its one line from `model.band`; null when it has nothing to say. */
 export function bandOf(kit: Kit, model: DeckModel, actions: DeckActions, theirs: RenderElement | null): RenderElement | null {
@@ -54,9 +26,8 @@ export function bandOf(kit: Kit, model: DeckModel, actions: DeckActions, theirs:
 }
 
 /** The whole pane: the sample's header when it shows, then the v2 deck (./ui/v2/deck). */
-export function deckView(kit: Kit, model: DeckModel, deckActions: DeckActions, dash: DashModel): RenderElement {
+export function deckView(kit: Kit, model: DeckModel, actions: DeckActions, dash: DashModel): RenderElement {
   const { Box } = kit
-  const actions = dashActionsOf(deckActions)
   const state = dash.v2
   return (
     <Box flexDirection="column" gap={1}>

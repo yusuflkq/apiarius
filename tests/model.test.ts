@@ -303,9 +303,9 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   await clock.advance(2000)
   const kept = lastOf(saved)
   expect(kept.v).toBe(M.SNAPSHOT_VERSION)
-  // its graph tab is the Agents tab now (Classic), and /deck opens the Dashboard; the pane it had open stays
+  // its graph tab is the Agents tab now (Classic); /deck opens v2's Now, the earlier build's fields left as they were
   expect(M.healView(older.view, kept.data).tab).toBe('agents')
-  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'dashboard', agent: 'agent-old', agentPane: 'activity', showFiles: false })
+  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'activity', showFiles: false })
   expect(kept.data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-old'])
   expect(kept.data.messages.map(message => message.id)).toEqual([spawned.id])
   expect(kept.data.tasks).toEqual({})

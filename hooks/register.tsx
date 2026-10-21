@@ -29,19 +29,13 @@ import * as F from './format'
 import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
-import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
-
-import type { ChatLine, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
+import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { newRenderMemo } from './renderMemo'
 import { bandOf, deckView, type DeckActions } from './views'
 import * as W from './web'
 
 const PANE = 'agent-deck'
 const SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
-const HISTORY_KEY = 'history'
-const HISTORY_DAYS = 21
-
-type History = Record<string, Record<string, Omit<DayRow, 'day' | 'sessions'>>>
 
 let data: DeckData = M.emptyData(0)
 let view: DeckView = M.defaultView()
@@ -50,34 +44,27 @@ let cwd = ''
 let sessionId = ''
 let usage: UsageInfo | null = null
 let usageAt = 0
-let days: DayRow[] = []
-let daysAt = 0
 let fileDiff: G.FileDiff | null = null
 let commit: G.CommitDetail | null = null
-let chat: { agent: string; lines: ChatLine[]; at: number } | null = null
 let isPaneOpen = false
 let isGitBusy = false
 let isGitQueued = false
 let isHeavyQueued = false
 let lastGitAt = 0
 let lastHeavyAt = 0
-const timers: { git?: Timer; save?: Timer; tick?: Timer; day?: Timer; dump?: Timer; web?: Timer } = {}
+const timers: { git?: Timer; save?: Timer; tick?: Timer; dump?: Timer; web?: Timer } = {}
 /** The screen key the last drawing showed (or the last timed redraw asked for); see `screenKey`. */
 let shownKey = ''
 let gitKeyMemo: { of: G.GitState; key: string } | null = null
 
 /**
- * The sample `/deck demo` shows (web/fixtures/state.json, its times moved
- * to the moment it was read), and the deck model its agent pages read; null
- * until it is read. `note` says why it could not be; `version` counts its
- * changes (an answer given in it), for the screen key. `v2` is the v2
- * sample (web/fixtures/state.v2.json, `W.v2StateFromText`), null while it
- * is read or when it could not be; `v2Files` its lazy files
- * (web/fixtures/v2/), as read.
+ * The sample `/deck demo` shows: `v2` the v2 sample (web/fixtures/state.v2.json,
+ * `W.v2StateFromText`, its times moved to the moment it was read), null
+ * while it is read or when it could not be; `v2Files` its lazy files
+ * (web/fixtures/v2/), as read. `note` says why it could not be read;
+ * `version` counts its changes (an answer given in it), for the screen key.
  */
-const demo: { state: W.WebState | null; data: DeckData | null; v2: W.WebStateV2 | null; v2Files: W.V2Files; note: string; version: number } = {
-  state: null,
-  data: null,
+const demo: { v2: W.WebStateV2 | null; v2Files: W.V2Files; note: string; version: number } = {
   v2: null,
   v2Files: W.v2FilesFrom({ agents: {}, patches: {}, messages: {} }),
   note: '',
@@ -88,47 +75,25 @@ const demo: { state: W.WebState | null; data: DeckData | null; v2: W.WebStateV2 
 let dataGen = 0
 
 /**
- * The v2 view model (`W.deckStateOf`, web/CONTRACT.md v2) as the screen
- * stands, built once per screen and shared by the pane (`dashOf`),
- * state.json (`writeWeb`) and the debug dump: built again only when the
- * screen's key moved (`shownKey`), the data was saved since (`dataGen`),
- * git was read or the usage loaded again, a minute turned (the ages and
- * times it words), or the questions the deck may answer changed.
+ * The v2 view model (`W.deckStateOf`, web/CONTRACT.md) as the screen
+ * stands, shared by the pane (`dashOf`), the band, state.json (`writeWeb`)
+ * and the debug dump, with what it shows as one key (`W.v2KeyOf`). Each
+ * screen key builds it afresh (`screenKey`); `v2Of` builds it again only
+ * when the data was saved since (`dataGen`), git was read or the usage
+ * loaded again, a minute turned (the ages and times it words), or the
+ * questions the deck may answer changed.
  */
 const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usage: UsageInfo | null; state: W.WebStateV2 | null; shows: string } = { key: '', data: null, git: null, usage: null, state: null, shows: '' }
 
-function v2Of(now: number): W.WebStateV2 {
+function v2Of(now: number, isFresh = false): W.WebStateV2 {
   const asking = [...askers.keys()]
-  const key = [shownKey, dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd].join('\u0001')
-  if (v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage) return v2Memo.state
+  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd].join('\u0001')
+  if (!isFresh && v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage) return v2Memo.state
   // a question the page may answer is one whose race runs in this module: none after a reload
   const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking))
   Object.assign(v2Memo, { key, data, git, usage, state, shows: W.v2KeyOf(state) })
   return state
 }
-
-/** What the v2 state shows (`W.v2KeyOf`), worked out once per state built. */
-function v2ShowsOf(now: number): string {
-  v2Of(now)
-  return v2Memo.shows
-}
-
-/**
- * The surfaces whose org chart Client failed (`ui.fault`): their Org tab lists
- * the agents as a tree while it stays open. A drawing of anything else (another
- * tab, an agent's page) clears its surface, so the chart is tried again the
- * next time the Org tab shows; /deck clears them all.
- */
-const orgDown = new Set<RenderSurface>()
-
-/** Whether this surface's Org tab lists the agents instead of its chart: the chart failed there and the tab has not been left since. */
-function isOrgDownOn(surface: RenderSurface): boolean {
-  if (view.tab !== 'org' || view.page !== '') orgDown.delete(surface)
-  return orgDown.has(surface)
-}
-
-/** The agent whose page was opened last: the org chart marks it. */
-let lastAgent: string | null = null
 
 /** The key of the Button the pane's focus ring is on, as `ui.focus` last landed it ('' for none, or one of the engine's own stops): where `j`, `k` and `n` move it from. */
 let paneFocus = ''
@@ -178,41 +143,19 @@ function gitKeyOf(state: G.GitState): string {
 }
 
 /**
- * Everything on screen, as one key: each agent's status, now text and coarse
- * elapsed time while it runs, the banner; the Agents tab's goal, plan,
- * checklists, last actions, files, messages, needs-you line and summary
- * (`M.deckKeyOf`); git (whether read, HEAD, branch, files and counts); the
- * usage figures rounded; the day history; the edits; on the Stats tab the
- * session's totals and the minute; and what the native dashboard shows
- * beside them (`dashKeyOf`); and all that the v2 state shows (`W.v2KeyOf`),
- * which every v2 screen draws. Equal keys draw the same screen.
+ * Everything on screen, as one key: all that the v2 state shows, built
+ * afresh (`W.v2KeyOf`: the header, needs, tree, plan, chat, changes, Inspect
+ * and acks, every age and elapsed time as worded); git as the Changes tab
+ * reads it (whether read, HEAD, branch, files and counts); how the web deck
+ * stands; and the sample's own state while it shows. Equal keys draw the
+ * same screen.
  */
 function screenKey(now: number): string {
-  const figures = usage
-    ? [Math.round(usage.contextPercent ?? -1), F.money(usage.costUsd), ...usage.limits.map(limit => `${limit.kind}:${Math.round(limit.percentUsed)}`)].join(' ')
-    : ''
-  const isStats = isPaneOpen && view.tab === 'stats'
-  const minute = isStats ? M.minuteOf(now) : ''
-  const totals = isStats ? JSON.stringify([M.totalsOf(data), data.minutes[data.minutes.length - 1] ?? null]) : ''
-  const edits = `${data.edits.length}:${data.edits[data.edits.length - 1]?.id ?? ''}`
+  v2Of(now, true)
   const shown = webPaneOf()
   const webKey = `${shown.status}\t${shown.url}\t${shown.opened}\t${shown.note}`
-  return [M.agentsKeyOf(data, git, now), M.deckKeyOf(data, git, now), gitKeyOf(git), figures, JSON.stringify(days), minute, totals, edits, webKey, dashKeyOf(now), v2ShowsOf(now)].join('\n\u0001')
-}
-
-/**
- * What the native dashboard draws that the keys above leave out, while the
- * pane shows it (the Dashboard, Org, Plan, an agent page, the sample): the coarse
- * ages it words ("4m", so to the minute), the calls held on you and whether
- * the deck may answer each, each agent's tokens as a card words them, the
- * sample's state, and where the org chart's Client failed. '' otherwise.
- */
-function dashKeyOf(now: number): string {
-  const isDash = isPaneOpen && (view.tab === 'dashboard' || view.tab === 'org' || view.tab === 'plan' || view.page !== '' || view.isDemo)
-  if (!isDash) return ''
-  const held = data.pending.map(item => `${item.id}:${item.kind}:${askers.has(item.id)}`).join(',')
-  const tokens = data.agents.map(agent => `${agent.id}:${F.num(agent.tokensIn + agent.tokensOut + agent.cacheRead)}`).join(',')
-  return [M.minuteOf(now), held, tokens, view.isDemo, demo.version, demo.state !== null, demo.note, [...orgDown].join(',')].join('|')
+  const sample = view.isDemo ? [demo.version, demo.v2 !== null, demo.note].join('|') : ''
+  return [v2Memo.shows, gitKeyOf(git), webKey, sample].join('\n\u0001')
 }
 
 /**
@@ -1344,56 +1287,6 @@ async function loadCommit($: EngineInterface, hash: string): Promise<void> {
   redraw($)
 }
 
-/** Turns an agent's (or the main loop's) transcript into chat bubbles. */
-function chatLinesOf(messages: readonly SessionMessage[], agentName: string, parentName: string): ChatLine[] {
-  const lines: ChatLine[] = []
-  for (const message of messages) {
-    const text = message.text.trim()
-    if (message.role === 'user') {
-      if (text) lines.push({ role: 'parent', who: parentName, text })
-      continue
-    }
-    if (text) lines.push({ role: 'agent', who: agentName, text })
-    const uses = message.toolUses
-    uses.slice(0, 3).forEach(use => lines.push({ role: 'tool', who: agentName, text: `${use.tool} ${M.targetOf(use.tool, use.input, git.root || null)}${use.isError ? ' ✗' : ''}` }))
-    if (uses.length > 3) lines.push({ role: 'tool', who: agentName, text: `… ${uses.length - 3} more tool calls` })
-  }
-  return lines.slice(-28)
-}
-
-async function loadChat($: EngineInterface, agentId: string): Promise<void> {
-  const agent = M.agentOf(data, agentId)
-  const now = await $.clock.now()
-  if (!agent) return
-
-  let lines: ChatLine[] = []
-  try {
-    if (agent.kind === 'main') {
-      const found = await $.session.messages()
-      lines = chatLinesOf(found.slice(-16), 'main', 'You')
-    } else if (agent.kind === 'agent' || agent.kind === 'teammate') {
-      const found = await $.session.messages({ agentId })
-      const parent = agent.parentId ? M.agentOf(data, agent.parentId) : undefined
-      lines = 'deny' in found ? [{ role: 'note', who: '', text: `No transcript to show yet (${found.deny}).` }] : chatLinesOf(found.slice(-18), M.labelOf(agent), parent ? M.labelOf(parent) : 'main')
-    } else {
-      lines = data.messages
-        .filter(message => message.from === agentId || message.to === agentId)
-        .slice(-12)
-        .map(message => ({ role: message.from === agentId ? 'agent' : 'parent', who: message.from === agentId ? M.labelOf(agent) : message.from, text: message.text }))
-    }
-  } catch (error) {
-    lines = [{ role: 'note', who: '', text: `Could not read the conversation: ${error instanceof Error ? error.message : String(error)}` }]
-  }
-
-  const mine = data.messages.filter(message => message.kind === 'chat' && message.to === agentId && message.at > now - 120_000)
-  for (const message of mine) {
-    if (!lines.some(line => line.role === 'parent' && line.text.includes(message.text.slice(0, 40)))) lines.push({ role: 'parent', who: 'You (deck)', text: message.text })
-  }
-
-  const isSame = chat !== null && chat.agent === agentId && JSON.stringify(chat.lines) === JSON.stringify(lines)
-  chat = { agent: agentId, lines, at: now }
-  if (!isSame) redraw($)
-}
 
 /**
  * The agents you messaged from the deck and await a reply from, by id: when
@@ -1424,16 +1317,14 @@ async function sendChat($: EngineInterface, agentId: string, text: string, ackId
     // busy, it reads them once its turn ends; idle, at once
     await queueForMain($, text, ackId, isBusy ? { status: 'queued', text: 'Claude reads it when it finishes its current turn' } : { status: 'delivered', text: 'Claude reads it now' })
     $.ui.toast(isBusy ? 'Queued for the Orchestrator: it reads it when its current turn ends.' : 'Sent to the Orchestrator.')
-    chat?.lines.push({ role: 'parent', who: 'You', text })
     redraw($)
     return
   }
 
   const sent = await $.session.send({ to: { agentId }, text }).catch(error => ({ isDelivered: false as const, reason: String(error) }))
   const message = M.addMessage(data, { from: M.YOU, to: agentId, kind: 'chat', text, at: now, isDelivered: sent.isDelivered, ...(ackId ? { ackId } : {}) })
-  if (chat?.agent === agentId) chat.lines.push({ role: 'parent', who: 'You (deck)', text })
   if (sent.isDelivered) {
-    $.ui.toast(`Sent to ${M.labelOf(agent)}`)
+    $.ui.toast(`Sent to ${W.rowTitleOf(agent)}`)
     if (M.isEnded(agent.status)) M.reopen(agent)
     replies.set(agentId, { since: now, isRead: false })
     await ack($, ackId, 'delivered', 'It reads it at its next step')
@@ -1499,7 +1390,7 @@ const relays: Relay[] = []
  * (`passRelay`); a relay turn that ends without one fails it.
  */
 async function relayViaMain($: EngineInterface, agent: DeckAgent, text: string, ackId: string, message: DeckMessage): Promise<void> {
-  const label = M.labelOf(agent)
+  const label = W.rowTitleOf(agent)
   const prompt = `Pass this message from me to the agent "${label}" (id ${agent.id}) with SendMessage, word for word, then carry on with what you were doing:\n\n${text}`
   const relay: Relay = { agentId: agent.id, label, text, ackId, message, prompt, isSubmitted: false, turnId: '', isPassed: false, isRead: false }
   relays.push(relay)
@@ -1602,64 +1493,6 @@ async function loadUsage($: EngineInterface): Promise<void> {
     redrawIfChanged($, usageAt)
   } catch {
     // the status line's figures are optional here
-  }
-}
-
-function historyOf(value: unknown): History {
-  return value && typeof value === 'object' ? (value as History) : {}
-}
-
-/** Adds this session's totals to the day it started, kept across sessions in `$.store`. */
-async function recordDay($: EngineInterface): Promise<void> {
-  const totals = M.totalsOf(data)
-  const day = F.dayKey(data.startedAt)
-  const key = `${sessionId || 'session'}:${data.startedAt}`
-  try {
-    const history = M.copyOf(historyOf(await $.store.get(HISTORY_KEY)))
-    const today = history[day] ?? {}
-    today[key] = {
-      added: totals.added,
-      removed: totals.removed,
-      tools: totals.tools,
-      tokens: totals.tokensIn + totals.tokensOut + totals.cacheRead,
-      activeMs: data.turnMs,
-    }
-    history[day] = today
-    const cutoff = F.dayKey(data.startedAt - HISTORY_DAYS * 86_400_000)
-    for (const old of Object.keys(history)) if (old < cutoff) delete history[old]
-    await $.store.set(HISTORY_KEY, history)
-    days = daysOf(history, await $.clock.now())
-  } catch {
-    // history is a nicety; the session's own numbers stand without it
-  }
-}
-
-function daysOf(history: History, now: number): DayRow[] {
-  const out: DayRow[] = []
-  for (let back = 6; back >= 0; back--) {
-    const day = F.dayKey(now - back * 86_400_000)
-    const sessions = Object.values(history[day] ?? {})
-    out.push({
-      day,
-      sessions: sessions.length,
-      added: sessions.reduce((sum, one) => sum + (one.added ?? 0), 0),
-      removed: sessions.reduce((sum, one) => sum + (one.removed ?? 0), 0),
-      tools: sessions.reduce((sum, one) => sum + (one.tools ?? 0), 0),
-      tokens: sessions.reduce((sum, one) => sum + (one.tokens ?? 0), 0),
-      activeMs: sessions.reduce((sum, one) => sum + (one.activeMs ?? 0), 0),
-    })
-  }
-  return out.some(row => row.sessions > 0) ? out : []
-}
-
-async function loadDays($: EngineInterface): Promise<void> {
-  try {
-    const now = await $.clock.now()
-    days = daysOf(historyOf(await $.store.get(HISTORY_KEY)), now)
-    daysAt = now
-    redrawIfChanged($, now)
-  } catch {
-    days = []
   }
 }
 
@@ -1776,10 +1609,6 @@ async function tick($: EngineInterface): Promise<void> {
     if (now - lastGitAt > 6000) void refreshGit($)
     if (now - usageAt > 10_000) void loadUsage($)
   }
-  if (isPaneOpen) {
-    if (now - daysAt > 120_000) void loadDays($)
-    if (view.tab === 'agents' && view.agentPane === 'chat' && now - (chat?.at ?? 0) > 6000) void loadChat($, view.agent)
-  }
   // the pane's first tick looks again for what a reload lost (once a pass under way is done)
   if (!isPaneOpen) {
     recovery.isPaneSeen = false
@@ -1796,9 +1625,7 @@ async function openPane($: EngineInterface): Promise<boolean> {
   isPaneOpen = true
   void refreshGit($, true)
   void loadUsage($)
-  void loadDays($)
   void syncAgents($)
-  if (view.tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
   if (view.commit) void loadCommit($, view.commit)
   return opened.isPlaced
 }
@@ -1834,67 +1661,25 @@ function scrollTo($: EngineInterface, key: string, block: 'start' | 'nearest' = 
 }
 
 /**
- * An agent page's Talk keeps to its newest message while you are at the
- * pane's end, as a chat does: the Talk it showed last (`agent`, what its
- * thread ended with) and whether you are at the end. You are there once
- * Talk opens on a press or you send from it, and while your own scrolling
- * (`ui.scroll`) leaves you there; not once you scroll up or a press brings
- * something above into view.
- */
-const talkView = { agent: '', end: '', isAtEnd: false }
-
-/** Takes the pane to its end, where the engine keeps it while the drawing grows and nothing else moves it. */
-function scrollToEnd($: EngineInterface) {
-  $.clock.after(SCROLL_MS, () => {
-    try {
-      void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
-    } catch {
-      // no scroll on this engine: the pane stays where it is
-    }
-  })
-}
-
-/** Talk opened on a press, or you sent from it: the pane goes to its end (the newest message and the box) and keeps to it. */
-function followTalk($: EngineInterface) {
-  talkView.agent = view.page
-  talkView.isAtEnd = true
-  scrollToEnd($)
-}
-
-/**
- * At each drawing of the pane, with the state it draws: something new at
- * the end of the Talk on show takes the pane to its end while you were
- * there; another page, pane or agent leaves it to a press.
- */
-function keepTalk($: EngineInterface, state: W.WebState | null) {
-  const id = state && view.page !== '' && view.agentPane === 'chat' ? view.page : ''
-  const end = state && id !== '' ? W.threadEndOf(state, id) : ''
-  if (id === '' || id !== talkView.agent) {
-    talkView.agent = id
-    talkView.isAtEnd = false
-  } else if (end !== talkView.end && talkView.isAtEnd) {
-    scrollToEnd($)
-  }
-  talkView.end = end
-}
-
-/**
  * The whole text of message `id` the state cut (`isCut`), for an agent
  * page's Show more, as the web page's `/message/<id>` serves it: the deck's
  * own copy while it holds one (whole under 700 characters; a longer one's
  * kept until the web deck writes it), else the file the web deck wrote
- * (`.web/<session>/messages/<id>.md`), else in the sample its fixture's
- * (web/fixtures/messages). `onRead` gets it, or null; then the pane draws.
+ * (`.web/<session>/messages/<id>.md`); in the sample, its own as read
+ * (`demo.v2Files`), else its file (web/fixtures/v2/messages). `onRead` gets
+ * it, or null; then the pane draws.
  */
 async function readMessage($: EngineInterface, id: string, onRead: (text: string | null) => void): Promise<void> {
   let text: string | null = null
   if (/^[A-Za-z0-9_-]{1,200}$/.test(id)) {
     const own = view.isDemo ? undefined : data.messages.find(message => W.webIdOf(message.id) === id)
-    if (own?.full !== undefined) text = own.full
+    const sampled = view.isDemo ? demo.v2Files.message(id) : null
+    if (sampled !== null) text = sampled
+    else if (own?.full !== undefined) text = own.full
     else if (own && own.isSaved !== true && Array.from(own.text).length < M.LIMITS.messageChars) text = own.text
     else {
       const root = $.plugin.root.replace(/[\\/]+$/, '')
-      const dir = view.isDemo ? `${root}/web/fixtures` : web.dir || W.webDirOf(root, sessionId)
+      const dir = view.isDemo ? `${root}/web/fixtures/v2` : web.dir || W.webDirOf(root, sessionId)
       try {
         text = await $.fs.read(`${dir}/messages/${id}.md`)
       } catch {
@@ -1909,28 +1694,6 @@ async function readMessage($: EngineInterface, id: string, onRead: (text: string
     // the pane goes on without it
   }
   redraw($)
-}
-
-/** The Plan tab with step `key` open, scrolled to once drawn: `openStep`, and `/deck plan <n>`. */
-function showStep($: EngineInterface, key: string) {
-  view.tab = 'plan'
-  view.page = ''
-  view.planOpen = M.planOpenWith(view.planOpen, M.stepOpenId(key), true)
-  changed($)
-  scrollTo($, M.stepRowKey(key))
-}
-
-/** The key of this session's plan step numbered `n` (1 for the first, as the Plan tab numbers them); '' for none. */
-function stepAt(n: string): string {
-  const at = /^\d{1,3}$/.test(n) ? Number(n) - 1 : -1
-  return M.planOf(data).steps[at]?.key ?? ''
-}
-
-/** Opens row `id` (an agent, a plan step, a file) in the detail block; an agent's conversation reloads when that view is the one open. */
-function pickAgent($: EngineInterface, id: string) {
-  view.agent = id
-  chat = null
-  if (view.agentPane === 'chat') void loadChat($, id)
 }
 
 /**
@@ -1979,41 +1742,11 @@ async function focusNeed($: EngineInterface): Promise<void> {
   await focusOn($, key)
 }
 
-/** The outline's folds and zoom as a press handed them over (views.tsx works them out): copies, so the view holds its own. */
-function setOutlineTo(outline: { folded?: readonly string[]; zoom?: string }) {
-  if (outline.folded) view.folded = outline.folded.filter(one => typeof one === 'string')
-  if (typeof outline.zoom === 'string') view.zoom = outline.zoom
-}
-
-/** The closures the views' buttons and fields run (views.tsx makes Classic's select, fold, zoom and Details of `pick`, `setOutline` and `openDetails`). */
+/** The closures the views' buttons and fields run. */
 function actionsFor($: EngineInterface): DeckActions {
   return {
-    setTab: tab => {
-      view.tab = tab
-      // a tab pressed on an agent's page leaves the page for that tab
-      view.page = ''
-      if (tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
-      if (tab === 'changes' && view.file) void loadFileDiff($, view.file)
-      changed($)
-    },
-    openAgent: (id, pane) => {
+    openAgent: id => {
       view.page = id
-      lastAgent = id
-      // Talk → and the like: the page opens on that pane, scrolled to it (Talk to its end: the newest message and the box)
-      if (pane) view.agentPane = pane
-      changed($)
-      if (pane === 'chat') followTalk($)
-      else if (pane) scrollTo($, `detail:${pane}`)
-    },
-    // the Plan tab with that step open, from wherever the press was (the Dashboard's goal, an agent page)
-    openStep: key => showStep($, key),
-    togglePlan: id => {
-      view.planOpen = M.planOpenWith(view.planOpen, id)
-      changed($)
-    },
-    // a section's head: folded to it and its summary, or open again, drawn at once
-    toggleSection: id => {
-      view.collapsed = M.collapsedWith(view.collapsed, id)
       changed($)
     },
     back: () => {
@@ -2023,40 +1756,22 @@ function actionsFor($: EngineInterface): DeckActions {
     answer: (callId, answers) => (view.isDemo ? void answerInSample($, callId, answers) : answerFromPane($, callId, answers)),
     redraw: () => redraw($),
     loadMessage: (id, onRead) => void readMessage($, id, onRead),
-    reveal: (key, block) => {
-      talkView.isAtEnd = false
-      scrollTo($, key, block)
-    },
-    followTalk: () => followTalk($),
+    reveal: (key, block) => scrollTo($, key, block),
     exitDemo: () => {
       leaveDemo()
       view.page = ''
       changed($)
     },
-    // the v2 screens' own state: each field checked as a reload checks it
+    // the v2 screens' own state: each field checked as a reload checks it; Changes reads the file it shows again
     setV2View: patch => {
       view.v2 = M.view2With(view.v2, patch)
+      if (view.v2.tab === 'changes' && view.file && git.isRepo) void loadFileDiff($, view.file)
       changed($)
     },
     // j and k: the focus a row down or up; n: the next thing that needs you
     focusNext: (dir, keys) => void focusNext($, dir, keys),
     focusNeed: () => void focusNeed($),
-    // a row picked; with `outline`, the outline as it shows that row (Classic's select)
-    pick: (id, outline) => {
-      pickAgent($, id)
-      if (outline) setOutlineTo(outline)
-      changed($)
-    },
-    setOutline: outline => {
-      setOutlineTo(outline)
-      changed($)
-    },
     selectRepo: root => void chooseRepo($, root),
-    setAgentPane: pane => {
-      view.agentPane = pane
-      if (pane === 'chat') void loadChat($, view.agent)
-      changed($)
-    },
     selectFile: path => {
       view.file = view.file === path ? '' : path
       fileDiff = null
@@ -2069,52 +1784,25 @@ function actionsFor($: EngineInterface): DeckActions {
       if (view.commit) void loadCommit($, hash)
       changed($)
     },
-    setFilter: filter => {
-      view.filter = filter
-      changed($)
-    },
-    toggleFiles: () => {
-      view.showFiles = !view.showFiles
-      changed($)
-    },
     toggleBand: () => {
       view.isBandHidden = !view.isBandHidden
       void $.store.set('prefs', { isBandHidden: view.isBandHidden }).catch(() => undefined)
       changed($)
     },
-    refresh: () => {
-      void refreshGit($, true)
-      void loadUsage($)
-      void syncAgents($)
-      if (view.tab === 'agents' && view.agentPane === 'chat') void loadChat($, view.agent)
-      $.ui.toast('Agent Deck refreshed')
-    },
-    // the sample's Talk sends nothing: its agents are a recording, and its Orchestrator is not this session's
-    // a send from the page's Talk carries an id: its ack says what came of it, under the message
+
+    // the sample's chat sends nothing: its agents are a recording, and its Orchestrator is not this session's
+    // a send from the pane's composer carries an id: its ack says what came of it, under the message
     sendChat: (agentId, text, ackId) => (view.isDemo ? $.ui.toast('Sample data: nothing is sent. Back to this chat to talk to your agents.') : void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))),
     review: text => fillReview($, text),
     // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
     open: tab => {
       leaveDemo()
-      view.tab = M.tabNamed(tab) ?? 'dashboard'
       view.v2 = M.view2With(view.v2, { tab: M.v2TabOf(tab), isInspectOpen: false })
       view.page = ''
       changed($)
       void openPane($)
     },
     openWeb: () => void openWeb($),
-    toggleDetails: () => {
-      view.isDetailsOpen = !view.isDetailsOpen
-      changed($)
-    },
-    openDetails: (id, outline) => {
-      view.isDetailsOpen = true
-      if (id !== '') {
-        pickAgent($, id)
-        if (outline) setOutlineTo(outline)
-      }
-      changed($)
-    },
   }
 }
 
@@ -2129,35 +1817,26 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
     columns,
     ...('Input' in ui ? { Input: ui.Input } : {}),
     ...('Select' in ui ? { Select: ui.Select } : {}),
-    // the terminal's table answers to Svg but draws nothing for it: there Stats draws its cards and charts as text
+    // the terminal's table answers to Svg but draws nothing for it: there the screens draw text
     ...('Svg' in ui && surface !== 'terminal' ? { Svg: ui.Svg } : {}),
-    // a table answers to every element name: only the terminal and the desktop run a surface module
-    ...('Client' in ui && (surface === 'terminal' || surface === 'desktop') ? { Client: ui.Client } : {}),
   }
 }
 
-/** What the native dashboard draws from: this session's web state (the page's, `webStateOf`), or the sample's while it shows. */
-function dashOf(now: number, surface: RenderSurface): DashModel {
+/** What the pane draws from: this session's v2 state and its lazy files, or the sample's while it shows. */
+function dashOf(now: number): DashModel {
   const isDemo = view.isDemo
   return {
-    // a question the deck may answer is one whose race runs in this module, as the page is told
-    state: isDemo ? demo.state : W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())),
     v2: isDemo ? demo.v2 : v2Of(now),
     v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data),
     isDemo,
     demoNote: demo.note,
-    paneData: isDemo && demo.data ? demo.data : data,
-    isOrgDown: isOrgDownOn(surface),
-    selected: lastAgent,
   }
 }
 
 /** Leaves the sample: the pane shows this session again. */
 function leaveDemo() {
-  if (!view.isDemo && demo.state === null) return
+  if (!view.isDemo && demo.v2 === null) return
   view.isDemo = false
-  demo.state = null
-  demo.data = null
   demo.v2 = null
   demo.v2Files = W.v2FilesFrom({ agents: {}, patches: {}, messages: {} })
   demo.note = ''
@@ -2199,92 +1878,49 @@ async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2
 }
 
 /**
- * `/deck demo`, or a reload while the sample showed: reads the web deck's
- * fixture under the mod's folder (web/fixtures/state.json, and each edit's
- * patch from web/fixtures/patches) and shows it as the sample, its times
- * moved to now. `isFresh` opens it on the Dashboard; a reload keeps the tab
- * and page it was on. Answers why it could not be read; '' once it shows.
+ * `/deck demo`, or a reload while the sample showed: reads the v2 sample
+ * under the mod's folder (web/fixtures/state.v2.json, then the lazy files
+ * its state names under web/fixtures/v2) and shows it, its times moved to
+ * now. `isFresh` opens it on Now; a reload keeps the tab and page it was on.
+ * Answers why it could not be read; '' once it shows.
  */
 async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   const root = $.plugin.root.replace(/[\\/]+$/, '')
   view.isDemo = true
   if (isFresh) {
-    view.tab = 'dashboard'
     view.page = ''
+    view.v2 = M.view2With(view.v2, { tab: 'now', isInspectOpen: false })
   }
-  demo.state = null
-  demo.data = null
   demo.v2 = null
   demo.v2Files = W.v2FilesFrom({ agents: {}, patches: {}, messages: {} })
   demo.note = ''
   demo.version += 1
   redraw($)
-  let state: W.WebState | null = null
   const readAt = await $.clock.now()
+  let shown: W.WebStateV2 | null = null
+  let files: W.V2Files | null = null
   try {
-    state = demoStateOf(await $.fs.read(`${root}/web/fixtures/state.json`), readAt)
+    const text = await $.fs.read(`${root}/web/fixtures/state.v2.json`)
+    shown = W.v2StateFromText(text, readAt)
+    if (shown) files = await readV2Sample($, `${root}/web/fixtures/v2`, shown, readAt - (JSON.parse(text) as { now: number }).now)
   } catch {
-    state = null
+    shown = null
   }
   // left (or loaded afresh) while it was read
-  if (!view.isDemo || demo.state !== null) return ''
-  if (!state) {
-    demo.note = 'The sample could not be read: web/fixtures/state.json is missing, or not a deck state.'
+  if (!view.isDemo || demo.v2 !== null) return ''
+  if (!shown) {
+    demo.note = 'The sample could not be read: web/fixtures/state.v2.json is missing, or not a deck state.'
     demo.version += 1
     redraw($)
     return demo.note
   }
-  const patches: Record<string, string> = {}
-  let v2: W.WebStateV2 | null = null
-  let v2Files: W.V2Files | null = null
-  await Promise.all([
-    ...state.edits
-      .filter(edit => /^[A-Za-z0-9_-]{1,120}$/.test(edit.id))
-      .map(async edit => {
-        try {
-          patches[edit.id] = await $.fs.read(`${root}/web/fixtures/patches/${edit.id}.diff`)
-        } catch {
-          // an edit with no patch shows no lines
-        }
-      }),
-    // the v2 sample, for the screens that draw v2, and its lazy files: its times moved to the same now
-    (async () => {
-      try {
-        const text = await $.fs.read(`${root}/web/fixtures/state.v2.json`)
-        const shown = W.v2StateFromText(text, readAt)
-        if (!shown) return
-        v2 = shown
-        v2Files = await readV2Sample($, `${root}/web/fixtures/v2`, shown, readAt - (JSON.parse(text) as { now: number }).now)
-      } catch {
-        // no v2 sample: those screens say so
-      }
-    })(),
-  ])
-  if (!view.isDemo) return ''
-  demo.state = state
-  demo.data = demoDataOf(state, patches)
-  demo.v2 = v2
-  if (v2Files) demo.v2Files = v2Files
-  if (view.page !== '' && !state.agents.some(agent => agent.id === view.page)) view.page = ''
+  const isPage = (id: string) => shown?.agents.some(row => row.row === 'agent' && row.id === id) === true
+  demo.v2 = shown
+  if (files) demo.v2Files = files
+  if (view.page !== '' && !isPage(view.page)) view.page = ''
   demo.version += 1
   changed($)
   return ''
-}
-
-/**
- * What the org chart's Client posted: `{ type: 'open', id }` for a card
- * clicked opens that agent's page, when the pane shows that agent (this
- * session's, or the sample's). Anything else is let go: it came from code.
- */
-function openFromChart($: EngineInterface, posted: unknown) {
-  if (typeof posted !== 'object' || posted === null) return
-  const { type, id } = posted as { type?: unknown; id?: unknown }
-  if (type !== 'open' || typeof id !== 'string') return
-  const isShown = view.isDemo ? demo.state?.agents.some(agent => agent.id === id) === true : id !== M.YOU && M.agentOf(data, id) !== undefined
-  if (!isShown) return
-  view.page = id
-  lastAgent = id
-  changed($)
 }
 
 /** The state a drawing reads: the live model, as it is now; the views build their rows from it. */
@@ -2295,9 +1931,7 @@ function modelOf(now: number): DeckModel {
     git,
     fileDiff,
     commit,
-    chat: chat && chat.agent === view.agent ? chat.lines : null,
     usage,
-    days,
     now,
     cwd,
     web: webPaneOf(),
@@ -2306,7 +1940,6 @@ function modelOf(now: number): DeckModel {
   }
 }
 
-/** The file an Edit, Write or NotebookEdit call names; '' for none. */
 function editedPathOf(input: Record<string, unknown>): string {
   return typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : ''
 }
@@ -2625,13 +2258,12 @@ function answerFromPane($: EngineInterface, callId: string, answers: Record<stri
   redraw($)
 }
 
-/** An answer given in the sample: its question taken down there alone (the v2 sample's need, else v1's), nothing sent to Claude. */
+/** An answer given in the sample: its question taken down there alone (`W.answeredInSample`), nothing sent to Claude. */
 async function answerInSample($: EngineInterface, callId: string, answers: Record<string, string>): Promise<void> {
-  const now = await $.clock.now()
-  const inV2 = demo.v2 ? W.answeredInSample(demo.v2, callId, answers, now) : null
-  if (inV2) demo.v2 = inV2.state
-  const words = inV2 ? inV2.words : demo.state && demo.data ? answerDemo(demo.state, demo.data, callId, answers, now) : ''
-  if (!words) return
+  const answered = demo.v2 ? W.answeredInSample(demo.v2, callId, answers, await $.clock.now()) : null
+  if (!answered) return
+  demo.v2 = answered.state
+  const words = answered.words
   demo.version += 1
   $.ui.toast(`Sample data: you answered ${F.trunc(words, 120)}. Nothing was sent to Claude.`)
   redraw($)
@@ -2831,7 +2463,6 @@ export const register: Register = on => {
     if (view.isDemo) void loadDemo($, false)
 
     void startRepos($)
-    void loadDays($)
     void syncAgents($)
     // what a reload lost (the goal, an ended agent's result), read back from the transcripts: never awaited, it redraws when done
     void recoverLost($)
@@ -2856,7 +2487,6 @@ export const register: Register = on => {
     const result = await next(e)
     const now = await $.clock.now()
     data = M.emptyData(now)
-    chat = null
     commit = null
     fileDiff = null
     changed($)
@@ -2883,9 +2513,7 @@ export const register: Register = on => {
       if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Agent Deck web stopped.' : 'Agent Deck web was not running.' }
       return openWeb($)
     }
-    // a Client that failed is tried again whenever /deck opens
-    orgDown.clear()
-    // the sample: the native dashboard drawn from the web deck's fixture
+    // the sample: the deck drawn from the v2 sample
     if (arg === 'demo' || arg === 'sample') {
       const why = await loadDemo($, true)
       const isShown = await openPane($)
@@ -2893,29 +2521,14 @@ export const register: Register = on => {
       if (why) return { text: why }
       return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
     }
-    // anything else is this session's deck: /deck alone its Dashboard
+    // anything else is this session's deck: /deck alone Now; now, chat or changes (or an earlier build's tab, on the one it folded into); inspect (or stats) Now with Inspect open
     leaveDemo()
     view.page = ''
-    if (arg === '') view.tab = 'dashboard'
-    // the Agents tab's full outline
-    if (arg === 'details') {
-      view.tab = 'agents'
-      view.isDetailsOpen = true
-    }
-    // /deck plan 3: the Plan tab with its third step open, as the web page's #/plan/<key> opens one
-    const isStepAsked = words[0] === 'plan' && words.length === 2
-    const step = isStepAsked ? stepAt(words[1] ?? '') : ''
-    // a tab's name or its start; an earlier build's name (overview, diffs, commits, graph) lands on the tab that replaced it
-    const tab = arg === 'details' ? undefined : M.tabFor(isStepAsked ? 'plan' : arg)
-    if (tab) view.tab = tab
-    // the v2 screens: /deck alone Now; now, chat or changes (an earlier build's tab on the one it folded into); inspect (or stats) Now with Inspect open
     const isInspect = words[0] === 'inspect' || words[0] === 'stats'
-    const v2Tab = arg === '' || isInspect || isStepAsked ? 'now' : M.v2TabFor(words[0] ?? '')
-    if (v2Tab) view.v2 = M.view2With(view.v2, { tab: v2Tab, isInspectOpen: isInspect })
+    const tab = arg === '' || isInspect ? 'now' : M.v2TabFor(words[0] ?? '')
+    if (tab) view.v2 = M.view2With(view.v2, { tab, isInspectOpen: isInspect })
     const isPlaced = await openPane($)
-    if (step) showStep($, step)
-    else changed($)
-    if (isStepAsked && !step) return { text: `The plan has no step ${words[1] ?? ''}: /deck plan shows its steps.` }
+    changed($)
     return isPlaced ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
   })
 
@@ -3348,11 +2961,8 @@ export const register: Register = on => {
         }
         data.turns += 1
         data.turnMs += e.durationMs
-        timers.day?.cancel()
-        timers.day = $.clock.after(400, () => void recordDay($))
       }
       scheduleGit($, 300)
-      if (chat && chat.agent === (e.agentId ?? M.MAIN)) void loadChat($, chat.agent)
       touched($, now)
     } catch {
       // the turn's end stands whatever the deck makes of it
@@ -3552,30 +3162,8 @@ export const register: Register = on => {
     shownKey = screenKey(now)
     return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, shownKey, view], () => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1))
-      const dash = dashOf(now, e.surface)
-      keepTalk($, dash.state)
-      return deckView(kit, modelOf(now), actionsFor($), dash)
+      return deckView(kit, modelOf(now), actionsFor($), dashOf(now))
     })
-  })
-
-  // your own scrolling of the pane: whether it leaves you at the end, where an agent page's Talk keeps to its newest message
-  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const result = await next(e)
-    if (e.origin.kind === 'person' && result.deny === undefined) talkView.isAtEnd = e.offset >= e.contentRows - e.bodyRows - 1
-    return result
-  })
-
-  // what the org chart's Client posts: a card clicked opens that agent's page
-  on('ui.message', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    openFromChart($, e.data)
-    return next(e)
-  })
-
-  // the org chart's Client failed: that surface's Org tab lists the agents as a tree until the tab is left (or /deck opens)
-  on('ui.fault', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    orgDown.add(e.surface)
-    redraw($)
-    return next(e)
   })
 
   // the pane's focus ring, wherever it moved (your Tab, arrows or click; the deck's j, k and n): where they move it from next

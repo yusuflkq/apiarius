@@ -5,9 +5,9 @@
  */
 import type { Elements, RenderSurface } from 'claude-code'
 
-import type { DeckAgentPane, DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
+import type { DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
-import type { V2Band, V2Files, WebState, WebStateV2 } from '../web'
+import type { V2Band, V2Files, WebStateV2 } from '../web'
 
 type TerminalTable = Elements['terminal']
 
@@ -21,12 +21,8 @@ export type Kit = {
   Input?: TerminalTable['Input']
   Select?: TerminalTable['Select']
   Svg?: Elements['desktop']['Svg']
-  /** Where the surface runs a plugin's surface module (the terminal and the desktop): the org chart's. */
-  Client?: Elements['desktop']['Client']
   columns: number
 }
-
-export type ChatLine = { role: 'parent' | 'agent' | 'tool' | 'note'; who: string; text: string }
 
 export type UsageInfo = {
   startedAt: number
@@ -35,15 +31,6 @@ export type UsageInfo = {
   limits: { kind: string; percentUsed: number }[]
 }
 
-export type DayRow = {
-  day: string
-  added: number
-  removed: number
-  tools: number
-  tokens: number
-  sessions: number
-  activeMs: number
-}
 
 /** The web deck (`/deck web`) as the pane shows it under its Open dashboard button. */
 export type WebPane = {
@@ -63,10 +50,7 @@ export type DeckModel = {
   git: GitState
   fileDiff: FileDiff | null
   commit: CommitDetail | null
-  /** The selected agent's conversation; null while it is read (or not asked for). */
-  chat: ChatLine[] | null
   usage: UsageInfo | null
-  days: DayRow[]
   /**
    * The time the drawing shows. Screens draw only what the screen signature
    * covers from it (a time of day, an agent's coarse elapsed time), so a
@@ -81,26 +65,12 @@ export type DeckModel = {
 }
 
 export type Actions = {
-  setTab: (tab: DeckTab) => void
-  /**
-   * Opens a row in the detail block: an agent's id (the Orchestrator's is
-   * `main`), a plan step's key (as `planOf` gives it), or `file:` and a file's path.
-   * The outline shows it: a zoom it lies outside ends, and the branches
-   * folded above it open.
-   */
-  select: (id: string) => void
-  /** Folds or opens an outline branch (an agent's id, a plan step's row id, a group's id); the choice stays. */
-  toggleFold: (id: string) => void
-  /** Re-roots the outline on a branch (an agent's id or a plan step's key); '' shows everything again, as does the branch already zoomed. */
-  zoomTo: (id: string) => void
-  selectAgent: (id: string) => void
-  setAgentPane: (pane: DeckAgentPane) => void
+  /** Opens the diff of Changes' file `path` (git's, read again), or closes it when it is the one open. */
   selectFile: (path: string) => void
+  /** Opens commit `hash`'s files, or closes them when it is the one open. */
   selectCommit: (hash: string) => void
-  setFilter: (filter: string) => void
-  toggleFiles: () => void
+  /** Hides the band above the prompt, or shows it again, as `/deck band` does; the choice stays. */
   toggleBand: () => void
-  refresh: () => void
   /**
    * Sends `text` to agent `agentId` (to the Orchestrator: your next prompt).
    * With `ackId` (`[A-Za-z0-9_-]`, at most 40) what came of it is noted in the
@@ -115,37 +85,12 @@ export type Actions = {
   selectRepo: (root: string) => void
   /** What `/deck web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
   openWeb: () => void
-  /** Shows the Agents tab's full outline (Details), or its summary again. */
-  toggleDetails: () => void
-  /** Shows the full outline with row `id` selected (as `select`); '' only opens it. */
-  showDetails: (id: string) => void
 }
 
 /** What the native dashboard's presses run, beside the deck's own (Actions). */
 export type DashActions = Actions & {
-  /**
-   * Opens agent `id`'s page over the tab in view; Back returns to that tab.
-   * With `pane`, the page opens on it, scrolled to it (Talk is `chat`).
-   */
-  openAgent: (id: string, pane?: DeckAgentPane) => void
-  /**
-   * Opens the Plan tab with step `key` (its `key` in the state's
-   * `plan.steps`) open and scrolled into view, from any tab or agent page.
-   */
-  openStep: (key: string) => void
-  /**
-   * Opens or folds one of the Plan tab's disclosures, by its
-   * `DeckView.planOpen` id (`step:<key>`, `goal`, `result:<agent id>`): it
-   * stays so through redraws and reloads.
-   */
-  togglePlan: (id: string) => void
-  /**
-   * Folds a section to its heading and a one-line summary, or opens it again,
-   * by its `DeckView.collapsed` id (dashModel's FOLD): the Dashboard's goal,
-   * agents, figures, activity and files; an agent page's task and checklist;
-   * the Plan tab's goal. It stays so through redraws, live updates and reloads.
-   */
-  toggleSection: (id: string) => void
+  /** Opens agent `id`'s page over the tab in view; `b` (Back) returns to that tab. */
+  openAgent: (id: string) => void
   /** Leaves the agent page for the tab it was opened from. */
   back: () => void
   /**
@@ -165,14 +110,9 @@ export type DashActions = Actions & {
   /**
    * Brings the element keyed `key` into the pane's view once it is drawn:
    * `start` puts its top at the window's top (the default), `nearest` moves the
-   * least that shows it. An agent page's Talk stops keeping to its end.
+   * least that shows it.
    */
   reveal: (key: string, block?: 'start' | 'nearest') => void
-  /**
-   * Takes the pane to its end (on an agent page's Talk, the newest message and
-   * the box that sends) and keeps it there as messages come, while you stay.
-   */
-  followTalk: () => void
   /** Leaves the sample (`/deck demo`) for this session's own deck. */
   exitDemo: () => void
   /**
@@ -194,10 +134,8 @@ export type DashActions = Actions & {
   focusNeed: () => void
 }
 
-/** What the native dashboard draws from, beside the deck's model. */
+/** What the pane draws from, beside the deck's model. */
 export type DashModel = {
-  /** The web deck's state (`webStateOf` of the live deck), or the sample's; null while the sample is read. */
-  state: WebState | null
   /**
    * The v2 view model (`deckStateOf`, web/CONTRACT.md v2) of the live deck,
    * the very one state.json's `v2` holds (built once per screen); the
@@ -211,10 +149,4 @@ export type DashModel = {
   isDemo: boolean
   /** Why the sample could not be read; '' otherwise. */
   demoNote: string
-  /** The deck model the agent page's Diffs, Talk and Tool calls read: this session's, or the sample's. */
-  paneData: DeckData
-  /** The org chart's Client failed on this surface: the Org tab lists the agents as a tree instead. */
-  isOrgDown: boolean
-  /** The agent the org chart marks: the one whose page was opened last; null for none. */
-  selected: string | null
 }
