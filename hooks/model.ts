@@ -971,6 +971,7 @@ export function healData(value: DeckData, now: number): DeckData {
   data.workflows = healWorkflows(value.workflows)
   if (value.isNewGoalNext !== true) delete data.isNewGoalNext
   if (typeof value.mainTurnId !== 'string' || value.mainTurnId === '') delete data.mainTurnId
+  if (data.mainTurnId === undefined || typeof value.mainTurnAt !== 'number' || !Number.isFinite(value.mainTurnAt)) delete data.mainTurnAt
   for (const agent of data.agents) {
     if (!isOldCut(agent)) continue
     delete agent.label
@@ -1653,15 +1654,22 @@ export function questionResultOf(result: unknown): { answers: Record<string, str
   return { answers, response: typeof result.response === 'string' ? result.response : '', isIdle: typeof result.afkTimeoutMs === 'number' }
 }
 
-/** The main loop's turn `turnId` started (its `turn.start`, never a subagent's): the one Stop turn ends. */
-export function noteMainTurn(data: DeckData, turnId: string): void {
-  if (turnId !== '') data.mainTurnId = turnId
-  else delete data.mainTurnId
+/** The main loop's turn `turnId` started at `at` (its `turn.start`, never a subagent's): the one Stop turn ends. */
+export function noteMainTurn(data: DeckData, turnId: string, at: number): void {
+  if (turnId !== '') {
+    data.mainTurnId = turnId
+    data.mainTurnAt = at
+  } else {
+    delete data.mainTurnId
+    delete data.mainTurnAt
+  }
 }
 
 /** The main loop's turn `turnId` ended: no turn of its runs (one that ended out of order leaves a newer one in place). */
 export function endMainTurn(data: DeckData, turnId: string): void {
-  if (data.mainTurnId === undefined || turnId === '' || data.mainTurnId === turnId) delete data.mainTurnId
+  if (data.mainTurnId !== undefined && turnId !== '' && data.mainTurnId !== turnId) return
+  delete data.mainTurnId
+  delete data.mainTurnAt
 }
 
 /** What came of a web deck command (by its own `id`): a later word on it replaces the earlier; the newest 50 are kept. */
@@ -2750,6 +2758,11 @@ function taskStateOf(value: unknown): DeckTask['status'] | 'deleted' | undefined
     default:
       return undefined
   }
+}
+
+/** The task board's tasks (TaskCreate, TaskUpdate), as Claude keeps them, in board order: by numeric id, else as created. */
+export function boardTasksOf(data: DeckData): DeckTask[] {
+  return Object.values(data.board).sort(taskOrder)
 }
 
 /** Board order: by numeric id, else as created. */

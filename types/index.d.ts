@@ -367,6 +367,8 @@ export type DeckData = {
    * between turns. Stop turn ends it (`$.turn.abort`).
    */
   mainTurnId?: string
+  /** When that turn started (its `turn.start`); absent with it, and in a snapshot of a build that did not keep it. */
+  mainTurnAt?: number
 }
 
 /**

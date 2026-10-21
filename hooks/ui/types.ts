@@ -7,7 +7,7 @@ import type { Elements, RenderSurface } from 'claude-code'
 
 import type { DeckAgentPane, DeckData, DeckTab, DeckView } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
-import type { WebState } from '../web'
+import type { WebState, WebStateV2 } from '../web'
 
 type TerminalTable = Elements['terminal']
 
@@ -178,6 +178,13 @@ export type DashActions = Actions & {
 export type DashModel = {
   /** The web deck's state (`webStateOf` of the live deck), or the sample's; null while the sample is read. */
   state: WebState | null
+  /**
+   * The v2 view model (`deckStateOf`, web/CONTRACT.md v2) of the live deck,
+   * the very one state.json's `v2` holds (built once per screen); the
+   * sample's (web/fixtures/state.v2.json, its times moved to now) while the
+   * sample shows; null while that is read or could not be.
+   */
+  v2: WebStateV2 | null
   /** The sample (`/deck demo`) is shown, not this session. */
   isDemo: boolean
   /** Why the sample could not be read; '' otherwise. */

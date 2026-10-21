@@ -500,7 +500,7 @@ test('the tab row switches tabs: Org draws the chart Client sized to the chart, 
 test('where no Client draws (VS Code), and where the chart`s Client failed, the Org tab lists the agents as a tree', async ($, on) => {
   // a surface whose Client failed (its ui.fault): the same tree, saying why
   const state = W.webStateOf(sessionData(), M.defaultView(), emptyGit(), null, NOW, 's', '/repo')
-  probe(on, kit => orgTab(kit, state, inert(), { state, isDemo: false, demoNote: '', paneData: sessionData(), isOrgDown: true, selected: 'agent-fixer' }))
+  probe(on, kit => orgTab(kit, state, inert(), { state, v2: null, isDemo: false, demoNote: '', paneData: sessionData(), isOrgDown: true, selected: 'agent-fixer' }))
   await opened($, on)
   const vscode = await $.ui.mount(pane('vscode'))
   await press(vscode, 'tab:org')

@@ -1,15 +1,17 @@
 /**
  * The web deck's half of the mod: what `.web/<sessionId>/state.json` holds
- * (`webStateOf`, the v1 `WebState` of web/CONTRACT.md), the patch and
- * message files written beside it, and the lines the server prints back
- * (`splitLines`, `parseLine`, `routeOf`, and the checks on an answer).
+ * (`webStateOf`, the v1 `WebState` of web/CONTRACT.md, and beside it under
+ * `v2` the one view model every surface draws, `deckStateOf`'s
+ * `WebStateV2`), the patch, message and agent files written beside it, and
+ * the lines the server prints back (`splitLines`, `parseLine`, `routeOf`,
+ * and the checks on an answer).
  *
  * Pure, like the model: nothing here reads a clock but the `now` it is
  * handed, and every query is model.ts's own, so the page and the pane say
  * the same thing. The hooks module (register.tsx) writes the files, starts
  * the server and acts on the commands.
  */
-import type { DeckAgent, DeckData, DeckMessageKind, DeckPending, DeckStepStatus, DeckView } from '../types'
+import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView } from '../types'
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
@@ -527,6 +529,685 @@ export function newPatchesOf(data: DeckData, written: ReadonlySet<string>): { id
   return out
 }
 
+// ---------------------------------------------------------------------------
+// v2: the one view model the web page, the Desktop pane and the terminal all
+// draw (web/CONTRACT.md, v2). Only what Claude Code did, said or holds: no
+// plan it did not make, no step links, no addressee it did not use, no need
+// it did not raise. Its derived wording (a row's title, a chat row's
+// sentence head, a fold's counts, the header's word) is made here once.
+
+/** A row's dot: `starting` until the engine spawns the agent its Agent call asked for; `waiting` only while something waits on you. */
+export type V2Status = 'starting' | 'running' | 'waiting' | 'done' | 'failed' | 'idle'
+
+export type V2Header = {
+  /** Something in `needs` waits on you; else the main loop or an agent is at work; else idle. */
+  state: 'working' | 'waiting' | 'idle'
+  /** That word as every surface prints it: "Working", "Waiting on you", "Idle". */
+  stateText: string
+  /**
+   * Your latest request, in your words: the newest prompt you typed (or
+   * sent from the deck) to the Orchestrator, else the goal the transcript
+   * held; null before the first. `messageId` names its chat row when it is
+   * one (its whole text at /message/<id> when `isCut`).
+   */
+  goal: { text: string; headline: string; at: number; isCut?: true; messageId?: string } | null
+  /** Short: `opus-5.5`; '' until known. */
+  model: string
+  contextPercent: number | null
+  costUsd: number | null
+  /** "opus-5.5 · context 41% · $4.12", each part left out while unknown. */
+  line: string
+  /** The main loop's running turn, the one `abortTurn` ends (`$.turn.abort`), and when it started (null when the deck did not see it start); null between turns. */
+  turn: { id: string; at: number | null } | null
+}
+
+export type V2Question = { question: string; header: string; multiSelect: boolean; options: { label: string; description: string }[] }
+
+/** One thing that needs you: only what Claude Code itself raised (a question, a permission prompt, its notification). */
+export type V2Need = {
+  /** A question's or a permission prompt's call (its tool_use_id, `webIdOf`'d), which `answer` names; a notification's own id. `[A-Za-z0-9_-]`. */
+  id: string
+  /** `question`: AskUserQuestion, answerable from the deck while `isAnswerable`; `permission`: its dialog shows (a tool.check ask, then its PermissionRequest); `notification`: Claude Code's own (classic Notification). */
+  kind: 'question' | 'permission' | 'notification'
+  /** Whose: `main`, or an agent's id. */
+  agent: string
+  /** Its row's title in `agents` ("Orchestrator" for the main loop). */
+  agentName: string
+  at: number
+  /** How old, coarse: "now", "3m", "2h". */
+  age: string
+  /** A question's questions, one paragraph each; a permission's description (else its tool); a notification's words, verbatim. */
+  text: string
+  /** A question's, as its call gave them. */
+  questions?: V2Question[]
+  /** True only for a question this mod instance can still answer (its race is live); false after a reload, and for every other kind. */
+  isAnswerable: boolean
+  /** A permission's tool. */
+  tool?: string
+  /** A permission's exact shell command (at most 2000 characters, may span lines). */
+  command?: string
+  /** A permission's file, repository-relative inside the repository. */
+  path?: string
+  /** A permission's own words for what it does, else what it is aimed at. */
+  description?: string
+  /** A notification's own type (`permission_prompt`, `idle_prompt`, one the deck does not know) and title, verbatim. */
+  type?: string
+  title?: string
+}
+
+/** One agent in the tree of who started whom. */
+export type V2AgentRow = {
+  row: 'agent'
+  /** `main` is the Orchestrator. */
+  id: string
+  /** Its agent file's name, `id` file-safe (`webIdOf`): agents/<fileId>.json, served at /agent/<fileId>. */
+  fileId: string
+  /** Who started it: `main`, or an agent's id; null for the Orchestrator. */
+  parent: string | null
+  /** 0 for the Orchestrator, 1 for the agents it started, and so on. */
+  depth: number
+  /** The Orchestrator; an Agent call's agent; a teammate; a Workflow script's agent; or a loop of Claude Code's own with no spawn (a compaction, a memory fork). */
+  kind: 'orchestrator' | 'agent' | 'teammate' | 'workflow' | 'engine'
+  status: V2Status
+  /** Stopped (TaskStop, or its turn aborted), not failed: its status says `failed`. */
+  isStopped: boolean
+  /** The name its spawn gave it; '' with none. */
+  name: string
+  /** Its Agent call's description, on one line; '' with none. */
+  description: string
+  /** Its agent type (`Explore`, `general-purpose`); '' when Claude Code did not say. */
+  type: string
+  /** The start of its id ('' for the Orchestrator and a placeholder): told apart from a namesake. */
+  shortId: string
+  /** What its row leads with: its name, else its description (cut after a word, 60 characters), else its type, else its short id; "Orchestrator" for the main loop. Never a made-up name or a " 2". */
+  title: string
+  /** Its call in flight, verbatim: the tool and what it was given (a shell's command, a file, a pattern); null between calls. */
+  live: { tool: string; text: string; at: number } | null
+  startedAt: number
+  endedAt: number | null
+  /** How long it has been at it, coarse ("<1m", "4m"), or how long its run took; the Orchestrator's: its turn's, '' between turns. */
+  elapsed: string
+  /** Its spawn ran it in the background (every teammate's does): only such an agent can be stopped (`stopAgent`). */
+  background: boolean
+  /** Short: `haiku-4.5`; '' until known. */
+  model: string
+  /** 0–9, stable per agent. */
+  avatar: number
+  /** How many of `needs` are its. */
+  needs: number
+  /** The fold group it sits in (a `V2FoldRow`'s id: it is drawn only while that is open); null on a row always drawn. */
+  fold: string | null
+  /** The prompt it was given, at most 600 characters (`isTaskCut`: the whole in its agent file); '' for the Orchestrator, whose task is your request. */
+  task: string
+  isTaskCut?: true
+  /** What it handed back (its hand-back, its answer, its last message); the Orchestrator's: its latest answer to you. At most 600 characters (`isResultCut`: the whole in its agent file). '' until it reports. */
+  result: string
+  isResultCut?: true
+  /** Its own TodoWrite list, with Claude's statuses. */
+  todos: V2Todo[]
+  /** In + out + cache reads. */
+  tokens: number
+}
+
+/** A TodoWrite item, or a board task's words, with Claude's own status: `doing` its activeForm. */
+export type V2Todo = { text: string; status: 'done' | 'active' | 'pending'; doing?: string }
+
+/** The agents one parent started that finished or went idle, folded into one row the way Claude Code's own panel folds them. */
+export type V2FoldRow = {
+  row: 'fold'
+  /** `fold:` and its parent's id. */
+  id: string
+  parent: string
+  /** Its members' depth. */
+  depth: number
+  /** The agents it folds that its parent started, in spawn order (the agents they started fold with them). */
+  ids: string[]
+  done: number
+  failed: number
+  stopped: number
+  idle: number
+  /** "4 done · 1 failed". */
+  text: string
+}
+
+export type V2Row = V2AgentRow | V2FoldRow
+
+/** One message of the one chat, read as a sentence: `who` then `text`. */
+export type V2ChatRow = {
+  /** `[A-Za-z0-9_-]`: a cut one's whole text at /message/<id>. */
+  id: string
+  at: number
+  /** `you`, `main`, an agent's id, `engine` (Claude Code itself), or the name a sender went by that no agent of the session carries. */
+  from: string
+  /** `you`, `main`, an agent's id, or the name SendMessage was given that no agent carries; null when the words went to nobody in particular (an agent's words after your message). */
+  to: string | null
+  /** The sentence's head: "You → Orchestrator", "Orchestrator → scout", "scout", "Claude Code → you". */
+  who: string
+  kind: DeckMessageKind
+  /** A SendMessage's own summary; a notification's title, else its type; a task notification's status. */
+  title?: string
+  /** At most 600 characters, Markdown. */
+  text: string
+  isCut?: true
+  /** Delivered to its agent (a send from the deck, a SendMessage); absent when no one said. */
+  isDelivered?: boolean
+  /** The id of the page's command that sent it: its outcome is the ack of that id. */
+  ackId?: string
+  /** A question's or a choice's call, `webIdOf`'d (the need's `id` while it is held). */
+  callId?: string
+  /** The agent a notification is about. */
+  agent?: string
+}
+
+/** The plan, only as Claude made it, from every source it used; null when it made none. */
+export type V2Plan = {
+  /** Its task board (TaskCreate, TaskUpdate), by task id, with Claude's statuses and the owner TaskUpdate named. */
+  board: { id: string; subject: string; status: 'pending' | 'active' | 'done'; owner: string | null; doing?: string }[]
+  /** The Orchestrator's own TodoWrite list, with Claude's statuses; null for none. */
+  todos: { items: V2Todo[]; at: number } | null
+  /** The plan approved last (ExitPlanMode), as Claude wrote it: Markdown, never split into steps; null for none. */
+  approved: { markdown: string; at: number; by: string } | null
+  /** Each Workflow run's phases, as its script's meta names them: no phase has a status (no event says one). */
+  workflows: { id: string; name: string; phases: string[]; startedAt: number; endedAt: number | null }[]
+}
+
+export type V2Changes = {
+  repo: WebState['repo']
+  /** Git's uncommitted files; `edits` the ids of the agents' own edits of that path (patches at /patch/<id>). Git's hunks are never tagged by agent. */
+  files: { path: string; code: string; added: number; removed: number; edits: string[] }[]
+  /** Each agent's own edit patches, the newest 300, oldest first. */
+  edits: { id: string; agent: string; tool: string; path: string; at: number; added: number; removed: number; isOutside?: true }[]
+  /** The newest 20, newest first; `agent` the one whose shell call made it. */
+  commits: WebState['commits']
+}
+
+/** Inspect's first part (Phase 2 adds context, loaded, permissions and background): the context, the spend, and each agent's tokens. */
+export type V2Inspect = {
+  contextPercent: number | null
+  costUsd: number | null
+  agents: { id: string; title: string; model: string; tokens: { in: number; out: number; cacheRead: number }; requests: number; tools: number; errors: number }[]
+}
+
+/** The state every surface draws (web/CONTRACT.md, v2). */
+export type WebStateV2 = {
+  v: 2
+  /** When it was built, ms since the epoch. */
+  now: number
+  session: { id: string; cwd: string; startedAt: number }
+  header: V2Header
+  /** What needs you, oldest first; empty when nothing does. */
+  needs: V2Need[]
+  /** The tree of who started whom, as rows: the Orchestrator first, each agent under the one that started it (spawn order), the ones at work first and then their parent's fold row and its members. */
+  agents: V2Row[]
+  plan: V2Plan | null
+  /** The newest 200 messages, oldest first. */
+  chat: V2ChatRow[]
+  changes: V2Changes
+  inspect: V2Inspect
+  /** What came of the page's commands, by their `id`: the newest 50, oldest first. */
+  acks: WebAck[]
+}
+
+/** An agent's own file, `agents/<id>.json`, read when its page opens: its words whole and its calls. */
+export type V2AgentFile = {
+  v: 2
+  id: string
+  /** The prompt it was given, whole as kept (at most 2000 characters). */
+  task: string
+  /** What it handed back, whole as kept (at most 4000 characters). */
+  result: string
+  todos: V2Todo[]
+  /** Its latest tool calls (the newest 14 the deck keeps), oldest first: what each was given, verbatim, and how it went. */
+  activity: { id: string; at: number; tool: string; target: string; command?: string; description?: string; ok: boolean | null; ms: number | null }[]
+  /** Its edits' ids, oldest first: each patch at /patch/<id>. */
+  edits: string[]
+}
+
+/** v2's sizes: the chat rows kept, a text's characters in the state, the edits, commits and acks kept, a title's and a name's characters. */
+export const V2_CAPS = { chat: 200, text: 600, edits: 300, commits: 20, acks: 50, title: 60, name: 40 } as const
+
+const STATE_TEXT: Readonly<Record<V2Header['state'], string>> = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' }
+
+/** The results the deck made up for a row its Agent call ended without an agent: no report of the agent's. */
+const MADE_UP_RESULT = /^(?:Not started: |Runs in a cloud session, outside this view$)/
+
+/** The loops that are rows of the tree: the Orchestrator, its agents (a Workflow's and Claude Code's own among them) and teammates; never you or a peer of earlier builds. */
+function isTreeAgent(agent: DeckAgent): boolean {
+  return agent.kind === 'main' || agent.kind === 'agent' || agent.kind === 'teammate'
+}
+
+/** The kind of loop a row is. */
+function rowKindOf(agent: DeckAgent): V2AgentRow['kind'] {
+  if (agent.kind === 'main') return 'orchestrator'
+  if (agent.origin === 'workflow') return 'workflow'
+  if (agent.origin === 'engine') return 'engine'
+  return agent.kind === 'teammate' ? 'teammate' : 'agent'
+}
+
+/** The start of an agent's id, to tell it from a namesake; '' for the Orchestrator and a row its Agent call made before the spawn. */
+function shortIdOf(agent: DeckAgent): string {
+  if (agent.kind === 'main' || M.isPlaceholder(agent)) return ''
+  return agent.id.slice(0, 7)
+}
+
+/** Its type as Claude Code said it; '' for the deck's own placeholder word. */
+function typeOf(agent: DeckAgent): string {
+  if (agent.kind === 'main') return ''
+  const type = agent.type.trim()
+  return type === 'subagent' || type === 'agent' || type === 'teammate' ? '' : type
+}
+
+/** What a row leads with: its name, else its description, else its type, else its short id; the Orchestrator for the main loop. */
+export function rowTitleOf(agent: DeckAgent): string {
+  if (agent.kind === 'main') return M.ORCHESTRATOR
+  if (!M.isNameless(agent)) return F.oneLine(agent.name)
+  const description = F.oneLine(agent.description)
+  if (description !== '') return M.cutAtWord(description, V2_CAPS.title)
+  return typeOf(agent) || shortIdOf(agent) || agent.id.slice(0, 7)
+}
+
+/** A sender or a receiver as a chat row's sentence names it: You (you once named second), the Orchestrator, Claude Code, an agent's title, or the name itself. */
+function partyOf(data: DeckData, id: string, isSender: boolean): string {
+  if (id === M.YOU) return isSender ? 'You' : 'you'
+  if (id === M.MAIN) return M.ORCHESTRATOR
+  if (id === M.ENGINE) return M.ENGINE_NAME
+  const agent = M.agentOf(data, id)
+  return agent && agent.kind !== 'peer' ? M.cutAtWord(rowTitleOf(agent), V2_CAPS.name) : id.replace(/^peer:/, '')
+}
+
+/** A text cut for the state (`cutMarkdown`) and whether it was. */
+function cutOf(text: string, most: number): { text: string; isCut: boolean } {
+  const cut = cutMarkdown(text, most)
+  return { text: cut, isCut: cut !== text }
+}
+
+/** The call in flight, verbatim: a shell's command, else what it was aimed at. */
+function liveOf(agent: DeckAgent): V2AgentRow['live'] {
+  const call = agent.current
+  if (!call) return null
+  return { tool: call.tool, text: F.oneLine(call.command || call.target), at: call.at }
+}
+
+/** A TodoWrite list (or board items) as the state carries it. */
+function todosOf(items: readonly { text: string; status: V2Todo['status']; doing?: string }[] | undefined): V2Todo[] {
+  return (items ?? []).map(item => ({ text: item.text, status: item.status, ...(item.doing ? { doing: item.doing } : {}) }))
+}
+
+/** What an agent handed back, as Claude Code gave it: never the words the deck made up for an Agent call that started no agent. */
+function resultOf(agent: DeckAgent): string {
+  const said = agent.answer ?? ''
+  return agent.kind === 'main' || agent.resultVia !== undefined || !MADE_UP_RESULT.test(said) ? said : ''
+}
+
+/** Whether a row folds: finished or idle, nothing of its waits on you. */
+function isQuietRow(row: V2AgentRow): boolean {
+  return row.kind !== 'orchestrator' && row.needs === 0 && (row.status === 'done' || row.status === 'failed' || row.status === 'idle')
+}
+
+/** One agent's row, out of the tree: its `depth` and `fold` are the walk's to set. */
+function agentRowOf(data: DeckData, agent: DeckAgent, now: number, needs: ReadonlyMap<string, number>): V2AgentRow {
+  const isMain = agent.kind === 'main'
+  const task = cutOf(isMain ? '' : agent.prompt, V2_CAPS.text)
+  const result = cutOf(resultOf(agent), V2_CAPS.text)
+  const turnAt = data.mainTurnAt
+  return {
+    row: 'agent',
+    id: agent.id,
+    fileId: webIdOf(agent.id),
+    parent: isMain ? null : (M.parentIdOf(data, agent) ?? M.MAIN),
+    depth: 0,
+    kind: rowKindOf(agent),
+    status: agent.status === 'starting' ? 'starting' : M.shownStatusOf(agent, data),
+    isStopped: agent.status === 'killed',
+    name: isMain || M.isNameless(agent) ? '' : F.oneLine(agent.name),
+    description: isMain ? '' : F.oneLine(agent.description),
+    type: typeOf(agent),
+    shortId: shortIdOf(agent),
+    title: rowTitleOf(agent),
+    live: liveOf(agent),
+    startedAt: agent.startedAt,
+    endedAt: agent.endedAt ?? null,
+    elapsed: isMain ? (data.mainTurnId !== undefined && turnAt !== undefined ? M.elapsedOf({ ...agent, startedAt: turnAt, endedAt: undefined }, now) : '') : M.elapsedOf(agent, now),
+    background: agent.kind === 'teammate' || agent.background === true,
+    model: shortModel(agent.model),
+    avatar: avatarOf(agent.id),
+    needs: needs.get(agent.id) ?? 0,
+    fold: null,
+    task: task.text,
+    ...(task.isCut ? { isTaskCut: true as const } : {}),
+    result: result.text,
+    ...(result.isCut ? { isResultCut: true as const } : {}),
+    todos: todosOf(agent.todos),
+    tokens: agent.tokensIn + agent.tokensOut + agent.cacheRead,
+  }
+}
+
+/** "4 done · 1 failed": the counts a fold row says, each left out at none. */
+function foldTextOf(fold: Pick<V2FoldRow, 'done' | 'failed' | 'stopped' | 'idle'>): string {
+  const parts = [fold.done > 0 ? `${fold.done} done` : '', fold.failed > 0 ? `${fold.failed} failed` : '', fold.stopped > 0 ? `${fold.stopped} stopped` : '', fold.idle > 0 ? `${fold.idle} idle` : '']
+  return parts.filter(part => part !== '').join(' · ')
+}
+
+/**
+ * The tree of who started whom, as rows (depth-first, each parent's agents
+ * in spawn order): the Orchestrator first; under each agent, the ones it
+ * started that are at work, wait on you or have one of theirs at work; then
+ * one fold row for the rest, the finished and idle ones, and their rows
+ * (each with `fold` set, the agents they started with them). The
+ * Orchestrator never folds. You and the peers of earlier builds are no rows.
+ * `needs` counts each agent's needs (`needsListOf`): an agent with one never
+ * folds.
+ */
+export function agentRowsOf(data: DeckData, now: number, needs: ReadonlyMap<string, number> = new Map()): V2Row[] {
+  const main = M.agentOf(data, M.MAIN)
+  if (!main) return []
+  const workers = data.agents.filter(agent => isTreeAgent(agent) && agent.kind !== 'main')
+  const kids = new Map<string, DeckAgent[]>()
+  for (const agent of workers) {
+    const parent = M.parentIdOf(data, agent) ?? M.MAIN
+    kids.set(parent, [...(kids.get(parent) ?? []), agent])
+  }
+  const built = new Map<string, V2AgentRow>()
+  const rowOf = (agent: DeckAgent): V2AgentRow => {
+    const known = built.get(agent.id)
+    if (known) return known
+    const row = agentRowOf(data, agent, now, needs)
+    built.set(agent.id, row)
+    return row
+  }
+  // whether anything under an agent is at work or waits on you: then it stays out of the fold
+  const busy = new Map<string, boolean>()
+  const isBusyBelow = (id: string, seen: Set<string>): boolean => {
+    const known = busy.get(id)
+    if (known !== undefined) return known
+    if (seen.has(id)) return false
+    seen.add(id)
+    const isBusy = (kids.get(id) ?? []).some(kid => !isQuietRow(rowOf(kid)) || isBusyBelow(kid.id, seen))
+    busy.set(id, isBusy)
+    return isBusy
+  }
+  const rows: V2Row[] = []
+  const placed = new Set<string>()
+  const walk = (agent: DeckAgent, depth: number, fold: string | null) => {
+    if (placed.has(agent.id)) return
+    placed.add(agent.id)
+    rows.push({ ...rowOf(agent), depth, fold })
+    const under = (kids.get(agent.id) ?? []).filter(kid => !placed.has(kid.id))
+    if (fold !== null) {
+      for (const kid of under) walk(kid, depth + 1, fold)
+      return
+    }
+    const quiet = under.filter(kid => isQuietRow(rowOf(kid)) && !isBusyBelow(kid.id, new Set()))
+    for (const kid of under) if (!quiet.includes(kid)) walk(kid, depth + 1, null)
+    if (quiet.length === 0) return
+    const id = `fold:${agent.id}`
+    const counts = { done: 0, failed: 0, stopped: 0, idle: 0 }
+    for (const kid of quiet) {
+      const row = rowOf(kid)
+      if (row.isStopped) counts.stopped += 1
+      else if (row.status === 'failed') counts.failed += 1
+      else if (row.status === 'idle') counts.idle += 1
+      else counts.done += 1
+    }
+    rows.push({ row: 'fold', id, parent: agent.id, depth: depth + 1, ids: quiet.map(kid => kid.id), ...counts, text: foldTextOf(counts) })
+    for (const kid of quiet) walk(kid, depth + 1, id)
+  }
+  walk(main, 0, null)
+  // an agent the walk never reached (its parents name each other): under the Orchestrator, never lost
+  for (const agent of workers) if (!placed.has(agent.id)) walk(agent, 1, null)
+  return rows
+}
+
+/** A question's questions as the state carries them. */
+function questionsOf(questions: readonly DeckQuestion[] | undefined): V2Question[] {
+  return (questions ?? []).map(one => ({ question: one.question, header: one.header, multiSelect: one.multiSelect, options: one.options.map(option => ({ label: option.label, description: option.description })) }))
+}
+
+/**
+ * What needs you, oldest first, only from what Claude Code raised: each call
+ * it holds on you (a question, a permission prompt whose dialog shows), then
+ * each of its notifications that asks something, its words verbatim. A
+ * notification about a call held already (its permission prompt's, by its
+ * call or its agent) is that call's need, not a second one.
+ */
+export function needsListOf(data: DeckData, now: number, answerable: ReadonlySet<string> = new Set()): V2Need[] {
+  const nameOf = (id: string) => partyOf(data, id, true)
+  const held: V2Need[] = data.pending.map(item => ({
+    id: webIdOf(item.id),
+    kind: item.kind,
+    agent: item.agentId,
+    agentName: nameOf(item.agentId),
+    at: item.at,
+    age: F.since(now - item.at),
+    text: item.kind === 'question' ? M.questionsTextOf(item.questions ?? []) : item.description || item.tool,
+    ...(item.kind === 'question' ? { questions: questionsOf(item.questions) } : {}),
+    isAnswerable: item.kind === 'question' && answerable.has(item.id),
+    ...(item.kind === 'permission' ? { tool: item.tool } : {}),
+    ...(item.command ? { command: item.command } : {}),
+    ...(item.path ? { path: item.path } : {}),
+    ...(item.description ? { description: item.description } : {}),
+  }))
+  const notes: V2Need[] = []
+  for (const note of data.needs) {
+    const agent = note.agent ?? M.MAIN
+    if (note.call !== undefined && data.pending.some(item => item.id === note.call)) continue
+    if (note.kind === 'permission_prompt' && data.pending.some(item => item.kind === 'permission' && item.agentId === agent)) continue
+    notes.push({
+      id: webIdOf(`note_${note.at}_${note.kind}_${agent}`),
+      kind: 'notification',
+      agent,
+      agentName: nameOf(agent),
+      at: note.at,
+      age: F.since(now - note.at),
+      text: note.text,
+      isAnswerable: false,
+      type: note.kind,
+      ...(note.title ? { title: note.title } : {}),
+    })
+  }
+  return [...held, ...notes].sort((a, b) => a.at - b.at)
+}
+
+/** One message as a chat row: a sentence's head, its words cut at 600 characters, and what it belongs to. */
+function chatRowOf(data: DeckData, message: DeckMessage): V2ChatRow {
+  const text = cutOf(message.text, V2_CAPS.text)
+  const to = message.to === '' ? null : message.to
+  const from = partyOf(data, message.from, true)
+  return {
+    id: webIdOf(message.id),
+    at: message.at,
+    from: message.from,
+    to,
+    who: to === null ? from : `${from} → ${partyOf(data, to, false)}`,
+    kind: message.kind,
+    ...(message.title ? { title: message.title } : {}),
+    text: text.text,
+    ...(text.isCut ? { isCut: true as const } : {}),
+    ...(message.isDelivered !== undefined ? { isDelivered: message.isDelivered } : {}),
+    ...(message.ackId ? { ackId: message.ackId } : {}),
+    ...(message.callId ? { callId: webIdOf(message.callId) } : {}),
+    ...(message.agent ? { agent: message.agent } : {}),
+  }
+}
+
+/** Your latest request, in your words: your newest prompt (or chat from the deck) to the Orchestrator, else the goal in hand, the newer of the two. */
+function latestAskOf(data: DeckData): V2Header['goal'] {
+  let asked: DeckMessage | undefined
+  for (let i = data.messages.length - 1; i >= 0 && !asked; i--) {
+    const one = data.messages[i]
+    if (one && one.from === M.YOU && one.to === M.MAIN && (one.kind === 'prompt' || one.kind === 'chat')) asked = one
+  }
+  // the goal the deck made of an approved plan holds none of your words
+  const goal = [...data.goals].reverse().find(one => one.origin !== 'plan')
+  const goalAt = goal ? Math.max(goal.at, ...goal.followUps.map(one => one.at)) : -1
+  if (asked && asked.at >= goalAt) {
+    const words = (asked.full ?? asked.text).trim()
+    const text = cutOf(words, V2_CAPS.text)
+    return { text: text.text, headline: M.headlineOf(words), at: asked.at, ...(text.isCut ? { isCut: true as const } : {}), messageId: webIdOf(asked.id) }
+  }
+  if (!goal) return null
+  const latest = goal.followUps[goal.followUps.length - 1]
+  if (latest && latest.at >= goal.at) return { text: latest.text, headline: M.headlineOf(latest.text), at: latest.at }
+  const text = cutOf(goal.text, V2_CAPS.text)
+  return { text: text.text, headline: goal.headline, at: goal.at, ...(text.isCut ? { isCut: true as const } : {}) }
+}
+
+/** The plan, from every source Claude used (its board, the Orchestrator's TodoWrite list, the plan it had approved, its Workflows' phases); null when it used none. */
+export function planOfV2(data: DeckData): V2Plan | null {
+  const board = M.boardTasksOf(data).map(task => ({ id: task.id, subject: task.subject, status: task.status, owner: task.owner ?? null, ...(task.doing ? { doing: task.doing } : {}) }))
+  const main = M.agentOf(data, M.MAIN)
+  const items = todosOf(main?.todos)
+  const approved = data.approved ? { markdown: data.approved.text, at: data.approved.at, by: data.approved.by } : null
+  const workflows = data.workflows.filter(run => run.phases.length > 0).map(run => ({ id: webIdOf(run.id), name: run.name, phases: [...run.phases], startedAt: run.startedAt, endedAt: run.endedAt ?? null }))
+  if (board.length === 0 && items.length === 0 && !approved && workflows.length === 0) return null
+  return { board, todos: items.length > 0 ? { items, at: main?.todosAt ?? 0 } : null, approved, workflows }
+}
+
+/** The header's line: "opus-5.5 · context 41% · $4.12", each part left out while unknown. */
+function headerLineOf(model: string, usage: UsageInfo | null): string {
+  const percent = usage?.contextPercent
+  const parts = [model, percent !== undefined ? `context ${Math.round(percent)}%` : '', usage?.costUsd !== undefined ? F.money(usage.costUsd) : '']
+  return parts.filter(part => part !== '').join(' · ')
+}
+
+/**
+ * The one view model every surface draws (web/CONTRACT.md, v2), from the
+ * deck's live model at `now`: the header, what needs you, the tree of
+ * agents with its fold rows, the plan as Claude made it (null for none),
+ * the one chat, the changes, Inspect's first part and the acks.
+ * `answerable` holds the questions whose race is live in this mod instance.
+ * Pure: the same data, git, usage and `now` build the same state.
+ */
+export function deckStateOf(data: DeckData, git: GitState, usage: UsageInfo | null, now: number, sessionId: string, cwd: string, answerable: ReadonlySet<string> = new Set()): WebStateV2 {
+  const root = git.root || ''
+  const isRepo = git.isRepo === true && root !== ''
+  const main = M.agentOf(data, M.MAIN)
+  const needs = needsListOf(data, now, answerable)
+  const needsBy = new Map<string, number>()
+  for (const need of needs) needsBy.set(need.agent, (needsBy.get(need.agent) ?? 0) + 1)
+  const isWorking = main?.status === 'running' || data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
+  const state: V2Header['state'] = needs.length > 0 ? 'waiting' : isWorking ? 'working' : 'idle'
+  const model = shortModel(main?.model)
+  const turnId = data.mainTurnId
+  const edits = data.edits.slice(-V2_CAPS.edits)
+  return {
+    v: 2,
+    now,
+    session: { id: sessionId, cwd, startedAt: data.startedAt },
+    header: {
+      state,
+      stateText: STATE_TEXT[state],
+      goal: latestAskOf(data),
+      model,
+      contextPercent: usage?.contextPercent ?? null,
+      costUsd: usage?.costUsd ?? null,
+      line: headerLineOf(model, usage),
+      turn: turnId !== undefined ? { id: turnId, at: data.mainTurnAt ?? null } : null,
+    },
+    needs,
+    agents: agentRowsOf(data, now, needsBy),
+    plan: planOfV2(data),
+    // oldest first by when each was said: a word recorded late (a result, a choice) still sits where it was said
+    chat: data.messages
+      .slice(-V2_CAPS.chat)
+      .map(message => chatRowOf(data, message))
+      .sort((a, b) => a.at - b.at),
+    changes: {
+      repo: isRepo ? { name: F.baseName(root.replace(/[\\/]+$/, '')), root, branch: git.branch, ahead: git.ahead, behind: git.behind, head: git.head } : null,
+      files: isRepo ? git.files.map(file => ({ path: file.path, code: file.code, added: file.added, removed: file.removed, edits: edits.filter(edit => M.samePath(edit.path, file.path)).map(edit => webIdOf(edit.id)) })) : [],
+      edits: edits.map(edit => ({ id: webIdOf(edit.id), agent: edit.agent, tool: edit.tool, path: edit.path, at: edit.at, added: edit.added, removed: edit.removed, ...(root !== '' && ABSOLUTE.test(edit.path) ? { isOutside: true as const } : {}) })),
+      commits: isRepo
+        ? git.commits.slice(0, V2_CAPS.commits).map(commit => ({ hash: commit.hash, short: commit.short, subject: commit.subject, author: commit.author, at: commit.at, added: commit.added, removed: commit.removed, files: commit.files, agent: data.commitsBy[commit.hash] ?? null }))
+        : [],
+    },
+    inspect: {
+      contextPercent: usage?.contextPercent ?? null,
+      costUsd: usage?.costUsd ?? null,
+      agents: data.agents
+        .filter(isTreeAgent)
+        .map(agent => ({ id: agent.id, title: rowTitleOf(agent), model: shortModel(agent.model), tokens: { in: agent.tokensIn, out: agent.tokensOut, cacheRead: agent.cacheRead }, requests: agent.requests, tools: agent.tools, errors: agent.errors })),
+    },
+    acks: data.acks.slice(-V2_CAPS.acks).map(ack => ({ id: ack.id, ok: ack.ok, status: ack.status, text: ack.text, at: ack.at })),
+  }
+}
+
+/** Agent `agent`'s own file, `agents/<id>.json`: its words whole, its list, its latest calls and its edits. */
+export function agentFileOf(data: DeckData, agent: DeckAgent): V2AgentFile {
+  return {
+    v: 2,
+    id: agent.id,
+    task: agent.kind === 'main' ? '' : agent.prompt,
+    result: resultOf(agent),
+    todos: todosOf(agent.todos),
+    activity: agent.recent.map(call => ({
+      id: webIdOf(call.id),
+      at: call.at,
+      tool: call.tool,
+      target: call.target,
+      ...(call.command ? { command: call.command } : {}),
+      ...(call.description ? { description: call.description } : {}),
+      ok: call.ok ?? null,
+      ms: call.ms ?? null,
+    })),
+    edits: data.edits.filter(edit => edit.agent === agent.id).map(edit => webIdOf(edit.id)),
+  }
+}
+
+/** Every agent's file as `agents/<id>.json` holds it (the Orchestrator's, its agents', its teammates'), by its file-safe id (`webIdOf`). */
+export function agentFilesOf(data: DeckData): { id: string; text: string }[] {
+  return data.agents.filter(isTreeAgent).map(agent => ({ id: webIdOf(agent.id), text: `${JSON.stringify(agentFileOf(data, agent))}\n` }))
+}
+
+/**
+ * Who a composer's words go to: `@name` first (an agent row's `name`, else
+ * its `shortId`, any case) sends the rest to that agent, by SendMessage;
+ * words with no `@` go to the Orchestrator. `error` says why it cannot be
+ * sent: no agent of that name, or nothing after it.
+ */
+export function recipientOf(state: Pick<WebStateV2, 'agents'>, words: string): { agentId: string; title: string; text: string } | { error: string } {
+  const said = words.trim()
+  const at = /^@(\S+)\s*([\s\S]*)$/.exec(said)
+  const rows = state.agents.filter((row): row is V2AgentRow => row.row === 'agent')
+  if (!at) {
+    const main = rows.find(row => row.id === M.MAIN)
+    return said === '' ? { error: 'Nothing to send' } : { agentId: M.MAIN, title: main?.title ?? M.ORCHESTRATOR, text: said }
+  }
+  const handle = (at[1] ?? '').toLowerCase()
+  const text = (at[2] ?? '').trim()
+  const found = rows.find(row => row.id !== M.MAIN && row.name.toLowerCase() === handle) ?? rows.find(row => row.id !== M.MAIN && row.shortId !== '' && row.shortId.toLowerCase() === handle)
+  if (!found) return { error: `No agent named @${at[1] ?? ''} in this session` }
+  if (text === '') return { error: 'Nothing to send' }
+  return { agentId: found.id, title: found.title, text }
+}
+
+/** The fields of a v2 state, or of its agent files, that hold a time: moved together when a recorded state is shown now. */
+const TIME_KEYS: ReadonlySet<string> = new Set(['now', 'at', 'startedAt', 'endedAt'])
+
+/** `value` (a v2 state, or an agent file) with every time in it (`now`, `at`, `startedAt`, `endedAt`, past 2001) moved by `by` ms. */
+export function v2TimesMoved<T>(value: T, by: number): T {
+  const move = (one: unknown): unknown => {
+    if (Array.isArray(one)) return one.map(move)
+    if (one === null || typeof one !== 'object') return one
+    const out: Record<string, unknown> = {}
+    for (const [key, field] of Object.entries(one as Record<string, unknown>)) out[key] = TIME_KEYS.has(key) && typeof field === 'number' && field > 1e12 ? field + by : move(field)
+    return out
+  }
+  return move(value) as T
+}
+
+/** A recorded v2 state (web/fixtures/state.v2.json) as shown at `now`: its times moved so it was built then. Null for text that is no v2 state. */
+export function v2StateFromText(text: string, now: number): WebStateV2 | null {
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!isRecord(value) || value.v !== 2 || typeof value.now !== 'number' || !Array.isArray(value.agents) || !Array.isArray(value.chat) || !Array.isArray(value.needs) || !Array.isArray(value.acks)) return null
+  if (!isRecord(value.header) || !isRecord(value.changes) || !isRecord(value.inspect) || !isRecord(value.session)) return null
+  return v2TimesMoved(value as unknown as WebStateV2, now - value.now)
+}
+
 /**
  * What agent `agentId`'s thread in a v1 state ends with, as one string (its
  * length, its last message and the last word on that one's command): a
@@ -563,6 +1244,10 @@ export type WebRoute =
   | { kind: 'review'; text: string }
   /** Answers to a question the engine holds a call on: by question text, a label, labels comma-joined, or words of your own. */
   | { kind: 'answer'; callId: string; answers: Record<string, string> }
+  /** Stops a background agent or a teammate at work (TaskStop): a foreground one ends with its caller's turn. */
+  | { kind: 'stopAgent'; agentId: string }
+  /** Ends the main loop's running turn (`$.turn.abort`), as Esc in Claude Code does. */
+  | { kind: 'abortTurn'; turnId: string }
   | { kind: 'ping' }
 
 /** The most a line may grow without a newline before it is dropped: past any command the server passes (16 KB). */
@@ -625,13 +1310,22 @@ function answersOf(value: unknown): Record<string, string> | null {
   return Object.keys(out).length > 0 ? out : null
 }
 
+/** The agent a `stopAgent` may stop: a background agent or a teammate (never the Orchestrator, which `abortTurn` stops) still at work. */
+function stoppableOf(data: DeckData, agentId: unknown): DeckAgent | undefined {
+  const agent = typeof agentId === 'string' ? M.agentOf(data, agentId) : undefined
+  if (!agent || (agent.kind !== 'agent' && agent.kind !== 'teammate')) return undefined
+  return (agent.kind === 'teammate' || agent.background === true) && M.isLive(agent.status) ? agent : undefined
+}
+
 /**
  * What a command asks, once it is checked against the model: a `chat` to an
  * agent the deck holds (the Orchestrator, a subagent, a teammate), a `review`
- * prompt, an `answer` to a question (its call and answers; whether that call
- * still waits is the hooks module's to tell), or a `ping`. Text must be a
- * string, not blank, at most 4000 characters. Anything else is null, to be
- * refused (`refusalOf` says why).
+ * prompt, an `answer` to a question (its call, as the state's need or chat
+ * row names it, and answers; whether that call still waits is the hooks
+ * module's to tell), a `stopAgent` of a background agent or teammate at
+ * work, an `abortTurn` of the main loop's running turn (the one named, when
+ * one is), or a `ping`. Text must be a string, not blank, at most 4000
+ * characters. Anything else is null, to be refused (`refusalOf` says why).
  */
 export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
   if (!isRecord(cmd)) return null
@@ -639,8 +1333,19 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
   // an answer has no text of its own: it is read before the text is
   if (cmd.cmd === 'answer') {
     const answers = answersOf(cmd.answers)
-    const callId = typeof cmd.callId === 'string' ? cmd.callId.trim() : ''
+    const said = typeof cmd.callId === 'string' ? cmd.callId.trim() : ''
+    // v2 names a call file-safe (`webIdOf`): the call held under that name is the one meant
+    const callId = data.pending.find(item => item.id === said)?.id ?? data.pending.find(item => webIdOf(item.id) === said)?.id ?? said
     return callId !== '' && callId.length <= 200 && answers ? { kind: 'answer', callId, answers } : null
+  }
+  if (cmd.cmd === 'stopAgent') {
+    const agent = stoppableOf(data, cmd.agentId)
+    return agent ? { kind: 'stopAgent', agentId: agent.id } : null
+  }
+  if (cmd.cmd === 'abortTurn') {
+    const turnId = data.mainTurnId
+    if (turnId === undefined || (cmd.turnId !== undefined && cmd.turnId !== turnId)) return null
+    return { kind: 'abortTurn', turnId }
   }
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '' || text.length > MOST_TEXT) return null
@@ -668,6 +1373,14 @@ export function reviewStepOf(filled: { isFilled: boolean; refusal?: 'no_composer
 export function refusalOf(cmd: unknown, data: DeckData): string {
   if (!isRecord(cmd) || typeof cmd.cmd !== 'string') return 'Not a command the deck reads'
   if (cmd.cmd === 'answer') return 'Not an answer the deck can read'
+  if (cmd.cmd === 'stopAgent') {
+    const agent = typeof cmd.agentId === 'string' ? M.agentOf(data, cmd.agentId) : undefined
+    if (!agent || (agent.kind !== 'agent' && agent.kind !== 'teammate')) return agent?.kind === 'main' ? 'The Orchestrator stops with its turn: Stop turn' : 'No such agent in this session'
+    if (!M.isLive(agent.status)) return 'It is not at work'
+    if (agent.kind !== 'teammate' && agent.background !== true) return "Only a background agent or a teammate can be stopped: a foreground one ends with its caller's turn (Stop turn)"
+    return 'Not stopped'
+  }
+  if (cmd.cmd === 'abortTurn') return data.mainTurnId === undefined ? 'No turn is running' : 'That turn has ended'
   if (cmd.cmd !== 'chat' && cmd.cmd !== 'review') return `Not a command the deck knows: ${F.trunc(F.oneLine(cmd.cmd), 40)}`
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '') return 'Nothing to send'

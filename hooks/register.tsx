@@ -30,7 +30,6 @@ import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
 import { answerDemo, demoDataOf, demoStateOf } from './ui/dash/demo'
-import * as O from './ui/outlineModel'
 import { T } from './ui/theme'
 import type { ChatLine, DashModel, DayRow, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { newRenderMemo } from './renderMemo'
@@ -71,9 +70,34 @@ let gitKeyMemo: { of: G.GitState; key: string } | null = null
  * The sample `/deck demo` shows (web/fixtures/state.json, its times moved
  * to the moment it was read), and the deck model its agent pages read; null
  * until it is read. `note` says why it could not be; `version` counts its
- * changes (an answer given in it), for the screen key.
+ * changes (an answer given in it), for the screen key. `v2` is the v2
+ * sample (web/fixtures/state.v2.json, `W.v2StateFromText`), null while it
+ * is read or when it could not be.
  */
-const demo: { state: W.WebState | null; data: DeckData | null; note: string; version: number } = { state: null, data: null, note: '', version: 0 }
+const demo: { state: W.WebState | null; data: DeckData | null; v2: W.WebStateV2 | null; note: string; version: number } = { state: null, data: null, v2: null, note: '', version: 0 }
+
+/** Counts the saves (`save`): each change of the data the deck keeps moves it on. */
+let dataGen = 0
+
+/**
+ * The v2 view model (`W.deckStateOf`, web/CONTRACT.md v2) as the screen
+ * stands, built once per screen and shared by the pane (`dashOf`),
+ * state.json (`writeWeb`) and the debug dump: built again only when the
+ * screen's key moved (`shownKey`), the data was saved since (`dataGen`),
+ * git was read or the usage loaded again, a minute turned (the ages and
+ * times it words), or the questions the deck may answer changed.
+ */
+const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usage: UsageInfo | null; state: W.WebStateV2 | null } = { key: '', data: null, git: null, usage: null, state: null }
+
+function v2Of(now: number): W.WebStateV2 {
+  const asking = [...askers.keys()]
+  const key = [shownKey, dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd].join('\u0001')
+  if (v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage) return v2Memo.state
+  // a question the page may answer is one whose race runs in this module: none after a reload
+  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking))
+  Object.assign(v2Memo, { key, data, git, usage, state })
+  return state
+}
 
 /**
  * The surfaces whose org chart Client failed (`ui.fault`): their Org tab lists
@@ -320,6 +344,7 @@ function renameInView(from: string, to: string) {
 
 /** Keeps the model in `$.state`, so a reload of this module picks it up again; while the debug folder is there, dumps it too, and while the web deck is on, writes its state. */
 function save($: EngineInterface) {
+  dataGen += 1
   scheduleDump($)
   scheduleWeb($)
   if (timers.save) return
@@ -394,13 +419,14 @@ async function writeDump($: EngineInterface): Promise<void> {
  * What the deck believes now, as plain data: the raw counts; the goal, the
  * plan (steps and links), the summary, the needs-you line and the fold; per
  * agent its label, scope, origin, status, parent, step link, checklist, step,
- * last action and result; the files; the last 20 messages; the outline's
- * rows; and how the web deck stands (never its token).
+ * last action and result; the files; the last 20 messages; the v2 tree's
+ * rows (`W.deckStateOf`'s agents, folds and all); and how the web deck
+ * stands (never its token).
  */
 function debugStateOf(now: number) {
   const plan = M.planOf(data)
   const goal = M.goalOf(data)
-  const outline = O.outlineOf(data, view, now, O.MOST_ROWS, git.root)
+  const tree = v2Of(now).agents
   const nameOf = (id: string) => {
     const agent = M.agentOf(data, id)
     return agent ? M.labelOf(agent) : id
@@ -455,21 +481,11 @@ function debugStateOf(now: number) {
       kind: message.kind,
       text: F.oneLine(message.text).slice(0, 80),
     })),
-    outline: {
-      rows: outline.rows.map(row => ({
-        id: row.id,
-        depth: row.depth,
-        label: row.label,
-        kind: row.kind,
-        status: row.status,
-        fold: row.fold,
-        columns: { count: row.count, minutes: row.minutes, added: row.added, removed: row.removed },
-        note: row.note,
-      })),
-      crumbs: outline.crumbs,
-      empty: outline.empty,
-      hidden: outline.hidden,
-    },
+    tree: tree.map(row =>
+      row.row === 'fold'
+        ? { row: row.row, id: row.id, depth: row.depth, text: row.text, ids: row.ids }
+        : { row: row.row, id: row.id, depth: row.depth, title: row.title, kind: row.kind, status: row.status, fold: row.fold, live: row.live ? `${row.live.tool} ${row.live.text}` : null, needs: row.needs },
+    ),
     web: { isOn: web.isOn, status: web.status, port: web.port, dir: web.dir, opened: web.opened, note: web.note, patches: web.written.size, hasParent: web.pid !== '' },
     // what waits on you, and whether the page may answer it; what came of the page's latest commands
     pending: data.pending.map(item => ({ ...item, isAnswerable: askers.has(item.id) })),
@@ -482,7 +498,8 @@ function debugStateOf(now: number) {
  * starts `web/server.js` for the session, answers with the page's link and
  * tries to open it in the Desktop's Browser pane. While it is on, what the
  * deck holds goes to `.web/<sessionId>/state.json` at most every 300 ms after
- * a change (`W.webStateOf`), each edit's patch once beside it, and the page's
+ * a change (`W.webStateOf`, with the v2 view model under `v2`), each edit's
+ * patch once beside it, each agent's file when it changed, and the page's
  * commands come back as lines on the server's stdout.
  *
  * The child is the session's: `superviseWeb` runs from session.start, whose
@@ -527,9 +544,11 @@ const web: {
   written: Set<string>
   /** The state last written, its time left out. */
   lastKey: string
+  /** Each agent's file (`agents/<id>.json`) as last written, by its web id: one is written again only when it changed. */
+  agentFiles: Map<string, string>
   isWriting: boolean
   isWriteQueued: boolean
-} = { isOn: false, token: '', port: 0, keptPort: 0, dir: '', status: 'off', note: '', opened: '', pid: '', epoch: 0, isAsked: false, waiters: [], written: new Set(), lastKey: '', isWriting: false, isWriteQueued: false }
+} = { isOn: false, token: '', port: 0, keptPort: 0, dir: '', status: 'off', note: '', opened: '', pid: '', epoch: 0, isAsked: false, waiters: [], written: new Set(), lastKey: '', agentFiles: new Map(), isWriting: false, isWriteQueued: false }
 
 /** The web deck as the pane draws it. */
 function webPaneOf(): WebPane {
@@ -570,8 +589,10 @@ function scheduleWeb($: EngineInterface) {
  * Writes what the page reads: each edit's patch not written yet
  * (`patches/<id>.diff`, once), each cut message's whole text not written yet
  * (`messages/<id>.md`, once: it is then marked saved and its whole text let
- * go), then `state.json`, unless it says what the last write said (its time
- * aside). One write at a time: a change during one writes again after it.
+ * go), each agent's file that changed (`agents/<id>.json`, v2's), then
+ * `state.json` (v1, and the v2 view model the pane draws under `v2`),
+ * unless it says what the last write said (its time aside). One write at a
+ * time: a change during one writes again after it.
  */
 async function writeWeb($: EngineInterface): Promise<void> {
   if (!web.isOn || web.dir === '') return
@@ -590,10 +611,16 @@ async function writeWeb($: EngineInterface): Promise<void> {
       file.message.isSaved = true
       delete file.message.full
     }
+    for (const file of W.agentFilesOf(data)) {
+      if (web.agentFiles.get(file.id) === file.text) continue
+      await $.fs.write(`${web.dir}/agents/${file.id}.json`, file.text)
+      web.agentFiles.set(file.id, file.text)
+    }
     const now = await $.clock.now()
     // a question the page may answer is one whose race runs in this module: none after a reload
-    const text = JSON.stringify(W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())))
-    const key = text.replace(/^\{"v":1,"now":\d+,/, '')
+    const text = JSON.stringify({ ...W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())), v2: v2Of(now) })
+    // both builds' times left out: a state that says nothing new is not written again
+    const key = text.replace(/^\{"v":1,"now":\d+,/, '').replace(/,"v2":\{"v":2,"now":\d+,/, ',"v2":{')
     if (key !== web.lastKey) {
       await $.fs.write(`${web.dir}/state.json`, text)
       web.lastKey = key
@@ -670,6 +697,7 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
   saveWeb($)
   redraw($)
   web.lastKey = ''
+  web.agentFiles.clear()
   await writeWeb($)
   if (web.pid === '') web.pid = await enginePidOf($)
   // a newer session.start took over: the web deck is its supervisor's now
@@ -789,6 +817,9 @@ function onWebLine($: EngineInterface, line: string): boolean {
   else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
   else if (route.kind === 'review') void sendReview($, route.text, ackId)
   else if (route.kind === 'answer') answerCall($, route.callId, route.answers, ackId)
+  // Stop agent and Stop turn come with the deck's next build: the page is told so, never left waiting
+  else if (route.kind === 'stopAgent') void ack($, ackId, 'failed', 'Not in this build yet: stop it in Claude Code')
+  else if (route.kind === 'abortTurn') void ack($, ackId, 'failed', 'Not in this build yet: press Esc in Claude Code')
   return false
 }
 
@@ -2052,6 +2083,7 @@ function dashOf(now: number, surface: RenderSurface): DashModel {
   return {
     // a question the deck may answer is one whose race runs in this module, as the page is told
     state: isDemo ? demo.state : W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())),
+    v2: isDemo ? demo.v2 : v2Of(now),
     isDemo,
     demoNote: demo.note,
     paneData: isDemo && demo.data ? demo.data : data,
@@ -2066,6 +2098,7 @@ function leaveDemo() {
   view.isDemo = false
   demo.state = null
   demo.data = null
+  demo.v2 = null
   demo.note = ''
   demo.version += 1
 }
@@ -2086,12 +2119,14 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   }
   demo.state = null
   demo.data = null
+  demo.v2 = null
   demo.note = ''
   demo.version += 1
   redraw($)
   let state: W.WebState | null = null
+  const readAt = await $.clock.now()
   try {
-    state = demoStateOf(await $.fs.read(`${root}/web/fixtures/state.json`), await $.clock.now())
+    state = demoStateOf(await $.fs.read(`${root}/web/fixtures/state.json`), readAt)
   } catch {
     state = null
   }
@@ -2104,8 +2139,9 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
     return demo.note
   }
   const patches: Record<string, string> = {}
-  await Promise.all(
-    state.edits
+  let v2: W.WebStateV2 | null = null
+  await Promise.all([
+    ...state.edits
       .filter(edit => /^[A-Za-z0-9_-]{1,120}$/.test(edit.id))
       .map(async edit => {
         try {
@@ -2114,10 +2150,19 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
           // an edit with no patch shows no lines
         }
       }),
-  )
+    // the v2 sample, for the screens that draw v2: its times moved to the same now
+    (async () => {
+      try {
+        v2 = W.v2StateFromText(await $.fs.read(`${root}/web/fixtures/state.v2.json`), readAt)
+      } catch {
+        // no v2 sample: those screens say so
+      }
+    })(),
+  ])
   if (!view.isDemo) return ''
   demo.state = state
   demo.data = demoDataOf(state, patches)
+  demo.v2 = v2
   if (view.page !== '' && !state.agents.some(agent => agent.id === view.page)) view.page = ''
   demo.version += 1
   changed($)
@@ -3079,7 +3124,7 @@ export const register: Register = on => {
       const now = await $.clock.now()
       const main = M.agentOf(data, M.MAIN)
       // the main loop's running turn: the one Stop turn ends ($.turn.abort takes its id)
-      M.noteMainTurn(data, e.turnId)
+      M.noteMainTurn(data, e.turnId, now)
       // you answered, or the Orchestrator went on by itself: it waits on nobody
       M.clearNeeds(data, { kind: 'turn' })
       if (main) {

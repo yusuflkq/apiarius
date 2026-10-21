@@ -94,7 +94,10 @@ test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s a
   expect(state.goal).toMatchObject({ headline: 'Fix the off-by-one in src/range.js' })
   expect(state.agents.find((agent: { id: string }) => agent.id === 'agent-x1')).toMatchObject({ label: 'scout', scope: 'Find the bug', origin: 'agent', status: 'running', parent: 'main', answer: null })
   expect(state.messages).toContainEqual({ from: 'main', to: 'agent-x1', route: 'Orchestrator → scout', kind: 'spawn', text: 'Find the off-by-one in src/range.js' })
-  expect(state.outline.rows.map((row: { label: string; depth: number }) => `${row.depth}:${row.label}`)).toEqual(['0:Orchestrator', '1:scout'])
+  // the v2 tree, as every surface draws it: the Orchestrator, and scout at work under it (nothing folds while it works)
+  expect(state.tree.map((row: { title: string; depth: number }) => `${row.depth}:${row.title}`)).toEqual(['0:Orchestrator', '1:scout'])
+  expect(state.tree[1]).toMatchObject({ row: 'agent', id: 'agent-x1', kind: 'agent', status: 'running', fold: null, live: null, needs: 0 })
+  expect(state.outline).toBeUndefined()
   expect(state.needs).toMatchObject({ kind: 'none' })
   expect(state.fold).toBeNull()
 
@@ -103,7 +106,10 @@ test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s a
   await $.tool.call(scoutReads('/work/README.md'))
   await clock.advance(2100)
   expect(disk.writes).toHaveLength(2)
-  expect(JSON.parse(disk.writes[1]?.text ?? '{}').agents.find((agent: { id: string }) => agent.id === 'agent-x1').lastAction.text).toBe('Read /work/README.md')
+  const second = JSON.parse(disk.writes[1]?.text ?? '{}')
+  expect(second.agents.find((agent: { id: string }) => agent.id === 'agent-x1').lastAction.text).toBe('Read /work/README.md')
+  // its calls ended as they began: no call in flight on its row of the tree
+  expect(second.tree[1]).toMatchObject({ title: 'scout', live: null })
 
   // the folder is gone: the next tick sees it, and no change writes again
   disk.isDebug = false

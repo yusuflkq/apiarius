@@ -172,19 +172,27 @@ test('a subagent`s turn.start leaves the prompt the main loop`s next turn starts
   expect(promptsOf(lastOf(saved))).toEqual(['Map the repository'])
 })
 
-test('the main loop`s running turn: kept from its turn.start to its turn.complete, healed from a snapshot only as a string', () => {
+test('the main loop`s running turn: kept from its turn.start to its turn.complete with when it started, healed from a snapshot only as a string and a time', () => {
   const data = M.emptyData(NOW)
-  M.noteMainTurn(data, 't1')
+  M.noteMainTurn(data, 't1', NOW - 5000)
   expect(data.mainTurnId).toBe('t1')
+  expect(data.mainTurnAt).toBe(NOW - 5000)
   // an older turn's end leaves the newer one in place
   M.endMainTurn(data, 't0')
   expect(data.mainTurnId).toBe('t1')
   M.endMainTurn(data, 't1')
   expect(data.mainTurnId).toBeUndefined()
-  M.noteMainTurn(data, 't2')
-  expect(M.healData(M.copyOf(data), NOW).mainTurnId).toBe('t2')
+  expect(data.mainTurnAt).toBeUndefined()
+  M.noteMainTurn(data, 't2', NOW - 1000)
+  expect(M.healData(M.copyOf(data), NOW)).toMatchObject({ mainTurnId: 't2', mainTurnAt: NOW - 1000 })
   expect(M.healData({ ...M.copyOf(data), mainTurnId: 7 as unknown as string }, NOW).mainTurnId).toBeUndefined()
+  // no turn, no time; a time that is no number goes, the turn stays
+  expect(M.healData({ ...M.copyOf(data), mainTurnId: 7 as unknown as string }, NOW).mainTurnAt).toBeUndefined()
+  const healed = M.healData({ ...M.copyOf(data), mainTurnAt: 'soon' as unknown as number }, NOW)
+  expect(healed.mainTurnId).toBe('t2')
+  expect(healed.mainTurnAt).toBeUndefined()
 })
+
 
 /** The chat's rows as [from, to, kind, title, text]. */
 function rowsOf(data: DeckData): [string, string, string, string, string][] {

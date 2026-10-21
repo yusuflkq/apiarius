@@ -565,6 +565,50 @@ test('while on, state.json follows the data at most every 300 ms, and each edit`
   expect(statesOf(w).length).toBe(settled)
 })
 
+/** The agent files written, by name, each write's text in order. */
+function agentFilesOf(w: World): Map<string, string[]> {
+  const files = new Map<string, string[]>()
+  for (const one of w.writes) {
+    const name = /[\\/]agents[\\/]([^\\/]+)\.json$/.exec(one.path)?.[1]
+    if (name) files.set(name, [...(files.get(name) ?? []), one.text])
+  }
+  return files
+}
+
+test('state.json carries the v2 view model under `v2` beside v1, and each agent`s file (agents/<id>.json) is written when it changed, only then', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  await $.command.run(deck('web'))
+  await clock.advance(400)
+  const first = statesOf(w).pop()!.state as W.WebState & { v2: W.WebStateV2 }
+  // v1 as it was, its keys first; v2 the same session as every surface draws it
+  expect(Object.keys(first).slice(0, 2)).toEqual(['v', 'now'])
+  expect(first.agents.map(one => one.id)).toContain('agent-x1')
+  expect(first.v2).toMatchObject({ v: 2, session: { id: 'session-1', cwd: '/work' }, header: { state: 'working', goal: { text: 'Fix the off-by-one in src/range.js' } } })
+  expect(first.v2.agents.map(row => (row.row === 'agent' ? `${row.depth}:${row.title}:${row.status}` : row.text))).toEqual(['0:Orchestrator:running', '1:scout:running'])
+  expect(first.v2.chat.map(row => row.who)).toEqual(['You → Orchestrator', 'Orchestrator → scout'])
+  let files = agentFilesOf(w)
+  expect([...files.keys()].sort()).toEqual(['agent-2dx1', 'main'])
+  expect(JSON.parse(files.get('agent-2dx1')![0]!)).toMatchObject({ v: 2, id: 'agent-x1', task: 'Find the off-by-one in src/range.js', activity: [], edits: [] })
+
+  // scout edits: its file again (its call, its edit), the Orchestrator's not
+  await $.tool.call({ tool: 'Edit', file_path: '/work/src/app.ts', old_string: 'const b = 2', new_string: 'const b = 3', agentId: 'agent-x1' } as never)
+  await clock.advance(350)
+  files = agentFilesOf(w)
+  expect([files.get('agent-2dx1')?.length, files.get('main')?.length]).toEqual([2, 1])
+  const last = statesOf(w).pop()!.state as W.WebState & { v2: W.WebStateV2 }
+  const scoutFile = JSON.parse(files.get('agent-2dx1')![1]!) as W.V2AgentFile
+  expect(scoutFile.edits).toEqual([last.v2.changes.edits[0]!.id])
+  expect(scoutFile.activity.map(one => [one.tool, one.ok])).toEqual([['Edit', true]])
+
+  // nothing new: neither the state nor a file is written again
+  const settled = [statesOf(w).length, w.writes.length]
+  await clock.advance(6000)
+  expect([statesOf(w).length, w.writes.length]).toEqual(settled)
+})
+
 test("the page's commands come back on the child's stdout: chat goes to session.send, review to the prompt box; split chunks are buffered, and a bad agent, bad JSON or an unknown command are ignored", async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
