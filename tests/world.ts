@@ -161,7 +161,15 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
   on('agent.spawn', () => ({ model: 'claude-haiku', agentId: 'agent-x1' }))
-  on('tool.check', () => ({ decision: w.verdict }))
+  // an ask is core's (the mode's decider): since 2.1.311 a hook's own ask goes to a person, whom a test has none of; a test's query of its own has nothing beneath, and asks
+  on('tool.check', async ($, e, next) => {
+    if (w.verdict !== 'ask') return { decision: w.verdict }
+    try {
+      return await next(e)
+    } catch {
+      return { decision: 'ask' as const }
+    }
+  })
   on('classic.PermissionRequest', () => (w.isDecided ? { decision: { behavior: 'allow' as const } } : {}))
   on('classic.PermissionDenied', () => ({}))
   on('classic.Notification', () => ({}))
