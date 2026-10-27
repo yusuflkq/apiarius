@@ -78,12 +78,23 @@ export function avatar(kit: Kit, row: Face, px: number, opts: { dot?: boolean; a
     if (isAnimated) return <Svg source={source} alt={`${row.title}'s avatar`} width={px} height={px} isInteractive />
     return <Svg source={source} alt={`${row.title}'s avatar`} width={px} height={px} />
   }
-  const face = AV.terminalFace(agent)
-  if (!opts.dot) return <Text color={face.color}>{face.glyph}</Text>
+  const face = AV.terminalFace(agent, avatarStyleOf(kit))
+  if (!opts.dot) return terminalCell(kit, face)
   return (
     <Text>
-      <Text color={face.color}>{face.glyph}</Text>
+      {terminalCell(kit, face)}
       <Text color={face.markColor}>{face.mark}</Text>
+    </Text>
+  )
+}
+
+/** A terminal face's one cell: its glyph in its colour, bold on its background where the style tiles it (mono). */
+export function terminalCell(kit: Kit, face: ReturnType<typeof AV.terminalFace>): RenderElement {
+  const { Text } = kit
+  if (face.background === undefined) return <Text color={face.color}>{face.glyph}</Text>
+  return (
+    <Text color={face.color} backgroundColor={face.background} bold={face.bold === true}>
+      {face.glyph}
     </Text>
   )
 }

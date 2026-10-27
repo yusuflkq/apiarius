@@ -184,11 +184,11 @@ test('the editors` stack: each face on a plate of the ground, a grey disc for on
   assert.equal(A.avatarStackSvg('blob', []), '<svg xmlns="http://www.w3.org/2000/svg" width="0" height="20" viewBox="0 0 0 20"></svg>')
 })
 
-test('the terminal draws no SVG: an agent`s glyph from ◆●▲■✦⬢★◉ in its deep colour, then its status`s mark in its hue', () => {
+test('the terminal draws no SVG: in glyph style an agent`s glyph from ◆●▲■✦⬢★◉ in its deep colour, then its status`s mark in its hue', () => {
   assert.deepEqual(A.GLYPHS, ['◆', '●', '▲', '■', '✦', '⬢', '★', '◉'])
   const seen = new Set()
   for (const id of ['main', 'b81c6f3e2a9d4c17', 'c4d7e8f9a0b1263d', 'd2e3f4a5b6c7089a', 'aa11bb22cc33dd44', 'a3f9c2e1b7d4058e', 'e5f6a7b8c9d0142b', 'f1e2d3c4b5a6978c']) {
-    const face = A.terminalFace({ id, status: 'running' })
+    const face = A.terminalFace({ id, status: 'running' }, 'glyph')
     assert.equal(face.glyph, A.GLYPHS[A.pickOf(id) % 8])
     assert.equal(face.color, A.colorsOf({ id })[0])
     seen.add(face.glyph)
@@ -196,6 +196,30 @@ test('the terminal draws no SVG: an agent`s glyph from ◆●▲■✦⬢★◉ 
   assert.ok(seen.size >= 3)
   assert.deepEqual(['starting', 'running', 'waiting', 'done', 'failed', 'idle', 'stopped'].map(status => A.terminalFace({ id: 'x', status }).mark), ['◐', '◐', '‖', '✓', '✕', '◌', '◌'])
   assert.equal(A.terminalFace({ id: 'x', status: 'failed' }).markColor, A.LOOK_HUE.failed)
+})
+
+test('each style has its own one-character terminal face: mood and a ring follow the status, mono is the name`s letter on its colour, the Orchestrator`s orbit a sun', () => {
+  const main = { id: 'main', name: 'Orchestrator', role: 'main' }
+  const builder = { id: 'b81c6f3e2a9d4c17', name: 'builder' }
+  const of = (style, agent, status, more = {}) => A.terminalFace({ ...agent, status, ...more }, style)
+  // every style draws one narrow cell, and no two styles draw the Orchestrator alike
+  const faces = A.STYLE_IDS.map(style => of(style, main, 'running').glyph)
+  for (const glyph of faces) assert.equal(Array.from(glyph).length, 1)
+  assert.equal(new Set(faces).size, A.STYLE_IDS.length)
+  // no style named: the default's
+  assert.deepEqual(A.terminalFace({ ...builder, status: 'running' }), of(A.DEFAULT_STYLE, builder, 'running'))
+  assert.deepEqual(['running', 'waiting', 'done', 'failed', 'idle'].map(status => of('mood', builder, status).glyph), ['☻', '☻', '☺', '☹', '☺'])
+  assert.deepEqual(['running', 'done', 'failed', 'idle'].map(status => of('ring', builder, status).glyph), ['◑', '●', '●', '○'])
+  assert.deepEqual([0, 0.2, 0.5, 0.8, 1].map(progress => of('ring', builder, 'running', { progress }).glyph), ['○', '◔', '◑', '◕', '●'])
+  assert.equal(of('ring', builder, 'waiting').color, A.LOOK_HUE.waiting)
+  assert.deepEqual(of('mono', builder, 'running'), { glyph: 'B', color: '#ffffff', background: A.colorsOf(builder)[0], bold: true, mark: '◐', markColor: A.LOOK_HUE.running })
+  assert.equal(of('mono', { id: 'x1', name: '研究 agent' }, 'running').glyph, 'A')
+  assert.equal(of('orbit', main, 'running').glyph, '☼')
+  assert.equal(of('orbit', builder, 'running').glyph, '⊙')
+  assert.ok(A.BAUHAUS_GLYPHS.includes(of('bauhaus', builder, 'done').glyph))
+  assert.match(of('pixel', builder, 'idle').glyph, /^[⠀-⣿]$/)
+  // the seed alone picks it: the same agent, the same face, on every redraw
+  assert.deepEqual(of('critter', builder, 'running'), of('critter', builder, 'running'))
 })
 
 test('a robot moves as its status does, only when animated: scanning eyes, a blinking light and a bob at work; a pulsing amber light and a hop waiting; one settle done; one shake failed; a slow breath idle', () => {

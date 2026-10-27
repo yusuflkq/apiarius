@@ -996,7 +996,7 @@ function avatarsCommand($: EngineInterface, words: string): CommandRunResult {
   const style = avatarStyleNamed(words)
   if (style === undefined) return { text: `No avatar style called "${F.trunc(F.oneLine(words), 40)}". One of: ${AV.STYLE_IDS.join(', ')}.` }
   setAvatarStyle($, style)
-  return { text: `Avatars: ${AV.styleName(style)}. The pane, the web page and /deck demo draw them, in every session; /deck avatars lists the others.` }
+  return { text: `Avatars: ${AV.styleName(style)}, in every session: the pane, the web page and /deck demo draw them (the terminal as one character each); /deck avatars lists the others.` }
 }
 
 /** Says what came of the page's command `id` in the state it reads (`acks`); a command with no id is told nothing. */

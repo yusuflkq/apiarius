@@ -19,7 +19,7 @@ import type { RenderElement } from 'claude-code'
 import * as AV from '../../../web/avatars.mjs'
 import type { DashActions, Kit } from '../types'
 import { ticks, uiWrapAdvance, type TickPart } from './dashModel'
-import { avatar, avatarAgentOf, avatarStyleOf, svgOf, type Face } from './look'
+import { avatar, avatarAgentOf, avatarStyleOf, svgOf, terminalCell, type Face } from './look'
 import { P, pillWidth, ruleSvg, tagSvg, tagWidth, toneOf } from './palette'
 import { monoAdvance, type Advance } from './text'
 
@@ -90,8 +90,7 @@ export function faces(kit: Kit, who: readonly (Face | null)[], px: number, names
       ) : (
         shown.map(one => {
           if (one === null) return <Text color={P.muted3}>●</Text>
-          const glyph = AV.terminalFace(avatarAgentOf(one))
-          return <Text color={glyph.color}>{glyph.glyph}</Text>
+          return terminalCell(kit, AV.terminalFace(avatarAgentOf(one), avatarStyleOf(kit)))
         })
       )}
       {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}

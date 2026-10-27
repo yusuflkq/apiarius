@@ -32,6 +32,7 @@ export const PALETTE: readonly (readonly [string, string])[]
 export const LOOK_HUE: Readonly<Record<AvatarLook, string>>
 export const LOOK_MARK: Readonly<Record<AvatarLook, string>>
 export const GLYPHS: readonly string[]
+export const BAUHAUS_GLYPHS: readonly string[]
 
 export function lookOf(status: string | undefined): AvatarLook
 export function isStyle(value: unknown): value is AvatarStyle
@@ -45,5 +46,5 @@ export function progressOf(todos: readonly { status: string }[] | undefined): nu
 export function avatarSvg(style: string, agent: AvatarAgent, opts?: AvatarOptions): string
 export function stackWidth(n: number, size: number, overlap?: number): number
 export function avatarStackSvg(style: string, agents: readonly (AvatarAgent | null)[], opts?: { size?: number; overlap?: number; ground?: string; id?: string }): string
-export function terminalFace(agent: AvatarAgent): { glyph: string; color: string; mark: string; markColor: string }
+export function terminalFace(agent: AvatarAgent, style?: string): { glyph: string; color: string; background?: string; bold?: boolean; mark: string; markColor: string }
 export function dataUrl(svg: string): string

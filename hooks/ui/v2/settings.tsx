@@ -8,10 +8,12 @@
  *   the v2 state's `inspect` holds them, a table where the pane is wide
  *   enough and two lines an agent where it is not;
  * - Avatar style: the ten styles of web/avatars.mjs, each its name beside a
- *   small face drawn in it where Svg draws (the Orchestrator at work), the
- *   one drawn marked; a press draws every agent in it from now on, in every
- *   session and on the web page (`setAvatarStyle`, as `/deck avatars`);
- * - Web page: "Open in browser" (`/deck web`) and how the page stands;
+ *   small face drawn in it (the Orchestrator at work; one character on the
+ *   terminal), the one drawn marked; a press draws every agent in it from
+ *   now on, in every session and on the web page (`setAvatarStyle`, as
+ *   `/deck avatars`);
+ * - Web page: "Start the web page" (`/deck web`), then "Open in browser", a
+ *   link to it, and how the page stands;
  * - Help: what each tab shows, and the few keys there are.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks module.
@@ -23,7 +25,7 @@ import { MAIN } from '../../model'
 import type { V2AgentRow, V2Inspect, WebStateV2 } from '../../web'
 import type { DashActions, DeckModel, Kit, WebPane } from '../types'
 import { isAiry, listBox, listRow } from './dash'
-import { AVATAR, avatar, avatarStyleOf, quiet, sectionHead, svgOf, type Face } from './look'
+import { AVATAR, avatar, avatarAgentOf, avatarStyleOf, quiet, sectionHead, svgOf, terminalCell, type Face } from './look'
 import { P } from './palette'
 import { rule, widthFor } from './parts'
 import { num, plural, usd } from './text'
@@ -242,8 +244,8 @@ const PICKED = P.runText
  * The avatars' style: the ten, in rows of as many as fit (about 22 cells
  * each), the one drawn marked. Where Svg draws, each a bordered chip, its
  * face drawn in its style beside its name, the one drawn ringed and ticked;
- * on the terminal, which draws no faces, each a radio line (◉ the one drawn,
- * ○ the rest). Each name is a plain Button keyed `avatars:<style>`.
+ * on the terminal, each a radio line (◉ the one drawn, ○ the rest) with its
+ * one-character face. Each name is a plain Button keyed `avatars:<style>`.
  */
 function avatarsSection(kit: Kit, actions: DashActions): RenderElement {
   const { Box, Text } = kit
@@ -277,6 +279,7 @@ function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, wi
         <Box flexShrink={0}>
           <Text color={isOn ? PICKED : P.muted2}>{isOn ? '◉' : '○'}</Text>
         </Box>
+        <Box flexShrink={0}>{terminalCell(kit, AV.terminalFace(avatarAgentOf(SAMPLE), id))}</Box>
         <Box flexShrink={1} minWidth={0}>
           {label}
         </Box>
@@ -316,20 +319,30 @@ function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, wi
 
 /** What the web page's line says, by how it stands. */
 function webNote(web: WebPane | undefined): { text: string; color: string } {
-  if (!web || web.status === 'off') return { text: 'The same deck as a page in the Browser pane, live: /deck web.', color: P.muted2 }
-  if (web.status === 'starting') return { text: 'Starting the web deck…', color: P.muted2 }
-  if (web.status === 'failed') return { text: web.note || 'The web deck could not start.', color: P.failText }
-  return { text: web.opened === 'failed' && web.url !== '' ? `Running at ${web.url}: the Browser pane could not open it.` : 'Running: Open in browser shows it again.', color: P.muted }
+  if (!web || web.status === 'off') return { text: 'The same deck as a live page in your browser (/deck web).', color: P.muted2 }
+  if (web.status === 'starting') return { text: 'Starting the web page…', color: P.muted2 }
+  if (web.status === 'failed') return { text: web.note || 'The web page could not start.', color: P.failText }
+  return { text: 'Live, on this machine only.', color: P.muted }
 }
 
-/** The web page: "Open in browser" (as /deck web: started if need be, opened in the Browser pane), and how it stands. */
+/**
+ * The web page and how it stands. While it runs, "Open in browser" is a link
+ * to it, which the surface opens itself (as the deck's top line is): the
+ * Browser pane refuses a mod's preview_start. Until then a Button starts it
+ * (as /deck web), and the link takes its place.
+ */
 function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): RenderElement {
-  const { Box, Button, Text } = kit
+  const { Box, Button, Markdown, Text } = kit
   const note = webNote(web)
+  const isUp = web !== undefined && web.status === 'running' && web.url !== ''
   return section(kit, 'settings:web', sectionHead(kit, 'Web page', null), [
     <Box key="settings:web:row" flexDirection="row" columnGap={2} alignItems="center">
       <Box flexShrink={0}>
-        <Button key="web:open" label="Open in browser" onPress={() => actions.openWeb()} />
+        {isUp ? (
+          <Markdown key="settings:web:link" text={`[Open in browser](${web.url})`} />
+        ) : (
+          <Button key="web:open" label={web?.status === 'starting' ? 'Starting…' : 'Start the web page'} onPress={() => actions.openWeb()} />
+        )}
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         <Text color={note.color} wrap="wrap">

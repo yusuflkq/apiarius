@@ -204,14 +204,16 @@ test('one sender`s messages within a few minutes stack under one avatar and name
     expect(await ui.find({ key: `to:msg:${answer.id}` })).toBeUndefined()
     for (const [i, name] of ['builder', 'docs', 'scout'].entries()) {
       const row = spawns[i]!
-      expect((await ui.find({ key: `to:msg:${row.id}` }))?.text).toMatch(new RegExp(`^to[◆●▲■✦⬢★◉]?${name}· [0-9]+m$`))
+      expect((await ui.find({ key: `to:msg:${row.id}` }))?.text).toMatch(new RegExp(`^to.?${name}· [0-9]+m$`))
       expect((await ui.find({ key: `chat:to:msg:${row.id}` }))?.props.label).toBe(name)
     }
     // the sender's face once, at the group's left; each recipient's beside its name
     if (surface === 'desktop') {
       expect(under(group, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["Orchestrator's avatar", "builder's avatar", "docs's avatar", "scout's avatar"])
     } else {
-      const glyphs = under(group, node => node.type === 'Text' && typeof node.children?.[0] === 'string' && AV.GLYPHS.includes(node.children[0] as string))
+      // each a robot's one character, the default style's on the terminal
+      const robot = AV.terminalFace({ id: IDS.builder }).glyph
+      const glyphs = under(group, node => node.type === 'Text' && node.children?.[0] === robot)
       expect(glyphs.length).toBe(4)
     }
     // another sender between starts a group of its own
@@ -296,7 +298,7 @@ test('under your message, what came of it and when: Not delivered, Queued, Deliv
     // yours to an agent names it over the bubble, at the right: its face, its name a press
     const head = await ui.find({ key: `head:msg:${delivered.id}` })
     expect(head?.props.justifyContent).toBe('flex-end')
-    expect(head?.text).toMatch(/^to[◆●▲■✦⬢★◉]?builder$/)
+    expect(head?.text).toMatch(/^to.?builder$/)
     expect((await ui.find({ key: `chat:to:msg:${delivered.id}` }))?.props.label).toBe('builder')
     // yours to the Orchestrator name no one
     expect(await ui.find({ key: `head:msg:${queued.id}` })).toBeUndefined()

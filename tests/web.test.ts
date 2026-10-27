@@ -717,5 +717,13 @@ test('the pane: with no Browser pane to open the web deck in, its link shows as 
   expect(link?.type).toBe('Markdown')
   expect(link?.text).toContain(`[Open Agent Deck](http://127.0.0.1:${PORT}/?t=`)
   expect(link?.text).toMatch(/\) in the Browser pane$/)
+  // Settings' Open in browser is that link too, which the surface opens itself: no Button that asks the Browser pane
+  await ui.press({ key: 'tab:settings' })
+  await ui.redraw()
+  const open = await ui.find({ key: 'settings:web:link' })
+  expect(open?.type).toBe('Markdown')
+  expect(open?.text).toMatch(/^\[Open in browser\]\(http:\/\/127\.0\.0\.1:\d+\/\?t=[^)]+\)$/)
+  expect(open?.text).toContain(`http://127.0.0.1:${PORT}/?t=`)
+  expect(await ui.find({ key: 'web:open' })).toBeUndefined()
   await ui.unmount()
 })

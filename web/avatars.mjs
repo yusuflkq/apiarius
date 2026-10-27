@@ -22,8 +22,9 @@
  *   as an image;
  * - the mod imports it too (hooks/ui/v2/look.tsx): the Desktop pane draws an
  *   Svg element as an image of the same document;
- * - the terminal draws no SVG: `terminalFace` is its coloured glyph and
- *   status mark.
+ * - the terminal draws no SVG: `terminalFace` is one character in the
+ *   style (a ☻ for mood, a sun for the Orchestrator's orbit, a letter on
+ *   its colour for mono), then its status mark.
  *
  * A plain ES module with no DOM and no Node, so the mod's environment runs
  * it as a browser does (web/avatars.d.mts types it for the mod). Pure: the
@@ -73,6 +74,9 @@ export const LOOK_MARK = { running: '◐', waiting: '‖', done: '✓', failed: 
 
 /** The terminal's glyphs: one an agent, by its seed. */
 export const GLYPHS = ['◆', '●', '▲', '■', '✦', '⬢', '★', '◉']
+
+/** Bauhaus on the terminal: a half-filled shape, one an agent, by its seed. */
+export const BAUHAUS_GLYPHS = ['◧', '◩', '◭', '◓', '◨', '◪', '◮', '◒']
 
 /** The ground a status dot is ringed in, as the gallery drew it: the deck's card. */
 const GROUND = '#141414'
@@ -513,16 +517,67 @@ export function avatarStackSvg(style, agents, opts = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${n2(width)}" height="${n2(size)}" viewBox="0 0 ${n2(width)} ${n2(size)}">${faces.join('')}</svg>`
 }
 
+/** A pixel sprite in one braille cell: rows 1 to 4 lit in both columns by the seed (the SVG sprite's hash), two at least. */
+function brailleSprite(seed) {
+  const h = pickOf(`${seed}#`)
+  let rows = [0, 1, 2, 3].filter(row => (h >> row) & 1)
+  if (rows.length < 2) rows = [1, 2]
+  const left = [0x01, 0x02, 0x04, 0x40]
+  const right = [0x08, 0x10, 0x20, 0x80]
+  return String.fromCharCode(0x2800 + rows.reduce((bits, row) => bits | left[row] | right[row], 0))
+}
+
+/** How full a progress ring is, as a pie: ○ ◔ ◑ ◕ ●. */
+function pieOf(frac) {
+  if (frac <= 0) return '○'
+  if (frac >= 1) return '●'
+  return frac < 0.375 ? '◔' : frac < 0.625 ? '◑' : '◕'
+}
+
+/** A name's first letter or digit that takes one cell (else its seed's), upper case. */
+function initialOf(name, seed) {
+  for (const text of [name, seed]) {
+    const one = Array.from(String(text)).find(ch => /[\p{L}\p{N}]/u.test(ch) && ch.codePointAt(0) < 0x1100)
+    if (one) return one.toUpperCase()
+  }
+  return '?'
+}
+
 /**
- * What the terminal draws for an agent, which draws no SVG: its glyph
- * ('◆●▲■✦⬢★◉', by its seed) in its deep colour, and its status's mark in
- * the status's hue (◐ at work, ‖ waiting on you, ✓ done, ✕ failed, ◌ idle).
+ * Each style on the terminal, which draws no SVG: one cell from the face's
+ * context (as `partsOf` makes it) as `{ glyph, color, background?, bold? }`.
+ * The owner chose them from mocks in Cascadia Mono (2026-10-27).
  */
-export function terminalFace(agent) {
+const TERMINAL = {
+  robot: c => ({ glyph: '◙', color: c.c1 }),
+  mood: c => ({ glyph: c.look === 'done' || c.look === 'idle' ? '☺' : c.look === 'failed' ? '☹' : '☻', color: c.c1 }),
+  critter: c => ({ glyph: ['ω', 'ᴥ', 'ʊ', 'ö', 'ʘ', 'ɷ'][pickOf(`${c.seed}c`) % 6], color: c.c1 }),
+  pixel: c => ({ glyph: brailleSprite(c.seed), color: c.c1 }),
+  mono: c => ({ glyph: initialOf(c.name, c.seed), color: '#ffffff', background: c.c1, bold: true }),
+  orbit: c => (c.role === 'main' ? { glyph: '☼', color: c.c2 } : { glyph: '⊙', color: c.c1 }),
+  bauhaus: c => ({ glyph: BAUHAUS_GLYPHS[pickOf(`${c.seed}b`) % BAUHAUS_GLYPHS.length], color: c.c1 }),
+  ring: c => ({ glyph: pieOf(c.progress ?? (c.look === 'done' || c.look === 'failed' ? 1 : c.look === 'idle' ? 0 : 0.5)), color: LOOK_HUE[c.look] }),
+  glyph: c => ({ glyph: GLYPHS[c.h % GLYPHS.length], color: c.c1 }),
+  blob: c => ({ glyph: 'Ω', color: c.c1 }),
+}
+
+/**
+ * What the terminal draws for an agent in `style` (the default's when it
+ * names none), which draws no SVG: one cell, `glyph` in `color` (bold on
+ * `background` where the style tiles it), and its status's mark in the
+ * status's hue (◐ at work, ‖ waiting on you, ✓ done, ✕ failed, ◌ idle).
+ * Mood's face and a ring's pie follow the status, as their SVG does.
+ */
+export function terminalFace(agent, style) {
   const seed = seedOf(agent)
   const h = pickOf(seed)
+  const [c1, c2] = PALETTE[h % PALETTE.length]
   const look = lookOf(agent && agent.status)
-  return { glyph: GLYPHS[h % GLYPHS.length], color: PALETTE[h % PALETTE.length][0], mark: LOOK_MARK[look], markColor: LOOK_HUE[look] }
+  const name = agent && typeof agent.name === 'string' && agent.name.trim() ? agent.name : seed
+  const role = agent && agent.role === 'main' ? 'main' : ''
+  const progress = agent && typeof agent.progress === 'number' && Number.isFinite(agent.progress) ? Math.min(1, Math.max(0, agent.progress)) : undefined
+  const face = TERMINAL[styleOf(style)]({ c1, c2, seed, h, look, name, role, progress })
+  return { ...face, mark: LOOK_MARK[look], markColor: LOOK_HUE[look] }
 }
 
 /** An SVG document as a `data:` URL, the way an image of it is drawn. */

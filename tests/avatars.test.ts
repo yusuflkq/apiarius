@@ -114,16 +114,24 @@ test('a desktop draws each agent`s face as the library`s own document, robots by
   await ui.unmount()
 })
 
-test('the terminal draws no image: each card leads with the agent`s glyph in its colour, then its status`s mark in its hue', async ($, on) => {
+test('the terminal draws no image: each card leads with the agent`s one-character face in the style picked, then its status`s mark in its hue; another style draws at once', async ($, on) => {
   const state = sampleState()
   await demo($, on, state)
   const ui = await $.ui.mount(pane('terminal'))
   expect(await ui.findAll({ type: 'Svg' })).toEqual([])
-  for (const row of D.cardAgentsOf(state).shown) {
-    const face = AV.terminalFace({ id: row.id, status: row.isStopped ? 'stopped' : row.status })
-    const card = await ui.find({ key: `card:${row.id}` })
-    expect(card?.text).toContain(`${face.glyph}${face.mark}`)
-    expect(AV.GLYPHS).toContain(face.glyph)
+  const shown = D.cardAgentsOf(state).shown
+  const cardsSay = async (style: AV.AvatarStyle) => {
+    for (const row of shown) {
+      const face = AV.terminalFace({ id: row.id, name: row.title, role: row.kind === 'orchestrator' ? 'main' : '', status: row.isStopped ? 'stopped' : row.status, progress: AV.progressOf(row.todos) }, style)
+      expect((await ui.find({ key: `card:${row.id}` }))?.text).toContain(`${face.glyph}${face.mark}`)
+    }
+  }
+  await cardsSay('robot')
+  expect((await ui.find({ key: `card:${shown[0]!.id}` }))?.text).toContain('◙')
+  for (const style of ['mono', 'ring', 'glyph'] as const) {
+    await $.command.run(deck(`avatars ${style}`))
+    await ui.redraw()
+    await cardsSay(style)
   }
   const builder = AV.terminalFace({ id: IDS.builder, status: 'waiting' })
   expect(builder.mark).toBe('‖')

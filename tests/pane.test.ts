@@ -275,8 +275,9 @@ test('5 opens Settings: Inspect (the context, the spend, the tokens and requests
     expect(await keysOf(ui, 'inspect:open:')).toEqual(v2.inspect.agents.map(one => `inspect:open:${one.id}`))
     // the linter's failed call counts in red under Errors
     expect((await ui.find({ key: 'inspect:head' }))?.text).toContain('Errors')
-    // the web page, as /deck web opens it
-    expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Open in browser')
+    // the web page: off, a Button starts it (as /deck web)
+    expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Start the web page')
+    expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
     // Help: each tab, then the keys that are left
     const help = (await ui.find({ key: 'help' }))?.text ?? ''
     for (const said of ['1  Dashboard', '2  Chat', '3  Org', '4  Changes', '5  Settings', 'pick Everyone or one agent', 'back from an agent’s page']) expect(help).toContain(said)
