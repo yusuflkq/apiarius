@@ -551,14 +551,14 @@ function initialOf(name, seed) {
 const TERMINAL = {
   robot: c => ({ glyph: '◙', color: c.c1 }),
   mood: c => ({ glyph: c.look === 'done' || c.look === 'idle' ? '☺' : c.look === 'failed' ? '☹' : '☻', color: c.c1 }),
-  critter: c => ({ glyph: ['ω', 'ᴥ', 'ʊ', 'ö', 'ʘ', 'ɷ'][pickOf(`${c.seed}c`) % 6], color: c.c1 }),
+  critter: c => ({ glyph: 'ᴥ', color: c.c1 }),
   pixel: c => ({ glyph: brailleSprite(c.seed), color: c.c1 }),
   mono: c => ({ glyph: initialOf(c.name, c.seed), color: '#ffffff', background: c.c1, bold: true }),
   orbit: c => (c.role === 'main' ? { glyph: '☼', color: c.c2 } : { glyph: '⊙', color: c.c1 }),
   bauhaus: c => ({ glyph: BAUHAUS_GLYPHS[pickOf(`${c.seed}b`) % BAUHAUS_GLYPHS.length], color: c.c1 }),
   ring: c => ({ glyph: pieOf(c.progress ?? (c.look === 'done' || c.look === 'failed' ? 1 : c.look === 'idle' ? 0 : 0.5)), color: LOOK_HUE[c.look] }),
   glyph: c => ({ glyph: GLYPHS[c.h % GLYPHS.length], color: c.c1 }),
-  blob: c => ({ glyph: 'Ω', color: c.c1 }),
+  blob: c => ({ glyph: 'ᗣ', color: c.c2 }),
 }
 
 /**
