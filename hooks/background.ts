@@ -80,6 +80,11 @@ export function rowsOf(data: DeckData): Row[] {
   return data.background
 }
 
+/** The record as it stands, read only: none where the data keeps none (the view model never writes the data). */
+function shownRowsOf(data: DeckData): readonly Row[] {
+  return Array.isArray(data.background) ? data.background : []
+}
+
 function keep(data: DeckData) {
   const rows = rowsOf(data)
   if (rows.length > MOST_BACKGROUND) rows.splice(0, rows.length - MOST_BACKGROUND)
@@ -427,7 +432,7 @@ export function isStoppableAgent(agent: Pick<DeckData['agents'][number], 'kind' 
 /** Every stopping call the deck could make now: TaskStop of each stoppable agent and each task Claude Code gave an id, CronDelete of each schedule it did. */
 export function stopCallsOf(data: DeckData): StopCall[] {
   const agents = data.agents.filter(isStoppableAgent).map(agent => stopCallOf('TaskStop', agent.id))
-  const rows = rowsOf(data)
+  const rows = shownRowsOf(data)
     .filter(row => row.isBound)
     .map(stopCallOfRow)
   return [...agents, ...rows]
@@ -590,7 +595,7 @@ const COUNT_WORDS: readonly [Kind, string, string][] = [
  */
 export function backgroundOf(data: DeckData, rows: readonly { row: string; id: string; title?: string }[], now: number): V2Background {
   const names = new Map(rows.flatMap(row => (row.row === 'agent' ? [[row.id, row.title ?? '']] : [])))
-  const shown = rowsOf(data).filter(row => !(isSchedule(row) && !row.recurring && row.nextAt !== undefined && row.nextAt < now - 60_000))
+  const shown = shownRowsOf(data).filter(row => !(isSchedule(row) && !row.recurring && row.nextAt !== undefined && row.nextAt < now - 60_000))
   const tasks = shown.filter(row => !isSchedule(row)).sort((a, b) => a.at - b.at)
   const schedules = shown.filter(isSchedule).sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity) || a.at - b.at)
   const out = [...tasks, ...schedules].map((row): V2BackgroundRow => {
@@ -628,7 +633,7 @@ export function backgroundOf(data: DeckData, rows: readonly { row: string; id: s
 /** The background row the page's `bgId` names: a task or schedule Claude Code gave an id; undefined for none. */
 export function rowByBgId(data: DeckData, bgId: unknown): Row | undefined {
   if (typeof bgId !== 'string' || bgId === '') return undefined
-  return rowsOf(data).find(row => row.isBound && bgIdOf(row.id) === bgId)
+  return shownRowsOf(data).find(row => row.isBound && bgIdOf(row.id) === bgId)
 }
 
 /** The stopping call a background row takes: TaskStop of a task, CronDelete of a schedule. */
