@@ -21,11 +21,22 @@
  * 15 tool calls, the linter's eslint call failed, builder's `npm test` and
  * the two questions still running.
  *
+ * Inspect (hooks/inspect.ts): the session runs in auto mode at high effort.
+ * Auto mode refused builder's `git push --force` and your PreToolUse hook
+ * blocked docs' edit of `.env` (two more calls, refused); your rule allowed
+ * tester's `npm test`, you allowed builder's edit of src/app.ts in its
+ * dialog, auto mode let scout's fetch through, builder's `npm test` waits on
+ * you. The Orchestrator's context was compacted once (92% → 18%) and
+ * researcher's once; /context's breakdown, two CLAUDE.md files and a nested
+ * one, four memory files, 23 skills (two used), two MCP servers and two
+ * hooks are loaded.
+ *
  * Plain TypeScript that Node runs as it is (no `claude-code` import), so the
  * fixture's generator can load it.
  */
 import type { DeckAgent, DeckData, DeckEdit, DeckQuestion } from '../types'
 import { emptyGit, type GitState } from '../hooks/git'
+import * as I from '../hooks/inspect'
 import * as M from '../hooks/model'
 import type { UsageInfo } from '../hooks/ui/types'
 import { gitDiffIdOf, type GitDiffs } from '../hooks/web'
@@ -141,6 +152,8 @@ export function v2Session(): V2Session {
   const data = M.emptyData(ago(42))
   const main = M.agentOf(data, M.MAIN) as DeckAgent
   Object.assign(main, { status: 'running', model: 'claude-opus-5-5', tokensIn: 182_400, tokensOut: 21_300, cacheRead: 1_204_000, requests: 31 })
+  // the classic hooks name the mode and the effort: auto mode, high
+  I.noteMode(data, { permission_mode: 'auto', effort: { level: 'high' } })
 
   // you asked; the main loop's turn runs since
   M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: PROMPT, at: ago(40) })
@@ -230,6 +243,8 @@ export function v2Session(): V2Session {
     removed: 1,
     patch: patchOf('src/app.ts', [" import { auth } from './auth'", "+import { limiter } from './rateLimit'", ' app.use(auth())', '-app.use(routes)', '+app.use(limit(limiter(store)), routes)']),
   })
+  // auto mode refused its force-push (Inspect's permissions): a call refused
+  call(data, builder, 'toolu_01BldB1', 'Bash', FORCE_PUSH, ago(13), 900, false)
   call(data, builder, 'toolu_01BldW2', 'Write', { file_path: 'C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js' }, ago(11), 200)
   edit(data, builder, {
     id: 'toolu_01BldW2',
@@ -321,6 +336,8 @@ export function v2Session(): V2Session {
     at: ago(26),
   })
   call(data, docs, 'toolu_01DocE1', 'Edit', { file_path: `${ROOT}\\docs\\api.md` }, ago(23), 250)
+  // your PreToolUse hook blocked its edit of .env (Inspect's permissions)
+  call(data, docs, 'toolu_01DocE0', 'Edit', { file_path: `${ROOT}\\.env` }, ago(22.5), 120, false)
   edit(data, docs, {
     id: 'toolu_01DocE1',
     tool: 'Edit',
@@ -394,6 +411,8 @@ export function v2Session(): V2Session {
 
   M.noteNotification(data, { type: 'elicitation_dialog', message: 'The github MCP server is asking for your input', title: 'github', at: ago(1) })
 
+  inspectOf(data)
+
   const git: GitState = {
     ...emptyGit(),
     isRepo: true,
@@ -440,4 +459,121 @@ export function v2Session(): V2Session {
   })
   const usage: UsageInfo = { startedAt: ago(42), contextPercent: 41, costUsd: 4.12, limits: [] }
   return { data, git, usage, now: SAMPLE_NOW, sessionId: '5f2c8a1e-7b3d-4c9a-9e61-2d4f8b0c3a17', cwd: ROOT, answerable: new Set(['toolu_01AskOne', 'toolu_01AskMany']), gitDiffs }
+}
+
+/** builder's force-push, which auto mode refused. */
+const FORCE_PUSH = { command: 'git push --force origin main', description: 'Push the limiter' }
+
+/** The Orchestrator's compaction's summary, as the engine's first message after it reads: long, so its whole text is a lazy file. */
+const SUMMARY = `This session is being continued from a previous conversation that ran out of context. The conversation is summarized below.
+
+1. **Request.** Per-user rate limiting for the public API: a sliding window, 100 requests a minute by default, set per route; Redis in production, in memory in tests; 429 with Retry-After; the docs updated.
+2. **Plan.** Approved: map the routes, write the limiter in \`src/rateLimit.ts\`, two stores, answer 429, the docs.
+3. **Done so far.** researcher mapped 14 public routes, all mounted in \`src/app.ts\` after \`auth()\`. docs updated \`docs/api.md\`. builder wrote the limiter; tester's tests pass against the in-memory store; the linter failed on a missing config.
+4. **Open.** Which store backs production; which routes skip the limiter.
+${'Next: wait for builder, then run the limiter tests. '.repeat(3)}`
+
+/**
+ * What Inspect heard in the sample session (hooks/inspect.ts): every
+ * permission decision on the calls above, oldest first, with how each ask
+ * was settled and how its call ended; the two compactions; /context's
+ * breakdown; the instruction and memory files; the model, the output style
+ * and the settings' hooks; two skills and four MCP calls used.
+ */
+function inspectOf(data: DeckData): void {
+  const at = (n: number) => ago(n)
+  // /context's breakdown, read last: the window the Orchestrator's compaction is counted against
+  I.noteBreakdown(
+    data,
+    {
+      categories: [
+        { name: 'System prompt', tokens: 3_100, kind: 'used', color: 'promptBorder' },
+        { name: 'System tools', tokens: 12_400, kind: 'used', color: 'inactive' },
+        { name: 'MCP tools', tokens: 8_200, kind: 'used', color: 'cyan_FOR_SUBAGENTS_ONLY' },
+        { name: 'Memory files', tokens: 2_600, kind: 'used', color: 'claude' },
+        { name: 'Skills', tokens: 1_900, kind: 'used', color: 'warning' },
+        { name: 'Messages', tokens: 54_000, kind: 'used', color: 'purple_FOR_SUBAGENTS_ONLY' },
+        { name: 'Free space', tokens: 84_800, kind: 'free', color: 'promptBorder' },
+        { name: 'Autocompact buffer', tokens: 33_000, kind: 'buffer', color: 'inactive' },
+        { name: 'MCP tools (deferred)', tokens: 4_100, kind: 'deferred', color: 'inactive' },
+      ],
+      totalTokens: 82_200,
+      rawMaxTokens: 200_000,
+      percentage: 41,
+      model: 'claude-opus-5-5',
+      memoryFiles: [
+        { path: 'C:\\Users\\sam\\.claude\\CLAUDE.md', type: 'User', tokens: 310 },
+        { path: `${ROOT}\\CLAUDE.md`, type: 'Project', tokens: 1_480 },
+        { path: `${ROOT}\\src\\CLAUDE.md`, type: 'Project', tokens: 240 },
+        { path: 'C:\\Users\\sam\\.claude\\projects\\acme-api\\memory\\MEMORY.md', type: 'AutoMem', tokens: 160 },
+        { path: 'C:\\Users\\sam\\.claude\\projects\\acme-api\\memory\\redis-in-ci.md', type: 'AutoMem', tokens: 140 },
+        { path: 'C:\\Users\\sam\\.claude\\projects\\acme-api\\memory\\api-conventions.md', type: 'AutoMem', tokens: 180 },
+        { path: 'C:\\Users\\sam\\.claude\\projects\\acme-api\\memory\\ask-before-pushing.md', type: 'AutoMem', tokens: 90 },
+      ],
+      mcpTools: [
+        ...['get_pull_request', 'list_checks', 'create_issue', 'list_issues', 'get_file', 'search_code', 'create_branch', 'list_commits', 'get_workflow_run', 'add_comment', 'merge_pull_request', 'list_pull_requests'].map((tool, i) => ({ name: `mcp__github__${tool}`, serverName: 'github', tokens: 520, isLoaded: i < 10 })),
+        ...['search_issues', 'get_issue', 'create_issue', 'update_issue', 'list_projects', 'list_teams', 'add_comment', 'get_user'].map(tool => ({ name: `mcp__linear__${tool}`, serverName: 'linear', tokens: 380, isLoaded: false })),
+      ],
+      skills: {
+        totalSkills: 23,
+        skillFrontmatter: ['code-review', 'run', 'simplify', 'security-review', 'init', 'loop', 'schedule', 'update-config', 'keybindings-help', 'fewer-permission-prompts', 'claude-api', 'dataviz', 'pdf', 'docx', 'xlsx', 'pptx', 'humanizer', 'skill-creator', 'artifact-design', 'workflow-authoring', 'plugin-authoring', 'watch-video', 'ask'].map(name => ({ name })),
+      },
+      autoCompactThreshold: 166_000,
+      isAutoCompactEnabled: true,
+    },
+    200_000,
+    at(0.5),
+  )
+  // the instruction files the conversation carries (prompt.context), and why each loaded (InstructionsLoaded)
+  I.noteInstructions(
+    data,
+    [
+      { path: 'C:\\Users\\sam\\.claude\\CLAUDE.md', kind: 'user', content: ['# Mine', '', '- Plain English in docs.', '- Ask before pushing.', '- Tests before commits.', '- No new dependencies unasked.'].join('\n') },
+      { path: `${ROOT}\\CLAUDE.md`, kind: 'project', content: Array.from({ length: 41 }, (_, i) => `Line ${i + 1} of the project's notes.`).join('\n') },
+    ],
+    at(42),
+  )
+  I.noteInstructionLoaded(data, { path: 'C:\\Users\\sam\\.claude\\CLAUDE.md', memoryType: 'User', reason: 'session_start' }, at(42))
+  I.noteInstructionLoaded(data, { path: `${ROOT}\\CLAUDE.md`, memoryType: 'Project', reason: 'session_start' }, at(42))
+  I.noteInstructionLoaded(data, { path: `${ROOT}\\src\\CLAUDE.md`, memoryType: 'Project', reason: 'nested_traversal', trigger: `${ROOT}\\src\\app.ts` }, at(33))
+  // the model, the output style and the settings' hooks (the project's PreToolUse guard, your Stop chime)
+  I.noteLoaded(
+    data,
+    {
+      model: 'claude-opus-5-5',
+      outputStyle: 'default',
+      hooks: [
+        ...I.hooksOf({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'powershell -c (New-Object Media.SoundPlayer chimes.wav).PlaySync()' }] }] } }, 'user'),
+        ...I.hooksOf({ hooks: { PreToolUse: [{ matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'node .claude/hooks/protect-secrets.js' }] }] } }, 'project'),
+      ],
+    },
+    at(42),
+  )
+  // two skills the Skill tool ran, and the github server's tools called four times
+  I.noteCall(data, 'Skill', { skill: 'code-review' }, at(9))
+  I.noteCall(data, 'Skill', { skill: 'run' }, at(17))
+  for (const tool of ['mcp__github__get_pull_request', 'mcp__github__get_pull_request', 'mcp__github__get_pull_request', 'mcp__github__list_checks']) I.noteCall(data, tool, {}, at(6))
+
+  // every permission decision, oldest first: the verdict, how an ask was settled, how the call ended
+  const check = (id: string, agentId: string, tool: string, input: Record<string, unknown>, minutes: number, verdict: I.CheckIn['verdict']) => I.noteCheck(data, { id, tool, input, agentId, verdict, approver: 'person', at: at(minutes), root: ROOT })
+  check('toolu_01BldW1', IDS.builder, 'Write', { file_path: `${ROOT}\\src\\rateLimit.ts` }, 27, { decision: 'allow' })
+  I.noteEnd(data, 'toolu_01BldW1', true)
+  check('toolu_01BldE1', IDS.builder, 'Edit', { file_path: `${ROOT}\\src\\app.ts` }, 24, { decision: 'ask' })
+  I.noteDialog(data, 'toolu_01BldE1')
+  I.noteEnd(data, 'toolu_01BldE1', true)
+  check('toolu_01SctF1', IDS.scout, 'WebFetch', { url: 'https://github.com/redis/ioredis#readme' }, 24, { decision: 'ask' })
+  I.noteEnd(data, 'toolu_01SctF1', true)
+  check('toolu_01DocE0', IDS.docs, 'Edit', { file_path: `${ROOT}\\.env` }, 22.5, { decision: 'deny', hook: 'PreToolUse', reason: '.env files are off limits' })
+  I.noteEnd(data, 'toolu_01DocE0', false, 'PreToolUse hook blocked this: .env files are off limits')
+  check('toolu_01TstB1', IDS.tester, 'Bash', { command: 'npm test -- rateLimit --runInBand', description: 'Run the limiter tests' }, 16, { decision: 'allow', rule: 'Bash(npm test:*)' })
+  I.noteEnd(data, 'toolu_01TstB1', true)
+  check('toolu_01BldB1', IDS.builder, 'Bash', FORCE_PUSH, 13, { decision: 'ask' })
+  I.noteDenied(data, 'toolu_01BldB1', 'Force-pushing to main overwrites history others share; push to the feature branch instead')
+  I.noteEnd(data, 'toolu_01BldB1', false, 'Permission for this action has been denied by auto mode.')
+  check('toolu_01BldB2', IDS.builder, 'Bash', { command: 'npm test -- rateLimit', description: 'Run the limiter tests' }, 2.5, { decision: 'ask' })
+  I.noteDialog(data, 'toolu_01BldB2')
+
+  // the compactions: researcher's own (an agent's: no window known), then the Orchestrator's, 92% → 18% of its window
+  I.noteCompaction(data, { agent: IDS.researcher, trigger: 'auto', before: 176_000, after: 44_000, summary: 'Mapping the public routes of the API: 14 found so far in src/app.ts, all after auth(); still to read: src/routes/admin.ts.', at: at(32) })
+  I.noteCompaction(data, { agent: M.MAIN, trigger: 'auto', before: 184_000, after: 36_000, summary: SUMMARY, at: at(14) })
 }

@@ -172,7 +172,7 @@ test('Chat is a group chat: yours at the right in a blue bubble, when under it; 
     const answer = v2.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
     expect(await ui.find({ key: `chat:to:msg:${answer.id}` })).toBeUndefined()
     expect((await ui.find({ key: `head:msg:${answer.id}` }))?.text).toMatch(/^Orchestrator\d+m$/)
-    const plain = v2.chat.find(row => row.to === null)!
+    const plain = v2.chat.find(row => row.to === null && row.kind === 'chat')!
     expect((await ui.find({ key: `head:msg:${plain.id}` }))?.text).toMatch(/^builder\d+m$/)
     // a name SendMessage was given that no agent carries: said, no press, a grey dot for its face
     const lost = v2.chat.find(row => row.to === 'ops-bot')!
@@ -215,7 +215,7 @@ test('one sender`s messages within a few minutes stack under one avatar and name
       expect(glyphs.length).toBe(4)
     }
     // another sender between starts a group of its own
-    const result = v2.chat.find(row => row.from === IDS.researcher)!
+    const result = v2.chat.find(row => row.from === IDS.researcher && row.kind === 'result')!
     expect(await ui.find({ key: `grp:msg:${result.id}` })).toBeDefined()
     await press(ui, 'tab:now')
     await ui.unmount()

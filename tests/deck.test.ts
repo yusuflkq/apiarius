@@ -116,7 +116,7 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
-test('/deck opens the pane on the Dashboard; Changes shows git`s files (one opened to git`s own diff) and the commit log; /deck stats lands on Settings and /deck classic on the Dashboard, on each surface', async ($, on) => {
+test('/deck opens the pane on the Dashboard; Changes shows git`s files (one opened to git`s own diff) and the commit log; /deck stats lands on Inspect and /deck classic on the Dashboard, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -150,11 +150,11 @@ test('/deck opens the pane on the Dashboard; Changes shows git`s files (one open
     await ui.press({ key: `commit:${HASH}` })
     expect(await ui.find({ key: 'changes:review' })).toBeDefined()
 
-    // the old views' commands land where they went: Stats on Settings (its Inspect), Classic on the Dashboard
+    // the old views' commands land where they went: Stats on Inspect (its Spend), Classic on the Dashboard
     await $.command.run(deck('stats'))
     await ui.redraw()
-    expect((await ui.find({ key: 'tab:settings' }))?.props.dimColor).toBe(false)
-    expect((await ui.find({ key: 'inspect' }))?.text).toContain('INSPECT')
+    expect((await ui.find({ key: 'tab:inspect' }))?.props.dimColor).toBe(false)
+    expect((await ui.find({ key: 'inspect' }))?.text).toContain('SPEND')
     await $.command.run(deck('classic'))
     await ui.redraw()
     expect(await ui.find({ key: 'inspect' })).toBeUndefined()
