@@ -11,6 +11,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 
+import type { V2BackgroundRow } from '../hooks/background'
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
 import * as T from '../hooks/timeline'
@@ -197,8 +198,13 @@ test('the sample`s timeline: a lane an agent in the tree`s order, the Orchestrat
     [IDS.builder, IDS.reviewer, 'Limiter ready for review'],
     [IDS.reviewer, IDS.builder, 'Two questions on the window'],
   ])
-  expect(timeline.background).toEqual([])
-  expect(timelineSummaryOf(timeline)).toBe('40m · 8 agents')
+  // the background tasks the deck saw start, from their call to now: builder's dev server, the Orchestrator's CI monitor; never the
+  // test watcher first seen in Claude Code's snapshot (when it started is not known), the wakeup or the cron
+  expect(timeline.background).toEqual([
+    { id: 'bash_7', title: 'npm run dev', what: 'Shell · Start the dev server', start: ago(18) - ago(40), end: null },
+    { id: 'mon_2', title: 'CI checks on PR 42', what: 'Monitor', start: ago(3.5) - ago(40), end: null },
+  ])
+  expect(timelineSummaryOf(timeline)).toBe('40m · 8 agents · 2 in the background')
 })
 
 test('nothing the deck does not know is drawn: a wait whose end a reload lost, a gap before a resume it did not see; Clear finished leaves its agents out; background lanes only from the state`s own', () => {
@@ -224,10 +230,27 @@ test('nothing the deck does not know is drawn: a wait whose end a reload lost, a
   const { state } = built(data, NOW + 5 * MIN)
   const cleared = W.clearedStateOf(state, { ids: [one.id], at: NOW + 3 * MIN })
   expect(T.timelineOf(data, cleared).lanes.map(lane => lane.id)).toEqual(['main'])
-  // background shells: none until the state carries them, then a lane each from the times it names
+  // background lanes: none with nothing in the background; then a lane each task whose call the deck saw start, from that call to now,
+  // never one first seen in Claude Code's snapshot (no start known), nor a schedule
   expect(T.timelineOf(data, state).background).toEqual([])
-  const shells = { ...state, background: [{ id: 'b1', command: 'npm run dev', startedAt: NOW + MIN, endedAt: null }, { id: 'b2', startedAt: 'soon', command: 'x' }] } as unknown as W.WebStateV2
-  expect(T.timelineOf(data, shells).background).toEqual([{ id: 'b1', title: 'npm run dev', start: MIN, end: null }])
+  const row = (id: string, kind: V2BackgroundRow['kind'], by: string | null, title: string, what: string): V2BackgroundRow => ({
+    id,
+    kind,
+    what,
+    title,
+    status: kind === 'cron' ? 'scheduled' : 'running',
+    by,
+    byName: by === null ? '' : 'Orchestrator',
+    at: NOW + MIN,
+    nextAt: null,
+    schedule: kind === 'cron' ? '0 9 * * 1-5' : '',
+    recurring: kind === 'cron',
+    when: '',
+    stop: null,
+  })
+  const rows = [row('bash_1', 'shell', M.MAIN, 'npm run dev', 'Shell · Start the dev server'), row('bash_2', 'shell', null, 'npx vitest --watch', 'Shell'), row('cron_1', 'cron', M.MAIN, 'Summarise the PRs', 'Cron · Every weekday at 9:00')]
+  const busy: W.WebStateV2 = { ...state, background: { rows, tasks: 2, scheduled: 1, text: '2 shells · 1 scheduled' } }
+  expect(T.timelineOf(data, busy).background).toEqual([{ id: 'bash_1', title: 'npm run dev', what: 'Shell · Start the dev server', start: MIN, end: null }])
 })
 
 test('timeline.json read back: its times moved by moving its start and now; text that is no timeline reads as none', () => {
@@ -387,7 +410,9 @@ test('Org`s head has the Chart · Timeline switch; the Timeline on the desktop i
   expect(image).toBeDefined()
   expect(svg?.props).toMatchObject({ width: Math.floor(83 * 7.85) - 4 })
   expect(svg?.props.isInteractive).toBeUndefined()
-  expect((await ui.findAll({ type: 'Text' })).some(one => one.text === '40m · 8 agents')).toBe(true)
+  expect((await ui.findAll({ type: 'Text' })).some(one => one.text === '40m · 8 agents · 2 in the background')).toBe(true)
+  // the background tasks under the agents, each its own lane
+  for (const words of ['>BACKGROUND<', '>npm run dev<', 'CI checks']) expect(String(svg?.props.source)).toContain(words)
   // each name under it opens its page
   const names = (await ui.findAll({ type: 'Button' })).filter(one => (one.key ?? '').startsWith('agent:')).map(one => one.props.label)
   expect(names).toEqual(['Orchestrator', 'researcher', 'builder', 'tester', 'Lint the new files', 'docs', 'scout', 'reviewer'])
@@ -437,7 +462,15 @@ test('the terminal`s Timeline: text lanes fitted to its columns under a time axi
     const text = lanes!.text
     for (const glyph of ['━', '┄', '●', '✕', '■', '◆']) expect(text).toContain(glyph)
     const colours = new Set((await ui.findAll({ type: 'Text' })).filter(one => /^━+$/.test(one.text)).map(one => one.props.color))
-    expect([...colours].sort()).toEqual(['#3b82f6', '#f59e0b'])
+    expect([...colours].sort()).toEqual(['#3b82f6', '#64748b', '#f59e0b'])
+    // the background tasks under the agents: each its words, then a grey ━ from its call to now, in the same columns
+    expect(text).toContain('BACKGROUND')
+    for (const id of ['bash_7', 'mon_2']) {
+      const bg = (await ui.find({ key: `tl:bg:${id}` }))!
+      expect(bg.text.endsWith('━')).toBe(true)
+      expect(Array.from(bg.text).length).toBeLessThanOrEqual(cells + Math.min(18, Math.max(8, Math.floor((columns - 1) * 0.24))))
+    }
+    expect((await ui.find({ key: 'tl:bg:bash_7' }))?.text.startsWith('npm run dev')).toBe(true)
     await press(ui, W.agentKeyOf(IDS.tester))
     expect((await ui.find({ key: 'page:head' }))?.text).toContain('tester')
     await press(ui, 'key:b')

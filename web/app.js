@@ -1971,7 +1971,7 @@ function timelineFrom(d) {
     now: numOr(d.now, 0), startedAt: numOr(d.startedAt, 0), lanes,
     marks: arr(d.marks).filter(m => m && typeof m.at === 'number').map(m => ({ at: m.at, id: str(m.id), text: str(m.text) })),
     messages: arr(d.messages).filter(m => m && typeof m.at === 'number' && typeof m.from === 'string' && typeof m.to === 'string').map(m => ({ at: m.at, from: m.from, to: m.to, id: str(m.id), title: str(m.title) })),
-    background: arr(d.background).filter(b => b && typeof b.start === 'number').map(b => ({ id: str(b.id), title: str(b.title), start: b.start, end: numOr(b.end) })),
+    background: arr(d.background).filter(b => b && typeof b.start === 'number').map(b => ({ id: str(b.id), title: str(b.title), what: str(b.what), start: b.start, end: numOr(b.end) })),
   };
 }
 
@@ -2148,13 +2148,20 @@ function TimelineLegend(d, lanes) {
   return h('div', { key: 'legend', class: 'tl-legend' }, items.map(([key, label, swatch]) => h('span', { key, class: 'tl-key' }, swatch, label)));
 }
 
-/** What sits under the pointer at (x, y) of the drawing: a prompt, a message, a call, an outcome or a stretch, as lines of words; null for nothing. */
+/** What sits under the pointer at (x, y) of the drawing: a prompt, a message, a call, an outcome, a stretch or a background task, as lines of words; null for nothing. */
 function tlWhat(x, y) {
   const g = tl.geo;
   if (!g) return null;
   const { L, TOP, LANE, span, lanes, d, X } = g;
   const abs = ms => d.startedAt + ms;
   const near = (at, px) => Math.abs(X(at) - x) <= px;
+  // a background task, under the agents: what Claude Code said of it, from its call to now
+  if (d.background.length && y >= g.bgTop + 16) {
+    const b = d.background[Math.floor((y - g.bgTop - 16) / LANE)];
+    if (!b) return null;
+    const end = b.end == null ? span : b.end;
+    return [b.what ? `${b.what}: ${b.title}` : b.title, `${clockText(abs(b.start))} – ${b.end == null ? 'now' : clockText(abs(b.end))} · ${dur(Math.max(0, end - b.start))}`];
+  }
   const i = Math.floor((y - TOP) / LANE);
   const l = lanes[i];
   if (!l) return null;

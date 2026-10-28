@@ -65,8 +65,8 @@ export type V2Lane = {
   ticks: V2Tick[]
 }
 
-/** A background shell's lane, under the agents: drawn only when the state carries them (`backgroundLanesOf`). */
-export type V2BackgroundLane = { id: string; title: string; start: number; end: number | null }
+/** A background task's lane, under the agents (`backgroundLanesOf`): its row's id, title and kind with what Claude Code said of it ("Shell · Start the dev server"), from its call to now. */
+export type V2BackgroundLane = { id: string; title: string; what: string; start: number; end: number | null }
 
 /** Org's Timeline, every time in ms after `startedAt` (so moving `startedAt` and `now` moves it all). */
 export type V2Timeline = {
@@ -83,7 +83,7 @@ export type V2Timeline = {
   marks: { at: number; id: string; text: string }[]
   /** Messages between two agents drawn (the chat's SendMessage rows): when, who to whom, the row's id, its summary (else its first line). */
   messages: { at: number; from: string; to: string; id: string; title: string }[]
-  /** Background shells' lanes, under the agents (`backgroundLanesOf`); empty until the state carries them. */
+  /** The background tasks' lanes, under the agents (`backgroundLanesOf`): those the deck saw start; none with nothing in the background. */
   background: V2BackgroundLane[]
 }
 
@@ -206,11 +206,11 @@ function callsOf(agent: DeckAgent): { at: number; ms: number; tool: string; how:
  * ends. A task first seen in Claude Code's snapshot has no known start and
  * gets no lane; the schedules (crons, wakeups) are not lanes.
  */
-export function backgroundLanesOf(state: WebStateV2): { id: string; title: string; startedAt: number; endedAt: number | null }[] {
+export function backgroundLanesOf(state: WebStateV2): { id: string; title: string; what: string; startedAt: number; endedAt: number | null }[] {
   const rows = state.background?.rows ?? []
   return rows
     .filter(row => row.kind !== 'cron' && row.kind !== 'wakeup' && row.by !== null && Number.isFinite(row.at) && row.title.trim() !== '')
-    .map(row => ({ id: row.id, title: F.trunc(F.oneLine(row.title), TIMELINE_TEXT), startedAt: row.at, endedAt: null }))
+    .map(row => ({ id: row.id, title: F.trunc(F.oneLine(row.title), TIMELINE_TEXT), what: F.trunc(F.oneLine(row.what), TIMELINE_TEXT), startedAt: row.at, endedAt: null }))
 }
 
 /** The first line of a chat row's words, cut for a mark or a message. */
@@ -294,7 +294,7 @@ export function timelineOf(data: DeckData, state: WebStateV2): V2Timeline {
     })),
     marks: marks.map(mark => ({ ...mark, at: off(mark.at) })),
     messages: messages.map(message => ({ ...message, at: off(message.at) })),
-    background: background.map(one => ({ id: one.id, title: one.title, start: off(one.startedAt), end: offOrNull(one.endedAt) })),
+    background: background.map(one => ({ id: one.id, title: one.title, what: one.what, start: off(one.startedAt), end: offOrNull(one.endedAt) })),
   }
 }
 

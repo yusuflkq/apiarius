@@ -619,7 +619,7 @@ test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in 
   const timelines = () => p.calls.filter(one => one.url.startsWith('/timeline')).length
   assert.equal(timelines(), 1)
   const view = p.view('OrgPage()')
-  assert.equal(flat(textOf(find(view, 'org-bar')[0])), '40m · 8 agents Chart List Timeline')
+  assert.equal(flat(textOf(find(view, 'org-bar')[0])), '40m · 8 agents · 2 in the background Chart List Timeline')
   // the lanes, each name a link that opens its agent's drawer over Org
   assert.deepEqual(find(view, 'tl-name').map(a => flat(textOf(a))), ['Orchestrator', 'researcher', 'builder', 'tester', 'Lint the new files', 'docs', 'scout', 'reviewer'])
   assert.equal(find(view, 'tl-name')[2].p.href, `#/org/agent/${BUILDER}`)
@@ -646,6 +646,15 @@ test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in 
   assert.match(at(0, 0)[0], /^You: Add per-user rate limiting/)
   assert.equal(at(0, 17)[0], 'Working: Orchestrator')
   assert.equal(at(0, 24)[0], 'Idle: Orchestrator')
+  // the background tasks the deck saw start, under the agents: each its words and a bar from its call to now; a hover says what it is
+  const svgOf = () => find(p.view('OrgPage()'), 'tl-svg')[0]
+  assert.deepEqual(find(svgOf(), 'tl-bg-head').map(t => flat(textOf(t))), ['BACKGROUND'])
+  assert.deepEqual(find(svgOf(), 'tl-bg-name').map(t => flat(textOf(t))), ['npm run dev', 'CI checks on PR 42'])
+  assert.equal(find(svgOf(), 'tl-bg').length, 2)
+  const onBackground = (k, minutes) => p.run(`(() => { const g = tl.geo; return tlWhat(g.L + ((g.right - g.L) * ${minutes} * 60000) / g.span, g.bgTop + 16 + ${k} * g.LANE + g.LANE / 2) })()`)
+  assert.equal(onBackground(0, 30)[0], 'Shell · Start the dev server: npm run dev')
+  assert.match(onBackground(0, 30)[1], / – now · 18m$/)
+  assert.equal(onBackground(1, 38)[0], 'Monitor: CI checks on PR 42')
   // read again once per state, not per drawing
   p.view('OrgPage()')
   p.load(SAMPLE)
