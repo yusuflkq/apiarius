@@ -177,7 +177,7 @@ test('reads the live state (v1 with v2 under its key) and the bare sample alike;
 test('the header: the state in one word, your latest request in your words, and model · context · cost; the goal opens on its whole text', async () => {
   const p = page()
   p.load(SAMPLE)
-  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · context 41% · \\$4\\.12 Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Settings`))
+  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · context 41% · \\$4\\.12 Stop turn Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Settings`))
   click(find(p.view('Header()'), 'goal')[0])
   assert.match(p.text('Header()'), /Your latest request · 4m ago Also exempt \/health and \/metrics from the limiter\./)
   // a goal the state cut short: its whole text from /message/<messageId>, fetched once
@@ -189,7 +189,7 @@ test('the header: the state in one word, your latest request in your words, and 
   assert.match(cut.text('GoalPanel()'), /The whole of it, every word\./)
   assert.deepEqual(cut.fetched('message'), ['/message/m-goal'])
   // idle, with nothing known yet of the model, the context or the cost
-  p.load(sample(s => Object.assign(s.header, { state: 'idle', stateText: 'Idle', goal: null, line: '' })))
+  p.load(sample(s => Object.assign(s.header, { state: 'idle', stateText: 'Idle', goal: null, line: '', turn: null })))
   assert.match(p.text('Header()'), /^Idle No request yet Dashboard 4/)
 })
 
@@ -292,10 +292,10 @@ test('Now is the dashboard: needs, a run card per agent, the figures, the plan, 
   const p = page()
   p.load(dash())
   const order = () => [...p.view('NowPage()').c].filter(Boolean).flatMap(v => (v.k === 'cols' ? v.c.filter(Boolean) : [v])).map(v => v.k)
-  assert.deepEqual(order(), ['needs', 'agents', 'figures', 'plan', 'activity', 'files'])
+  assert.deepEqual(order(), ['needs', 'agents', 'background', 'figures', 'plan', 'activity', 'files'])
   assert.equal(find(p.view('NowPage()'), 'dash-cols').length, 1, 'activity and files share a row where the page is wide')
-  // nothing needs you and no plan: neither leaves a trace
-  p.load(dash(s => { s.needs = []; s.plan = null; s.figures.plan = null }))
+  // nothing needs you, no plan and nothing in the background: none leaves a trace
+  p.load(dash(s => { s.needs = []; s.plan = null; s.figures.plan = null; s.background = { rows: [], tasks: 0, scheduled: 0, text: '' } }))
   assert.deepEqual(order(), ['agents', 'figures', 'activity', 'files'])
   // a head folds its section: the head stays, the body goes, and so it stays on the next load
   p.load(dash())
@@ -1096,7 +1096,7 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   p.load(SAMPLE)
   assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: BUILDER })
   const drawer = () => p.view('Drawer()')
-  assert.match(flat(textOf(drawer())), /^builder general-purpose · sonnet-4\.5 · background waiting on you 29m started by Orchestrator 513k tokens b81c6f3 Message Chat with builder builder needs permission Bash 2m npm test -- rateLimit/)
+  assert.match(flat(textOf(drawer())), /^builder general-purpose · sonnet-4\.5 · background waiting on you 29m started by Orchestrator 513k tokens b81c6f3 Message Chat with builder Stop builder needs permission Bash 2m npm test -- rateLimit/)
   // the need above shows its call in flight already: no second line of it
   assert.equal(find(drawer(), 'live').length, 0)
   assert.match(flat(textOf(drawer())), /Task Write a sliding-window rate limiter in src\/rateLimit\.ts/)
@@ -1361,4 +1361,95 @@ test('Org (and Chat`s members) draw the agents in the style in force: the state`
   p.setNow(NOW + 11_000)
   p.load(sample(s => { s.now = NOW + 11_000; s.avatarStyle = 'bauhaus' }))
   assert.equal(svgOf(card()), drawn('bauhaus', 34, { dot: true, animated: true }))
+})
+
+// ---- Background and Stop
+
+const BG_NONE = { rows: [], tasks: 0, scheduled: 0, text: '' }
+
+test('Background: under the agents while something runs or is scheduled, its counts at the head`s right; a row each, its kind, title and what it is, who started it, its status, its age or next run on the page`s clock; Stop or Cancel only where Claude Code allows it, sent as stopBackground, its ack a toast', async () => {
+  const p = page()
+  p.load(SAMPLE)
+  const sec = () => find(p.view('NowPage()'), 'sec-background')[0]
+  assert.equal(flat(textOf(find(sec(), 'sec-title')[0])), 'Background 5')
+  assert.equal(flat(textOf(find(sec(), 'sec-note')[0])), '2 shells · 1 monitor · 2 scheduled')
+  const rows = () => find(sec(), 'bg-row')
+  assert.deepEqual(rows().map(r => r.k), ['bash_7', 'mon_2', 'bash_3', 'wake_9c2', 'cron_4e1'])
+  const row = id => rows().find(r => r.k === id)
+  assert.equal(flat(textOf(row('bash_7'))), 'npm run dev Shell · Start the dev server started by builder running 18m Stop')
+  assert.equal(flat(textOf(row('mon_2'))), 'CI checks on PR 42 Monitor started by Orchestrator running 3m Stop')
+  // first seen in Claude Code's snapshot: no starter, no age; Claude Code would ask before TaskStop, so no Stop
+  assert.equal(flat(textOf(row('bash_3'))), 'npx vitest --watch Shell · Watch the limiter tests running')
+  assert.equal(find(row('bash_3'), 'bg-stop').length, 0)
+  assert.equal(flat(textOf(row('wake_9c2'))), 'Check the deploy finished Wakeup started by Orchestrator scheduled in 18m Cancel')
+  assert.equal(flat(textOf(row('cron_4e1'))), "Summarise yesterday's PRs Cron · Every weekday at 9:00 started by Orchestrator scheduled in 11h Cancel")
+  // its age and next run run on the page's clock
+  p.setNow(NOW + 10 * MIN)
+  assert.match(flat(textOf(row('bash_7'))), / 28m Stop$/)
+  assert.match(flat(textOf(row('wake_9c2'))), / in 8m Cancel$/)
+  p.setNow(NOW)
+  // Stop: stopBackground by its id, the button busy until its ack, which is a toast
+  click(find(row('bash_7'), 'bg-stop')[0])
+  await settle()
+  const sent = p.commands().pop()
+  assert.deepEqual({ cmd: sent.cmd, bgId: sent.bgId }, { cmd: 'stopBackground', bgId: 'bash_7' })
+  assert.equal(flat(textOf(find(row('bash_7'), 'bg-stop')[0])), '…')
+  p.load(sample(s => { s.now = NOW + 1; s.acks.push({ id: sent.id, ok: true, status: 'delivered', text: 'Stopped npm run dev', at: NOW }) }))
+  assert.equal(p.run('ui.toast.text'), 'Stopped npm run dev')
+  assert.equal(flat(textOf(find(row('bash_7'), 'bg-stop')[0])), 'Stop')
+  // nothing in the background: no section
+  p.load(sample(s => { s.now = NOW + 2; s.background = BG_NONE }))
+  assert.equal(find(p.view('NowPage()'), 'sec-background').length, 0)
+})
+
+test('Stop turn at the header`s right while the main loop`s turn runs, sent as abortTurn with that turn; Stop beside a background agent`s or a teammate`s card (never inside it, and none on the Orchestrator`s) and in its drawer, sent as stopAgent; where none is offered, the drawer says why', async () => {
+  const p = page()
+  p.load(SAMPLE)
+  const stopTurn = () => find(p.view('Header()'), 'stop-turn')[0]
+  assert.equal(flat(textOf(stopTurn())), 'Stop turn')
+  click(stopTurn())
+  await settle()
+  let sent = p.commands().pop()
+  assert.deepEqual({ cmd: sent.cmd, turnId: sent.turnId }, { cmd: 'abortTurn', turnId: SAMPLE.header.turn.id })
+  assert.equal(flat(textOf(stopTurn())), 'Stopping…')
+  // a refused one says why
+  p.load(sample(s => { s.now = NOW + 1; s.acks.push({ id: sent.id, ok: false, status: 'failed', text: 'That turn has ended', at: NOW }) }))
+  assert.equal(p.run('ui.toast.text'), 'Not stopped: That turn has ended')
+  // between turns: none
+  p.load(sample(s => { s.now = NOW + 2; s.header.turn = null }))
+  assert.equal(find(p.view('Header()'), 'stop-turn').length, 0)
+
+  p.load(SAMPLE)
+  const wraps = find(p.view('AgentsSection()'), 'run-wrap')
+  assert.deepEqual(wraps.map(w => w.k), [`wrap:${BUILDER}`, `wrap:${REVIEWER}`])
+  // the card stays one button; its Stop sits beside it
+  for (const w of wraps) {
+    assert.equal(find(w, 'run-card')[0].t, 'button')
+    assert.equal(find(find(w, 'run-card')[0], 'run-stop').length, 0)
+    assert.equal(flat(textOf(find(w, 'run-stop')[0])), 'Stop')
+  }
+  click(find(wraps[0], 'run-stop')[0])
+  await settle()
+  sent = p.commands().pop()
+  assert.deepEqual({ cmd: sent.cmd, agentId: sent.agentId }, { cmd: 'stopAgent', agentId: BUILDER })
+  assert.equal(p.run('route.drawer'), null, 'a Stop opens no drawer')
+
+  // in its drawer: Stop beside Message; the Orchestrator's says why it has none
+  p.open(`{ kind: "agent", id: "${REVIEWER}" }`)
+  assert.equal(flat(textOf(find(p.view('Drawer()'), 'stop-drawer')[0])), 'Stop')
+  p.open('{ kind: "agent", id: "main" }')
+  assert.equal(find(p.view('Drawer()'), 'stop-drawer').length, 0)
+  assert.equal(flat(textOf(find(p.view('Drawer()'), 'stop-why')[0])), 'The Orchestrator stops with its turn: Stop turn ends it')
+  // a finished agent: neither
+  p.open(`{ kind: "agent", id: "${TESTER}" }`)
+  assert.equal(find(p.view('Drawer()'), 'stop-drawer').length + find(p.view('Drawer()'), 'stop-why').length, 0)
+})
+
+test('what you stopped from the deck shows in Chat as a small line in the middle, "You stopped builder", never a bubble of yours', () => {
+  const p = page({ hash: '#/chat' })
+  p.load(sample(s => s.chat.push({ id: 'mstop', at: NOW, from: 'you', to: BUILDER, who: 'You → builder', kind: 'stop', text: 'You stopped builder' })))
+  const line = find(p.view('ChatPage()'), 'notice-stop')
+  assert.equal(line.length, 1)
+  assert.equal(flat(textOf(line[0])), 'You stopped builder now')
+  assert.equal(find(line[0], 'notice-who').length, 0)
 })

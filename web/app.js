@@ -277,6 +277,10 @@ const IC = {
   circleDashed: '<path d="M10.1 2.182a10 10 0 0 1 3.8 0"/><path d="M13.9 21.818a10 10 0 0 1-3.8 0"/><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"/><path d="M2.182 13.9a10 10 0 0 1 0-3.8"/><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"/><path d="M21.818 10.1a10 10 0 0 1 0 3.8"/><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"/><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"/>',
   progress: '<circle cx="12" cy="12" r="10" pathLength="100" stroke-dasharray="78 22"/>',
   clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  // Background's kinds and Stop
+  timer: '<line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>',
+  workflow: '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
+  square: '<rect width="14" height="14" x="5" y="5" rx="2"/>',
   terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   filePlus: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>',
@@ -444,7 +448,29 @@ function rowOf(r) {
     task: str(r.task), isTaskCut: r.isTaskCut === true, result: str(r.result), isResultCut: r.isResultCut === true,
     todos: todosOf(r.todos), tokens: numOr(r.tokens, 0),
     isCleared: r.isCleared === true,
+    stop: stopOf(r.stop),
   };
+}
+
+/** A Stop or Cancel as the state says it: the call it makes (TaskStop, CronDelete), its label, whether Claude Code's own check allows it here (`can`), and why not; null for none. */
+function stopOf(x) {
+  x = obj(x);
+  if (!x || typeof x.can !== 'boolean') return null;
+  return { tool: str(x.tool), label: str(x.label) || 'Stop', can: x.can, why: str(x.why) };
+}
+
+const BG_KINDS = new Set(['shell', 'monitor', 'workflow', 'agent', 'other', 'cron', 'wakeup']);
+
+/** What runs in the background and what is scheduled (v2's `background`): its rows, counts and line; none from a mod that writes none. */
+function backgroundOf(b) {
+  b = obj(b) || {};
+  const rows = arr(b.rows).filter(x => x && typeof x.id === 'string' && x.id).map(x => ({
+    id: x.id, kind: BG_KINDS.has(x.kind) ? x.kind : 'other', what: str(x.what), title: str(x.title) || x.id, status: str(x.status) || 'running',
+    by: typeof x.by === 'string' && x.by ? x.by : null, byName: str(x.byName), at: numOr(x.at, 0), nextAt: numOr(x.nextAt, null),
+    schedule: str(x.schedule), recurring: x.recurring === true, when: str(x.when), stop: stopOf(x.stop),
+  }));
+  const scheduled = rows.filter(x => x.status === 'scheduled').length;
+  return { rows, tasks: numOr(b.tasks, rows.length - scheduled), scheduled: numOr(b.scheduled, scheduled), text: str(b.text) };
 }
 
 /** Whether an agent is finished: done, failed, stopped or idle, nothing of its waiting on you; never the Orchestrator (the mod's W.isFinishedRow). The Dashboard and Chat's members fold these behind one "N finished" row. */
@@ -526,6 +552,7 @@ function normalize(s) {
     },
     needs: arr(s.needs).filter(n => n && typeof n.id === 'string' && n.id).map(needOf),
     agents: arr(s.agents).filter(r => r && typeof r.id === 'string' && r.id && (r.row === 'agent' || r.row === 'fold')).map(rowOf),
+    background: backgroundOf(s.background),
     plan: planOf(s.plan),
     chat: arr(s.chat).filter(m => m && typeof m.id === 'string' && m.id).map(chatOf),
     changes: changesOf(s.changes),
@@ -608,6 +635,7 @@ function apply(next) {
   }
   IX = buildIndex(S);
   noteResolved();
+  noteStops();
   // a style picked here holds until the state names it: from then on the state's (the person's setting) is drawn
   if (ui.picked && S.avatarStyle === ui.picked.style) ui.picked = null;
   invalidate();
@@ -926,6 +954,7 @@ const ui = {
   picked: null,            // { style, until }: an avatar style picked here, drawn until the state names it
   toast: null,             // { text, until }
   needAt: -1,              // the need `n` went to last
+  stops: new Map(),        // command id -> { key, at }: a Stop, Cancel or Stop turn sent from here, until its ack
 };
 
 /** Brings element `id` into view once the page shows route `on` (and the element has rendered: the state may still be on its way). */
@@ -1463,7 +1492,8 @@ function Header() {
       h('span', { class: 'brand-mark', title: 'Agent Deck', 'aria-hidden': 'true' }),
       hd ? StateWord() : h('span', { class: 'state is-idle' }, Dot('idle'), S ? 'Idle' : 'Connecting'),
       hd ? GoalButton() : h('span', { class: 'goal goal-none' }),
-      hd && hd.line ? h('span', { class: 'hd-line hd-line-top' }, hd.line) : null),
+      hd && hd.line ? h('span', { class: 'hd-line hd-line-top' }, hd.line) : null,
+      hd && hd.turn ? StopTurn() : null),
     GoalPanel(),
     h('nav', { class: 'hd-tabs', 'aria-label': 'Pages' },
       TABS.map(([id, label]) => Tab(id, label)),
@@ -1483,6 +1513,7 @@ function NowPage() {
   return h('div', { key: 'now', class: 'page page-now' },
     NeedsSection(),
     AgentsSection(),
+    BackgroundSection(),
     FiguresStrip(),
     PlanSection(),
     h('div', { key: 'cols', class: 'dash-cols' }, ActivitySection(), FilesSection()));
@@ -1625,10 +1656,123 @@ function AgentsSection() {
   const link = h('a', { class: 'sec-link', href: hrefOf('org', route.drawer) }, hidden ? `${hidden} more in Org` : 'Org chart', icon('arrowRight'));
   return Section('agents', 'Agents', IX.shown.length || null, link, () => (IX.shown.length || S.cleared.count
     ? h('div', { class: 'run-cards' },
-      h('div', { key: 'front', class: 'run-grid' }, shown.map(RunCard)),
+      h('div', { key: 'front', class: 'run-grid' }, shown.map(CardOf)),
       FinishedRow('now', finishedCount, open),
       finished.length > 0 && h('div', { key: 'finished', class: 'run-grid run-grid-finished' }, finished.map(RunCard)))
     : h('div', { class: 'card' }, Empty('bot', 'No agents yet', 'The Orchestrator and the agents it starts show here as they work.'))));
+}
+
+// -------------------------------------------------------------- stopping
+// Stop turn, Stop and Cancel: the page asks the mod, which stops only
+// through Claude Code's own channels (TaskStop, CronDelete, $.turn.abort),
+// asking Claude Code's own permission check first; a Stop or Cancel shows
+// only where the state says that check allows it (`stop.can`). What came of
+// each press comes back as a toast.
+
+/** Sends a stop command (`body`; its `id` made here) for the target keyed `key`; its ack, once the state holds it, is a toast. */
+async function sendStop(key, body) {
+  const id = newCmdId('st');
+  ui.stops.set(id, { key, at: Date.now() });
+  renderNow();
+  try {
+    await command({ ...body, id });
+    setTimeout(invalidate, ACK_WAIT + 50);
+  } catch (err) {
+    ui.stops.delete(id);
+    toast(err.message);
+  }
+  renderNow();
+}
+
+/** Whether a stop of the target keyed `key` sent from here waits on its ack. */
+const isStopping = key => [...ui.stops.values()].some(s => s.key === key && Date.now() - s.at < ACK_WAIT);
+
+/** The stops sent from here whose ack the state now holds: each said once, as a toast. */
+function noteStops() {
+  for (const [id, s] of ui.stops) {
+    const k = IX.acks.get(id);
+    if (k) {
+      ui.stops.delete(id);
+      toast(k.ok ? k.text : lead('Not stopped', k.text));
+    } else if (Date.now() - s.at > ACK_WAIT) ui.stops.delete(id);
+  }
+}
+
+/** Stop turn, at the right of the header while the main loop's turn runs: `$.turn.abort` of it, as Esc in Claude Code does. */
+function StopTurn() {
+  const busy = isStopping('turn');
+  return h('button', {
+    key: 'stopturn', type: 'button', class: 'stop-btn stop-turn', disabled: busy,
+    title: 'End the Orchestrator\'s turn, and the foreground agents with it, as Esc in Claude Code does',
+    onClick: () => sendStop('turn', { cmd: 'abortTurn', turnId: S.header.turn.id }),
+  }, icon('square', 'stop-ic'), busy ? 'Stopping…' : 'Stop turn');
+}
+
+/** Stop on a background agent or a teammate: Claude Code's own TaskStop of it. */
+function StopAgent(a, cls) {
+  const busy = isStopping(`agent:${a.id}`);
+  return h('button', {
+    key: 'stop', type: 'button', class: cls, disabled: busy, title: `Stop ${a.title}: Claude Code's own TaskStop`,
+    onClick: e => { stop(e); sendStop(`agent:${a.id}`, { cmd: 'stopAgent', agentId: a.id }); },
+  }, icon('square', 'stop-ic'), busy ? 'Stopping…' : a.stop.label);
+}
+
+/** A run card, with its Stop beside it where Claude Code allows one (a card is a button, so its Stop sits over its corner, not in it). */
+function CardOf(a) {
+  if (!a.stop || !a.stop.can) return RunCard(a);
+  return h('div', { key: `wrap:${a.id}`, class: 'run-wrap' }, RunCard(a), StopAgent(a, 'stop-btn run-stop'));
+}
+
+// ------------------------------------------------------------- background
+// What runs when no agent is talking (v2's `background`): background shells,
+// monitors, workflows, crons and wakeups, from the calls that start them and
+// Claude Code's own snapshots. Shown only while something runs or is
+// scheduled; its line of counts at the head's right.
+
+const BG_ICON = { shell: 'terminal', monitor: 'eye', workflow: 'workflow', agent: 'bot', other: 'circle', cron: 'clock', wakeup: 'timer' };
+
+/** When a row says it runs, on the page's clock: a task's age since its call started it (none for one first seen in a snapshot), a schedule's next run. */
+function bgWhen(x) {
+  if (x.status !== 'scheduled') return x.by ? ageOf(x.at) : '';
+  if (x.nextAt == null) return '';
+  const left = x.nextAt - liveNow();
+  if (left > 0) { const t = since(left); return `in ${t === 'now' ? '<1m' : t}`; }
+  return x.recurring ? '' : 'due';
+}
+
+/** A row's status, in its hue: a task's (running blue, else its word), a schedule's "scheduled". */
+function BgStatus(x) {
+  const scheduled = x.status === 'scheduled', running = x.status === 'running';
+  return h('span', { class: `bg-status${scheduled ? ' is-scheduled' : running ? '' : ' is-other'}` },
+    scheduled ? icon('clock', 'bg-st-ic') : Glyph(running ? 'active' : 'pending', 12), x.status);
+}
+
+function BgRow(x) {
+  const scheduled = x.status === 'scheduled';
+  const key = `bg:${x.id}`;
+  const busy = isStopping(key);
+  const next = x.nextAt != null ? `Next run ${new Date(x.nextAt).toLocaleString()}` : '';
+  return h('div', { key: x.id, id: `bg-${x.id}`, class: `bg-row${scheduled ? ' is-scheduled' : ''}` },
+    icon(BG_ICON[x.kind] || 'circle', 'bg-ic'),
+    h('span', { class: 'bg-main' },
+      h('span', { class: 'bg-top' },
+        h('span', { class: `bg-title${x.kind === 'shell' ? ' mono' : ''}`, title: x.title }, x.title),
+        x.what && h('span', { class: 'bg-what', title: [x.what, x.schedule].filter(Boolean).join(' · ') }, x.what)),
+      x.by && h('span', { class: 'bg-by' }, 'started by ', NameLink(x.by, 14))),
+    BgStatus(x),
+    h('span', { class: 'bg-when', title: next }, bgWhen(x)),
+    h('span', { class: 'bg-act' },
+      x.stop && x.stop.can && h('button', {
+        type: 'button', class: 'btn btn-xs bg-stop', disabled: busy, title: `${x.stop.label}: Claude Code's own ${x.stop.tool}`,
+        onClick: () => sendStop(key, { cmd: 'stopBackground', bgId: x.id }),
+      }, busy ? '…' : x.stop.label)));
+}
+
+function BackgroundSection() {
+  const bg = S.background;
+  if (!bg || !bg.rows.length) return null;
+  return Section('background', 'Background', bg.rows.length, bg.text ? h('span', { class: 'sec-note' }, bg.text) : null, () =>
+    h('div', { class: 'card list bg-list' }, bg.rows.map(BgRow)));
 }
 
 // ----------------------------------------------------------------- figures
@@ -2205,7 +2349,7 @@ function Members(f) {
 }
 
 /** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone) in the middle. */
-const sideOf = m => (m.kind === 'command' || m.from === 'engine' ? 'notice' : m.from === 'you' ? 'mine' : 'theirs');
+const sideOf = m => (m.kind === 'command' || m.kind === 'stop' || m.from === 'engine' ? 'notice' : m.from === 'you' ? 'mine' : 'theirs');
 
 /** A send from here not in the chat yet (or refused): drawn as the row it becomes, so it turns into it in place. */
 const pendingRow = o => ({ id: o.id, at: o.at, from: 'you', to: o.agentId, who: `You → ${o.title}`, kind: 'chat', title: '', text: o.text, ackId: o.id });
@@ -2355,8 +2499,9 @@ function Notice(e) {
   const said = oneLine(m.text) || oneLine(m.title);
   const words = said.length > 200 ? `${said.slice(0, 199)}…` : said;
   const about = m.kind === 'notification' && m.agent && m.agent !== 'main' && IX.byId.has(m.agent) && !said.includes(nameOf(m.agent)) ? m.agent : null;
-  return h('div', { key: e.key, class: `notice${m.kind === 'command' ? ' notice-command' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
-    h('span', { class: 'notice-who' }, m.kind === 'command' ? 'You ran' : 'Claude Code'),
+  return h('div', { key: e.key, class: `notice${m.kind === 'command' ? ' notice-command' : m.kind === 'stop' ? ' notice-stop' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
+    // what you stopped from the deck says so itself: "You stopped builder"
+    m.kind !== 'stop' && h('span', { class: 'notice-who' }, m.kind === 'command' ? 'You ran' : 'Claude Code'),
     h('span', { class: 'notice-text' }, words),
     about && h('span', { class: 'notice-about' }, Party(about, 14)),
     h('span', { class: 'notice-time' }, ageOf(m.at)));
@@ -2835,7 +2980,9 @@ function AgentDrawer(id) {
         a.shortId && h('span', { class: 'fact mono muted' }, a.shortId)),
       h('div', { key: 'actions', class: 'drawer-actions' },
         h('button', { type: 'button', class: 'btn btn-sm', onClick: () => { ui.focusTo = composerId(scope); renderNow(); } }, icon('message'), 'Message'),
-        h('button', { type: 'button', class: 'btn btn-sm', onClick: () => { ui.chatFilter = a.id; ui.pinChat = true; navigate('chat', isWide() ? route.drawer : null); } }, icon('arrowRight'), `Chat with ${a.title}`)),
+        h('button', { type: 'button', class: 'btn btn-sm', onClick: () => { ui.chatFilter = a.id; ui.pinChat = true; navigate('chat', isWide() ? route.drawer : null); } }, icon('arrowRight'), `Chat with ${a.title}`),
+        a.stop && a.stop.can && StopAgent(a, 'btn btn-sm stop-drawer')),
+      a.stop && !a.stop.can && a.stop.why && h('p', { key: 'stopwhy', class: 'stop-why' }, a.stop.why),
       NeedsList(a.id),
       // its call in flight, unless a need above already shows that very call
       a.live && !(IX.needsBy.get(a.id) || []).length && LiveStrip(a),
