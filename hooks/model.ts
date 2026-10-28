@@ -4009,22 +4009,30 @@ export function unwrapMessage(text: string): { text: string; from?: string } {
   return from ? { text: body, from } : { text: body }
 }
 
+/** How long after its send a delivery may come and still be its echo: 20 seconds; while its envelope names the very sender, ECHO_SENDER_MS (a message waits for its receiver's next tool round, past a long call). */
+export const ECHO_MS = 20_000
+export const ECHO_SENDER_MS = 15 * 60_000
+
 /**
- * The send a delivery to `to` echoes, among the last 16 messages of the last
- * 20 seconds: the same words once the envelope is off (or one the start of
- * the other), to the receiver or to an agent of the receiver's name. A send
- * followed by its receive is then logged once.
+ * The send a delivery to `to` echoes, among the last 40 messages: the same
+ * words once the envelope is off (or one the start of the other), to the
+ * receiver or to an agent of the receiver's name, sent in the last 20
+ * seconds, or in the last 15 minutes by the sender its envelope names. A
+ * send followed by its receive is then logged once.
  */
 export function echoOf(data: DeckData, to: string, text: string, now: number): DeckMessage | undefined {
-  const body = oneLine(unwrapMessage(text).text)
+  const unwrapped = unwrapMessage(text)
+  const body = oneLine(unwrapped.text)
   if (body === '') return undefined
   const head = body.slice(0, 40)
   const receiver = agentOf(data, to)
   const name = receiver && !isNameless(receiver) ? receiver.name.toLowerCase() : ''
-  const recent = data.messages.slice(-16)
+  const sender = unwrapped.from ? (resolveRecipient(data, unwrapped.from)?.id ?? unwrapped.from) : ''
+  const recent = data.messages.slice(-40)
   for (let i = recent.length - 1; i >= 0; i--) {
     const message = recent[i]
-    if (!message || now - message.at >= 20_000 || message.kind === 'result') continue
+    if (!message || message.kind === 'result') continue
+    if (now - message.at >= (sender !== '' && message.from === sender ? ECHO_SENDER_MS : ECHO_MS)) continue
     const target = agentOf(data, message.to)
     // a send to a name no agent carried then: the receiver's name now
     const sentName = message.to.toLowerCase()

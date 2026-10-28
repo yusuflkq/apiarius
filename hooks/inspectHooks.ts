@@ -202,10 +202,36 @@ export function inspectCalled(data: DeckData, tool: string, input: unknown, at: 
   }
 }
 
-/** A call ended: it ran, or it was refused with `refusal`. Its own touch follows. */
-export function inspectEnded(data: DeckData, id: string, ran: boolean, refusal: string): void {
+/**
+ * The calls Claude Code ran, by tool_use_id: its classic PostToolUse or
+ * PostToolUseFailure named them (`inspectRan`; both fire inside the call,
+ * before its `tool.call` resolves), until the call's end takes them
+ * (`inspectEnded`). The newest 200: a call whose end never comes (the deck's
+ * own, which its `tool.call` hook leaves alone) goes past them.
+ */
+const ranCalls = new Set<string>()
+const MOST_RAN = 200
+
+/** Claude Code ran call `id`: its classic PostToolUse or PostToolUseFailure fired. */
+export function inspectRan(id: unknown): void {
+  if (typeof id !== 'string' || id === '') return
+  ranCalls.add(id)
+  for (const old of ranCalls) {
+    if (ranCalls.size <= MOST_RAN) break
+    ranCalls.delete(old)
+  }
+}
+
+/**
+ * A call ended as `end` says: it ran, or it was refused (`I.refusalOfEnd`:
+ * a hook's `deny`, or an error with no PostToolUse or PostToolUseFailure of
+ * it, which is how Claude Code hands back a refusal). Its own touch follows.
+ */
+export function inspectEnded(data: DeckData, id: string, end: I.CallEnd): void {
   try {
-    I.noteEnd(data, id, ran, refusal)
+    const hasRun = ranCalls.delete(id)
+    const refusal = I.refusalOfEnd(end, hasRun)
+    I.noteEnd(data, id, refusal === undefined, refusal ?? '')
   } catch {
     // tracking never changes what the tool returned
   }

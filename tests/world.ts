@@ -64,6 +64,8 @@ export type World = {
   checks: { tool: string; input: unknown }[]
   /** Each turn the deck ended (`$.turn.abort`), by its id. */
   aborted: string[]
+  /** How many of a plugin's own permission checks (`$.tool.check`, no call) reject next, as one asked inside a turn being stopped does. */
+  checkFails: number
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -86,6 +88,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     opens: [],
     checks: [],
     aborted: [],
+    checkFails: 0,
     ...extra,
   }
 }
@@ -181,6 +184,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   // an ask is core's (the mode's decider): since 2.1.311 a hook's own ask goes to a person, whom a test has none of; a test's query of its own has nothing beneath, and asks
   on('tool.check', async ($, e, next) => {
     w.checks.push({ tool: e.tool, input: e.input })
+    if (w.checkFails > 0 && e.tool_use_id === undefined) {
+      w.checkFails -= 1
+      throw new Error('Error: The operation was aborted.')
+    }
     if (w.verdict !== 'ask') return { decision: w.verdict }
     try {
       return await next(e)

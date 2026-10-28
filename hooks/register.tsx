@@ -40,6 +40,7 @@ import {
   inspectInstructionLoaded,
   inspectInstructions,
   inspectMode,
+  inspectRan,
   readInspectContext,
   readInspectLoaded,
 } from './inspectHooks'
@@ -502,12 +503,20 @@ const sendsInFlight: { from: string; to: string; text: string }[] = []
 /** The message rows a resume logged for want of a send under way, by id, the newest 20: a send of the same words after it is that one row. */
 const resumeRows: string[] = []
 
-/** A resumed agent's waking words, one message from `from`: the send under way to it (or just logged) logs them; with none, the resume does. */
-function logResumeWords(agent: DeckAgent, from: string, words: string, at: number) {
+/**
+ * A resumed agent's waking words, one message: the send under way to it (or
+ * just logged) logs them; with none, the resume does, from the sender its
+ * envelope names (`<agent-message from="…">`, an agent's SendMessage), else
+ * from `from`. The envelope comes off first, as the send never carried it.
+ */
+function logResumeWords(agent: DeckAgent, from: string, prompt: string, at: number) {
+  const unwrapped = M.unwrapMessage(prompt)
+  const words = unwrapped.text
   if (words.trim() === '') return
   const isSent = sendsInFlight.some(one => one.text.trim() === words.trim() && (one.to === agent.id || M.resolveRecipient(data, one.to)?.id === agent.id))
   if (isSent || M.loggedSendOf(data, { to: agent.id, text: words, at })) return
-  const row = M.addMessage(data, { from, to: agent.id, kind: 'message', text: words, at })
+  const sender = unwrapped.from ? (M.resolveRecipient(data, unwrapped.from)?.id ?? F.trunc(F.oneLine(unwrapped.from), 120)) : from
+  const row = M.addMessage(data, { from: sender, to: agent.id, kind: 'message', text: words, at })
   resumeRows.push(row.id)
   if (resumeRows.length > 20) resumeRows.splice(0, resumeRows.length - 20)
 }
@@ -1108,6 +1117,12 @@ async function ack($: EngineInterface, id: string, status: DeckAck['status'], te
 /** The stopping calls whose verdict is being asked for now, by their key: one question each at a time. */
 const probing = new Set<string>()
 
+/** When the permission check itself last failed for a stopping call, by its key: asked again only CHECK_RETRY_MS later. */
+const checkFailedAt = new Map<string, number>()
+
+/** How long after a permission check that failed (it rejects inside a turn being stopped) the deck asks again. */
+const CHECK_RETRY_MS = 5_000
+
 /**
  * Asks Claude Code's permission check about every stopping call the deck
  * could make whose verdict is missing or old (`B.staleCallsOf`): TaskStop of
@@ -1118,20 +1133,31 @@ const probing = new Set<string>()
  */
 function probeStops($: EngineInterface, now: number): void {
   for (const call of B.staleCallsOf(data, now)) {
-    if (probing.has(call.key)) continue
+    if (probing.has(call.key) || now - (checkFailedAt.get(call.key) ?? -Infinity) < CHECK_RETRY_MS) continue
     probing.add(call.key)
     void verdictOf($, call).finally(() => probing.delete(call.key))
   }
 }
 
-/** Claude Code's permission check on stopping call `call`, asked now and kept; a check that fails reads as a refusal, its reason said. */
-async function verdictOf($: EngineInterface, call: B.StopCall): Promise<{ decision: 'allow' | 'ask' | 'deny'; reason?: string }> {
+/**
+ * Claude Code's permission check on stopping call `call`, asked now and
+ * kept. A check that fails (it rejects inside a turn being stopped) is no
+ * verdict of Claude Code's: nothing is kept, the Stop stays as it was, it is
+ * asked again soon, and what it said is answered as `failed`.
+ */
+async function verdictOf($: EngineInterface, call: B.StopCall): Promise<{ decision: 'allow' | 'ask' | 'deny'; reason?: string } | { failed: string }> {
   let verdict: { decision: 'allow' | 'ask' | 'deny'; reason?: string }
   try {
     const said = await $.tool.check({ tool: call.tool, input: call.input })
     verdict = { decision: said.decision, ...(said.reason ? { reason: said.reason } : {}) }
+    checkFailedAt.delete(call.key)
   } catch (error) {
-    verdict = { decision: 'deny', reason: firstSentenceOf(error instanceof Error ? error.message : String(error)) || `Claude Code could not check ${call.tool}` }
+    try {
+      checkFailedAt.set(call.key, await $.clock.now())
+    } catch {
+      // asked again at the next change
+    }
+    return { failed: firstSentenceOf(error instanceof Error ? error.message : String(error)) }
   }
   try {
     const now = await $.clock.now()
@@ -1150,6 +1176,7 @@ async function verdictOf($: EngineInterface, call: B.StopCall): Promise<{ decisi
  */
 async function runStop($: EngineInterface, call: B.StopCall): Promise<string> {
   const verdict = await verdictOf($, call)
+  if ('failed' in verdict) return `Could not ask Claude Code whether ${call.tool} is allowed${verdict.failed ? `: ${verdict.failed.replace(/[.!?]+$/, '')}` : ''}. Try again in a moment`
   if (verdict.decision !== 'allow') return B.stopOf(data, call.tool, call.id).why
   try {
     const ran = await $.tool.call({ tool: call.tool, ...call.input } as unknown as Parameters<EngineInterface['tool']['call']>[0])
@@ -3372,8 +3399,8 @@ export const register: Register = on => {
     try {
       end = await $.clock.now()
       ok = ran.deny === undefined && ran.isError !== true
-      // Inspect: the call ran (its permission was given), or it was refused
-      inspectEnded(data, e.tool_use_id, ran.deny === undefined, ran.deny ?? '')
+      // Inspect: the call ran (its permission was given), or it was refused (Claude Code hands a refusal back as an error that no PostToolUse heard)
+      inspectEnded(data, e.tool_use_id, ran)
       if (agent) {
         M.endTool(agent, e.tool_use_id, ok, end)
         // a permission prompt holds its call: the call's end is the person's answer
@@ -4084,7 +4111,16 @@ export const register: Register = on => {
     return result
   })
 
+  // each also says Claude Code ran the call (it was not refused before it ran): Inspect's decisions and Recent activity's "⊘ denied" read it
   on('classic.PostToolUse', async ($, e, next) => {
+    inspectRan(e.tool_use_id)
+    const result = await next(e)
+    if (inspectMode(data, e)) touched($, await $.clock.now())
+    return result
+  })
+
+  on('classic.PostToolUseFailure', async ($, e, next) => {
+    inspectRan(e.tool_use_id)
     const result = await next(e)
     if (inspectMode(data, e)) touched($, await $.clock.now())
     return result

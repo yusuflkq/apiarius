@@ -295,6 +295,26 @@ test('Stop: Claude Code`s permission check asked first (no permission asked of y
   expect(v2Of(w).chat.filter(row => row.kind === 'stop').pop()).toMatchObject({ from: 'you', to: 'main', text: 'You stopped the turn' })
 })
 
+test('a permission check that fails (it rejects inside a turn being stopped) is no verdict of Claude Code`s: nothing is kept, so Stop says it was not asked yet rather than denied; a press says it could not ask, runs nothing, and the check is asked again a moment later', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const { w } = stopWorld(on)
+  w.checkFails = 1
+  await work($)
+  await clock.advance(400)
+  const scout = () => v2Of(w).agents.find(row => row.row === 'agent' && row.id === 'agent-x1')
+  expect(scout()).toMatchObject({ stop: { can: false, why: 'Not asked yet whether Claude Code allows TaskStop here' } })
+  // a press while the check fails: nothing runs, and the ack says why
+  w.checkFails = 1
+  command(w.children[0], { cmd: 'stopAgent', id: 's-1', agentId: 'agent-x1' })
+  await clock.advance(400)
+  expect(w.held).toEqual([])
+  expect(lastState(w).acks.find(ack => ack.id === 's-1')).toMatchObject({ status: 'failed', text: expect.stringMatching(/^Could not ask Claude Code whether TaskStop is allowed: .*[^.]\. Try again in a moment$/) })
+  // a moment later Claude Code is asked again, and its verdict shows
+  w.verdict = 'allow'
+  await clock.advance(8_000)
+  expect(scout()).toMatchObject({ stop: { can: true, why: '' } })
+})
+
 const SURFACES = ['terminal', 'desktop'] as const
 
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {

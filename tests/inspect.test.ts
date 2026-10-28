@@ -306,6 +306,59 @@ test('through the hooks: the session`s start reads what is loaded and /context`s
   )
 })
 
+test('a refusal reads as one however Claude Code hands it back: as a hook`s deny, or (as 2.1.311 does for your rule, your hook, a declined dialog, auto mode, a stopped turn) as an error no PostToolUse heard; an error after PostToolUseFailure is a call that ran and failed', () => {
+  expect(I.refusalOfEnd({ deny: 'Not here' }, false)).toBe('Not here')
+  expect(I.refusalOfEnd({ isError: true, text: 'WebFetch denied access to domain:example.com.' }, false)).toBe('WebFetch denied access to domain:example.com.')
+  expect(I.refusalOfEnd({ isError: true }, false)).toBe('')
+  // it ran: PostToolUse or PostToolUseFailure fired for it
+  expect(I.refusalOfEnd({ isError: true, text: 'Exit code 3' }, true)).toBeUndefined()
+  expect(I.refusalOfEnd({ text: 'ok' }, false)).toBeUndefined()
+})
+
+test('through the hooks, as Claude Code 2.1.311 ends them: a call its check denied (your rule, your hook) ends in an error with no PostToolUse, and reads refused, in Recent activity too; one that ran and failed (PostToolUseFailure) reads allowed', async ($: Engine, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld({ holding: ['Bash', 'Write', 'WebFetch'] })
+  inspectWorld(on, w)
+  on('classic.PostToolUse', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+  await work($)
+  await clock.settle()
+
+  /**
+   * A call as the engine runs it: its check (`verdict`) beneath the deck's
+   * hooks, which refuses it there on a deny; else the tool, held, ends in an
+   * error (`failed`) after the engine's PostToolUseFailure.
+   */
+  const run = async (id: string, tool: string, input: Record<string, unknown>, verdict: 'allow' | 'deny', failed?: string) => {
+    w.verdict = verdict
+    const call = $.tool.call({ tool, ...input, tool_use_id: id } as never)
+    await clock.settle()
+    const held = w.held.find(one => one.id === id)
+    if (held) w.held.splice(w.held.indexOf(held), 1)
+    if (held && failed === undefined) {
+      held.settle({ deny: 'the test held a call it meant refused' })
+      return 'held'
+    }
+    held?.settle({ isError: true, result: `Error: ${failed}`, text: failed } as never)
+    const ended = await call
+    await clock.advance(400)
+    return ended
+  }
+  // Claude Code hands each refusal back as an error, not a deny
+  expect(await run('toolu_rule', 'WebFetch', { url: 'https://example.com', prompt: 'title?' }, 'deny')).toMatchObject({ isError: true })
+  expect(await run('toolu_env', 'Write', { file_path: '/work/.env', content: 'X=1' }, 'deny')).toMatchObject({ isError: true })
+  expect(await run('toolu_fail', 'Bash', { command: 'node -e "process.exit(3)"', description: 'Exit 3' }, 'allow', 'Exit code 3')).toMatchObject({ isError: true })
+
+  const state = v2Of(w)
+  const decided = Object.fromEntries(state.inspect.permissions.decisions.map(d => [d.id, [d.outcome, d.text, d.why]]))
+  // the engine's own verdicts carry no rule or hook here: a deny reads by its reason
+  expect(decided.toolu_rule).toEqual(['denied', 'Denied', ''])
+  expect(decided.toolu_env).toEqual(['denied', 'Denied', ''])
+  expect(decided.toolu_fail).toEqual(['allowed', 'Allowed', ''])
+  const marks = Object.fromEntries(state.activity.map(one => [one.id, [one.ok, one.refused ?? '']]))
+  expect(marks).toMatchObject({ toolu_rule: [false, 'denied'], toolu_env: [false, 'denied'], toolu_fail: [false, ''] })
+})
+
 // ---------------------------------------------------------------------------
 // The tab, as the pane and the terminal draw it.
 

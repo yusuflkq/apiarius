@@ -217,6 +217,24 @@ export function noteDenied(data: DeckData, id: string, reason: string): boolean 
   return true
 }
 
+/** A call's end as `tool.call`'s `next(e)` resolved it: a hook's refusal (`deny`), or the tool's error (`isError`, its words `text`). */
+export type CallEnd = { deny?: string | undefined; isError?: boolean | undefined; text?: string | undefined }
+
+/**
+ * Whether a call that ended as `end` says was refused, and with what words;
+ * undefined when it ran. Claude Code hands a refusal made before the tool
+ * ran (your rule, your hook, you or the host declining its dialog, auto
+ * mode, its turn stopped while it asked) back as an error, `isError` with
+ * the refusal's words, not as a `deny`; what tells it from a tool that ran
+ * and failed is that neither PostToolUse nor PostToolUseFailure fired for
+ * it (`hasRun` false). A hook's `deny` is a refusal however it came.
+ */
+export function refusalOfEnd(end: CallEnd, hasRun: boolean): string | undefined {
+  if (typeof end.deny === 'string') return end.deny
+  if (end.isError === true && !hasRun) return typeof end.text === 'string' ? end.text : ''
+  return undefined
+}
+
 /** Call `id` ended: it ran (`ran`), or it was refused with `refusal`, the words the model read. Whether a decision changed. */
 export function noteEnd(data: DeckData, id: string, ran: boolean, refusal = ''): boolean {
   const found = decisionOf(data, id)
