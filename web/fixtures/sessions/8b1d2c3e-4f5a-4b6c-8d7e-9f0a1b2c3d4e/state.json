@@ -1,0 +1,245 @@
+{
+  "v": 2,
+  "now": 1792013580000,
+  "session": {
+    "id": "8b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
+    "cwd": "C:\\Users\\sam\\code\\agent-deck",
+    "startedAt": 1792012080000
+  },
+  "avatarStyle": "robot",
+  "header": {
+    "state": "working",
+    "stateText": "Working",
+    "goal": {
+      "text": "Agent Deck terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it.",
+      "headline": "Agent Deck terminal faces",
+      "at": 1792012140000,
+      "messageId": "m1792012140000_you_main"
+    },
+    "model": "opus-5.5",
+    "contextPercent": 22,
+    "costUsd": 1.8,
+    "line": "opus-5.5 · context 22% · $1.80",
+    "turn": null
+  },
+  "needs": [],
+  "agents": [
+    {
+      "row": "agent",
+      "id": "main",
+      "fileId": "main",
+      "parent": null,
+      "depth": 0,
+      "kind": "orchestrator",
+      "status": "running",
+      "isStopped": false,
+      "name": "",
+      "description": "",
+      "type": "",
+      "shortId": "",
+      "title": "Orchestrator",
+      "live": null,
+      "startedAt": 1792012080000,
+      "endedAt": null,
+      "resumedAt": null,
+      "elapsed": "",
+      "background": false,
+      "model": "opus-5.5",
+      "avatar": 2,
+      "needs": 0,
+      "fold": null,
+      "task": "",
+      "result": "",
+      "todos": [],
+      "tokens": 0
+    },
+    {
+      "row": "agent",
+      "id": "c1a2b3c4d5e6f708",
+      "fileId": "c1a2b3c4d5e6f708",
+      "parent": "main",
+      "depth": 1,
+      "kind": "agent",
+      "status": "running",
+      "isStopped": false,
+      "name": "builder",
+      "description": "Build and test the faces",
+      "type": "general-purpose",
+      "shortId": "c1a2b3c",
+      "title": "builder",
+      "live": {
+        "tool": "Bash",
+        "text": "npm test",
+        "at": 1792013544000
+      },
+      "startedAt": 1792012380000,
+      "endedAt": null,
+      "resumedAt": null,
+      "elapsed": "20m",
+      "background": true,
+      "model": "sonnet-4.5",
+      "avatar": 6,
+      "needs": 0,
+      "fold": null,
+      "task": "Add terminalFace to web/avatars.mjs and run the tests.",
+      "result": "",
+      "todos": [],
+      "tokens": 0
+    },
+    {
+      "row": "agent",
+      "id": "d1e2f3a4b5c6d708",
+      "fileId": "d1e2f3a4b5c6d708",
+      "parent": "main",
+      "depth": 1,
+      "kind": "agent",
+      "status": "running",
+      "isStopped": false,
+      "name": "painter",
+      "description": "Draw the glyphs",
+      "type": "general-purpose",
+      "shortId": "d1e2f3a",
+      "title": "painter",
+      "live": {
+        "tool": "Edit",
+        "text": "hooks/ui/v2/look.tsx",
+        "at": 1792013562000
+      },
+      "startedAt": 1792012500000,
+      "endedAt": null,
+      "resumedAt": null,
+      "elapsed": "18m",
+      "background": true,
+      "model": "sonnet-4.5",
+      "avatar": 1,
+      "needs": 0,
+      "fold": null,
+      "task": "Draw a glyph per agent in hooks/ui/v2/look.tsx.",
+      "result": "",
+      "todos": [],
+      "tokens": 0
+    }
+  ],
+  "activity": [
+    {
+      "id": "toolu_fc_p1",
+      "at": 1792013562000,
+      "agent": "d1e2f3a4b5c6d708",
+      "agentName": "painter",
+      "tool": "Edit",
+      "text": "hooks/ui/v2/look.tsx",
+      "ok": null,
+      "ms": null
+    },
+    {
+      "id": "toolu_fc_b1",
+      "at": 1792013544000,
+      "agent": "c1a2b3c4d5e6f708",
+      "agentName": "builder",
+      "tool": "Bash",
+      "text": "Run the tests",
+      "ok": null,
+      "ms": null
+    }
+  ],
+  "files": [],
+  "figures": {
+    "running": 2,
+    "waiting": 0,
+    "done": 0,
+    "failed": 0,
+    "stopped": 0,
+    "plan": null,
+    "costUsd": 1.8,
+    "tokens": 0,
+    "contextPercent": 22,
+    "minutes": 24,
+    "needs": 0
+  },
+  "plan": null,
+  "chat": [
+    {
+      "id": "m1792012140000_you_main",
+      "at": 1792012140000,
+      "from": "you",
+      "to": "main",
+      "who": "You → Orchestrator",
+      "kind": "prompt",
+      "text": "Agent Deck terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it."
+    },
+    {
+      "id": "m1792012380000_main_c1a2b3c4d5e6f708",
+      "at": 1792012380000,
+      "from": "main",
+      "to": "c1a2b3c4d5e6f708",
+      "who": "Orchestrator → builder",
+      "kind": "spawn",
+      "text": "Add terminalFace to web/avatars.mjs and run the tests."
+    },
+    {
+      "id": "m1792012500000_main_d1e2f3a4b5c6d708",
+      "at": 1792012500000,
+      "from": "main",
+      "to": "d1e2f3a4b5c6d708",
+      "who": "Orchestrator → painter",
+      "kind": "spawn",
+      "text": "Draw a glyph per agent in hooks/ui/v2/look.tsx."
+    }
+  ],
+  "changes": {
+    "repo": null,
+    "files": [],
+    "edits": [],
+    "commits": []
+  },
+  "inspect": {
+    "contextPercent": 22,
+    "costUsd": 1.8,
+    "agents": [
+      {
+        "id": "main",
+        "title": "Orchestrator",
+        "model": "opus-5.5",
+        "tokens": {
+          "in": 0,
+          "out": 0,
+          "cacheRead": 0
+        },
+        "requests": 0,
+        "tools": 0,
+        "errors": 0
+      },
+      {
+        "id": "c1a2b3c4d5e6f708",
+        "title": "builder",
+        "model": "sonnet-4.5",
+        "tokens": {
+          "in": 0,
+          "out": 0,
+          "cacheRead": 0
+        },
+        "requests": 0,
+        "tools": 1,
+        "errors": 0
+      },
+      {
+        "id": "d1e2f3a4b5c6d708",
+        "title": "painter",
+        "model": "sonnet-4.5",
+        "tokens": {
+          "in": 0,
+          "out": 0,
+          "cacheRead": 0
+        },
+        "requests": 0,
+        "tools": 1,
+        "errors": 0
+      }
+    ]
+  },
+  "acks": [],
+  "cleared": {
+    "count": 0,
+    "at": null
+  }
+}

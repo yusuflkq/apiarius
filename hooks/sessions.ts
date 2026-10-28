@@ -121,7 +121,7 @@ export type SessionRowV2 = {
   at: number
   age: string
   startedAt: number
-  /** A deck can open it: it names its state folder. */
+  /** A deck can open it: it names its state folder (where a deck reads, that folder is checked to be one the deck makes, `isStateDirOf`). */
   canOpen: boolean
   /** Its deck takes answers and messages from another deck (its inbox); otherwise answer it in its window. */
   canSteer: boolean
@@ -379,7 +379,7 @@ export function sessionsViewOf(entries: readonly SessionEntry[], me: SessionEntr
 }
 
 function rowOf(entry: SessionEntry, isMe: boolean, now: number): SessionRowV2 {
-  const canOpen = entry.dir !== '' && isStateDirOf(entry.dir, entry.id)
+  const canOpen = entry.dir !== ''
   return {
     id: entry.id,
     isMe,

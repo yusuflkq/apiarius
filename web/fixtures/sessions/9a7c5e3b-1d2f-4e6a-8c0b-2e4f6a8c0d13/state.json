@@ -1,0 +1,123 @@
+{
+  "v": 2,
+  "now": 1792013580000,
+  "session": {
+    "id": "9a7c5e3b-1d2f-4e6a-8c0b-2e4f6a8c0d13",
+    "cwd": "C:\\Users\\sam\\notes",
+    "startedAt": 1792004580000
+  },
+  "avatarStyle": "robot",
+  "header": {
+    "state": "idle",
+    "stateText": "Idle",
+    "goal": {
+      "text": "Notes sync\n\nSync my notebooks into the notes folder as Markdown.",
+      "headline": "Notes sync",
+      "at": 1792004640000,
+      "messageId": "m1792004640000_you_main"
+    },
+    "model": "sonnet-4.5",
+    "contextPercent": 7,
+    "costUsd": 0.31,
+    "line": "sonnet-4.5 · context 7% · $0.31",
+    "turn": null
+  },
+  "needs": [],
+  "agents": [
+    {
+      "row": "agent",
+      "id": "main",
+      "fileId": "main",
+      "parent": null,
+      "depth": 0,
+      "kind": "orchestrator",
+      "status": "idle",
+      "isStopped": false,
+      "name": "",
+      "description": "",
+      "type": "",
+      "shortId": "",
+      "title": "Orchestrator",
+      "live": null,
+      "startedAt": 1792004580000,
+      "endedAt": null,
+      "resumedAt": null,
+      "elapsed": "",
+      "background": false,
+      "model": "sonnet-4.5",
+      "avatar": 2,
+      "needs": 0,
+      "fold": null,
+      "task": "",
+      "result": "Synced 14 notebooks.\n\nEach is a Markdown file under `notes/remarkable/`, its pages in order.",
+      "todos": [],
+      "tokens": 0
+    }
+  ],
+  "activity": [],
+  "files": [],
+  "figures": {
+    "running": 0,
+    "waiting": 0,
+    "done": 0,
+    "failed": 0,
+    "stopped": 0,
+    "plan": null,
+    "costUsd": 0.31,
+    "tokens": 0,
+    "contextPercent": 7,
+    "minutes": 0,
+    "needs": 0
+  },
+  "plan": null,
+  "chat": [
+    {
+      "id": "m1792004640000_you_main",
+      "at": 1792004640000,
+      "from": "you",
+      "to": "main",
+      "who": "You → Orchestrator",
+      "kind": "prompt",
+      "text": "Notes sync\n\nSync my notebooks into the notes folder as Markdown."
+    },
+    {
+      "id": "m1792006380000_main_you",
+      "at": 1792006380000,
+      "from": "main",
+      "to": "you",
+      "who": "Orchestrator → you",
+      "kind": "answer",
+      "text": "Synced 14 notebooks.\n\nEach is a Markdown file under `notes/remarkable/`, its pages in order."
+    }
+  ],
+  "changes": {
+    "repo": null,
+    "files": [],
+    "edits": [],
+    "commits": []
+  },
+  "inspect": {
+    "contextPercent": 7,
+    "costUsd": 0.31,
+    "agents": [
+      {
+        "id": "main",
+        "title": "Orchestrator",
+        "model": "sonnet-4.5",
+        "tokens": {
+          "in": 0,
+          "out": 0,
+          "cacheRead": 0
+        },
+        "requests": 0,
+        "tools": 0,
+        "errors": 0
+      }
+    ]
+  },
+  "acks": [],
+  "cleared": {
+    "count": 0,
+    "at": null
+  }
+}

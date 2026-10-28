@@ -1,0 +1,129 @@
+{
+  "v": 2,
+  "now": 1792013580000,
+  "session": {
+    "id": "2c4e6a8b-0d1f-4a3c-8e5b-7d9f1a3c5e70",
+    "cwd": "C:\\Users\\sam\\code\\api-server",
+    "startedAt": 1792012860000
+  },
+  "avatarStyle": "robot",
+  "header": {
+    "state": "working",
+    "stateText": "Working",
+    "goal": {
+      "text": "Fix the flaky CI job\n\nThe integration tests fail one run in five on CI. Find out why and fix it.",
+      "headline": "Fix the flaky CI job",
+      "at": 1792012920000,
+      "messageId": "m1792012920000_you_main"
+    },
+    "model": "opus-5.5",
+    "contextPercent": 18,
+    "costUsd": 0.64,
+    "line": "opus-5.5 · context 18% · $0.64",
+    "turn": null
+  },
+  "needs": [],
+  "agents": [
+    {
+      "row": "agent",
+      "id": "main",
+      "fileId": "main",
+      "parent": null,
+      "depth": 0,
+      "kind": "orchestrator",
+      "status": "running",
+      "isStopped": false,
+      "name": "",
+      "description": "",
+      "type": "",
+      "shortId": "",
+      "title": "Orchestrator",
+      "live": {
+        "tool": "Bash",
+        "text": "gh run view 1842 --log",
+        "at": 1792013556000
+      },
+      "startedAt": 1792012860000,
+      "endedAt": null,
+      "resumedAt": null,
+      "elapsed": "",
+      "background": false,
+      "model": "opus-5.5",
+      "avatar": 2,
+      "needs": 0,
+      "fold": null,
+      "task": "",
+      "result": "",
+      "todos": [],
+      "tokens": 0
+    }
+  ],
+  "activity": [
+    {
+      "id": "toolu_ci_m1",
+      "at": 1792013556000,
+      "agent": "main",
+      "agentName": "Orchestrator",
+      "tool": "Bash",
+      "text": "Read the failed run’s log",
+      "ok": null,
+      "ms": null
+    }
+  ],
+  "files": [],
+  "figures": {
+    "running": 0,
+    "waiting": 0,
+    "done": 0,
+    "failed": 0,
+    "stopped": 0,
+    "plan": null,
+    "costUsd": 0.64,
+    "tokens": 0,
+    "contextPercent": 18,
+    "minutes": 11,
+    "needs": 0
+  },
+  "plan": null,
+  "chat": [
+    {
+      "id": "m1792012920000_you_main",
+      "at": 1792012920000,
+      "from": "you",
+      "to": "main",
+      "who": "You → Orchestrator",
+      "kind": "prompt",
+      "text": "Fix the flaky CI job\n\nThe integration tests fail one run in five on CI. Find out why and fix it."
+    }
+  ],
+  "changes": {
+    "repo": null,
+    "files": [],
+    "edits": [],
+    "commits": []
+  },
+  "inspect": {
+    "contextPercent": 18,
+    "costUsd": 0.64,
+    "agents": [
+      {
+        "id": "main",
+        "title": "Orchestrator",
+        "model": "opus-5.5",
+        "tokens": {
+          "in": 0,
+          "out": 0,
+          "cacheRead": 0
+        },
+        "requests": 0,
+        "tools": 1,
+        "errors": 0
+      }
+    ]
+  },
+  "acks": [],
+  "cleared": {
+    "count": 0,
+    "at": null
+  }
+}

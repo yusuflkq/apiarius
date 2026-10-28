@@ -11,6 +11,12 @@
  * answers a moment later, an answer resolves its question, and stopAgent and
  * abortTurn get this build's "Not in this build yet", and Clear finished hides
  * the finished agents until Show N cleared. Commands are printed here too.
+ * Every session on the sample's machine (All sessions) comes along: the
+ * sample's registry (web/fixtures/sessions.v2.json) in a registry folder the
+ * server reads (`--sessions`), the other sessions' decks in `.web/<id>/`
+ * beside it, and the list in the state; an answer or a message to one of
+ * them is acked in its own state, as its deck would, or refused where its
+ * deck reads no inbox.
  * Editing the sample starts the copy again from it. `--static` keeps the
  * sample's own times and only prints commands. Ctrl+C stops both processes.
  */
@@ -59,13 +65,66 @@ function reset() {
   try { for (const name of ['agents', 'patches', 'messages', 'gitdiffs']) copyFolder(name, by) } catch (err) { console.error(`dev: ${err.message}`); return }
   state = by ? shift(sample, by) : sample
   stash = null
+  resetSessions()
   save()
+}
+
+// ---- every session on the sample's machine: the registry the server reads, and the other sessions' decks beside this one's
+const SESSIONS = path.join(FIXTURES, 'sessions.v2.json')
+const registry = path.join(dir, 'registry')
+/** The sample's registry (each file's `dir` the copy's), the list as this deck shows it, and the other sessions' states; null when the sample has none. */
+let others = null
+
+function resetSessions() {
+  let sample
+  try { sample = JSON.parse(fs.readFileSync(SESSIONS, 'utf8')) } catch { others = null; return }
+  const by = isStatic ? 0 : Date.now() - sample.now
+  fs.rmSync(registry, { recursive: true, force: true })
+  fs.mkdirSync(registry, { recursive: true })
+  const states = new Map()
+  const entries = sample.entries.map(entry => {
+    if (entry.id === sample.me || !entry.dir) return entry
+    // a session's folder as the mod makes one: .web/<its id>
+    const from = path.join(FIXTURES, entry.dir), to = path.join(dir, '.web', entry.id)
+    fs.rmSync(to, { recursive: true, force: true })
+    fs.mkdirSync(path.join(to, 'agents'), { recursive: true })
+    states.set(entry.id, shift(JSON.parse(fs.readFileSync(path.join(from, 'state.json'), 'utf8')), by))
+    for (const file of fs.readdirSync(path.join(from, 'agents'))) fs.writeFileSync(path.join(to, 'agents', file), JSON.stringify(shift(JSON.parse(fs.readFileSync(path.join(from, 'agents', file), 'utf8')), by)))
+    return { ...entry, dir: to }
+  })
+  others = { me: sample.me, entries, view: shift(sample.view, by), states }
+  saveOthers()
+}
+
+/** The registry's files (each heartbeat now, as their decks' are) and the other sessions' states. */
+function saveOthers() {
+  if (!others) return
+  for (const entry of others.entries) if (entry.id !== others.me && entry.dir) fs.writeFileSync(path.join(registry, `${entry.id}.json`), JSON.stringify({ ...entry, heartbeatAt: Date.now() }))
+  for (const [id, one] of others.states) fs.writeFileSync(path.join(dir, '.web', id, 'state.json'), JSON.stringify(one))
+}
+setInterval(saveOthers, 60000).unref()
+
+/** A command for another session's deck: an answer or a message acked in its own state, as its deck would; refused where its deck reads no inbox. */
+function playOther(cmd) {
+  if (cmd.cmd === 'view' || !others) return
+  const entry = others.entries.find(one => one.id === cmd.session)
+  const theirs = others.states.get(cmd.session)
+  if (!entry || !theirs || !entry.inbox) return later(300, () => ack(cmd.id, false, 'failed', 'Answer it in its window: its deck takes no answers or messages from another'))
+  setTimeout(() => {
+    const at = Date.now()
+    const word = cmd.cmd === 'answer' ? { ok: true, status: 'answered', text: 'Claude carries on' } : { ok: true, status: 'queued', text: 'Claude reads it when it finishes its current turn' }
+    if (cmd.id) theirs.acks = [...(theirs.acks || []).filter(one => one.id !== cmd.id), { id: cmd.id, ...word, at }].slice(-50)
+    const row = (theirs.agents || []).find(one => one.row === 'agent' && one.id === cmd.agentId)
+    if (cmd.cmd === 'chat') theirs.chat.push({ id: `m${at}_dev${++seq}`, at, from: 'you', to: cmd.agentId, who: `You → ${row ? row.title : cmd.agentId}`, kind: 'chat', text: cmd.text, ...(cmd.id ? { ackId: cmd.id } : {}) })
+    theirs.now = at
+    saveOthers()
+  }, 800)
 }
 
 function save() {
   if (!isStatic) state.now = Math.max(Date.now(), (state.now || 0) + 1) // never older: the page drops an older write of the same session
   // as the mod writes it: v1's keys first (here only the few every state has), the v2 state under `v2`
-  const file = { v: 1, now: state.now, session: { ...state.session, model: state.header.model }, v2: state }
+  const file = { v: 1, now: state.now, session: { ...state.session, model: state.header.model }, v2: others ? { ...state, sessions: others.view } : state }
   fs.writeFileSync(stateFile, `${JSON.stringify(file, null, 1)}\n`)
 }
 
@@ -99,6 +158,7 @@ function settle() {
 }
 
 function play(cmd) {
+  if (cmd.session) return playOther(cmd)
   if (cmd.cmd === 'chat') {
     later(400, () => {
       const a = rowOf(cmd.agentId)
@@ -170,7 +230,7 @@ function play(cmd) {
 }
 
 // ---- the server
-const args = [path.join(__dirname, 'server.js'), '--dir', dir, '--parent', String(process.pid)]
+const args = [path.join(__dirname, 'server.js'), '--dir', dir, '--parent', String(process.pid), '--sessions', registry]
 reset()
 // stdin stays a pipe: the server leaves when it closes, so it goes when this process does
 const server = spawn(process.execPath, args, { env: { ...process.env, AGENT_DECK_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'inherit'] })

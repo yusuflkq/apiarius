@@ -28,6 +28,8 @@ const QT = TOKEN ? `?t=${encodeURIComponent(TOKEN)}` : '';
 /** The latest v2 state, and the indexes built from it. */
 let S = null;
 let IX = null;
+/** This session's own latest state: `S` too, unless another session's deck shows (#/s/<id>/…, "All sessions" below). */
+let HOME = null;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
@@ -299,6 +301,9 @@ const IC = {
   dollar: '<line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   hand: '<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
   activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  laptop: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
+  squareTerminal: '<path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>',
+  layers: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
 };
 
@@ -537,6 +542,8 @@ function normalize(s) {
     avatarStyle: AV.styleOf(s.avatarStyle),
     // what the deck's Clear finished hid (its rows `isCleared`): how many, and when
     cleared: { count: numOr((obj(s.cleared) || {}).count, 0), at: numOr((obj(s.cleared) || {}).at, null) },
+    // every session on this machine (All sessions, below); null from a mod that lists none
+    sessions: sessionsOf(s.sessions),
   };
 }
 
@@ -598,14 +605,21 @@ function apply(next) {
   if (!next || typeof next !== 'object') return;
   const v2 = v2Of(next);
   if (!v2) {
-    if (S && !S.empty) return; // never trade a real state for nothing
-    S = emptyState(next.empty === true ? 'empty' : 'old');
+    if (HOME && !HOME.empty) return; // never trade a real state for nothing
+    HOME = emptyState(next.empty === true ? 'empty' : 'old');
   } else {
     // An older write of the same session (a slow fetch racing the stream) never replaces a newer one.
     const sid = obj(v2.session) ? v2.session.id : '';
-    if (S && !S.empty && S.session.id && sid === S.session.id && numOr(v2.now, 0) < S.now) return;
-    S = normalize(v2);
+    if (HOME && !HOME.empty && HOME.session.id && sid === HOME.session.id && numOr(v2.now, 0) < HOME.now) return;
+    HOME = normalize(v2);
   }
+  // another session's deck shows: this one's state waits behind it (its list of sessions and its acks are still read)
+  if (route.session) {
+    if (S) indexViewed();
+    invalidate();
+    return;
+  }
+  S = HOME;
   IX = buildIndex(S);
   noteResolved();
   // a style picked here holds until the state names it: from then on the state's (the person's setting) is drawn
@@ -674,6 +688,13 @@ function retryNow() {
 }
 
 async function command(body) {
+  // another session's deck: an answer or a message goes to its own deck, which acts on it as on its own page's; nothing else goes from here
+  if (route.session && body.cmd !== 'view') {
+    const row = sessionRow(route.session);
+    if (body.cmd !== 'chat' && body.cmd !== 'answer') throw new Error('Read-only here: this is another session\'s deck. Do that in its window.');
+    if (!row || !row.canSteer) throw new Error('Answer it in its window: its deck takes no answers or messages from another.');
+    body = { ...body, session: route.session };
+  }
   let res;
   try {
     res = await fetch('/cmd', { method: 'POST', headers: { ...AUTH, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -761,7 +782,7 @@ function fullTextOf(id) {
   if (t) return t;
   t = { status: 'loading', text: '', error: '' };
   fullTexts.set(id, t);
-  fetch(`/message/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
+  fetch(`${baseUrl()}/message/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'The rest is not on disk yet.' : `The server answered ${r.status}.`))))
     .then(text => { t.status = 'ok'; t.text = text; })
     .catch(e => { t.status = 'error'; t.error = e.message || 'Could not load the rest.'; })
@@ -780,7 +801,7 @@ function diffOf(kind, id) {
   if (p) return p;
   p = { status: 'loading', hunks: null, error: '' };
   diffs.set(key, p);
-  fetch(`/${kind}/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
+  fetch(`${baseUrl()}/${kind}/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? `${DIFF_WORD[kind]} is not on disk yet.` : `The server answered ${r.status}.`))))
     .then(text => { p.status = 'ok'; p.hunks = parsePatch(text); })
     .catch(e => { p.status = 'error'; p.error = e.message || `Could not load ${DIFF_WORD[kind].toLowerCase()}.`; })
@@ -836,7 +857,7 @@ function agentFileOf(a) {
   if (!f) { f = { status: 'loading', data: null, error: '', sig: '', loading: false, tries: 0 }; agentFiles.set(a.fileId, f); }
   f.sig = sig;
   f.loading = true;
-  fetch(`/agent/${encodeURIComponent(a.fileId)}${QT}`, { headers: AUTH, cache: 'no-store' })
+  fetch(`${baseUrl()}/agent/${encodeURIComponent(a.fileId)}${QT}`, { headers: AUTH, cache: 'no-store' })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'Its activity is not on disk yet.' : `The server answered ${r.status}.`))))
     .then(text => { f.data = agentFileFrom(JSON.parse(text)); f.status = 'ok'; f.error = ''; f.tries = 0; })
     .catch(e => {
@@ -859,16 +880,20 @@ const TABS = [['now', 'Dashboard'], ['chat', 'Chat'], ['org', 'Org'], ['changes'
 const ROUTE_ALIAS = { dashboard: 'now', inspect: 'settings', help: 'settings' };
 
 function parseRoute() {
-  const parts = location.hash.replace(/^#\/?/, '').split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } });
+  const all = location.hash.replace(/^#\/?/, '').split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } });
+  // every session on this machine (#/sessions), and another session's deck (#/s/<id>/<tab>…, its tabs and drawer as this one's)
+  if (all[0] === 'sessions') return { tab: 'sessions', drawer: null, key: 'sessions', session: null };
+  const session = all[0] === 's' && all[1] ? all[1] : null;
+  const parts = session ? all.slice(2) : all;
   const name = ROUTE_ALIAS[parts[0]] || parts[0];
   // an Inspect drawer's link of an earlier page (#/<route>/inspect) opens Settings
   const tab = parts[1] === 'inspect' ? 'settings' : TABS.some(t => t[0] === name) ? name : 'now';
   const drawer = parts[1] === 'agent' && parts[2] ? { kind: 'agent', id: parts[2] } : null;
-  return { tab, drawer, key: tab };
+  return { tab, drawer, key: tab, session };
 }
 let route = parseRoute();
 
-const hrefOf = (tab, drawer) => `#/${tab}${drawer ? `/agent/${encodeURIComponent(drawer.id)}` : ''}`;
+const hrefOf = (tab, drawer, session = route.session) => (tab === 'sessions' ? '#/sessions' : `${session ? `#/s/${encodeURIComponent(session)}/` : '#/'}${tab}${drawer ? `/agent/${encodeURIComponent(drawer.id)}` : ''}`);
 
 /** Takes the page to `next`, noting the tab it leaves (`i` and `h` go back to it from Settings). */
 function setRoute(next) {
@@ -877,6 +902,8 @@ function setRoute(next) {
     if (next.tab !== 'settings') ui.settingsAt = null;
   }
   route = next;
+  // another session's deck, or this one's again
+  if ((route.session || null) !== VIEW.id) switchView(route.session || null);
 }
 
 /** Keeps where the page shown now is scrolled to; the chat read to its end keeps "the end". */
@@ -891,7 +918,7 @@ function navigate(tab, drawer = route.drawer) {
   saveScroll();
   const href = hrefOf(tab, drawer);
   if (location.hash !== href) location.hash = href;
-  setRoute({ tab, drawer, key: tab });
+  setRoute({ tab, drawer, key: tab, session: tab === 'sessions' ? null : route.session });
   renderNow();
 }
 const openAgent = id => navigate(route.tab, { kind: 'agent', id });
@@ -1463,13 +1490,15 @@ function Header() {
       h('span', { class: 'brand-mark', title: 'Agent Deck', 'aria-hidden': 'true' }),
       hd ? StateWord() : h('span', { class: 'state is-idle' }, Dot('idle'), S ? 'Idle' : 'Connecting'),
       hd ? GoalButton() : h('span', { class: 'goal goal-none' }),
-      hd && hd.line ? h('span', { class: 'hd-line hd-line-top' }, hd.line) : null),
+      hd && hd.line ? h('span', { class: 'hd-line hd-line-top' }, hd.line) : null,
+      SessionsLink()),
     GoalPanel(),
     h('nav', { class: 'hd-tabs', 'aria-label': 'Pages' },
       TABS.map(([id, label]) => Tab(id, label)),
       h('span', { class: 'hd-tabs-end' },
         hd && hd.line ? h('span', { class: 'hd-line hd-line-tabs' }, hd.line) : null,
-        ConnPill())));
+        ConnPill())),
+    ViewingBar());
 }
 
 // ================================================================== dashboard
@@ -2932,6 +2961,7 @@ const KEYS = [
   ['j  k', 'Move the focus down, up'],
   ['Enter', 'Open the focused row: an agent, a fold, a need, a file'],
   ['b', 'Back: close the agent'],
+  ['s', 'All sessions: every Claude Code session on this machine'],
   ['n', 'The next thing that needs you'],
   ['m', 'Message: the composer (in an agent\'s drawer, that agent)'],
   ['i', 'Inspect, here in Settings'],
@@ -3017,6 +3047,9 @@ function Welcome() {
 }
 
 function Page() {
+  // every session on this machine, and another session's deck while it is read
+  if (route.tab === 'sessions') return SessionsPage();
+  if (route.session && !S) return ViewingWait();
   if (!S) return conn.status === 'denied' || conn.fails >= 2 ? Unreachable() : Loading();
   // Settings holds with nothing yet too: the avatar style and the help are the deck's own
   if (route.tab === 'settings') return SettingsPage();
@@ -3109,6 +3142,8 @@ function moveFocus(dir) {
 
 /** What a key does (false: nothing, and it goes on to the browser). */
 function keyAction(key) {
+  // s: every session on this machine, or back from the list
+  if (key === 's') { toggleSessions(); return true; }
   if (!S) return false;
   // nothing yet: the tabs and Settings' keys, the rest have nothing to act on
   if (S.empty && !/^[1-5ih?]$/.test(key)) return false;
@@ -3205,6 +3240,182 @@ function afterRender(pin) {
   document.title = S && !S.empty ? `${S.needs.length ? '● ' : ''}${S.header.stateText} · Agent Deck` : 'Agent Deck';
 }
 
+// ============================================================== all sessions
+// Every Claude Code session on this machine whose Agent Deck runs (the mod's
+// `sessions`, hooks/sessions.ts): #/sessions lists them, this chat first; a
+// press opens one's deck read-only at #/s/<id>/<tab>, under "Viewing <title>",
+// read from its folder (/s/<id>/state and its lazy files) every 1.5 s while
+// it shows, its own deck asked to keep writing them (`view`, every 30 s). An
+// answer or a message goes to its own deck, which acts on it through Claude
+// Code as on its own page's; where its deck takes none, "Answer it in its window".
+
+/** The session whose deck shows (null: this one's), its state as read, why none shows, and its poll. */
+const VIEW = { id: null, S: null, error: '', timer: 0, asked: 0, openedAt: 0, seq: 0 };
+const VIEW_POLL = 1500, VIEW_AGAIN = 30000;
+
+/** Where the lazy files come from: another session's under /s/<id>, this one's at the root. */
+function baseUrl() { return route.session ? `/s/${encodeURIComponent(route.session)}` : ''; }
+
+/** Every session on this machine as the page reads it (the mod's `sessions`); null from a mod that writes none. */
+function sessionsOf(x) {
+  x = obj(x);
+  if (!x) return null;
+  const rows = arr(x.rows).filter(r => r && typeof r.id === 'string' && r.id).map(r => {
+    const state = STATE_TEXT[r.state] ? r.state : 'idle';
+    return {
+      id: r.id, isMe: r.isMe === true, title: str(r.title) || 'No request yet', state, stateText: str(r.stateText) || STATE_TEXT[state],
+      surface: str(r.surface), place: str(r.place), repo: str(r.repo), cwd: str(r.cwd),
+      need: typeof r.need === 'string' && r.need ? r.need : null, say: str(r.say), working: numOr(r.working, 0),
+      costUsd: numOr(r.costUsd), cost: str(r.cost), at: numOr(r.at, 0), startedAt: numOr(r.startedAt, 0),
+      canOpen: r.canOpen === true, canSteer: r.canSteer === true,
+    };
+  });
+  const others = obj(x.others) || {};
+  return { rows, text: str(x.text), others: { waiting: numOr(others.waiting, 0), working: numOr(others.working, 0) } };
+}
+
+const sessionsNow = () => (HOME && HOME.sessions) || null;
+const sessionRow = id => { const list = sessionsNow(); return (list && list.rows.find(r => r.id === id)) || null; };
+
+/** The index of the session viewed, this deck's own acks with its (a send refused here is acked here). */
+function indexViewed() {
+  IX = buildIndex(S);
+  if (HOME) for (const k of HOME.acks) if (!IX.acks.has(k.id)) IX.acks.set(k.id, k);
+}
+
+/** Another session's deck from now (`id`), or this one's again (null): the lazy files read afresh, its state read until it shows. */
+function switchView(id) {
+  clearTimeout(VIEW.timer);
+  Object.assign(VIEW, { id, S: null, error: '', asked: 0, openedAt: Date.now(), seq: VIEW.seq + 1 });
+  agentFiles.clear();
+  fullTexts.clear();
+  diffs.clear();
+  if (!id) {
+    S = HOME;
+    IX = S ? buildIndex(S) : null;
+    if (S) noteResolved();
+    invalidate();
+    return;
+  }
+  S = null;
+  IX = null;
+  pollView(VIEW.seq);
+}
+
+/** Reads the session viewed again, and asks its deck to keep writing it every 30 s; then again in 1.5 s, while it shows. */
+async function pollView(seq) {
+  if (seq !== VIEW.seq || !VIEW.id) return;
+  const id = VIEW.id;
+  if (Date.now() - VIEW.asked >= VIEW_AGAIN) {
+    VIEW.asked = Date.now();
+    command({ cmd: 'view', session: id }).catch(() => {});
+  }
+  try {
+    const res = await fetch(`/s/${encodeURIComponent(id)}/state${QT}`, { headers: AUTH, cache: 'no-store' });
+    if (seq !== VIEW.seq) return;
+    if (res.status === 404) VIEW.error = 'That session is not running any more: its deck lists it no longer.';
+    else if (res.ok) {
+      const v2 = v2Of(JSON.parse(await res.text()));
+      if (seq !== VIEW.seq) return;
+      if (v2) { applyViewed(v2); VIEW.error = ''; }
+      else if (!VIEW.S) VIEW.error = Date.now() - VIEW.openedAt > 15000 ? 'Its deck has not written its state: answer it in its window.' : 'Asking its deck for its state…';
+    }
+  } catch { /* a torn write, or the server between restarts: the next poll reads it */ }
+  if (seq !== VIEW.seq) return;
+  invalidate();
+  VIEW.timer = setTimeout(() => pollView(seq), VIEW_POLL);
+}
+
+/** The session viewed's state, as this page shows it: read-only, its questions answerable only where its deck takes answers from here. */
+function applyViewed(v2) {
+  if (VIEW.S && numOr(v2.now, 0) < VIEW.S.now) return;
+  const s = normalize(v2);
+  s.sessions = null;
+  const row = sessionRow(VIEW.id);
+  if (!row || !row.canSteer) s.needs = s.needs.map(n => ({ ...n, isAnswerable: false }));
+  VIEW.S = s;
+  S = s;
+  indexViewed();
+  noteResolved();
+}
+
+/** s: the list of sessions, or back to where it was opened from. */
+function toggleSessions() {
+  if (route.tab !== 'sessions') { ui.beforeSessions = location.hash || '#/now'; location.hash = '#/sessions'; setRoute(parseRoute()); renderNow(); return; }
+  location.hash = ui.beforeSessions && ui.beforeSessions !== '#/sessions' ? ui.beforeSessions : '#/now';
+  setRoute(parseRoute());
+  renderNow();
+}
+
+/** The header's way to the list: "All sessions", after "◆ 1 other session needs you" while another waits on you. */
+function SessionsLink() {
+  const list = sessionsNow();
+  if (!list) return null;
+  const n = list.others.waiting;
+  return h('a', { key: 'sessions', class: `hd-sessions${route.tab === 'sessions' ? ' on' : ''}`, href: '#/sessions', title: list.text },
+    n > 0 && h('span', { class: 'hd-sessions-need' }, `◆ ${n}`, h('span', { class: 'hd-sessions-words' }, ` other ${n === 1 ? 'session needs' : 'sessions need'} you`)),
+    h('span', { class: 'hd-sessions-label' }, icon('layers'), h('span', { class: 'hd-sessions-word' }, 'All sessions')));
+}
+
+/** Over another session's deck: "Viewing" and its title, where it runs, what goes from here, All sessions and Back to this chat. */
+function ViewingBar() {
+  if (!route.session) return null;
+  const row = sessionRow(route.session);
+  const where = row ? [row.place, row.repo].filter(Boolean).join(' · ') : '';
+  const note = VIEW.error || (row && row.canSteer ? 'Read-only here: an answer or a message goes to its own deck, which passes it to Claude Code.' : 'Read-only here: answer it in its window. Its deck takes nothing from another.');
+  return h('div', { key: 'viewbar', class: 'viewbar' },
+    h('span', { class: 'viewbar-tag' }, 'Viewing'),
+    h('span', { class: 'viewbar-title' }, row ? row.title : 'Another session'),
+    where && h('span', { class: 'viewbar-where' }, where),
+    h('span', { class: 'viewbar-note' }, note),
+    h('span', { class: 'viewbar-end' },
+      h('a', { class: 'viewbar-link', href: '#/sessions' }, 'All sessions'),
+      h('a', { class: 'btn btn-sm btn-primary', href: '#/now' }, 'Back to this chat')));
+}
+
+/** Another session's deck before its state is read: why nothing shows yet. */
+function ViewingWait() {
+  return h('div', { key: 'viewwait', class: 'page' },
+    h('div', { class: 'card' }, Empty('layers', VIEW.error ? 'Nothing to show yet' : 'Reading its deck…', VIEW.error || 'Its deck writes its state while another deck looks; it shows here within seconds.')));
+}
+
+/** #/sessions: every session on this machine, this chat first, a row each; a press opens its deck (this chat's: the Dashboard). */
+function SessionsPage() {
+  const list = sessionsNow();
+  return h('div', { key: 'sessions', class: 'page page-sessions' },
+    h('div', { key: 'top', class: 'sess-top' },
+      h('h1', { class: 'sess-title' }, 'All sessions'),
+      list && h('span', { class: 'sess-sum' }, list.text)),
+    !list
+      ? h('div', { key: 'none', class: 'card' }, Empty('layers', 'No sessions listed', HOME && !HOME.empty ? 'This deck lists the sessions on this machine once it has read them.' : 'Waiting for this session\'s deck.'))
+      : h('div', { key: 'list', class: 'card list sess-list' }, list.rows.map(SessionRow)),
+    list && h('p', { key: 'note', class: 'sess-note' }, list.rows.length > 1
+      ? 'Every Claude Code session here whose Agent Deck runs, Desktop and terminal alike. A press opens its deck: its Dashboard, Chat and Changes, read-only.'
+      : 'No other session here runs Agent Deck now. Each one that does shows here, Desktop and terminal alike.'));
+}
+
+/** One session: its state's dot; its title and "this chat"; where it runs and what it waits on you for (amber) or is doing; its word, spend and age. */
+function SessionRow(r) {
+  const href = r.isMe ? '#/now' : r.canOpen ? `#/s/${encodeURIComponent(r.id)}/now` : null;
+  const kids = [
+    Dot(STATE_HUE[r.state], r.state === 'working'),
+    h('span', { class: 'sess-main' },
+      h('span', { class: 'sess-line' },
+        h('span', { class: 'sess-name' }, r.title),
+        r.isMe && h('span', { class: 'tag tag-wait' }, 'this chat')),
+      h('span', { class: 'sess-sub' },
+        r.surface && icon(r.surface === 'terminal' ? 'squareTerminal' : 'laptop', 'sess-ic'),
+        h('span', { class: 'sess-where' }, [r.place, r.repo].filter(Boolean).join(' · ')),
+        r.say && h('span', { class: `sess-say${r.need ? ' is-need' : ''}` }, `· ${r.say}`))),
+    h('span', { class: `sess-state is-${r.state}` }, r.stateText),
+    h('span', { class: 'sess-cost' }, r.cost),
+    h('span', { class: 'sess-age' }, ageOf(r.at)),
+  ];
+  return href
+    ? h('a', { key: r.id, class: `sess-row${r.isMe ? ' is-me' : ''}`, href, 'data-nav': '', title: r.cwd }, kids)
+    : h('div', { key: r.id, class: 'sess-row', title: r.cwd }, kids);
+}
+
 function boot() {
   window.addEventListener('hashchange', () => {
     saveScroll();
@@ -3219,6 +3430,8 @@ function boot() {
 
   renderNow();
   connect();
+  // a reload on another session's deck reads it again
+  if (route.session) switchView(route.session);
 }
 
 // web/test/page.test.js reads this file without a browser and drives its views itself: it boots nothing then.

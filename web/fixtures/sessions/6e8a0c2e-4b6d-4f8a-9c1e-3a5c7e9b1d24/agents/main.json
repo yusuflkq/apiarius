@@ -1,0 +1,20 @@
+{
+  "v": 2,
+  "id": "main",
+  "task": "",
+  "result": "",
+  "todos": [],
+  "activity": [
+    {
+      "id": "toolu_st_m1",
+      "at": 1792013040000,
+      "tool": "Bash",
+      "target": "Remove the old build",
+      "command": "rm -rf dist",
+      "description": "Remove the old build",
+      "ok": null,
+      "ms": null
+    }
+  ],
+  "edits": []
+}
