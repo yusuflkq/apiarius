@@ -59,6 +59,7 @@ import {
   rowOf,
   runShort,
   runTitle,
+  ticks,
   tilesOf,
   wrapTicks,
   type ActivityRow,
@@ -514,9 +515,7 @@ function activityRow(kit: Kit, state: WebStateV2, row: ActivityRow, actions: Das
       {text ? (
         <Box flexShrink={1} minWidth={0}>
           {row.isSaid ? (
-            <Text italic color={P.fg2} wrap="truncate-end">
-              {text}
-            </Text>
+            <Text wrap="truncate-end">{wordParts(kit, ticks(text), P.fg2)}</Text>
           ) : (
             <Button key={`now:acttext:${row.key}`} label={text} plain onPress={open}>
               <Text color={P.fg2}>{text}</Text>

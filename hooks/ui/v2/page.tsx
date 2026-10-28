@@ -22,11 +22,12 @@ import { agentLogOf, type V2AgentFile, type V2AgentRow, type V2Files, type V2Log
 import type { DashActions, Kit } from '../types'
 import { composerKey } from './chat'
 import { isAiry, listBox, listRow } from './dash'
+import { ticks } from './dashModel'
 import { editBlock, titleOf, type Budget } from './diffs'
 import { AVATAR, avatar, glyph, keyButton, quiet, sectionHead, statusPill, svgOf, wordMark } from './look'
 import { needsSection } from './needs'
 import { P } from './palette'
-import { rule } from './parts'
+import { rule, wordParts } from './parts'
 import { pageStop } from './stop'
 import { ago, flat, foldText, msText, num } from './text'
 
@@ -157,9 +158,7 @@ function saidLine(kit: Kit, state: WebStateV2, row: V2AgentRow): RenderElement |
       <Box flexShrink={0}>{wordMark(kit, 'said', P.runText)}</Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         <Text wrap="wrap">
-          <Text italic color={P.fg2}>
-            {words.text}
-          </Text>
+          {wordParts(kit, ticks(words.text), P.fg2)}
           <Text color={P.muted2}>{`  ${ago(said.at, state.now)}`}</Text>
         </Text>
       </Box>
@@ -347,9 +346,7 @@ function wordRow(kit: Kit, state: WebStateV2, kind: V2Word['kind'], word: V2Word
             {THOUGHT_LABEL}
           </Text>
         ) : null}
-        <Text italic color={isThought ? P.muted : P.fg2} wrap="wrap">
-          {word.isCut && !folded.isCut ? `${folded.text}…` : folded.text}
-        </Text>
+        <Text wrap="wrap">{wordParts(kit, ticks(word.isCut && !folded.isCut ? `${folded.text}…` : folded.text), isThought ? P.muted : P.fg2)}</Text>
       </Box>
       <Box flexShrink={0} width={AGE} justifyContent="flex-end">
         <Text color={P.muted2}>{ago(word.at, state.now)}</Text>
