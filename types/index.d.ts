@@ -49,6 +49,29 @@ export type DeckActivity = {
   ok?: boolean
 }
 
+/**
+ * What one model step of a loop (the main loop's, a subagent's, a
+ * teammate's) gave besides its tool calls, as Claude Code gave it: its
+ * visible text (`said`), or its thinking as Claude Code shows it live
+ * (`thought`: a summary, or nothing when thinking is off). Never put in
+ * Chat: these words are said to nobody.
+ */
+export type DeckWord = {
+  kind: 'said' | 'thought'
+  /** When the step's response ended. */
+  at: number
+  /** The step: its turn's id and its index in that turn. */
+  turnId: string
+  step: number
+  /** The words, at most 4000 characters (`isCut` when they were longer). */
+  text: string
+  isCut?: true
+  /** The id of the loop's latest call begun before the words came, '' for none: in its log they follow that call. */
+  after: string
+  /** Chat has them already: the turn's last step's text (the Orchestrator's answer to you, an agent's result), or an agent's first words after your message. */
+  isChat?: true
+}
+
 /** What an agent said it is working on: the in-progress item of its todo list or task list. */
 export type DeckTodo = {
   /** The item's `activeForm` ("Running the tests"), else its content or subject. */
@@ -130,6 +153,8 @@ export type DeckAgent = {
   requests: number
   current?: DeckActivity
   recent: DeckActivity[]
+  /** Its steps' words and thinking (`DeckWord`), oldest first, the newest 60; absent before its first. */
+  words?: DeckWord[]
   /** Its result: the SubagentHandback report, else the turn's answer, else the last message at SubagentStop. */
   answer?: string
   /**
@@ -653,6 +678,8 @@ export type DeckView2 = {
   clearedAt: number
   /** What Org shows: its Timeline once picked (`timeline`); absent, the chart (a patch of `chart` goes back to it, and leaves the field out). */
   orgView?: 'chart' | 'timeline'
+  /** What an agent page's Activity lists: its calls alone once "Calls only" is picked (`calls`); absent, its calls with their words between them (a patch of `words` goes back to that, and leaves the field out). */
+  activityView?: 'calls' | 'words'
   /**
    * Inspect over the tab, as earlier builds had it: always false now, as
    * Inspect is a tab of its own. A view saved with `true`, or a patch that

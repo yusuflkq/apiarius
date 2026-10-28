@@ -290,6 +290,17 @@ function redrawIfChanged($: EngineInterface, now: number) {
   redraw($)
 }
 
+/** What Claude Code showed of a step's thinking as it streamed, read from its chunks: their text, and the block the last came in. */
+type Thinking = { text: string; block: number }
+
+/** Adds a thinking chunk's text to what was read of the step's; a new block starts on a line of its own. Past what a word keeps, the rest goes unread. */
+function keepThinking(kept: Thinking, chunk: { index: number; text: string }): void {
+  if (kept.text.length > M.LIMITS.wordChars) return
+  if (kept.block !== -1 && chunk.index !== kept.block && kept.text !== '') kept.text += '\n\n'
+  kept.block = chunk.index
+  kept.text += chunk.text
+}
+
 /** An event changed the data: keep it, and draw if the screen would change. Whatever it brought that the deck could stop is put to Claude Code's permission check at once (`probeStops`), so its Stop shows with it. */
 function touched($: EngineInterface, now: number) {
   save($)
@@ -3649,12 +3660,21 @@ export const register: Register = on => {
     const awaited = e.agentId !== undefined ? replies.get(e.agentId) : undefined
     const startedAt = awaited || isStale ? await $.clock.now() : 0
     if (isStale) touched($, startedAt)
-    const result = yield* next(e)
+    // the response as it streams: each chunk goes on at once, as it came; what Claude Code shows of the thinking is read on the way
+    const stream = next(e)
+    const thinking: Thinking = { text: '', block: -1 }
+    for await (const chunk of stream) {
+      if (chunk.kind === 'thinking') keepThinking(thinking, chunk)
+      yield chunk
+    }
+    const result = await stream.result
+    let isReply = false
     try {
       if (awaited && e.agentId !== undefined && replies.get(e.agentId) === awaited && startedAt > awaited.since) {
         // its first words since your message: said to nobody in particular, so never taken to be to you
         if (result.answer.trim() !== '') {
           replies.delete(e.agentId)
+          isReply = true
           const now = await $.clock.now()
           M.addMessage(data, { from: e.agentId, to: '', kind: 'chat', text: result.answer, at: now })
           touched($, now)
@@ -3664,6 +3684,20 @@ export const register: Register = on => {
       }
     } catch {
       // the reply stands in the agent's own transcript
+    }
+    try {
+      // what the step gave besides its calls: its thinking as Claude Code showed it, then its visible text; kept on its loop's row, never in Chat
+      const agent = M.agentOf(data, id)
+      if (agent && (thinking.text.trim() !== '' || result.answer.trim() !== '')) {
+        const now = await $.clock.now()
+        const step = { at: now, turnId: e.turnId, step: e.index }
+        M.noteWord(agent, { ...step, kind: 'thought', text: thinking.text })
+        // a step that asks for no call ends its turn: its text is the turn's answer, which Chat has (the Orchestrator's answer to you, an agent's result)
+        M.noteWord(agent, { ...step, kind: 'said', text: result.answer, isChat: isReply || result.toolUses.length === 0 })
+        touched($, now)
+      }
+    } catch {
+      // the words stand in the agent's own transcript
     }
     try {
       const usageOfStep = result.usage

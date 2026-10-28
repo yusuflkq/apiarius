@@ -33,6 +33,7 @@ import type {
   DeckTodoItem,
   DeckView,
   DeckView2,
+  DeckWord,
   DeckWorkflow,
 } from '../types'
 import * as AV from '../web/avatars.mjs'
@@ -138,6 +139,9 @@ export const LIMITS = {
   label: 18,
   /** A label's characters when the cut at `label` keeps fewer than two words or very little (`cutAtWord`). */
   labelStretch: 24,
+  /** The words and thoughts of its steps one loop keeps (`DeckAgent.words`), and each one's characters. */
+  words: 60,
+  wordChars: 4000,
 } as const
 
 export const EDIT_TOOLS: readonly string[] = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit']
@@ -248,6 +252,12 @@ function orgViewOf(value: unknown, current: DeckView2['orgView']): Pick<DeckView
   return view === 'timeline' ? { orgView: 'timeline' } : {}
 }
 
+/** What an agent page's Activity lists, as `view.v2.activityView` keeps it: its calls alone once "Calls only" is picked, else its calls with their words (the field left out). */
+function activityViewOf(value: unknown, current: DeckView2['activityView']): Pick<DeckView2, 'activityView'> {
+  const view = value === 'calls' || value === 'words' ? value : current
+  return view === 'calls' ? { activityView: 'calls' } : {}
+}
+
 /** The agents `view.v2.cleared` keeps at most, the oldest dropped first. */
 const CLEARED_KEPT = 500
 
@@ -315,6 +325,7 @@ export function view2With(current: DeckView2, patch: unknown): DeckView2 {
     cleared: Array.isArray(p.cleared) ? [...new Set(p.cleared.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-CLEARED_KEPT) : current.cleared,
     clearedAt: typeof p.clearedAt === 'number' && Number.isFinite(p.clearedAt) && p.clearedAt >= 0 ? p.clearedAt : current.clearedAt,
     ...orgViewOf(p.orgView, current.orgView),
+    ...activityViewOf(p.activityView, current.activityView),
   }
 }
 
@@ -806,6 +817,45 @@ export function beginTool(data: DeckData, agent: DeckAgent, activity: DeckActivi
   bump(data, activity.at, 'tools')
 }
 
+/**
+ * Keeps what one model step of `agent`'s loop gave besides its calls, as
+ * Claude Code gave it (`DeckWord`): its visible text (`said`) or its
+ * thinking as Claude Code shows it (`thought`), cut at LIMITS.wordChars,
+ * after the latest call the loop began; its newest LIMITS.words in all.
+ * Words of nothing but white space are none. Answers whether it kept them.
+ */
+export function noteWord(agent: DeckAgent, word: { kind: DeckWord['kind']; text: string; at: number; turnId: string; step: number; isChat?: boolean }): boolean {
+  const text = word.text.trim()
+  if (text === '') return false
+  const kept = trunc(text, LIMITS.wordChars)
+  const words = agent.words ?? []
+  words.push({
+    kind: word.kind,
+    at: word.at,
+    turnId: word.turnId,
+    step: word.step,
+    text: kept,
+    ...(kept !== text ? { isCut: true as const } : {}),
+    after: agent.recent[agent.recent.length - 1]?.id ?? '',
+    ...(word.isChat ? { isChat: true as const } : {}),
+  })
+  if (words.length > LIMITS.words) words.splice(0, words.length - LIMITS.words)
+  agent.words = words
+  return true
+}
+
+/** The latest words `agent` said (not thought) after the latest call it began, while it began none since; undefined when it has said none since. */
+export function saidSinceCallOf(agent: DeckAgent): DeckWord | undefined {
+  const words = agent.words ?? []
+  const last = agent.recent[agent.recent.length - 1]?.id ?? ''
+  for (let i = words.length - 1; i >= 0; i--) {
+    const one = words[i] as DeckWord
+    if (one.after !== last) return undefined
+    if (one.kind === 'said') return one
+  }
+  return undefined
+}
+
 export function endTool(agent: DeckAgent, id: string, ok: boolean, now: number) {
   const entry = agent.recent.find(one => one.id === id)
   L.noteCallEnd(agent, id, entry, ok, now)
@@ -1101,6 +1151,9 @@ function healAgent(agent: DeckAgent): DeckAgent {
   if (agent.resultVia === undefined && agent.kind !== 'main' && typeof agent.answer === 'string' && MADE_UP_RESULT.test(agent.answer)) delete agent.answer
   const during = loose.during
   if (!isRecord(during) || (during.kind !== 'todo' && during.kind !== 'task') || typeof during.key !== 'string' || typeof during.text !== 'string') delete agent.during
+  const words = Array.isArray(loose.words) ? healWordList(loose.words) : []
+  if (words.length > 0) agent.words = words
+  else delete agent.words
   if (Array.isArray(loose.todos)) {
     agent.todos = loose.todos
       .filter(isRecord)
@@ -1110,6 +1163,24 @@ function healAgent(agent: DeckAgent): DeckAgent {
     delete agent.todos
   }
   return agent
+}
+
+/** A restored loop's words (`DeckWord`), each kept only in its own shape, cut to the newest LIMITS.words. */
+function healWordList(value: readonly unknown[]): DeckWord[] {
+  return value
+    .filter(isRecord)
+    .filter(one => (one.kind === 'said' || one.kind === 'thought') && typeof one.text === 'string' && one.text !== '' && num(one.at) !== undefined && typeof one.turnId === 'string' && num(one.step) !== undefined && typeof one.after === 'string')
+    .map(one => ({
+      kind: one.kind as DeckWord['kind'],
+      at: one.at as number,
+      turnId: one.turnId as string,
+      step: one.step as number,
+      text: trunc(one.text as string, LIMITS.wordChars),
+      ...(one.isCut === true ? { isCut: true as const } : {}),
+      after: one.after as string,
+      ...(one.isChat === true ? { isChat: true as const } : {}),
+    }))
+    .slice(-LIMITS.words)
 }
 
 function healGoals(value: unknown): DeckGoal[] {
@@ -2315,6 +2386,8 @@ function mergeInto(row: DeckAgent, twin: DeckAgent): void {
   row.cacheRead += twin.cacheRead
   row.requests += twin.requests
   row.recent = [...row.recent, ...twin.recent].sort((a, b) => a.at - b.at).slice(-LIMITS.recent)
+  const words = [...(row.words ?? []), ...(twin.words ?? [])].sort((a, b) => a.at - b.at).slice(-LIMITS.words)
+  if (words.length > 0) row.words = words
   row.lastAt = Math.max(row.lastAt, twin.lastAt)
   if (twin.current) row.current = twin.current
   if (twin.todos) row.todos = twin.todos

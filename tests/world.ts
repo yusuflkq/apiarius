@@ -22,8 +22,13 @@ export type Child = { request: ProcessSpawnRequest; print: (text: string) => voi
 /** A tool call held open beneath the deck, as a dialog holds it: `settle` answers it as Claude Code would; `isAborted` once a hook above returned without it. */
 export type Held = { tool: string; id: string; e: Record<string, unknown>; isAborted: boolean; settle: (result: ToolCallResult) => void }
 
-/** A model step the test words: its visible text, and a gate it waits on before it ends. */
-export type Step = { answer: string; gate?: Promise<void> }
+/**
+ * A model step the test words: its visible text (streamed as one text
+ * chunk), what Claude Code shows of its thinking (each piece a chunk, in
+ * block 0, or `[block, text]`), the tools it asks for, and a gate it waits
+ * on before it ends.
+ */
+export type Step = { answer: string; thinking?: (string | readonly [number, string])[]; tools?: string[]; gate?: Promise<void> }
 
 export type World = {
   children: Child[]
@@ -164,7 +169,13 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('turn.step', async function* ($, e) {
     const step = w.steps.shift() ?? { answer: '' }
     if (step.gate) await step.gate
-    return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    for (const piece of step.thinking ?? []) {
+      const [index, text] = typeof piece === 'string' ? [0, piece] : piece
+      yield { kind: 'thinking' as const, index, text }
+    }
+    if (step.answer !== '') yield { kind: 'text' as const, index: 1, text: step.answer }
+    const toolUses = (step.tools ?? []).map(name => ({ name, input: {} }))
+    return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses, stopReason: toolUses.length > 0 ? ('tool_use' as const) : ('end_turn' as const), usage: null }
   })
   on('agent.spawn', () => ({ model: 'claude-haiku', agentId: 'agent-x1' }))
   // an ask is core's (the mode's decider): since 2.1.311 a hook's own ask goes to a person, whom a test has none of; a test's query of its own has nothing beneath, and asks
