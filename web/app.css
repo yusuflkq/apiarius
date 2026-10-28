@@ -1136,6 +1136,34 @@ span.cg-av { cursor: default; }
 .outcome.is-fail { color: var(--fail-text); }
 .outcome.is-wait { color: var(--wait-text); }
 
+/* ----------------------------------------------------------- their words */
+/* What an agent said between its calls, quoted in italics after a speech
+   mark (never a message: Chat does not hold it); its thinking as Claude
+   Code shows it, dimmer, under its label. */
+.said-mark { display: inline-flex; flex: none; margin-right: 6px; vertical-align: -2px; color: var(--run-text); }
+.said-mark .ic { width: 13px; height: 13px; }
+.said-words { font-style: italic; color: var(--fg-2); }
+.said-words .code, .ra-said .code, .word-text .code { font-style: normal; }
+.run-now .said-words { color: var(--muted); }
+.run-now .said-words .code { padding: 0; border: 0; background: none; font-size: 0.92em; color: var(--fg-2); }
+.live.is-said { border-color: var(--border); background: var(--card-2); }
+.live.is-said .live-label { color: var(--muted); }
+.live.is-said .said-mark { margin-right: 0; }
+.ra-said { font-style: italic; color: var(--fg-2); }
+.block-extra { display: inline-flex; margin-left: auto; align-self: center; }
+.seg-toggle.seg-sm button { height: 24px; padding: 0 9px; font-size: 11.5px; }
+.act + .act-word, .act-word + .act, .act-word + .act-word { border-top: 1px solid var(--border-soft); }
+.act-word { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 9px 12px; font-size: 12.5px; }
+.act-word.is-said { background: rgba(255, 255, 255, 0.025); }
+.word-mark { display: inline-flex; flex: none; margin-top: 2px; color: var(--muted); }
+.word-mark .ic { width: 14px; height: 14px; }
+.act-word.is-thought .word-mark { color: var(--muted-2); }
+.word-body { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.word-label { font-size: 11.5px; color: var(--muted-2); }
+.word-text { font-style: italic; line-height: 1.6; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.act-word.is-thought .word-text { color: var(--muted); }
+.act-word .act-time { margin-top: 2px; }
+
 @container drawer (max-width: 470px) {
   .composer-keys { display: none; }
 }

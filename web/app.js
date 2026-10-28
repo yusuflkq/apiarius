@@ -318,6 +318,9 @@ const IC = {
   plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
   hook: '<path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/>',
   shrink: '<path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8"/><path d="M9 19.8V15m0 0H4.2M9 15l-6 6"/><path d="M15 4.2V9m0 0h4.8M15 9l6-6"/><path d="M9 4.2V9m0 0H4.2M9 9 3 3"/>',
+  // an agent's words between its calls, and its thinking as Claude Code shows it
+  said: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  thought: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
 };
 
 function icon(name, cls) {
@@ -456,6 +459,7 @@ function rowOf(r) {
     name: str(r.name), description: str(r.description), type: str(r.type), shortId: str(r.shortId),
     title: str(r.title) || str(r.name) || str(r.description) || str(r.type) || str(r.shortId) || r.id,
     live: live && typeof live.tool === 'string' ? { tool: live.tool, text: str(live.text), at: numOr(live.at, 0) } : null,
+    said: saidOf(r.said),
     startedAt: numOr(r.startedAt, 0), endedAt: numOr(r.endedAt, null), resumedAt: numOr(r.resumedAt, null), elapsed: str(r.elapsed),
     background: r.background === true, model: str(r.model), avatar: numOr(r.avatar, 0), needs: numOr(r.needs, 0),
     fold: typeof r.fold === 'string' && r.fold ? r.fold : null,
@@ -464,6 +468,12 @@ function rowOf(r) {
     isCleared: r.isCleared === true,
     stop: stopOf(r.stop),
   };
+}
+
+/** An agent's words since its latest call while it is at work, as the state says them; null for none. */
+function saidOf(x) {
+  const s = obj(x);
+  return s && typeof s.text === 'string' && s.text.trim() ? { text: s.text, at: numOr(s.at, 0), isCut: s.isCut === true } : null;
 }
 
 /** A Stop or Cancel as the state says it: the call it makes (TaskStop, CronDelete), its label, whether Claude Code's own check allows it here (`can`), and why not; null for none. */
@@ -513,10 +523,11 @@ function changesOf(c) {
   };
 }
 
-/** The newest tool calls of every agent, newest first. */
+/** The newest tool calls of every agent, and what each said between them (`kind` 'said'), newest first. */
 function activityOf(list) {
-  return arr(list).filter(x => x && typeof x.tool === 'string' && typeof x.agent === 'string' && x.agent).map(x => ({
+  return arr(list).filter(x => x && typeof x.tool === 'string' && typeof x.agent === 'string' && x.agent && (x.kind !== 'said' || typeof x.text === 'string')).map(x => ({
     id: str(x.id) || `${numOr(x.at, 0)}|${x.agent}|${x.tool}|${str(x.text)}`, at: numOr(x.at, 0), agent: x.agent, agentName: str(x.agentName),
+    kind: x.kind === 'said' ? 'said' : 'call',
     tool: x.tool, text: str(x.text), ok: typeof x.ok === 'boolean' ? x.ok : null, ms: numOr(x.ms),
     refused: x.refused === 'denied' || x.refused === 'blocked' ? x.refused : null,
   })).sort((x, y) => y.at - x.at);
@@ -912,16 +923,34 @@ function parsePatch(text) {
 const agentFiles = new Map();
 
 /** What an agent's file is fetched against: when its row changes, the mod wrote the file again. */
-const rowSig = a => [a.status, a.isStopped, a.live ? `${a.live.tool}@${a.live.at}` : '', a.endedAt || '', a.tokens, a.result.length, a.todos.length, (IX.editsBy.get(a.id) || []).length].join('|');
+const rowSig = a => [a.status, a.isStopped, a.live ? `${a.live.tool}@${a.live.at}` : '', a.said ? a.said.at : '', a.endedAt || '', a.tokens, a.result.length, a.todos.length, (IX.editsBy.get(a.id) || []).length].join('|');
 
-/** An agent file as the page reads it: `{ task, result, todos, activity, edits }`. */
+/** An agent file as the page reads it: `{ task, result, todos, activity, words, edits }`. */
 function agentFileFrom(d) {
   d = obj(d) || {};
   return {
     task: str(d.task), result: str(d.result), todos: todosOf(d.todos),
     activity: arr(d.activity).filter(x => x && typeof x.tool === 'string').map(x => ({ id: str(x.id), at: numOr(x.at, 0), tool: x.tool, target: str(x.target), command: str(x.command), description: str(x.description), ok: typeof x.ok === 'boolean' ? x.ok : null, ms: numOr(x.ms) })),
+    words: arr(d.words).filter(w => w && (w.kind === 'said' || w.kind === 'thought') && typeof w.text === 'string' && w.text.trim()).map(w => ({ kind: w.kind, at: numOr(w.at, 0), step: numOr(w.step, 0), text: w.text, after: str(w.after), isCut: w.isCut === true })),
     edits: arr(d.edits).filter(x => typeof x === 'string'),
   };
+}
+
+/**
+ * An agent's log as its file holds it, oldest first: each call and, with
+ * `withWords`, the words that came after it (said and thought, in the
+ * order they came); words from before its first call first.
+ */
+function logOf(f, withWords) {
+  const ids = new Set(f.activity.map(x => x.id));
+  const after = new Map();
+  for (const w of withWords ? f.words : []) {
+    const k = ids.has(w.after) ? w.after : '';
+    if (!after.has(k)) after.set(k, []);
+    after.get(k).push(w);
+  }
+  const wordsAfter = k => (after.get(k) || []).map(w => ({ kind: w.kind, word: w }));
+  return [...wordsAfter(''), ...f.activity.flatMap(x => [{ kind: 'call', call: x }, ...wordsAfter(x.id)])];
 }
 
 function agentFileOf(a) {
@@ -1006,6 +1035,7 @@ const isWide = () => typeof window.innerWidth === 'number' && window.innerWidth 
 
 const ui = {
   orgView: ['list', 'timeline'].includes(store.get('orgView', 'chart')) ? store.get('orgView', 'chart') : 'chart', // Org: the chart, the list or the timeline
+  actWords: store.get('actView', 'words') !== 'calls', // an agent's Activity: its calls with their words (the default), or its calls only
   open: new Map(),         // disclosure key -> open
   chatFilter: 'all',       // Chat's member picked: 'all' (Everyone) | an agent's id
   drafts: new Map(),       // composer scope ('chat', 'agent:<id>') -> half-typed words
@@ -1686,7 +1716,15 @@ function stepOf(a) {
   return { text, n, glyph: isRunning(a.status) ? 'active' : st };
 }
 
-/** A run card's line: its call in flight, verbatim; else what it handed back; else its status in a word. */
+/** An agent's words as the deck quotes them, after a speech mark: in italics, their code spans as code. */
+function Words(text, cls) {
+  return [
+    h('span', { key: 'mark', class: 'said-mark' }, icon('said')),
+    h('span', { key: 'words', class: `said-words${cls ? ` ${cls}` : ''}` }, '“', inline(text), '”'),
+  ];
+}
+
+/** A run card's line: its call in flight, verbatim; else, while it is at work, its words since its latest call; else what it handed back; else its status in a word. */
 function NowLine(a) {
   if (a.live) {
     return [
@@ -1695,11 +1733,12 @@ function NowLine(a) {
       h('span', { key: 'text', class: PATHY.has(a.live.tool) ? 'run-said mono' : 'run-said' }, a.live.text),
     ];
   }
+  if (a.said) return Words(firstLine(a.said.text, 280));
   if (a.result) return h('span', { key: 'said', class: 'run-said' }, inline(firstLine(a.result, 280)));
   const st = stateOf(a);
   return h('span', { key: 'quiet', class: 'run-quiet' }, isRunning(a.status) ? 'Working' : ROW_WORD[st] || statusOf(st).label);
 }
-const nowTitle = a => (a.live ? `${a.live.tool} ${a.live.text}` : a.result ? firstLine(a.result, 600) : '');
+const nowTitle = a => (a.live ? `${a.live.tool} ${a.live.text}` : a.said ? `“${oneLine(a.said.text)}”` : a.result ? firstLine(a.result, 600) : '');
 
 /** When its run began: its start, or when a message last woke it (resumed). */
 const runStartOf = a => Math.max(a.startedAt || 0, a.resumedAt || 0);
@@ -1913,18 +1952,20 @@ const FEED_MONO = new Set(['Read', 'Edit', 'MultiEdit', 'NotebookEdit', 'Write',
 
 function ActivityRow(x) {
   const a = IX.byId.get(x.agent);
-  const verb = TOOL_VERB[x.tool] || `used ${x.tool}${x.text ? ' on' : ''}`;
+  const isSaid = x.kind === 'said';
+  const verb = isSaid ? 'said' : TOOL_VERB[x.tool] || `used ${x.tool}${x.text ? ' on' : ''}`;
   const said = VERB_ONLY.has(x.tool) ? '' : x.text;
   return h('button', {
-    key: x.id, type: 'button', class: 'ra-row', 'data-nav': 'activity', enter: true, title: `${x.tool} ${x.text}`.trim(),
+    key: x.id, type: 'button', class: `ra-row${isSaid ? ' is-said' : ''}`, 'data-nav': 'activity', enter: true, title: isSaid ? `“${oneLine(x.text)}”` : `${x.tool} ${x.text}`.trim(),
     onClick: () => { if (a) openAgent(a.id); },
   },
   whoAvatar(x.agent, 22),
   h('span', { class: 'ra-text' },
     h('span', { class: 'ra-who' }, x.agentName || nameOf(x.agent)), ' ',
     h('span', { class: 'ra-verb' }, verb), ' ',
-    said && h('span', { class: `ra-target${FEED_MONO.has(x.tool) ? ' mono' : ''}` }, said)),
-  Outcome(a || { status: 'done' }, x),
+    // its words, quoted in italics: what it said between its calls
+    isSaid ? h('span', { class: 'ra-said' }, '“', inline(oneLine(x.text)), '”') : said && h('span', { class: `ra-target${FEED_MONO.has(x.tool) ? ' mono' : ''}` }, said)),
+  isSaid ? h('span', { class: 'outcome' }) : Outcome(a || { status: 'done' }, x),
   h('span', { class: 'ra-time', title: x.at ? new Date(x.at).toLocaleString() : '' }, ageOf(x.at)));
 }
 
@@ -2295,7 +2336,7 @@ function elapsedOf(a) {
 
 const ROW_WORD = { done: 'Done', failed: 'Failed', stopped: 'Stopped', idle: 'Idle', starting: 'Starting', waiting: 'Waiting on you', running: '' };
 
-/** A row's line: its call in flight, verbatim; else its status and its own last words (its result, else its description). */
+/** A row's line: its call in flight, verbatim; else, while it is at work, its words since its latest call; else its status and its own last words (its result, else its description). */
 function LineOf(a) {
   if (a.live) {
     return [
@@ -2303,6 +2344,7 @@ function LineOf(a) {
       h('span', { key: 'text', class: `arow-text${PATHY.has(a.live.tool) ? ' mono' : ''}` }, a.live.text),
     ];
   }
+  if (a.said) return h('span', { key: 'said', class: 'arow-text' }, Words(firstLine(a.said.text)));
   const st = stateOf(a);
   // its description says nothing new when it is the row's title already: its task does
   const said = a.result ? firstLine(a.result) : a.description && a.description !== a.title ? a.description : firstLine(a.task);
@@ -3271,9 +3313,9 @@ function DrawerHead(lead, title, sub, extra) {
     h('button', { type: 'button', class: 'icon-btn', title: 'Close (Esc)', 'aria-label': 'Close', onClick: closeDrawer }, icon('x')));
 }
 
-function Block(key, title, note, body) {
+function Block(key, title, note, body, extra) {
   return h('section', { key, class: 'block' },
-    h('div', { class: 'block-head' }, h('h3', { class: 'block-title' }, title), note != null && note !== '' && h('span', { class: 'block-note' }, note)),
+    h('div', { class: 'block-head' }, h('h3', { class: 'block-title' }, title), note != null && note !== '' && h('span', { class: 'block-note' }, note), extra ? h('span', { class: 'block-extra' }, extra) : null),
     body);
 }
 
@@ -3285,6 +3327,15 @@ function LiveStrip(a) {
     ToolTag(a.live.tool),
     h('span', { class: `live-text${PATHY.has(a.live.tool) ? ' mono' : ''}`, title: a.live.text }, a.live.text),
     h('span', { class: 'live-time' }, ageOf(a.live.at)));
+}
+
+/** While it is at work with no call in flight: the words it said since its latest call, whole as the state holds them. */
+function SaidStrip(a) {
+  return h('div', { key: 'live', class: 'live is-said', role: 'status' },
+    h('span', { class: 'said-mark' }, icon('said')),
+    h('span', { class: 'live-label' }, 'Said'),
+    h('span', { class: 'live-text said-words', title: a.said.text }, '“', inline(oneLine(a.said.text)), '”'),
+    h('span', { class: 'live-time' }, ageOf(a.said.at)));
 }
 
 function Outcome(a, x) {
@@ -3319,19 +3370,49 @@ function ActRow(a, x, i) {
       h('p', { class: 'act-meta' }, [x.id, x.ms != null ? msText(x.ms) : '', x.ok === true ? 'ok' : x.ok === false ? 'failed' : 'no result yet', x.at ? new Date(x.at).toLocaleTimeString() : ''].filter(Boolean).join(' · '))));
 }
 
+/** What a thought of the log is labelled: Claude Code's live view of the thinking, which may be a summary. */
+const THOUGHT_LABEL = 'Thinking, as Claude Code shows it';
+
+/** A step's words in the log: what it said, quoted in italics after a speech mark; or its thinking, dimmer, under its label. Long ones fold. */
+function WordRow(a, kind, w) {
+  const key = `word|${a.id}|${kind}|${w.at}|${w.step}`;
+  const isThought = kind === 'thought';
+  const long = w.text.length > 420 || w.text.split('\n').length > 6;
+  const text = isThought ? h('p', { class: 'word-text' }, w.text, w.isCut ? '…' : '') : h('p', { class: 'word-text' }, '“', inline(w.text), w.isCut ? '…' : '', '”');
+  return h('div', { key, class: `act-word is-${kind}` },
+    h('span', { class: 'word-mark' }, icon(isThought ? 'thought' : 'said')),
+    h('div', { class: 'word-body' },
+      isThought && h('span', { class: 'word-label' }, THOUGHT_LABEL),
+      Folded(key, long, text)),
+    h('span', { class: 'act-time', title: w.at ? new Date(w.at).toLocaleString() : '' }, ageOf(w.at)));
+}
+
+/** "Calls only · With their words": what an agent's Activity lists, kept for every drawer. */
+function WordsToggle() {
+  const set = on => { ui.actWords = on; store.set('actView', on ? 'words' : 'calls'); renderNow(); };
+  const Toggle = (on, label) => h('button', { key: label, type: 'button', class: ui.actWords === on ? 'on' : '', 'aria-pressed': ui.actWords === on ? 'true' : 'false', onClick: () => set(on) }, h('span', null, label));
+  return h('div', { class: 'seg-toggle seg-sm', role: 'group', 'aria-label': 'Activity shows' }, Toggle(false, 'Calls only'), Toggle(true, 'With their words'));
+}
+
+/**
+ * Its log, newest first: each tool call (it opens on all of it) and, unless
+ * "Calls only" is picked, what it said between them and its thinking as
+ * Claude Code showed it, as its file holds them.
+ */
 function ActivityBlock(a, f) {
   let body;
+  const hasWords = !!f.data && f.data.words.length > 0;
   if (!f.data) {
     body = f.status === 'error'
       ? h('div', { class: 'diff-err' }, icon('alert'), h('span', null, f.error), h('button', { class: 'btn btn-xs', type: 'button', onClick: () => { agentFiles.delete(a.fileId); renderNow(); } }, 'Retry'))
       : h('div', { class: 'act-wait' }, h('span', { class: 'sk sk-line' }), h('span', { class: 'sk sk-line short' }));
   } else {
-    const rows = f.data.activity.slice().reverse();
-    body = rows.length ? h('div', { class: 'acts' }, rows.map((x, i) => ActRow(a, x, i))) : h('p', { class: 'muted small' }, 'No tool calls yet.');
+    const log = logOf(f.data, ui.actWords).reverse();
+    body = log.length ? h('div', { class: 'acts' }, log.map((e, i) => (e.kind === 'call' ? ActRow(a, e.call, i) : WordRow(a, e.kind, e.word)))) : h('p', { class: 'muted small' }, 'No tool calls yet.');
   }
   const n = f.data ? f.data.activity.length : 0;
   // the file keeps an agent's newest 14 calls
-  return Block('activity', 'Activity', n >= 14 ? `the newest ${n}` : n ? plural(n, 'tool call') : '', body);
+  return Block('activity', 'Activity', n >= 14 ? `the newest ${n}` : n ? plural(n, 'tool call') : '', body, hasWords ? WordsToggle() : null);
 }
 
 function AgentDrawer(id) {
@@ -3369,8 +3450,8 @@ function AgentDrawer(id) {
         a.stop && a.stop.can && StopAgent(a, 'btn btn-sm stop-drawer')),
       a.stop && !a.stop.can && a.stop.why && h('p', { key: 'stopwhy', class: 'stop-why' }, a.stop.why),
       NeedsList(a.id),
-      // its call in flight, unless a need above already shows that very call
-      a.live && !(IX.needsBy.get(a.id) || []).length && LiveStrip(a),
+      // its call in flight, unless a need above already shows that very call; else its words since its latest call
+      a.live ? !(IX.needsBy.get(a.id) || []).length && LiveStrip(a) : a.said && SaidStrip(a),
       task && Block('task', 'Task', a.isTaskCut && !file ? 'cut short: the whole of it is on its way' : '', Folded(`task|${a.id}`, task.length > 360 || task.split('\n').length > 6, h('p', { class: 'task-text' }, task))),
       todos.length > 0 && Block('todos', 'Todos', doneOf(todos), h('ul', { class: 'items' }, todos.map((t, i) => Item(`${i}:${t.text}`, t.status, t.text, t.doing)))),
       result && Block('result', a.id === 'main' ? 'Latest answer' : st === 'failed' ? 'Result · failed' : 'Result', a.endedAt ? agoText(a.endedAt) : '', Folded(`result|${a.id}`, result.length > 600 || result.split('\n').length > 10, Markdown(result))),
