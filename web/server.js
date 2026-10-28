@@ -270,6 +270,7 @@ function handle(req, res) {
   if (route.startsWith('/gitdiff/')) return written(res, route.slice('/gitdiff/'.length), 'gitdiffs', '.diff', 'git diff')
   if (route.startsWith('/message/')) return written(res, route.slice('/message/'.length), 'messages', '.md', 'message')
   if (route.startsWith('/agent/')) return written(res, route.slice('/agent/'.length), 'agents', '.json', 'agent file', JSON_TYPE)
+  if (route === '/timeline') return written(res, 'timeline', '.', '.json', 'timeline', JSON_TYPE) // Org's Timeline, timeline.json beside the state
   if (route === '/favicon.ico') return res.writeHead(204).end()
   send(res, 404, 'not found\n')
 }
