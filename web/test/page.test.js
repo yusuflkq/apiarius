@@ -532,8 +532,9 @@ test('the sample`s own figures, activity and files, as the mod`s builder writes 
   assert.equal(feed.length, Math.min(10, SAMPLE.activity.length))
   assert.deepEqual(feed.map(r => r.k), SAMPLE.activity.slice(0, 10).map(x => x.id))
   assert.equal(flat(textOf(feed[0])), 'reviewer asked you: Which routes should skip the limiter? waiting 2m')
-  // the newest ten hold builder's force-push auto mode refused (the linter's failed call is older: its mark is checked below, with the refused ones)
-  assert.match(flat(textOf(feed.find(r => /denied/.test(textOf(r))))), /^builder ran Push the limiter ⊘ ?denied 13m$/)
+  // the newest ten hold three things builder and reviewer said between their calls; builder's force-push auto mode refused is older now (its mark, and the linter's failed call's, are checked below with the refused ones)
+  assert.equal(feed.filter(r => r.p.class.includes('is-said')).length, 3)
+  assert.equal(feed.filter(r => /denied/.test(textOf(r))).length, 0)
   const files = p.view('FilesSection()')
   assert.match(flat(textOf(find(files, 'sec-head')[0])), new RegExp(`^Files ${SAMPLE.files.filter(f => !f.isOutside).length} Changes$`))
   assert.equal(flat(textOf(find(files, 'file-row')[0])), 'src/ rateLimit.ts shared +7 −1 19m')
@@ -1586,4 +1587,80 @@ test('Recent activity says a refused call was "⊘ denied" (auto mode) or "⊘ b
   // an agent's own conversation keeps its compaction
   p.run(`pickMember("${RESEARCHER}")`)
   assert.equal(lines().length, 1)
+})
+
+// ---- what the agents say between their calls
+
+test('the drawer`s Activity lays an agent`s words and its thinking between its calls, newest first: each word quoted in italics after a speech mark, the thought dimmer under its label; "Calls only" leaves them out, kept for every drawer', async () => {
+  const storage = {}
+  const p = page({ hash: `#/now/agent/${BUILDER}`, storage })
+  p.load(SAMPLE)
+  const drawer = () => p.view('Drawer()')
+  drawer()
+  await settle()
+  const log = () => [...find(drawer(), 'acts')[0].c].map(one => one.p.class.split(' ').filter(c => c !== 'open').join(' '))
+  // newest first: npm test, the words since bench.js, bench.js, the words and the thought after the push, ...
+  assert.deepEqual(log(), ['act', 'act-word is-said', 'act-word is-said', 'act-word is-said', 'act', 'act-word is-said', 'act-word is-thought', 'act is-fail', 'act-word is-said', 'act', 'act-word is-said', 'act', 'act-word is-said'])
+  const words = find(drawer(), 'act-word')
+  assert.match(flat(textOf(words[0])), /^“ ?Running the limiter tests without REDIS_URL ?, as you asked\. ?” \d+m$/)
+  assert.equal(find(words[0], 'code').length, 1)
+  assert.equal(find(words[0], 'word-mark').length, 1)
+  const thought = words.find(one => one.p.class.includes('is-thought'))
+  assert.match(flat(textOf(thought)), /^Thinking, as Claude Code shows it Auto mode refused the force-push/)
+  // the switch, at Activity's head: with their words by default
+  const toggle = () => find(drawer(), 'seg-sm')[0]
+  assert.deepEqual([...toggle().c].map(b => [flat(textOf(b)), b.p.class]), [['Calls only', ''], ['With their words', 'on']])
+  click(toggle().c[0])
+  assert.deepEqual(log(), ['act', 'act', 'act is-fail', 'act', 'act'])
+  assert.equal(storage['agent-deck:actView'], '"calls"')
+  // kept: another page starts on Calls only
+  const again = page({ hash: `#/now/agent/${BUILDER}`, storage })
+  again.load(SAMPLE)
+  again.view('Drawer()')
+  await settle()
+  assert.equal(find(again.view('Drawer()'), 'act-word').length, 0)
+  click(toggle().c[1])
+  assert.equal(find(drawer(), 'act-word').length, 8)
+  // an agent with no words has no switch
+  p.open(`{ kind: "agent", id: "${TESTER}" }`)
+  p.view('Drawer()')
+  await settle()
+  assert.equal(find(drawer(), 'seg-sm').length, 0)
+  assert.equal(find(drawer(), 'act-word').length, 0)
+})
+
+test('an agent at work with no call in flight: its card, its row on Org and its drawer show its latest words in italics after a speech mark; a call in flight shows instead', async () => {
+  const words = "The tests share one Redis mock that's never reset. Let me clear it in `beforeEach`."
+  const between = s => {
+    s.needs = s.needs.filter(n => n.agent !== BUILDER)
+    Object.assign(s.agents.find(a => a.id === BUILDER), { status: 'running', needs: 0, live: null, said: { text: words, at: NOW - 30_000 } })
+  }
+  const p = page({ hash: `#/now/agent/${BUILDER}` })
+  p.load(sample(between))
+  const card = () => find(p.view('AgentsSection()'), 'run-card').find(c => flat(textOf(c)).startsWith('builder'))
+  assert.equal(find(card(), 'said-words').length, 1)
+  assert.match(flat(textOf(find(card(), 'run-now')[0])), /^“ ?The tests share one Redis mock that's never reset\. Let me clear it in beforeEach ?\. ?”$/)
+  const strip = find(p.view('Drawer()'), 'live')
+  assert.deepEqual([...strip].map(s => s.p.class), ['live is-said'])
+  assert.match(flat(textOf(strip[0])), /^Said “ ?The tests share one Redis mock .* ?” now$/)
+  assert.match(flat(textOf(p.view(`AgentRow(IX.byId.get("${BUILDER}"))`))), /builder “ ?The tests share one Redis mock/)
+  // a call begun since shows instead, as before
+  p.load(sample(s => { between(s); s.now += 1000; Object.assign(s.agents.find(a => a.id === BUILDER), { said: null, live: { tool: 'Bash', text: 'npm test', at: NOW } }) }))
+  assert.equal(find(card(), 'said-words').length, 0)
+  assert.deepEqual([...find(p.view('Drawer()'), 'live')].map(s => s.p.class), ['live'])
+})
+
+test('Recent activity holds what the agents said among their calls, newest first: "builder said “…”" in italics, with no outcome; the sample`s newest ten hold three', () => {
+  const p = page()
+  p.load(SAMPLE)
+  const rows = find(p.view('ActivitySection()'), 'ra-row')
+  const said = rows.filter(r => r.p.class.includes('is-said'))
+  assert.equal(said.length, 3)
+  assert.match(flat(textOf(said[0])), /^builder said “ ?Running the limiter tests without REDIS_URL ?, as you asked\. ?” \d+m$/)
+  assert.match(flat(textOf(said[1])), /^reviewer said “ ?Checking the window math first, then how Retry-After rounds\. ?” \d+m$/)
+  assert.equal(flat(textOf(find(said[0], 'outcome')[0])), '')
+  assert.equal(find(said[0], 'ra-said').length, 1)
+  // a click opens its agent
+  click(said[1])
+  assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: REVIEWER })
 })
