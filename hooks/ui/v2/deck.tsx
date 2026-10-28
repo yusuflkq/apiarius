@@ -11,7 +11,8 @@
  *
  * Each tab is a Button with its digit as its hotkey, so it presses while the
  * pane has the keyboard; Enter presses the focused one. Inspect and Help are
- * sections of Settings, so the header carries no keys of its own.
+ * sections of Settings; the header's one key is All sessions (`s`, ./sessions:
+ * every session on this machine, listed over the tab).
  *
  * Pure: Kit, the state, its lazy files, the deck model and DashActions come
  * from the hooks module.
