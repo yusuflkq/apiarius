@@ -356,6 +356,34 @@ test('a SendMessage that wakes a finished agent is one message row, no spawn: th
   expect(data.agents.filter(one => one.name === 'red').length).toBe(1)
 })
 
+test('an agent`s SendMessage that wakes a finished agent comes to it in an envelope (<agent-message from="…">): still one row, from that agent, in its own words, whether the resume comes inside the send or with no send the deck saw', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  world(on, saved)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.prompt.submit(typed('Have alice and bob talk'))
+  await $.turn.start({ text: 'Have alice and bob talk', turnId: 't1' })
+  await $.agent.spawn(spawnOf('alice', 'Wait for a message, then reply.'))
+  await $.agent.spawn(spawnOf('bob', 'Greet alice.'))
+  await $.turn.complete({ turnId: 'turn-alice', answer: 'Nothing came.', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-alice' })
+  await clock.advance(2000)
+
+  // bob's send to alice, finished, resumes her inside the send, its words in their envelope
+  resuming.run = () => $.agent.spawn({ ...spawnOf('alice', '<agent-message from="agent-bob">\nhi alice from bob\n</agent-message>'), resume: { agentId: 'agent-alice' } })
+  await $.session.send({ to: 'agent-alice', text: 'hi alice from bob', origin: { kind: 'model' }, agentId: 'agent-bob' } as never)
+  await clock.advance(2000)
+  await $.turn.complete({ turnId: 'turn-alice-2', answer: 'Replied.', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-alice' })
+  // Claude Code brings her back with bob's words in their envelope, and no send the deck saw
+  await $.agent.spawn({ ...spawnOf('alice', '<agent-message from="agent-bob">\nare you there?\n</agent-message>'), resume: { agentId: 'agent-alice' } })
+  await clock.advance(2000)
+
+  const data = lastOf(saved)
+  expect(data.messages.filter(one => one.to === 'agent-alice' && one.kind === 'message').map(one => [one.from, one.text])).toEqual([
+    ['agent-bob', 'hi alice from bob'],
+    ['agent-bob', 'are you there?'],
+  ])
+})
+
 test('Claude Code`s notifications are rows from Claude Code to you, as it sent them (a type the deck does not know too); those that ask something are needs, each taken down when what it waits on moves', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []

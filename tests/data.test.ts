@@ -950,3 +950,18 @@ test('a delivery`s envelope comes off with the sender it names; the send it echo
   expect(M.echoOf(data, 'fixer-2', 'Something else', NOW)).toBeUndefined()
   expect(M.echoOf(data, 'fixer-2', '<agent-message from="main"></agent-message>', NOW)).toBeUndefined()
 })
+
+test('a delivery waits for its receiver`s next tool round, past a long call: while its envelope names the very sender it echoes that sender`s send up to 15 minutes on; one from anyone else, or with no sender named, only within 20 seconds', () => {
+  const data = M.emptyData(NOW)
+  const alice = M.newAgent('agent-alice', 'agent', '', NOW - 60_000, { status: 'running', parentId: M.MAIN, description: 'alice' })
+  const bob = M.newAgent('agent-bob', 'agent', '', NOW - 60_000, { status: 'running', parentId: M.MAIN, description: 'bob' })
+  data.agents.push(alice, bob)
+  const sent = M.addMessage(data, { from: 'agent-alice', to: 'agent-bob', kind: 'message', text: 'hi bob from alice', at: NOW })
+  // bob reads it 22 seconds on, after a 20-second sleep
+  expect(M.echoOf(data, 'agent-bob', '<agent-message from="agent-alice">\nhi bob from alice\n</agent-message>', NOW + 22_000)).toBe(sent)
+  expect(M.echoOf(data, 'agent-bob', '<agent-message from="agent-alice">\nhi bob from alice\n</agent-message>', NOW + 14 * 60_000)).toBe(sent)
+  expect(M.echoOf(data, 'agent-bob', '<agent-message from="agent-alice">\nhi bob from alice\n</agent-message>', NOW + 16 * 60_000)).toBeUndefined()
+  // another sender's words, or none named: the 20 seconds alone
+  expect(M.echoOf(data, 'agent-bob', '<agent-message from="main">\nhi bob from alice\n</agent-message>', NOW + 22_000)).toBeUndefined()
+  expect(M.echoOf(data, 'agent-bob', 'hi bob from alice', NOW + 22_000)).toBeUndefined()
+})
