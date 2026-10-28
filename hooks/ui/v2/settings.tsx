@@ -359,7 +359,7 @@ function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): R
 export const TAB_HELP: readonly (readonly [string, string, string])[] = [
   ['1', 'Dashboard', 'what needs you, the agents at work, the figures, the plan, recent activity and files'],
   ['2', 'Chat', 'the session as a group chat: pick Everyone or one agent, and your words go to the one picked, or @name another'],
-  ['3', 'Org', 'who started whom: each agent under the one that started it'],
+  ['3', 'Org', 'who started whom: each agent under the one that started it; or the Timeline, each agent’s work, waits on you and idle time over the run'],
   ['4', 'Changes', 'git’s diff of each changed file, and the agents’ own edits'],
   ['5', 'Settings', 'Inspect, the avatar style, the web page and this help'],
 ]

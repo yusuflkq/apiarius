@@ -26,6 +26,13 @@
  * permission check allows each TaskStop and CronDelete but the watcher's,
  * which it would ask you about.
  *
+ * For Org's Timeline, as Claude Code reports a run: the Orchestrator's three
+ * turns with idle between them (your prompt starts the first, tester's
+ * task notification the last), its own calls (its board, the agents it
+ * starts, TaskStop, the Workflow); researcher's and reviewer's searches;
+ * tester's test run held on your permission for a minute and a half;
+ * reviewer idle between its turns until builder's message woke it.
+ *
  * Plain TypeScript that Node runs as it is (no `claude-code` import), so the
  * fixture's generator can load it.
  */
@@ -118,6 +125,14 @@ function call(data: DeckData, agent: DeckAgent, id: string, tool: string, input:
   M.endTool(agent, id, ok, at + ms)
 }
 
+/** An agent's reads and searches, one a `[minutes ago, tool, target]`, each `ms` long: the ticks on its lane. */
+function looks(data: DeckData, agent: DeckAgent, prefix: string, list: readonly (readonly [number, 'Read' | 'Grep' | 'Glob', string])[], ms = 400) {
+  list.forEach(([minutes, tool, target], i) => {
+    const input = tool === 'Read' ? { file_path: `${ROOT}\\${target.replace(/\//g, '\\')}` } : { pattern: target, path: `${ROOT}\\src` }
+    call(data, agent, `${prefix}${i}`, tool, input, ago(minutes), ms)
+  })
+}
+
 /** An edit an agent made, with its patch. */
 function edit(data: DeckData, agent: DeckAgent, one: { id: string; tool: string; path: string; at: number; added: number; removed: number; patch: string; isNew?: boolean }) {
   const made: DeckEdit = { id: one.id, agent: agent.id, tool: one.tool, path: one.path, abs: /^[A-Za-z]:\\/.test(one.path) ? one.path : `${ROOT}\\${one.path.replace(/\//g, '\\')}`, at: one.at, added: one.added, removed: one.removed, patch: one.patch, isNew: one.isNew === true }
@@ -157,7 +172,7 @@ export function v2Session(): V2Session {
   // you asked; the main loop's turn runs since
   M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'prompt', text: PROMPT, at: ago(40) })
   M.noteGoal(data, 'goal', { text: PROMPT, origin: 'composer', at: ago(40) })
-  M.noteMainTurn(data, 'turn-7c1e', ago(40))
+  M.noteMainTurn(data, 'turn-1a0f', ago(40))
 
   // the plan, as Claude made it: approved (ExitPlanMode), its own TodoWrite list, its task board, a Workflow's phases
   M.noteApproved(data, APPROVED, M.MAIN, ago(38))
@@ -177,6 +192,7 @@ export function v2Session(): V2Session {
     ['2', 'Write the sliding-window limiter', 'Writing the limiter'],
     ['3', 'Review the limiter', 'Reviewing the limiter'],
   ] as const) {
+    call(data, main, `toolu_01Task${id}`, 'TaskCreate', { subject, description: subject, activeForm: form }, ago(36.2) + Number(id) * 3000, 150)
     M.noteBoard(data, main, 'TaskCreate', { subject, description: subject, activeForm: form }, { task: { id, subject } }, ago(36))
   }
   M.noteBoard(data, main, 'TaskUpdate', { taskId: '1', status: 'completed', owner: 'researcher' }, { success: true }, ago(30))
@@ -197,14 +213,38 @@ export function v2Session(): V2Session {
     model: 'claude-haiku-4-5-20251001',
     at: ago(35),
   })
+  // the Orchestrator's Agent call waits on its foreground agent until it hands back
+  call(data, main, 'toolu_01SpRes', 'Agent', { description: 'Map the API routes', subagent_type: 'Explore' }, ago(35), 4 * 60_000)
   call(data, researcher, 'toolu_01ResG1', 'Grep', { pattern: 'router\\.(get|post)', path: `${ROOT}\\src` }, ago(34), 900)
   call(data, researcher, 'toolu_01ResR1', 'Read', { file_path: `${ROOT}\\src\\app.ts` }, ago(33), 300)
+  // more calls than the deck keeps whole (14): the timeline keeps each one's start
+  looks(data, researcher, 'toolu_01ResL', [
+    [34.8, 'Glob', 'src/**/*.ts'],
+    [34.6, 'Read', 'src/routes/index.ts'],
+    [34.45, 'Read', 'src/routes/health.ts'],
+    [34.3, 'Read', 'src/routes/metrics.ts'],
+    [33.8, 'Read', 'src/routes/users.ts'],
+    [33.6, 'Read', 'src/routes/orders.ts'],
+    [33.45, 'Read', 'src/routes/admin.ts'],
+    [33.3, 'Grep', 'app\\.use\\('],
+    [32.8, 'Grep', 'throttle|rateLimit'],
+    [32.6, 'Read', 'src/auth.ts'],
+    [32.4, 'Read', 'src/middleware/index.ts'],
+    [32.2, 'Read', 'package.json'],
+    [32.0, 'Grep', 'ioredis'],
+    [31.8, 'Read', 'src/redis.ts'],
+    [31.6, 'Glob', 'tests/**/*.ts'],
+    [31.4, 'Read', 'README.md'],
+  ])
   M.noteResult(data, researcher, 'Found 14 public routes, all mounted in `src/app.ts` after `auth()`. No limiter exists. The Redis client (`ioredis`) is already a dependency.', ago(31), 'handback')
   Object.assign(researcher, { status: 'completed', endedAt: ago(31), tokensIn: 41_000, tokensOut: 2_100, cacheRead: 88_000, requests: 6 })
 
   // the Orchestrator's answer to you: long, so its whole text is a lazy file
   M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'answer', text: ANSWER, at: ago(30) })
   M.noteMainAnswer(main, ANSWER)
+  // its first turn ends with that answer; the next starts within the minute
+  M.endMainTurn(data, 'turn-1a0f', ago(30))
+  M.noteMainTurn(data, 'turn-3b5d', ago(29.5))
 
   // builder: in the background, at work; tester and the nameless linter under it
   const builder = spawn(data, {
@@ -219,6 +259,7 @@ export function v2Session(): V2Session {
     model: 'claude-sonnet-4-5',
     at: ago(29),
   })
+  call(data, main, 'toolu_01SpBld', 'Agent', { description: 'Write the limiter and its stores', run_in_background: true }, ago(29), 1_200)
   Object.assign(builder, { tokensIn: 96_000, tokensOut: 14_800, cacheRead: 402_000, requests: 18 })
   call(data, builder, 'toolu_01BldW1', 'Write', { file_path: `${ROOT}\\src\\rateLimit.ts` }, ago(27), 400)
   edit(data, builder, {
@@ -299,7 +340,17 @@ export function v2Session(): V2Session {
       3,
     ),
   })
-  call(data, tester, 'toolu_01TstB1', 'Bash', { command: 'npm test -- rateLimit --runInBand', description: 'Run the limiter tests' }, ago(16), 8_400)
+  looks(data, tester, 'toolu_01TstL', [
+    [21.6, 'Read', 'src/rateLimit.ts'],
+    [21.2, 'Glob', 'tests/**/*.test.ts'],
+    [19.6, 'Read', 'tests/app.test.ts'],
+  ])
+  // its test run waits on your permission for a minute and a half, then runs
+  const tests = { command: 'npm test -- rateLimit --runInBand', description: 'Run the limiter tests' }
+  M.beginTool(data, tester, M.activityOf('toolu_01TstB1', 'Bash', tests, ROOT, ago(16)))
+  M.notePending(data, M.permissionOf({ id: 'toolu_01TstB1', tool: 'Bash', input: tests, agentId: IDS.tester, at: ago(15.9) }, ROOT))
+  M.dropPending(data, 'toolu_01TstB1')
+  M.endTool(tester, 'toolu_01TstB1', true, ago(14.4))
   M.noteResult(data, tester, 'Wrote 6 tests in `tests/rateLimit.test.ts`; all pass against the in-memory store.', ago(12), 'handback')
   Object.assign(tester, { status: 'completed', endedAt: ago(12), tokensIn: 22_000, tokensOut: 3_900, cacheRead: 51_000, requests: 5 })
   M.addMessage(data, { from: M.ENGINE, to: M.MAIN, kind: 'task', title: 'completed', text: 'Agent "Write the limiter tests" completed', at: ago(12), agent: IDS.tester })
@@ -332,6 +383,12 @@ export function v2Session(): V2Session {
     model: 'claude-haiku-4-5-20251001',
     at: ago(26),
   })
+  call(data, main, 'toolu_01SpDoc', 'Agent', { description: 'Update the API docs' }, ago(26), 5 * 60_000)
+  looks(data, docs, 'toolu_01DocL', [
+    [25.6, 'Read', 'docs/api.md'],
+    [25.1, 'Grep', 'Retry-After'],
+    [24.4, 'Read', 'src/rateLimit.ts'],
+  ])
   call(data, docs, 'toolu_01DocE1', 'Edit', { file_path: `${ROOT}\\docs\\api.md` }, ago(23), 250)
   edit(data, docs, {
     id: 'toolu_01DocE1',
@@ -357,8 +414,13 @@ export function v2Session(): V2Session {
     model: 'claude-haiku-4-5-20251001',
     at: ago(25),
   })
+  call(data, main, 'toolu_01SpSct', 'Agent', { description: 'Check the Redis client options', run_in_background: true }, ago(25), 1_100)
   call(data, scout, 'toolu_01SctF1', 'WebFetch', { url: 'https://github.com/redis/ioredis#readme' }, ago(24), 1_800)
+  call(data, main, 'toolu_01StopSct', 'TaskStop', { task_id: IDS.scout }, ago(22), 600)
   Object.assign(scout, { status: 'killed', endedAt: ago(22), tokensIn: 6_000, tokensOut: 300, cacheRead: 9_000, requests: 2 })
+  // the Orchestrator's second turn ends once docs handed back; tester's task notification (12 minutes ago) starts its third
+  M.endMainTurn(data, 'turn-3b5d', ago(20.5))
+  M.noteMainTurn(data, 'turn-7c1e', ago(12))
 
   // reviewer: a teammate, at work; builder and it write to each other (SendMessage, titled by its summary)
   const reviewer = spawn(data, {
@@ -375,8 +437,17 @@ export function v2Session(): V2Session {
     at: ago(10),
   })
   Object.assign(reviewer, { tokensIn: 30_000, tokensOut: 2_200, cacheRead: 64_000, requests: 4 })
+  // reviewer reads its task, then idles between its turns (TeammateIdle) until builder's message wakes it
+  M.noteIdle(data, { id: IDS.reviewer, name: 'reviewer' }, ago(9.6))
 
   M.addMessage(data, { from: IDS.builder, to: IDS.reviewer, kind: 'message', title: 'Limiter ready for review', text: '`src/rateLimit.ts` and both stores are in. The tests pass against the in-memory store; the Redis one needs a server.', at: ago(9), isDelivered: true })
+  M.reopen(reviewer, ago(8.9))
+  looks(data, reviewer, 'toolu_01RevB', [
+    [8.6, 'Read', 'src/rateLimit.ts'],
+    [6.9, 'Grep', 'Retry-After'],
+    [4.8, 'Read', 'tests/rateLimit.test.ts'],
+    [3.4, 'Grep', 'Math\\.ceil'],
+  ])
   M.addMessage(data, { from: IDS.reviewer, to: IDS.builder, kind: 'message', title: 'Two questions on the window', text: 'Why a sliding log rather than a sliding-window counter? And does `Retry-After` round up?', at: ago(7), isDelivered: true })
   M.addMessage(data, { from: IDS.builder, to: 'ops-bot', kind: 'message', title: 'A Redis for CI', text: 'Can CI start a Redis service for the limiter tests?', at: ago(6) })
 

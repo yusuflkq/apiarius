@@ -22,6 +22,30 @@
       "ms": 250
     },
     {
+      "id": "toolu_01TstL0",
+      "at": 1792012284000,
+      "tool": "Read",
+      "target": "src/rateLimit.ts",
+      "ok": true,
+      "ms": 400
+    },
+    {
+      "id": "toolu_01TstL1",
+      "at": 1792012308000,
+      "tool": "Glob",
+      "target": "tests/**/*.test.ts",
+      "ok": true,
+      "ms": 400
+    },
+    {
+      "id": "toolu_01TstL2",
+      "at": 1792012404000,
+      "tool": "Read",
+      "target": "tests/app.test.ts",
+      "ok": true,
+      "ms": 400
+    },
+    {
       "id": "toolu_01TstB1",
       "at": 1792012620000,
       "tool": "Bash",
@@ -29,7 +53,7 @@
       "command": "npm test -- rateLimit --runInBand",
       "description": "Run the limiter tests",
       "ok": true,
-      "ms": 8400
+      "ms": 96000
     }
   ],
   "edits": [

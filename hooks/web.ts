@@ -19,6 +19,7 @@ import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
 import { othersLineOf, type SessionsV2 } from './sessions'
+import { timelineOf, type V2Timeline } from './timeline'
 import type { UsageInfo } from './ui/types'
 
 // The state file (web/CONTRACT.md, v1).
@@ -1442,11 +1443,19 @@ export type V2Files = {
   gitDiff: (id: string) => string | null
   /** A cut message's whole text while the deck holds it whole; null once only its file has it (the pane's `loadMessage` reads that one). */
   message: (id: string) => string | null
+  /** Org's Timeline (./timeline; timeline.json, /timeline) of the v2 state `state`; null where there is none (a sample without one). */
+  timeline: (state: WebStateV2) => V2Timeline | null
 }
 
 /** The live deck's lazy files, made from its model when asked for. */
 export function v2FilesOf(data: DeckData, gitDiffs: GitDiffs = new Map()): V2Files {
+  // the timeline built last, for the state it was built for: a screen draws one state many times
+  let made: { state: WebStateV2; timeline: V2Timeline } | null = null
   return {
+    timeline: state => {
+      if (made?.state !== state) made = { state, timeline: timelineOf(data, state) }
+      return made.timeline
+    },
     gitDiff: id => [...gitDiffs.values()].find(one => one.id === id)?.text ?? null,
     agent: id => {
       const agent = data.agents.find(one => isTreeAgent(one) && webIdOf(one.id) === id)
@@ -1467,9 +1476,11 @@ export function v2FilesFrom(files: {
   patches: Readonly<Record<string, string>>
   messages: Readonly<Record<string, string>>
   gitDiffs?: Readonly<Record<string, string>>
+  /** The sample's timeline (web/fixtures/v2/timeline.json), its times moved as the state's were. */
+  timeline?: V2Timeline | null
 }): V2Files {
   const own = <T>(record: Readonly<Record<string, T>>, id: string): T | null => (Object.hasOwn(record, id) ? (record[id] ?? null) : null)
-  return { agent: id => own(files.agents, id), patch: id => own(files.patches, id), message: id => own(files.messages, id), gitDiff: id => own(files.gitDiffs ?? {}, id) }
+  return { agent: id => own(files.agents, id), patch: id => own(files.patches, id), message: id => own(files.messages, id), gitDiff: id => own(files.gitDiffs ?? {}, id), timeline: () => files.timeline ?? null }
 }
 
 // Git's own diff of each uncommitted file (gitdiffs/<id>.diff): what the mod read, by path.

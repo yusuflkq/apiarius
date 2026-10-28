@@ -167,6 +167,40 @@ export type DeckAgent = {
    * with its caller's turn.
    */
   background?: boolean
+  /** What the timeline keeps of its loop beyond the fields above (hooks/lane.ts); absent before its first call, run or wait. */
+  lane?: DeckLane
+}
+
+/**
+ * What Org's Timeline keeps of one loop that the model's own fields let go
+ * of (hooks/lane.ts), every time one Claude Code reported: its tool calls
+ * past the newest 14, the runs it ended before it ran again (the
+ * Orchestrator's: its turns), and its waits on you.
+ */
+export type DeckLane = {
+  /** When its first recorded call started, ms since the epoch: `calls` count from it. */
+  t0: number
+  /** The tools its calls used, each once, in the order first used: a call names its tool by place. */
+  tools: string[]
+  /**
+   * Its tool calls, oldest first, the newest 400: each `[start, length,
+   * tool, how]`, its start in ms after `t0`, its length in ms (-1 until its
+   * end came), its tool's place in `tools`, and how it went (1 ok, 0 failed,
+   * -1 not known yet).
+   */
+  calls: [number, number, number, number][]
+  /** Its runs that ended before it ran again (a message woke it, a teammate's next turn), or the Orchestrator's turns that ended: `[from, to]`, ms since the epoch, oldest first, the newest 100. */
+  runs: [number, number][]
+  /** When it last ran again after an end: its run now started then. Absent before. */
+  woke?: number
+  /**
+   * Its waits on you, oldest first, the newest 100: a call held on you
+   * (`held`: a question, a permission prompt, until the call ended) or
+   * Claude Code's notification (`note`: until its loop moved on, as
+   * `M.clearNeeds` takes it down). `to` absent while it waits, or when its
+   * end never came.
+   */
+  waits: { kind: 'held' | 'note'; from: number; to?: number; call?: string }[]
 }
 
 /**
@@ -481,6 +515,8 @@ export type DeckView2 = {
   cleared: string[]
   /** When "Clear finished" was pressed last; 0 for never. */
   clearedAt: number
+  /** What Org shows: its Timeline once picked (`timeline`); absent, the chart (a patch of `chart` goes back to it, and leaves the field out). */
+  orgView?: 'chart' | 'timeline'
   /**
    * Inspect over the tab, as earlier builds had it: always false now, as
    * Inspect is a section of Settings. A view saved with `true`, or a patch

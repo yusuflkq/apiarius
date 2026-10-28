@@ -146,7 +146,7 @@ function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, a
   if (view.page !== '') return agentPage(kit, state, files, view.page, actions)
   if (v2.tab === 'chat') return chatTab(kit, state, files, v2, actions, isDemo)
   if (v2.tab === 'changes') return changesTab(kit, state, files, model, actions, isDemo)
-  if (v2.tab === 'org') return orgTab(kit, state, actions, org)
+  if (v2.tab === 'org') return orgTab(kit, state, actions, org, { files, ...(v2.orgView ? { orgView: v2.orgView } : {}) })
   if (v2.tab === 'settings') return settingsTab(kit, state, model, actions)
   return nowTab(kit, state, view.collapsed, actions, () => actions.setV2View({ tab: 'org' }), v2.openFolds)
 }

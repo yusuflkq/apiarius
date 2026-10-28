@@ -23,18 +23,25 @@
  * The agents "Clear finished" hid are left out (W.shownStateOf): their
  * pages, Changes and Inspect keep them.
  *
+ * Its head carries the Chart · Timeline switch (`org:show:chart`,
+ * `org:show:timeline`): the Timeline (./timeline) is each agent's lane over the
+ * run. The pick stays in the view (`DeckView2.orgView`) through reloads.
+ *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
 import type { RenderElement } from 'claude-code'
 
-import { agentKeyOf, shownStateOf, type V2AgentRow, type WebStateV2 } from '../../web'
+import type { DeckView2 } from '../../../types'
+import { agentKeyOf, shownStateOf, type V2AgentRow, type V2Files, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { agentRowsOf } from './dashModel'
 import { quiet, sectionHead } from './look'
 import { orgChart, orgChartKeysOf, orgChartPlanOf } from './orgChart'
 import { orgPropsOf, type OrgAgent } from './orgLayout'
 import { orgLineOf, orgTree, treeRowsOf } from './orgTree'
+import { P } from './palette'
 import { num, plural } from './text'
+import { shownTimelineOf, timelineKeysOf, timelineView } from './timeline'
 
 /** How Org stands on this surface: whether its chart's Client failed here (the tree shows instead), and the agent whose page was opened last (the chart marks it). */
 export type OrgSpot = { isDown: boolean; selected: string | null }
@@ -69,20 +76,46 @@ export function isClientOn(kit: Kit, org: OrgSpot): boolean {
   return kit.surface === 'desktop' && kit.Client !== undefined && !org.isDown
 }
 
-/** The rows the focus moves among on Org: the chart's names (W.agentKeyOf), or the tree's agents; none over the Client, whose cards are its own. */
-export function orgFocusKeys(kit: Kit, whole: WebStateV2, org: OrgSpot): string[] {
+/** What Org shows beside the state: the view's pick (Chart, or the Timeline) and the lazy files the Timeline comes from. */
+export type OrgShows = { orgView?: DeckView2['orgView']; files?: V2Files }
+
+/** The rows the focus moves among on Org: the chart's names (W.agentKeyOf), or the tree's agents; none over the Client, whose cards are its own; the Timeline's lanes' names. */
+export function orgFocusKeys(kit: Kit, whole: WebStateV2, org: OrgSpot, shows: OrgShows = {}): string[] {
+  if (shows.orgView === 'timeline') return timelineKeysOf(shownTimelineOf(shows.files?.timeline(whole) ?? null, whole))
   const state = shownStateOf(whole)
   const plan = orgChartPlanOf(kit, chartAgentsOf(state))
   if (plan) return orgChartKeysOf(plan)
   return isClientOn(kit, org) ? [] : treeRowsOf(state).map(({ row }) => agentKeyOf(row.id))
 }
 
-/** Org: its head, then the chart where the pane draws it, else the chart's Client, else the tree. */
-export function orgTab(kit: Kit, whole: WebStateV2, actions: DashActions, org: OrgSpot): RenderElement {
+/** The Chart · Timeline switch at the head's right: two plain Buttons, the one shown lit. */
+function orgSwitch(kit: Kit, isTimeline: boolean, actions: DashActions): RenderElement {
+  const { Box, Text, Button } = kit
+  return (
+    <Box key="org:switch" flexDirection="row" columnGap={1}>
+      <Button key="org:show:chart" label="Chart" plain dimColor={isTimeline} onPress={() => actions.setV2View({ orgView: 'chart' })} />
+      <Text color={P.muted3}>·</Text>
+      <Button key="org:show:timeline" label="Timeline" plain dimColor={!isTimeline} onPress={() => actions.setV2View({ orgView: 'timeline' })} />
+    </Box>
+  )
+}
+
+/** Org: its head with the Chart · Timeline switch, then the Timeline once picked; else the chart where the pane draws it, else the chart's Client, else the tree. */
+export function orgTab(kit: Kit, whole: WebStateV2, actions: DashActions, org: OrgSpot, shows: OrgShows = {}): RenderElement {
   const { Box, Client } = kit
+  const isTimeline = shows.orgView === 'timeline'
+  const switcher = orgSwitch(kit, isTimeline, actions)
+  if (isTimeline) {
+    return (
+      <Box key="org:tab" flexDirection="column" gap={1}>
+        {sectionHead(kit, 'Timeline', null, switcher)}
+        {timelineView(kit, shownTimelineOf(shows.files?.timeline(whole) ?? null, whole), actions)}
+      </Box>
+    )
+  }
   // the agents Clear finished hid are no part of the chart
   const state = shownStateOf(whole)
-  const head = sectionHead(kit, 'Org chart', agentRowsOf(state).length)
+  const head = sectionHead(kit, 'Org chart', agentRowsOf(state).length, switcher)
   const agents = chartAgentsOf(state)
   const plan = orgChartPlanOf(kit, agents)
   if (plan) {

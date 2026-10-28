@@ -680,6 +680,49 @@ button.kpi:focus-visible { outline-offset: -2px; }
 .seg-toggle button:focus-visible { outline-offset: -2px; }
 .seg-toggle .ic { width: 14px; height: 14px; }
 
+/* --------------------------------------------------------- org timeline */
+
+.page-org.view-timeline { height: auto; padding-bottom: 56px; }
+.tl { position: relative; padding: 16px 16px 12px; overflow: hidden; }
+.tl-loading { min-height: 120px; display: grid; place-items: center; }
+.tl-svg { display: block; overflow: visible; font: 400 12px/1 var(--font); user-select: none; }
+.tl-row { fill: transparent; cursor: pointer; }
+.tl-row:hover, .tl-row.on { fill: var(--hover); }
+.tl-name text { fill: var(--fg-2); font-size: 12.5px; }
+.tl-name:hover text, .tl-name:focus-visible text { fill: var(--fg); text-decoration: underline; }
+.tl-name:focus { outline: none; }
+.tl-grid { stroke: #232323; }
+.tl-axis { fill: var(--muted-2); font: 11px var(--mono); }
+.tl-now { stroke: var(--run-text); stroke-dasharray: 3 3; }
+.tl-now-word { fill: var(--run-text); }
+.tl-work { fill: var(--run); pointer-events: none; }
+.tl-wait { fill: var(--wait); pointer-events: none; }
+.tl-idle { stroke: var(--muted-3); stroke-width: 2; stroke-dasharray: 2 3; pointer-events: none; }
+.tl-tick { stroke: #bfdbfe; stroke-opacity: 0.6; pointer-events: none; }
+.tl-tick-fail { stroke: var(--fail-text); stroke-width: 1.5; pointer-events: none; }
+.tl-done { fill: var(--done); pointer-events: none; }
+.tl-failed { stroke: var(--fail); stroke-width: 2.2; stroke-linecap: round; fill: none; pointer-events: none; }
+.tl-stopped { fill: var(--idle); pointer-events: none; }
+.tl-you { fill: var(--fg); pointer-events: none; }
+.tl-spawn { stroke: var(--muted-2); stroke-dasharray: 1 2; fill: none; pointer-events: none; }
+.tl-msg { stroke: var(--fg-2); stroke-width: 1.4; fill: none; pointer-events: none; }
+.tl-arrowhead { fill: var(--muted); }
+.tl-msg-word { fill: var(--fg-2); font-size: 10.5px; pointer-events: none; }
+.tl-bg-head { fill: var(--muted-2); font-size: 10px; letter-spacing: 0.6px; }
+.tl-bg-name { fill: var(--muted); font: 12px var(--mono); }
+.tl-bg { fill: #64748b; }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
+.tl-key { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.tl-sw { flex: none; overflow: visible; }
+.tl-tip {
+  position: absolute; z-index: 5; left: 0; top: 0; max-width: 360px; padding: 7px 10px;
+  border: 1px solid var(--border-strong); border-radius: 7px; background: #1d1d1d; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  font-size: 12px; line-height: 1.45; color: var(--fg); pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.08s;
+}
+.tl-tip.on { opacity: 1; visibility: visible; }
+.tl-tip-head { overflow-wrap: anywhere; }
+.tl-tip-sub { font: 11px var(--mono); color: var(--muted); }
+
 /* ------------------------------------------------------------- org chart */
 
 .org-view {

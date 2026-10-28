@@ -65,6 +65,8 @@ function reset() {
   try { sample = JSON.parse(fs.readFileSync(SAMPLE, 'utf8')) } catch { return } // half-saved: the next change resets
   const by = isStatic ? 0 : Date.now() - sample.now
   try { for (const name of ['agents', 'patches', 'messages', 'gitdiffs']) copyFolder(name, by) } catch (err) { console.error(`dev: ${err.message}`); return }
+  // Org's Timeline: its times count from its startedAt, so moving that (and its now) moves it all
+  try { fs.writeFileSync(path.join(dir, 'timeline.json'), `${JSON.stringify(shift(JSON.parse(fs.readFileSync(path.join(LAZY, 'timeline.json'), 'utf8')), by))}\n`) } catch { fs.rmSync(path.join(dir, 'timeline.json'), { force: true }) }
   state = by ? shift(sample, by) : sample
   stash = null
   resetSessions()

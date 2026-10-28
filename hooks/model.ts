@@ -38,6 +38,7 @@ import type {
 import * as AV from '../web/avatars.mjs'
 import { baseName, dur, firstLine, hash, oneLine, plural, trunc, truncStart } from './format'
 import type { GitState } from './git'
+import * as L from './lane'
 
 export const MAIN = 'main'
 export const YOU = 'you'
@@ -241,6 +242,12 @@ export function defaultView2(): DeckView2 {
   return { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, cleared: [], clearedAt: 0 }
 }
 
+/** What Org shows, as `view.v2.orgView` keeps it: the Timeline once picked, else the chart (the field left out). */
+function orgViewOf(value: unknown, current: DeckView2['orgView']): Pick<DeckView2, 'orgView'> {
+  const view = value === 'timeline' || value === 'chart' ? value : current
+  return view === 'timeline' ? { orgView: 'timeline' } : {}
+}
+
 /** The agents `view.v2.cleared` keeps at most, the oldest dropped first. */
 const CLEARED_KEPT = 500
 
@@ -308,6 +315,7 @@ export function view2With(current: DeckView2, patch: unknown): DeckView2 {
     isInspectOpen: false,
     cleared: Array.isArray(p.cleared) ? [...new Set(p.cleared.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-CLEARED_KEPT) : current.cleared,
     clearedAt: typeof p.clearedAt === 'number' && Number.isFinite(p.clearedAt) && p.clearedAt >= 0 ? p.clearedAt : current.clearedAt,
+    ...orgViewOf(p.orgView, current.orgView),
   }
 }
 
@@ -784,6 +792,7 @@ export function activityOf(id: string, tool: string, input: Record<string, unkno
 }
 
 export function beginTool(data: DeckData, agent: DeckAgent, activity: DeckActivity) {
+  L.noteCall(agent, activity)
   agent.current = activity
   agent.tools += 1
   agent.toolCounts[activity.tool] = (agent.toolCounts[activity.tool] ?? 0) + 1
@@ -800,6 +809,7 @@ export function beginTool(data: DeckData, agent: DeckAgent, activity: DeckActivi
 
 export function endTool(agent: DeckAgent, id: string, ok: boolean, now: number) {
   const entry = agent.recent.find(one => one.id === id)
+  L.noteCallEnd(agent, id, entry, ok, now)
   if (entry) {
     entry.ok = ok
     entry.ms = now - entry.at
@@ -1086,6 +1096,7 @@ function healAgent(agent: DeckAgent): DeckAgent {
   if (typeof loose.background !== 'boolean') delete agent.background
   if (num(loose.todosAt) === undefined) delete agent.todosAt
   if (num(loose.resumedAt) === undefined) delete agent.resumedAt
+  L.healLane(agent)
   if (!['handback', 'answer', 'call', 'stop'].includes(String(loose.resultVia))) delete agent.resultVia
   // the words earlier builds made up for an Agent call that started no agent: no result of any agent's
   if (agent.resultVia === undefined && agent.kind !== 'main' && typeof agent.answer === 'string' && MADE_UP_RESULT.test(agent.answer)) delete agent.answer
@@ -1462,6 +1473,7 @@ export function noteNeeds(data: DeckData, note: { kind: string; text: string; at
   const waiting = waitingCallOf(data, note.kind, note.text, named)
   const agent = waiting?.agent ?? named
   const title = trunc(oneLine(note.title ?? ''), 120)
+  L.noteWait(agentOf(data, agent ?? MAIN), { kind: 'note', from: note.at, ...(waiting ? { call: waiting.call } : {}) })
   const needs: DeckNeeds = {
     text: trunc(oneLine(note.text), NOTE_CHARS),
     kind: note.kind,
@@ -1602,6 +1614,7 @@ export function pendingOf(data: DeckData, id?: string): DeckPending[] {
 
 /** Notes a call held on the person, once per call (a newer note of it replaces the older); the newest 20 are kept. */
 export function notePending(data: DeckData, item: DeckPending): DeckPending {
+  L.noteWait(agentOf(data, item.agentId), { kind: 'held', from: item.at, call: item.id })
   data.pending = [...data.pending.filter(one => one.id !== item.id), item]
   if (data.pending.length > LIMITS.pending) data.pending.splice(0, data.pending.length - LIMITS.pending)
   return item
@@ -1754,6 +1767,7 @@ export function questionResultOf(result: unknown): { answers: Record<string, str
 /** The main loop's turn `turnId` started at `at` (its `turn.start`, never a subagent's): the one Stop turn ends. */
 export function noteMainTurn(data: DeckData, turnId: string, at: number): void {
   if (turnId !== '') {
+    L.noteTurnStart(data, agentOf(data, MAIN), at)
     data.mainTurnId = turnId
     data.mainTurnAt = at
   } else {
@@ -1762,9 +1776,10 @@ export function noteMainTurn(data: DeckData, turnId: string, at: number): void {
   }
 }
 
-/** The main loop's turn `turnId` ended: no turn of its runs (one that ended out of order leaves a newer one in place). */
-export function endMainTurn(data: DeckData, turnId: string): void {
+/** The main loop's turn `turnId` ended (at `at`, when told: the timeline keeps the turn): no turn of its runs (one that ended out of order leaves a newer one in place). */
+export function endMainTurn(data: DeckData, turnId: string, at?: number): void {
   if (data.mainTurnId !== undefined && turnId !== '' && data.mainTurnId !== turnId) return
+  L.noteTurnEnd(data, agentOf(data, MAIN), at)
   delete data.mainTurnId
   delete data.mainTurnAt
 }
@@ -1997,6 +2012,7 @@ export function seeLoop(data: DeckData, id: string, now: number): DeckAgent {
 export function reopen(agent: DeckAgent, at?: number): boolean {
   if (agent.kind === 'main' || agent.kind === 'you' || agent.kind === 'peer') return false
   if (!isEnded(agent.status) && agent.status !== 'idle') return false
+  L.noteWake(agent, at ?? agent.lastAt)
   agent.status = 'running'
   delete agent.endedAt
   delete agent.resultVia
@@ -2306,6 +2322,7 @@ function mergeInto(row: DeckAgent, twin: DeckAgent): void {
   if (twin.todosAt !== undefined) row.todosAt = twin.todosAt
   if (twin.todo) row.todo = twin.todo
   if (twin.model && !row.model) row.model = twin.model
+  L.mergeLanes(row, twin)
   if (twin.answer !== undefined && row.answer === undefined) {
     row.answer = twin.answer
     if (twin.resultVia) row.resultVia = twin.resultVia
@@ -2416,6 +2433,8 @@ export function noteSpawn(data: DeckData, spawn: Spawn): { agent: DeckAgent; isN
   agent.parentId = run ? run.caller : spawn.parentId
   if (spawn.model) agent.model = spawn.model
   if (spawn.background !== undefined) agent.background = spawn.background
+  // a known agent spawned again after its run ended: the timeline keeps that run
+  if (!isNew && agent.endedAt !== undefined) L.noteWake(agent, spawn.at)
   agent.status = 'running'
   delete agent.endedAt
   if (isNew) agent.startedAt = spawn.at

@@ -34,6 +34,7 @@ const repo = path.resolve(here, '..', '..')
 const { v2Session } = await import(pathToFileURL(path.join(repo, 'tests', 'v2session.ts')).href)
 const { sampleSessions } = await import(pathToFileURL(path.join(repo, 'tests', 'v2sessions.ts')).href)
 const W = await import(pathToFileURL(path.join(repo, 'hooks', 'web.ts')).href)
+const T = await import(pathToFileURL(path.join(repo, 'hooks', 'timeline.ts')).href)
 
 const { data, git, usage, now, sessionId, cwd, answerable, gitDiffs } = v2Session()
 const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, answerable, gitDiffs)
@@ -45,6 +46,7 @@ for (const file of W.agentFilesOf(data)) files.set(`v2/agents/${file.id}.json`, 
 for (const patch of W.newPatchesOf(data, new Set())) files.set(`v2/patches/${patch.id}.diff`, patch.text)
 for (const file of W.newMessageFilesOf(data)) files.set(`v2/messages/${file.id}.md`, file.text)
 for (const diff of W.newGitDiffsOf(gitDiffs, new Set())) files.set(`v2/gitdiffs/${diff.id}.diff`, diff.text)
+files.set('v2/timeline.json', T.timelineTextOf(T.timelineOf(data, state)))
 // every session on the sample's machine: the registry, then each other session's deck
 const sessions = sampleSessions()
 files.set('sessions.v2.json', `${JSON.stringify({ now: sessions.now, me: sessions.me, entries: sessions.entries, view: sessions.view }, null, 2)}\n`)

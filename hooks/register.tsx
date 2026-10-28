@@ -37,6 +37,7 @@ import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from './ui/v2/chat'
 import { openRowsFor, paneRowsFor } from './ui/v2/fit'
 import { newRenderMemo } from './renderMemo'
+import * as T from './timeline'
 import { bandOf, deckView, type DeckActions } from './views'
 import * as W from './web'
 
@@ -764,6 +765,13 @@ async function writeWeb($: EngineInterface): Promise<void> {
       web.gitDiffsWritten.add(diff.id)
     }
     const now = await $.clock.now()
+    // Org's Timeline (timeline.json), before the state: written again when it says something new, its time aside
+    const timeline = T.timelineTextOf(T.timelineOf(data, v2Of(now)))
+    const timelineKey = timeline.replace(/^\{"v":2,"now":\d+,/, '')
+    if (timelineKey !== timelineWritten.key) {
+      await $.fs.write(`${web.dir}/timeline.json`, timeline)
+      timelineWritten.key = timelineKey
+    }
     // a question the page may answer is one whose race runs in this module: none after a reload
     const text = JSON.stringify({ ...W.webStateOf(data, view, git, usage, now, sessionId, cwd, new Set(askers.keys())), v2: v2Of(now) })
     // both builds' times left out: a state that says nothing new is not written again
@@ -782,6 +790,9 @@ async function writeWeb($: EngineInterface): Promise<void> {
     }
   }
 }
+
+/** Org's Timeline as timeline.json was last written, its time left out: it is written again only when it changed. */
+const timelineWritten = { key: '' }
 
 /** The session's own process id, read as the parent of a node it starts (no shell between); '' when node cannot say. */
 async function enginePidOf($: EngineInterface): Promise<string> {
@@ -845,6 +856,7 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
   redraw($)
   web.lastKey = ''
   web.agentFiles.clear()
+  timelineWritten.key = ''
   void readGitDiffs($)
   await writeWeb($)
   if (web.pid === '') web.pid = await enginePidOf($)
@@ -2417,6 +2429,7 @@ async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2
   const patches: Record<string, string> = {}
   const messages: Record<string, string> = {}
   const gitDiffsRead: Record<string, string> = {}
+  let timeline: T.V2Timeline | null = null
   const read = async (path: string, keep: (text: string) => void) => {
     try {
       keep(await $.fs.read(path))
@@ -2437,8 +2450,9 @@ async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2
     ...state.changes.edits.filter(edit => isSafe(edit.id)).map(edit => read(`${dir}/patches/${edit.id}.diff`, text => (patches[edit.id] = text.replace(/\r\n/g, '\n')))),
     ...state.chat.filter(row => row.isCut && isSafe(row.id)).map(row => read(`${dir}/messages/${row.id}.md`, text => (messages[row.id] = text.replace(/\r\n/g, '\n').trimEnd()))),
     ...state.changes.files.flatMap(file => (file.diffId !== null && isSafe(file.diffId) ? [file.diffId] : [])).map(id => read(`${dir}/gitdiffs/${id}.diff`, text => (gitDiffsRead[id] = text.replace(/\r\n/g, '\n')))),
+    read(`${dir}/timeline.json`, text => (timeline = T.timelineFromText(text, by))),
   ])
-  return W.v2FilesFrom({ agents, patches, messages, gitDiffs: gitDiffsRead })
+  return W.v2FilesFrom({ agents, patches, messages, gitDiffs: gitDiffsRead, timeline })
 }
 
 /**
@@ -3641,7 +3655,7 @@ export const register: Register = on => {
       } else {
         const main = M.agentOf(data, M.MAIN)
         // no turn of the main loop's runs now: nothing for Stop turn to end
-        M.endMainTurn(data, e.turnId)
+        M.endMainTurn(data, e.turnId, now)
         // a relay turn passed your words on to a subagent (or failed to, which its ack says): nothing of it is an answer to you
         const isRelay = endRelay($, e.turnId, e.answer)
         if (main) {
