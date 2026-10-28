@@ -174,7 +174,7 @@ function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, a
   const { view } = model
   const v2 = view.v2
   if (model.isSessionsOpen) return sessionsPage(kit, state.sessions, actions)
-  if (view.page !== '') return agentPage(kit, state, files, view.page, actions)
+  if (view.page !== '') return agentPage(kit, state, files, view.page, actions, v2.activityView)
   if (v2.tab === 'chat') return chatTab(kit, state, files, v2, actions, isDemo)
   if (v2.tab === 'changes') return changesTab(kit, state, files, model, actions, isDemo)
   if (v2.tab === 'org') return orgTab(kit, state, actions, org, { files, ...(v2.orgView ? { orgView: v2.orgView } : {}) })

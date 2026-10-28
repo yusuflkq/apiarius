@@ -1,9 +1,11 @@
 /**
  * An agent's page, over the tab it was opened from (`b` goes back): who it
  * is (its avatar, name, status, how long, its model and tokens, who started
- * it), its live call verbatim, what it waits on you for (./needs), its task
- * (the prompt it was given), its own TodoWrite list, its result, then on
- * demand its Activity (its latest tool calls, from its lazy agent file,
+ * it), its live call verbatim (else, while it is at work, the words it said
+ * since its latest call), what it waits on you for (./needs), its task (the
+ * prompt it was given), its own TodoWrite list, its result, then on demand
+ * its Activity (a log of its latest tool calls and, by default, the words
+ * and thinking between them, from its lazy agent file,
  * `v2Files.agent(fileId)`) and its edits (its own patches), and "Chat with
  * <agent>": Chat with that agent picked in its member list, so the
  * composer's words go to it with no `@`.
@@ -13,15 +15,18 @@
  */
 import type { RenderElement } from 'claude-code'
 
+import type { DeckView2 } from '../../../types'
 import { clean } from '../../format'
 import { MAIN } from '../../model'
-import type { V2AgentFile, V2AgentRow, V2Files, WebStateV2 } from '../../web'
+import { agentLogOf, type V2AgentFile, type V2AgentRow, type V2Files, type V2LogEntry, type V2Word, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { composerKey } from './chat'
+import { isAiry, listBox, listRow } from './dash'
 import { editBlock, titleOf, type Budget } from './diffs'
-import { AVATAR, avatar, glyph, keyButton, quiet, sectionHead, statusPill } from './look'
+import { AVATAR, avatar, glyph, keyButton, quiet, sectionHead, statusPill, svgOf, wordMark } from './look'
 import { needsSection } from './needs'
 import { P } from './palette'
+import { rule } from './parts'
 import { pageStop } from './stop'
 import { ago, flat, foldText, msText, num } from './text'
 
@@ -45,8 +50,8 @@ function toggler(id: string, part: string, actions: DashActions): () => void {
   }
 }
 
-/** The agent page for row `id`; a quiet line and Back when the state holds no such agent. */
-export function agentPage(kit: Kit, state: WebStateV2, files: V2Files, id: string, actions: DashActions): RenderElement {
+/** The agent page for row `id`; a quiet line and Back when the state holds no such agent. `activityView` is the view's pick for its Activity ("Calls only", else with their words). */
+export function agentPage(kit: Kit, state: WebStateV2, files: V2Files, id: string, actions: DashActions, activityView?: DeckView2['activityView']): RenderElement {
   const { Box } = kit
   const row = state.agents.find((one): one is V2AgentRow => one.row === 'agent' && one.id === id)
   const back = <Box flexDirection="row">{keyButton(kit, 'key:b', 'b', '← Back', () => actions.back(), false)}</Box>
@@ -64,12 +69,12 @@ export function agentPage(kit: Kit, state: WebStateV2, files: V2Files, id: strin
       {back}
       {head(kit, state, row, actions)}
       {pageStop(kit, row, actions)}
-      {row.live ? liveLine(kit, state, row) : null}
+      {row.live ? liveLine(kit, state, row) : row.said ? saidLine(kit, state, row) : null}
       {needsSection(kit, state, state.needs.filter(need => need.agent === row.id), actions, 'page')}
       {textPart(kit, row, 'task', 'Task', file?.task || row.task, false, actions)}
       {todosPart(kit, file?.todos ?? row.todos)}
       {textPart(kit, row, 'result', row.id === MAIN ? 'Latest answer' : 'Result', file?.result || row.result, true, actions)}
-      {activityPart(kit, state, row, file, actions)}
+      {activityPart(kit, state, row, file, activityView, actions)}
       {editsPart(kit, state, files, row, file, actions)}
       {chatLine(kit, row, actions)}
     </Box>
@@ -141,20 +146,51 @@ function liveLine(kit: Kit, state: WebStateV2, row: V2AgentRow): RenderElement {
   )
 }
 
-/** A fold's head: "▸ ACTIVITY 14", a plain Button that opens or folds it. */
-function foldHead(kit: Kit, row: V2AgentRow, part: string, title: string, count: number | null, actions: DashActions): RenderElement {
+/** Its words since its latest call, while it is at work with no call in flight: quoted in italics after a speech mark (cut at a few rows), then how long ago. */
+function saidLine(kit: Kit, state: WebStateV2, row: V2AgentRow): RenderElement | null {
+  const { Box, Text } = kit
+  const said = row.said
+  if (!said) return null
+  const words = foldText(`“${clean(said.text).trim()}”`, kit.columns - 3, SAID_ROWS)
+  return (
+    <Box key="page:said" flexDirection="row" columnGap={1}>
+      <Box flexShrink={0}>{wordMark(kit, 'said', P.runText)}</Box>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text wrap="wrap">
+          <Text italic color={P.fg2}>
+            {words.text}
+          </Text>
+          <Text color={P.muted2}>{`  ${ago(said.at, state.now)}`}</Text>
+        </Text>
+      </Box>
+    </Box>
+  )
+}
+
+/** The rows the words under the head show at most. */
+const SAID_ROWS = 3
+
+/** A fold's head: "▸ ACTIVITY 14", a plain Button that opens or folds it; a control at the right. */
+function foldHead(kit: Kit, row: V2AgentRow, part: string, title: string, count: number | null, actions: DashActions, right: RenderElement | null = null): RenderElement {
   const { Box, Text, Button } = kit
   const open = isOpen(row.id, part)
   const label = `${open ? '▾' : '▸'} ${title.toUpperCase()}${count !== null ? ` ${count}` : ''}`
   return (
-    <Box flexDirection="row">
-      <Button key={`page:fold:${part}`} label={label} plain dimColor={kit.surface !== 'terminal'} onPress={toggler(row.id, part, actions)}>
-        <Text color={P.muted2}>{`${open ? '▾' : '▸'} `}</Text>
-        <Text bold color={P.muted}>
-          {title.toUpperCase()}
-        </Text>
-        {count !== null ? <Text color={P.muted2}>{` ${count}`}</Text> : null}
-      </Button>
+    <Box flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexShrink={0}>
+        <Button key={`page:fold:${part}`} label={label} plain dimColor={kit.surface !== 'terminal'} onPress={toggler(row.id, part, actions)}>
+          <Text color={P.muted2}>{`${open ? '▾' : '▸'} `}</Text>
+          <Text bold color={P.muted}>
+            {title.toUpperCase()}
+          </Text>
+          {count !== null ? <Text color={P.muted2}>{` ${count}`}</Text> : null}
+        </Button>
+      </Box>
+      {right ? (
+        <Box flexGrow={1} flexShrink={1} minWidth={0} justifyContent="flex-end">
+          {right}
+        </Box>
+      ) : null}
     </Box>
   )
 }
@@ -207,33 +243,117 @@ function todosPart(kit: Kit, todos: V2AgentRow['todos']): RenderElement | null {
   )
 }
 
-/** Its latest tool calls, from its agent file, on demand: each its outcome, the tool and what it was given, how long, when. */
-function activityPart(kit: Kit, state: WebStateV2, row: V2AgentRow, file: V2AgentFile | null, actions: DashActions): RenderElement {
-  const { Box, Text } = kit
-  const calls = file?.activity ?? []
+/** The entries of its log the page shows at most, the newest: a pane's drawing is capped, so "and n more" counts the earlier ones. */
+const MOST_LOG = 40
+
+/** The rows a word or a thought of the log shows at most. */
+const WORD_ROWS = 4
+
+/** The cells a log row's age takes at its right ("12m"). */
+const AGE = 4
+
+/** What a thought of the log is labelled: Claude Code's live view of the thinking, which may be a summary. */
+export const THOUGHT_LABEL = 'Thinking, as Claude Code shows it'
+
+/**
+ * Its log, from its agent file, on demand: each tool call (its outcome, the
+ * tool and what it was given, its lines or how long it took, when) and,
+ * unless "Calls only" is picked (`activityView`), what it said between them,
+ * quoted in italics after a speech mark, and its thinking as Claude Code
+ * showed it, dimmer, under its label; oldest first, the newest MOST_LOG. The
+ * switch at the head's right, shown while it has words, keeps the pick in
+ * the view.
+ */
+function activityPart(kit: Kit, state: WebStateV2, row: V2AgentRow, file: V2AgentFile | null, activityView: DeckView2['activityView'], actions: DashActions): RenderElement {
+  const { Box } = kit
+  const withWords = activityView !== 'calls'
+  const log = file ? agentLogOf(file, withWords) : []
+  const hasWords = (file?.words?.length ?? 0) > 0
   const open = isOpen(row.id, 'activity')
+  const shown = log.slice(-MOST_LOG)
+  const more = log.length - shown.length
+  const room = kit.columns - 4 - 2 - 2 - AGE
   return (
-    <Box key="page:activity" flexDirection="column">
-      {foldHead(kit, row, 'activity', 'Activity', calls.length, actions)}
-      {open && calls.length === 0 ? quiet(kit, file ? 'No tool calls yet.' : 'Its agent file is not to be had.') : null}
-      {open
-        ? calls.map(call => (
-            <Box key={`page:call:${call.id}`} flexDirection="row" columnGap={1}>
-              <Box flexShrink={0}>{glyph(kit, call.ok === true ? 'done' : call.ok === false ? 'failed' : 'active')}</Box>
-              <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Text wrap="truncate-end">
-                  <Text bold color={P.fg2}>
-                    {call.tool}
-                  </Text>
-                  <Text color={P.muted}>{` ${flat(call.command ?? call.target)}`}</Text>
-                </Text>
-              </Box>
-              <Box flexShrink={0}>
-                <Text color={P.muted2}>{[msText(call.ms), ago(call.at, state.now)].filter(one => one !== '').join(' · ')}</Text>
-              </Box>
-            </Box>
-          ))
-        : null}
+    <Box key="page:activity" flexDirection="column" rowGap={open && isAiry(kit) ? 1 : 0}>
+      {foldHead(kit, row, 'activity', 'Activity', log.length, actions, open && hasWords ? wordsSwitch(kit, withWords, actions) : null)}
+      {open && log.length === 0 ? quiet(kit, file ? 'No tool calls yet.' : 'Its agent file is not to be had.') : null}
+      {open && more > 0 ? quiet(kit, `and ${more} more`) : null}
+      {open && shown.length > 0 ? listBox(kit, 'page:log', shown.flatMap((entry, i) => [i > 0 ? rule(kit) : null, logRow(kit, state, entry, room)])) : null}
+    </Box>
+  )
+}
+
+/** The "Calls only · With their words" switch at Activity's head: two plain Buttons, the one shown lit; the pick stays in the view (`activityView`). */
+function wordsSwitch(kit: Kit, withWords: boolean, actions: DashActions): RenderElement {
+  const { Box, Text, Button } = kit
+  return (
+    <Box key="page:words" flexDirection="row" columnGap={1}>
+      <Button key="page:words:calls" label="Calls only" plain dimColor={withWords} onPress={() => actions.setV2View({ activityView: 'calls' })} />
+      <Text color={P.muted3}>·</Text>
+      <Button key="page:words:with" label="With their words" plain dimColor={!withWords} onPress={() => actions.setV2View({ activityView: 'words' })} />
+    </Box>
+  )
+}
+
+/** One entry of the log: a call, or a step's words. */
+function logRow(kit: Kit, state: WebStateV2, entry: V2LogEntry, room: number): RenderElement {
+  return entry.kind === 'call' ? callRow(kit, state, entry.call) : wordRow(kit, state, entry.kind, entry.word, room)
+}
+
+/** A call of the log: its outcome's glyph, the tool and what it was given; why it was refused, that it failed, an edit's lines or how long it took; when. */
+function callRow(kit: Kit, state: WebStateV2, call: V2AgentFile['activity'][number]): RenderElement {
+  const { Box, Text } = kit
+  const refused = state.activity.find(one => one.id === call.id && one.kind !== 'said')?.refused
+  const edit = state.changes.edits.find(one => one.id === call.id)
+  const how = refused ? `⊘ ${refused}` : call.ok === false ? `✕ ${msText(call.ms) || 'failed'}` : edit ? `+${edit.added} −${edit.removed}` : msText(call.ms)
+  return listRow(kit, `page:call:${call.id}`, [
+    <Box flexShrink={0}>{glyph(kit, call.ok === true ? 'done' : call.ok === false ? 'failed' : 'active')}</Box>,
+    <Box flexGrow={1} flexShrink={1} minWidth={0}>
+      <Text wrap="truncate-end">
+        <Text bold color={P.text}>
+          {call.tool}
+        </Text>
+        <Text color={P.fg2}>{` ${flat(call.command ?? call.target)}`}</Text>
+      </Text>
+    </Box>,
+    how ? (
+      <Box flexShrink={0}>
+        <Text color={refused || call.ok === false ? P.failText : P.muted2}>{how}</Text>
+      </Box>
+    ) : null,
+    <Box flexShrink={0} width={AGE} justifyContent="flex-end">
+      <Text color={P.muted2}>{ago(call.at, state.now)}</Text>
+    </Box>,
+  ])
+}
+
+/**
+ * A step's words in the log: what it said, quoted in italics after a speech
+ * mark, on a shade of its own where the surface draws one; or its thinking,
+ * dimmer, under THOUGHT_LABEL; each cut at WORD_ROWS rows; then when.
+ */
+function wordRow(kit: Kit, state: WebStateV2, kind: V2Word['kind'], word: V2Word, room: number): RenderElement {
+  const { Box, Text } = kit
+  const isThought = kind === 'thought'
+  const text = clean(word.text).trim()
+  const folded = foldText(isThought ? text : `“${text}”`, room, isThought ? WORD_ROWS - 1 : WORD_ROWS)
+  const shade = svgOf(kit) && !isThought ? { backgroundColor: P.saidBox } : {}
+  return (
+    <Box key={`page:${kind}:${word.at}:${word.step}`} flexDirection="row" columnGap={1} alignItems="flex-start" paddingX={1} paddingY={isAiry(kit) ? 1 : 0} {...shade}>
+      <Box flexShrink={0}>{wordMark(kit, kind, isThought ? P.muted2 : P.muted)}</Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+        {isThought ? (
+          <Text color={P.muted2} wrap="truncate-end">
+            {THOUGHT_LABEL}
+          </Text>
+        ) : null}
+        <Text italic color={isThought ? P.muted : P.fg2} wrap="wrap">
+          {word.isCut && !folded.isCut ? `${folded.text}…` : folded.text}
+        </Text>
+      </Box>
+      <Box flexShrink={0} width={AGE} justifyContent="flex-end">
+        <Text color={P.muted2}>{ago(word.at, state.now)}</Text>
+      </Box>
     </Box>
   )
 }

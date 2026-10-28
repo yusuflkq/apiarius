@@ -149,6 +149,8 @@ const ICON_ALT: Readonly<Record<IconName, string>> = {
   file: 'File',
   chevronRight: 'Shut',
   chevronDown: 'Open',
+  said: 'Said',
+  thought: 'Thinking',
 }
 
 /** An icon where the surface draws Svg; else `mark` in `color` (the terminal draws text alone). */
@@ -156,6 +158,14 @@ export function icon(kit: Kit, name: IconName, color: string, mark: string, px =
   const { Text } = kit
   const Svg = svgOf(kit)
   return Svg ? <Svg source={iconSvg(name, color, px)} alt={ICON_ALT[name]} width={px} height={px} /> : <Text color={color}>{mark}</Text>
+}
+
+/** The text glyph of an agent's words where the surface draws no icon (the terminal): `»` what it said, `∴` what it thought. */
+export const WORD_MARK = { said: '»', thought: '∴' } as const
+
+/** The mark of an agent's words: a speech bubble (`said`) or a cloud (`thought`) where Svg draws, else its text glyph, in `color`. */
+export function wordMark(kit: Kit, kind: 'said' | 'thought', color: string, px = 14): RenderElement {
+  return icon(kit, kind, color, WORD_MARK[kind], px)
 }
 
 /** A section's head: its title in muted capitals, a count after it, and a control at the right. */

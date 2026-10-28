@@ -51,6 +51,8 @@ export const P = {
   stepEdge: '#2e2e2e',
   /** A list row under the pointer: the web's hover wash over the pane. */
   rowHover: '#222222',
+  /** An agent's words in its log: a shade off the list's ground, so they stand apart from its calls. */
+  saidBox: '#1d1d1d',
 } as const
 
 /** `a` blended toward `b` by `t` (0 is all `a`, 1 all `b`), as hex: how the web's translucent edges flatten here. */
@@ -194,6 +196,8 @@ export type IconName =
   | 'file'
   | 'chevronRight'
   | 'chevronDown'
+  | 'said'
+  | 'thought'
 
 const ICONS: Readonly<Record<IconName, string>> = {
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
@@ -214,6 +218,9 @@ const ICONS: Readonly<Record<IconName, string>> = {
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   chevronRight: '<path d="m9 18 6-6-6-6"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  // an agent's words between its calls (a speech bubble), and its thinking as Claude Code shows it (a cloud)
+  said: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  thought: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
 }
 
 /** An icon as a whole SVG document, its strokes in `color`, `px` CSS pixels square. */

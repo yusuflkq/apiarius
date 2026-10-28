@@ -253,11 +253,22 @@ export function chipOf(state: Pick<WebStateV2, 'header'>, row: V2AgentRow): Chip
   return { text, glyph, n: todos.length > 0 ? `${done}/${todos.length}` : '' }
 }
 
-/** A card's now line: its call in flight verbatim ("Bash npm test"); else, once it is not at work, what it handed back; '' for neither. */
+/** A card's now line: its call in flight verbatim ("Bash npm test"); else, while it is at work, the words it said since its latest call, quoted; else, once it is not at work, what it handed back; '' for none. */
 export function cardLine(row: V2AgentRow): string {
   if (row.live) return flat(`${row.live.tool} ${row.live.text}`)
+  if (row.said) return quoted(row.said.text)
   if (isRunning(row.status)) return ''
   return plainLine(row.result)
+}
+
+/** Whether a card's now line is the agent's words (`said`, no call in flight), drawn in italics after a speech mark. */
+export function isSaidLine(row: V2AgentRow): boolean {
+  return !row.live && row.said !== undefined
+}
+
+/** An agent's words as the deck quotes them: on one line, in curly quotes. */
+export function quoted(text: string): string {
+  return `“${flat(text)}”`
 }
 
 /** "haiku-4.5 · 48k": the model and the tokens spent, these left out until there are some. */
@@ -365,8 +376,11 @@ export function verbOf(tool: string, hasTarget: boolean): string {
 /** How a call stands beside its row: running, waiting on you, failed, or how long it took; and its mark ('' for none). */
 export type Outcome = { text: string; tone: 'live' | 'wait' | 'fail' | 'quiet'; mark: string }
 
-/** One row of Recent activity: who, what it did to what, how it went, when. */
-export type ActivityRow = { key: string; agent: string; name: string; avatar: number | null; verb: string; text: string; outcome: Outcome; at: number }
+/** One row of Recent activity: who, what it did to what, how it went, when; `isSaid` for its words ("said", the words quoted, no outcome). */
+export type ActivityRow = { key: string; agent: string; name: string; avatar: number | null; verb: string; text: string; outcome: Outcome; at: number; isSaid?: true }
+
+/** A said row's outcome: none. */
+const NO_OUTCOME: Outcome = { text: '', tone: 'quiet', mark: '' }
 
 function outcomeOf(state: Pick<WebStateV2, 'agents'>, call: V2Activity): Outcome {
   // refused, as Inspect's permission decisions say: by a hook, or by auto mode, a rule or you
@@ -379,7 +393,7 @@ function outcomeOf(state: Pick<WebStateV2, 'agents'>, call: V2Activity): Outcome
   return { text: 'running', tone: 'live', mark: '◐' }
 }
 
-/** The newest `most` tool calls of every agent, newest first, each keyed by its call's id (one key once). */
+/** The newest `most` tool calls and words of every agent, newest first, each keyed by its id (one key once). */
 export function activityRows(state: WebStateV2, most = 10): ActivityRow[] {
   const calls = callsOf(state)
     .map((call, i) => ({ call, i }))
@@ -392,15 +406,17 @@ export function activityRows(state: WebStateV2, most = 10): ActivityRow[] {
     const n = seen.get(base) ?? 0
     seen.set(base, n + 1)
     const text = flat(call.text || '')
+    const isSaid = call.kind === 'said'
     return {
       key: n === 0 ? base : `${base}:${n}`,
       agent: call.agent,
       name: flat(call.agentName || row?.title || call.agent),
       avatar: row ? row.avatar : null,
-      verb: verbOf(call.tool, text !== ''),
-      text,
-      outcome: outcomeOf(state, call),
+      verb: isSaid ? 'said' : verbOf(call.tool, text !== ''),
+      text: isSaid ? quoted(text) : text,
+      outcome: isSaid ? NO_OUTCOME : outcomeOf(state, call),
       at: call.at,
+      ...(isSaid ? { isSaid: true as const } : {}),
     }
   })
 }

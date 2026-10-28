@@ -54,6 +54,7 @@ import {
   fileGroupsOf,
   figuresOf,
   fitPath,
+  isSaidLine,
   modelLine,
   rowOf,
   runShort,
@@ -66,7 +67,7 @@ import {
   type TickPart,
 } from './dashModel'
 import { rowsOf } from './fit'
-import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf } from './look'
+import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf, wordMark } from './look'
 import { cardStop, cardStopCells } from './stop'
 import { P, mix, toneOf, type IconName } from './palette'
 import {
@@ -92,6 +93,7 @@ import {
   tickParts,
   tickTexts,
   widthFor,
+  wordParts,
   wrapAdvanceOf,
   type Fold,
 } from './parts'
@@ -121,13 +123,15 @@ export function section(kit: Kit, key: string, head: RenderElement, body: Render
 
 // The agents.
 
-/** One card before it is drawn: its agent, its step box, and its now line laid into lines (the row it sits in pads each card to its tallest). */
-type CardModel = { row: V2AgentRow; chip: Chip; lines: TickPart[][] }
+/** One card before it is drawn: its agent, its step box, and its now line laid into lines (the row it sits in pads each card to its tallest); `isSaid` when that line is its words. */
+type CardModel = { row: V2AgentRow; chip: Chip; lines: TickPart[][]; isSaid: boolean }
 
 function cardOf(kit: Kit, state: WebStateV2, row: V2AgentRow, width: number): CardModel {
   const said = cardLine(row)
-  const room = Math.max(6, width - chromeOf(kit) - plainSlack(kit))
-  return { row, chip: chipOf(state, row), lines: said ? wrapTicks(said, room, 2, wrapAdvanceOf(kit)) : [] }
+  const isSaid = isSaidLine(row)
+  // its words sit after their speech mark, in Text: no Button's slack
+  const room = Math.max(6, width - chromeOf(kit) - (isSaid ? glyphCells(kit) + 1 : plainSlack(kit)))
+  return { row, chip: chipOf(state, row), lines: said ? wrapTicks(said, room, 2, wrapAdvanceOf(kit)) : [], isSaid }
 }
 
 /**
@@ -220,7 +224,7 @@ function agentCard(kit: Kit, state: WebStateV2, card: CardModel, width: number, 
     <Box key={`card:${row.id}`} flexDirection="column" width={width} borderStyle="round" borderColor={tone.edge} hover={{ borderColor: tone.hot }} paddingX={1} rowGap={isAiry(kit) ? 1 : 0}>
       {cardHead(kit, row, inner, open, cardStop(kit, row, actions))}
       {cardStep(kit, row, card.chip, inner, open)}
-      {cardBody(kit, row, card.lines, lines, open)}
+      {card.isSaid ? cardWords(kit, card.lines, lines) : cardBody(kit, row, card.lines, lines, open)}
       {cardFoot(kit, row, inner, state.now, open)}
     </Box>
   )
@@ -312,6 +316,21 @@ function cardBody(kit: Kit, row: V2AgentRow, lines: readonly TickPart[][], rows:
       {lines.length > 0
         ? lines.map((parts, i) => pressText(kit, `card:now:${row.id}:${i}`, tickParts(kit, parts, P.muted), open, true))
         : pressText(kit, `card:now:${row.id}:0`, [<Text color={P.muted3}>—</Text>], open, true)}
+    </Box>
+  )
+}
+
+/** A card's now line while it is the agent's words: the speech mark, then the words in italics in `rows` lines (Text, as a desktop's Button would draw them plain). */
+function cardWords(kit: Kit, lines: readonly TickPart[][], rows: number): RenderElement {
+  const { Box, Text } = kit
+  return (
+    <Box flexDirection="row" columnGap={1} height={rows} overflow="hidden">
+      <Box flexShrink={0}>{wordMark(kit, 'said', P.runText)}</Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+        {lines.map(parts => (
+          <Text wrap="truncate-end">{wordParts(kit, parts, P.muted)}</Text>
+        ))}
+      </Box>
     </Box>
   )
 }
@@ -441,7 +460,7 @@ const OUTCOME_HUE: Readonly<Record<ActivityRow['outcome']['tone'], string>> = { 
 const OUTCOME = 9
 const TIME = 4
 
-/** Recent activity: the newest ten calls of every agent, newest first, in a bordered list; folded, its head and the newest call. */
+/** Recent activity: the newest ten calls and words of every agent, newest first, in a bordered list; folded, its head and the newest. */
 function activitySection(kit: Kit, state: WebStateV2, actions: DashActions, width: number, fold: Fold): RenderElement {
   const head = foldHead(kit, fold, 'Recent activity', null, actions)
   if (!fold.isOpen) return section(kit, 'now:activity', head, null, width)
@@ -461,7 +480,8 @@ function activitySection(kit: Kit, state: WebStateV2, actions: DashActions, widt
  * One call, as the web's row: the agent's face, its name (bold where the
  * surface draws a Button's Text), the verb dim, what it was given; how it
  * went and when, dim, in fixed columns at the right. The name and the words
- * are plain Buttons that open the agent's page.
+ * are plain Buttons that open the agent's page. An agent's words ("said")
+ * are quoted in italics, in Text of their own, with no outcome.
  */
 function activityRow(kit: Kit, state: WebStateV2, row: ActivityRow, actions: DashActions, width: number): RenderElement {
   const { Box, Text, Button } = kit
@@ -493,9 +513,15 @@ function activityRow(kit: Kit, state: WebStateV2, row: ActivityRow, actions: Das
       </Box>
       {text ? (
         <Box flexShrink={1} minWidth={0}>
-          <Button key={`now:acttext:${row.key}`} label={text} plain onPress={open}>
-            <Text color={P.fg2}>{text}</Text>
-          </Button>
+          {row.isSaid ? (
+            <Text italic color={P.fg2} wrap="truncate-end">
+              {text}
+            </Text>
+          ) : (
+            <Button key={`now:acttext:${row.key}`} label={text} plain onPress={open}>
+              <Text color={P.fg2}>{text}</Text>
+            </Button>
+          )}
         </Box>
       ) : null}
     </Box>,

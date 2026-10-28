@@ -58,7 +58,7 @@ export function treeRowsOf(state: Pick<WebStateV2, 'agents'>): { row: V2AgentRow
   return out
 }
 
-/** An agent's one line on Org: its call in flight verbatim, else what it handed back; "stopped" for one stopped with neither. */
+/** An agent's one line on Org: its call in flight verbatim, else while it is at work its words since its latest call (quoted), else what it handed back; "stopped" for one stopped with none. */
 export function orgLineOf(row: V2AgentRow): string {
   return cardLine(row) || (row.isStopped ? 'stopped' : '')
 }

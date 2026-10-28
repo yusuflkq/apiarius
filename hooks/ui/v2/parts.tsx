@@ -213,6 +213,22 @@ export function tickParts(kit: Kit, parts: readonly TickPart[], color: string): 
   )
 }
 
+/** A line of an agent's words as Text runs, every run in italics (in Text of its own, since a desktop's Button draws neither colour nor italics): its plain words in `color`, its code spans on the chip's grey. */
+export function wordParts(kit: Kit, parts: readonly TickPart[], color: string): RenderElement[] {
+  const { Text } = kit
+  return parts.map(part =>
+    part.isCode ? (
+      <Text italic color={P.fg2} backgroundColor={P.chip}>
+        {part.text}
+      </Text>
+    ) : (
+      <Text italic color={color}>
+        {part.text}
+      </Text>
+    ),
+  )
+}
+
 /** A line's parts as Text: its plain words in `color`, its code spans (backticked) on the chip's grey. */
 export function tickTexts(kit: Kit, text: string, color: string): RenderElement[] {
   return tickParts(kit, ticks(text), color)
