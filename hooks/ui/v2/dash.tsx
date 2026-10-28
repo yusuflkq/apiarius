@@ -67,6 +67,7 @@ import {
 } from './dashModel'
 import { rowsOf } from './fit'
 import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf } from './look'
+import { cardStop, cardStopCells } from './stop'
 import { P, mix, toneOf, type IconName } from './palette'
 import {
   CARD_CHROME,
@@ -217,7 +218,7 @@ function agentCard(kit: Kit, state: WebStateV2, card: CardModel, width: number, 
   const open = () => actions.openAgent(row.id)
   return (
     <Box key={`card:${row.id}`} flexDirection="column" width={width} borderStyle="round" borderColor={tone.edge} hover={{ borderColor: tone.hot }} paddingX={1} rowGap={isAiry(kit) ? 1 : 0}>
-      {cardHead(kit, row, inner, open)}
+      {cardHead(kit, row, inner, open, cardStop(kit, row, actions))}
       {cardStep(kit, row, card.chip, inner, open)}
       {cardBody(kit, row, card.lines, lines, open)}
       {cardFoot(kit, row, inner, state.now, open)}
@@ -240,14 +241,18 @@ const NAME_MIN = 11
  * dim, lit while the pointer is on the card. "Open →" stands where cards
  * this wide leave a name NAME_MIN beside it and the widest pill, and only
  * beside a name that fits whole: a long name keeps its words, not the arrow.
+ * A background agent's or a teammate's Stop (./stop `cardStop`), where
+ * Claude Code allows it, stands just before "Open →", whatever the width;
+ * "Open →" stays beside it while the name still fits whole.
  */
-function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void): RenderElement {
+function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void, stop: RenderElement | null = null): RenderElement {
   const { Box, Button, Text } = kit
   const adv = advanceOf(kit)
   const before = avatarCells(kit, AVATAR.card, true) + 1 + plainSlack(kit) + 1
   const beside = 1 + openCells(kit)
   const word = row.isStopped ? 'stopped' : toneOf(row.status).word
-  const room = inner - before - pillCells(kit, row.status) - (row.isStopped ? 1 : 0)
+  const stopCells = stop ? cardStopCells(kit, row) : 0
+  const room = inner - before - pillCells(kit, row.status) - (row.isStopped ? 1 : 0) - stopCells
   const isOpenShown = inner - before - pillCells(kit, 'starting') - beside >= NAME_MIN && cellsOf(row.title, adv) <= room - beside
   const name = cutCells(row.title, Math.max(4, isOpenShown ? room - beside : room), adv)
   return (
@@ -261,9 +266,10 @@ function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void): R
         </Button>
       </Box>
       <Box flexShrink={0}>{statusPill(kit, row.status, word)}</Box>
-      {isOpenShown ? (
-        <Box flexGrow={1} flexShrink={0} justifyContent="flex-end">
-          {openButton(kit, `card:open:${row.id}`, toneOf(row.status).pillFg, open)}
+      {isOpenShown || stop ? (
+        <Box flexGrow={1} flexShrink={0} justifyContent="flex-end" {...(stop ? { columnGap: 2 } : {})}>
+          {stop}
+          {isOpenShown ? openButton(kit, `card:open:${row.id}`, toneOf(row.status).pillFg, open) : null}
         </Box>
       ) : null}
     </Box>

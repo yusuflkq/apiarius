@@ -33,6 +33,7 @@ import { clean } from '../../format'
 import { FINISHED_FOLD } from '../../model'
 import { agentKeyOf, needKeyOf, type V2Plan, type V2Todo, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
+import { BG_FOLD, backgroundFoldOf, backgroundSection } from './background'
 import { agentsSection, figuresSection, isAiry, listsOf } from './dash'
 import { FOLD, activityFoldOf, agentsFoldOf, cardAgentsOf, figuresFoldOf, filesFoldOf, planFoldOf } from './dashModel'
 import { rowsOf } from './fit'
@@ -82,6 +83,8 @@ export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[]
     const parts: { el: RenderElement | null; isShut: boolean }[] = [
       { el: needsSection(kit, state, state.needs, actions, 'now', needCards, needLines), isShut: false },
       { el: agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg, openFolds, agentRows), isShut: shut.has(FOLD.agents) },
+      // what runs when no agent is talking (./background), only while something does or is scheduled
+      { el: backgroundSection(kit, state, actions, fold(BG_FOLD, backgroundFoldOf(state))), isShut: shut.has(BG_FOLD) },
       { el: figuresSection(kit, state, actions, fold(FOLD.figures, figuresFoldOf(state))), isShut: shut.has(FOLD.figures) },
       { el: state.plan ? planSection(kit, state.plan, state.now, actions, fold(FOLD.plan, planFoldOf(state))) : null, isShut: shut.has(FOLD.plan) },
       { el: listsOf(kit, state, actions, fold(FOLD.activity, activityFoldOf(state)), fold(FOLD.files, filesFoldOf(state))), isShut: shut.has(FOLD.activity) && shut.has(FOLD.files) },
@@ -117,7 +120,7 @@ export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[]
   const room = kit.rows
   if (room !== undefined && tallOf(parts) > room) {
     // the one pressed last first, then the agents, the figures, the plan, Recent activity and Files; folded from the last up until it fits
-    const order = [...new Set([fit.first, FOLD.agents, FOLD.figures, FOLD.plan, FOLD.activity, FOLD.files])].filter(id => id !== '' && !collapsed.includes(id))
+    const order = [...new Set([fit.first, FOLD.agents, BG_FOLD, FOLD.figures, FOLD.plan, FOLD.activity, FOLD.files])].filter(id => id !== '' && !collapsed.includes(id) && (id !== BG_FOLD || (state.background?.rows.length ?? 0) > 0))
     const shut = new Set<string>()
     for (const id of order.slice(1).reverse()) {
       shut.add(id)
