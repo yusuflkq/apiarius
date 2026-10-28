@@ -25,7 +25,7 @@ const MIN = 60_000
 
 /** The sample's lazy files of one kind (agents, patches, messages, gitdiffs), by id. */
 const lazy = kind => Object.fromEntries(fs.readdirSync(path.join(WEB, 'fixtures', 'v2', kind)).map(file => [file.replace(/\.[^.]+$/, ''), fs.readFileSync(path.join(WEB, 'fixtures', 'v2', kind, file), 'utf8')]))
-const FILES = { agent: lazy('agents'), patch: lazy('patches'), message: lazy('messages'), gitdiff: lazy('gitdiffs') }
+const FILES = { agent: lazy('agents'), patch: lazy('patches'), message: lazy('messages'), gitdiff: lazy('gitdiffs'), timeline: fs.readFileSync(path.join(WEB, 'fixtures', 'v2', 'timeline.json'), 'utf8') }
 
 const BUILDER = 'b81c6f3e2a9d4c17'
 const RESEARCHER = 'a3f9c2e1b7d4058e'
@@ -61,6 +61,7 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
   const fetch = async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
     if (url === '/cmd') return reply(200, '{"ok":true}')
+    if (url.startsWith('/timeline')) return files.timeline === undefined ? reply(404, 'no such timeline\n') : reply(200, files.timeline)
     const m = /^\/(agent|patch|message|gitdiff)\/([^?]+)/.exec(url)
     if (m) {
       const text = files[m[1]][decodeURIComponent(m[2])]
@@ -547,10 +548,10 @@ test('Org`s list: the state`s rows in its order, each a status dot, its name, it
   const rows = () => [...find(p.view('OrgPage()'), 'tree')[0].c].filter(Boolean)
   assert.deepEqual(rows().map(r => r.k), ['main', BUILDER, `fold:${BUILDER}`, REVIEWER, 'fold:main'])
   assert.deepEqual(rows().map(r => flat(textOf(r))), [
-    'Orchestrator AskUserQuestion Which store should back the limiter in production? 40m',
+    'Orchestrator AskUserQuestion Which store should back the limiter in production? 12m',
     'builder Bash npm test -- rateLimit 29m',
     '1 done · 1 failed',
-    'reviewer AskUserQuestion Which routes should skip the limiter? 10m',
+    'reviewer AskUserQuestion Which routes should skip the limiter? 8m',
     '2 done · 1 stopped',
   ])
   assert.deepEqual(rows().map(r => r.p.style['--d']), ['0', '1', '2', '1', '1'])
@@ -568,7 +569,7 @@ test('Org`s list: the state`s rows in its order, each a status dot, its name, it
   assert.deepEqual(rows().map(r => r.k), ['main', BUILDER, `fold:${BUILDER}`, 'c4d7e8f9a0b1263d', LINT, REVIEWER, 'fold:main', RESEARCHER, 'e5f6a7b8c9d0142b', 'f1e2d3c4b5a6978c'])
   // times at work run on with the clock; finished ones stand
   p.setNow(NOW + 5 * MIN)
-  assert.match(byId('main'), / 45m$/)
+  assert.match(byId('main'), / 17m$/)
   assert.match(byId(BUILDER), / 34m$/)
   assert.match(byId('c4d7e8f9a0b1263d'), / 10m$/)
   // a row opens its agent
@@ -587,7 +588,7 @@ test('Org`s chart, by default (and 3): every agent row under the one that starte
   assert.equal(p.run('route.tab'), 'org')
   assert.equal(p.run('ui.orgView'), 'chart')
   const chart = p.view('OrgPage()')
-  assert.equal(flat(textOf(find(chart, 'org-bar')[0])), '8 agents · 3 waiting on you · 1 failed · 1 stopped Chart List')
+  assert.equal(flat(textOf(find(chart, 'org-bar')[0])), '8 agents · 3 waiting on you · 1 failed · 1 stopped Chart List Timeline')
   assert.equal(find(chart, 'org-card').length, 8)
   assert.equal(find(chart, 'edge').length, 7)
   assert.match(flat(textOf(byText(chart, 'org-card', 'tester'))), /^tester general-purpose · 10m haiku-4\.5 · 76\.9k Wrote 6 tests/)
@@ -605,6 +606,57 @@ test('Org`s chart, by default (and 3): every agent row under the one that starte
   const all = fit(1600, 900, 637, 760, 'all')
   assert.ok(all.k < 0.85 && 1600 * all.k <= 637 - 32 + 1 && 900 * all.k <= 760 - 32 + 1)
   assert.equal(fit(400, 300, 1100, 760, 'open').k, 1)
+})
+
+test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in the tree`s order, each name a link to its drawer; its stretches, calls and outcome; the axis to now; a legend of only what it holds; a hover says what is under the pointer', async () => {
+  const p = page({ hash: '#/org' })
+  p.load(SAMPLE)
+  click(byText(p.view('OrgPage()'), 'seg-toggle', 'Timeline').c.filter(Boolean)[2])
+  assert.equal(p.run('ui.orgView'), 'timeline')
+  assert.equal(p.storage['agent-deck:orgView'], '"timeline"')
+  assert.match(flat(textOf(p.view('OrgPage()'))), /Reading the timeline…/)
+  await settle()
+  const timelines = () => p.calls.filter(one => one.url.startsWith('/timeline')).length
+  assert.equal(timelines(), 1)
+  const view = p.view('OrgPage()')
+  assert.equal(flat(textOf(find(view, 'org-bar')[0])), '40m · 8 agents Chart List Timeline')
+  // the lanes, each name a link that opens its agent's drawer over Org
+  assert.deepEqual(find(view, 'tl-name').map(a => flat(textOf(a))), ['Orchestrator', 'researcher', 'builder', 'tester', 'Lint the new files', 'docs', 'scout', 'reviewer'])
+  assert.equal(find(view, 'tl-name')[2].p.href, `#/org/agent/${BUILDER}`)
+  // the Orchestrator's three turns with idle between, waits on you, every outcome; the axis from 0m, its now line
+  const svg = find(view, 'tl-svg')[0]
+  assert.equal(find(svg, 'tl-work').length, 11)
+  assert.equal(find(svg, 'tl-idle').length, 3)
+  assert.equal(find(svg, 'tl-wait').length, 4)
+  assert.deepEqual([find(svg, 'tl-done').length, find(svg, 'tl-failed').length, find(svg, 'tl-stopped').length], [3, 1, 1])
+  assert.equal(find(svg, 'tl-you').length, 2)
+  assert.equal(find(svg, 'tl-msg').length, 2)
+  assert.deepEqual(find(view, 'tl-axis').map(t => flat(textOf(t))).slice(0, 2), ['0m', '5m'])
+  assert.equal(find(view, 'tl-now').length, 1)
+  assert.deepEqual(find(view, 'tl-key').map(k => flat(textOf(k))), ['working', 'waiting on you', 'idle', 'done', 'failed', 'stopped', 'you wrote', 'a tool call', 'started by', 'a message'])
+  // a hover: what is under the pointer, from the drawing just made
+  const at = (lane, minutes) => p.run(`(() => { const g = tl.geo; return tlWhat(g.L + ((g.right - g.L) * ${minutes} * 60000) / g.span, g.TOP + ${lane} * g.LANE + g.LANE / 2) })()`)
+  assert.equal(at(3, 24.8)[0], 'Waiting on you: tester')
+  assert.match(at(3, 24.8)[1], / · 1m$/)
+  assert.equal(at(4, 23)[0], 'Failed: Lint the new files')
+  // a call the deck still holds whole says what it was given; an older one its tool
+  assert.equal(at(1, 8.6)[0], 'Read README.md')
+  assert.match(at(1, 8.6)[1], / · 400ms$/)
+  assert.equal(at(1, 5.2)[0], 'Glob')
+  assert.match(at(0, 0)[0], /^You: Add per-user rate limiting/)
+  assert.equal(at(0, 17)[0], 'Working: Orchestrator')
+  assert.equal(at(0, 24)[0], 'Idle: Orchestrator')
+  // read again once per state, not per drawing
+  p.view('OrgPage()')
+  p.load(SAMPLE)
+  p.view('OrgPage()')
+  assert.equal(timelines(), 1)
+  p.load(sample(s => { s.now += 1000 }))
+  p.view('OrgPage()')
+  assert.equal(timelines(), 2)
+  // a later page opens on the view picked last
+  const again = page({ hash: '#/org', storage: p.storage })
+  assert.equal(again.run('ui.orgView'), 'timeline')
 })
 
 test('the plan: every source Claude used, each as made (the board with owners, the todos, the approved plan as Markdown, a workflow`s phases with no status); none, no section', () => {
@@ -1167,7 +1219,7 @@ test('Settings (5, #/settings) holds Inspect, the avatar style and Help, laid ou
   // Inspect: the context, the spend, the tokens and the agents; then each agent's tokens, requests, tool calls and failures
   const ins = p.text('InspectSection()')
   assert.match(ins, /^Inspect This session Context 41% Spend \$4\.12 Tokens 2\.3M Agents 8 Tokens by agent Agent Model In Out Cache Total Req Tools Err/)
-  assert.match(ins, /Orchestrator opus-5\.5 182k 21\.3k 1\.2M 1\.4M 31 2 0 researcher haiku-4\.5 41k 2\.1k 88k 131k 6 2 0/)
+  assert.match(ins, /Orchestrator opus-5\.5 182k 21\.3k 1\.2M 1\.4M 31 10 0 researcher haiku-4\.5 41k 2\.1k 88k 131k 6 18 0/)
   assert.match(ins, /Lint the new files haiku-4\.5 9k 600 12k 21\.6k 2 1 1/)
   assert.equal(find(p.view('InspectSection()'), 'bar-fill')[0].p.style.width, '41%')
   // an agent's name opens its drawer over Settings

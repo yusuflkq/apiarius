@@ -35,6 +35,70 @@
       "ms": 200
     },
     {
+      "id": "toolu_01Task1",
+      "at": 1792011411000,
+      "tool": "TaskCreate",
+      "target": "Map the public routes",
+      "ok": true,
+      "ms": 150
+    },
+    {
+      "id": "toolu_01Task2",
+      "at": 1792011414000,
+      "tool": "TaskCreate",
+      "target": "Write the sliding-window limiter",
+      "ok": true,
+      "ms": 150
+    },
+    {
+      "id": "toolu_01Task3",
+      "at": 1792011417000,
+      "tool": "TaskCreate",
+      "target": "Review the limiter",
+      "ok": true,
+      "ms": 150
+    },
+    {
+      "id": "toolu_01SpRes",
+      "at": 1792011480000,
+      "tool": "Agent",
+      "target": "Map the API routes",
+      "ok": true,
+      "ms": 240000
+    },
+    {
+      "id": "toolu_01SpBld",
+      "at": 1792011840000,
+      "tool": "Agent",
+      "target": "Write the limiter and its stores",
+      "ok": true,
+      "ms": 1200
+    },
+    {
+      "id": "toolu_01SpDoc",
+      "at": 1792012020000,
+      "tool": "Agent",
+      "target": "Update the API docs",
+      "ok": true,
+      "ms": 300000
+    },
+    {
+      "id": "toolu_01SpSct",
+      "at": 1792012080000,
+      "tool": "Agent",
+      "target": "Check the Redis client options",
+      "ok": true,
+      "ms": 1100
+    },
+    {
+      "id": "toolu_01StopSct",
+      "at": 1792012260000,
+      "tool": "TaskStop",
+      "target": "f1e2d3c4b5a6978c",
+      "ok": true,
+      "ms": 600
+    },
+    {
       "id": "toolu_01AskOne",
       "at": 1792013400000,
       "tool": "AskUserQuestion",

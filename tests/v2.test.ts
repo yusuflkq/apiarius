@@ -651,6 +651,8 @@ test('/deck demo reads the v2 sample beside v1: web/fixtures/state.v2.json, then
       ...v2.agents.flatMap(row => (row.row === 'agent' ? [`v2/agents/${row.fileId}.json`] : [])),
       ...v2.changes.edits.map(edit => `v2/patches/${edit.id}.diff`),
       ...v2.chat.filter(row => row.isCut).map(row => `v2/messages/${row.id}.md`),
+      // Org's Timeline
+      'v2/timeline.json',
     ].sort(),
   )
 })
