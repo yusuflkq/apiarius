@@ -341,6 +341,22 @@ test('/agent serves an agent`s page file by id as JSON, with the token only, and
   assert.equal((await request(main.port, { path: '/agent/b81c6f3e2a9d4c17', headers: auth })).body, next)
 })
 
+test('/timeline serves Org`s Timeline (timeline.json beside the state) as JSON, with the token only; none written yet is a 404', async () => {
+  const auth = { 'X-Deck-Token': TOKEN }
+  const file = path.join(dir, 'timeline.json')
+  assert.equal((await request(main.port, { path: '/timeline', headers: auth })).status, 404)
+  const text = '{"v":2,"now":1792013580000,"startedAt":1792011180000,"tools":["Read"],"lanes":[],"marks":[],"messages":[],"background":[]}\n'
+  fs.writeFileSync(file, text)
+  assert.equal((await request(main.port, { path: '/timeline' })).status, 403)
+  const res = await request(main.port, { path: '/timeline', headers: auth })
+  assert.equal(res.status, 200)
+  assert.equal(res.headers['content-type'], 'application/json; charset=utf-8')
+  assert.equal(res.headers['cache-control'], 'no-store')
+  assert.equal(res.body, text)
+  for (const target of ['/timeline/', '/timeline/x', '/timeline.json', '/timelines']) assert.equal((await request(main.port, { path: target, headers: auth })).status, 404, target)
+  fs.rmSync(file)
+})
+
 test('POST /cmd passes clearFinished and showCleared on in exactly their shapes (no field but the page`s id)', async () => {
   const count = main.lines.length
   const good = [{ cmd: 'clearFinished', id: 'cl-1' }, { cmd: 'clearFinished' }, { cmd: 'showCleared', id: 'cl-2' }, { cmd: 'showCleared' }]

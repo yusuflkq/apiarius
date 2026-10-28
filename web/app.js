@@ -3191,7 +3191,7 @@ function AvatarSection() {
 const TAB_HELP = [
   ['now', 'What needs you, a card per agent, the session\'s figures, the plan Claude made, the newest tool calls and the files the agents touched.'],
   ['chat', 'The session as a group chat. Pick Everyone or one agent at the top: your words go to the one picked (Everyone: the Orchestrator), or @name another.'],
-  ['org', 'Every agent under the one that started it, as a chart (drag to pan, pinch or + and − to zoom) or as a list.'],
+  ['org', 'Every agent under the one that started it, as a chart (drag to pan, pinch or + and − to zoom) or as a list; or the Timeline, each agent’s work, waits on you and idle time over the run (hover to read one, press a lane to open it).'],
   ['changes', 'Git\'s uncommitted files, each with git\'s own diff and the agents\' own edits of it; their other edits; the commits; and Review.'],
   ['settings', 'This page: the session\'s context, spend and tokens per agent, how the agents look, and these notes.'],
 ];
