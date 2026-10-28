@@ -387,7 +387,7 @@ test('Inspect on the pane and the terminal: four sections folded to one line eac
     if (surface === 'desktop') expect((await ui.findAll({ type: 'Svg' })).some(one => String(one.props.alt) === 'Context: 82.2k of 200k')).toBe(true)
     else expect(bar?.text).toMatch(/^█+░+▒+$/)
     expect((await ui.find({ key: 'ctx:row:Messages' }))?.text).toContain('54k')
-    expect((await ui.find({ key: 'ctx:row:MCP tools (deferred)' }))?.text).toContain('(on demand)')
+    expect((await ui.find({ key: 'ctx:row:MCP tools (deferred)' }))?.text).toContain('MCP tools (deferred)4.1k')
     const compactions = (await ui.find({ key: 'ctx:compactions' }))?.text ?? ''
     expect(compactions).toContain('researcher · auto · 176k → 44k tokens')
     expect(compactions).toContain('Orchestrator · auto · 92% → 18%')

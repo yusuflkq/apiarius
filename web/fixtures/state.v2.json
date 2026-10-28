@@ -1313,6 +1313,8 @@
         "at": 1792011660000,
         "agent": "a3f9c2e1b7d4058e",
         "agentName": "researcher",
+        "trigger": "auto",
+        "figures": "176k → 44k tokens",
         "text": "researcher · auto · 176k → 44k tokens",
         "summary": "Mapping the public routes of the API: 14 found so far in src/app.ts, all after auth(); still to read: src/routes/admin.ts."
       },
@@ -1321,6 +1323,8 @@
         "at": 1792012740000,
         "agent": "main",
         "agentName": "Orchestrator",
+        "trigger": "auto",
+        "figures": "92% → 18%",
         "text": "Orchestrator · auto · 92% → 18%",
         "summary": "This session is being continued from a previous conversation that ran out of context. The conversation is summarized below. 1. **Request.** Per-user rate limiting for the public API: a sliding window, 100 requests a minute by default, set per route; Redis in production, in memory in tests; 429 with…"
       }

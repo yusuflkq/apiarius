@@ -212,7 +212,7 @@ function legend(kit: Kit, context: V2Context): RenderElement {
         <Text color={row.kind === 'free' ? P.muted3 : row.hue}>■</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        {line(kit, row.kind === 'deferred' ? `${row.name} (on demand)` : row.name, row.kind === 'deferred' ? P.muted2 : P.fg2)}
+        {line(kit, row.kind === 'deferred' && !/deferred|on demand/i.test(row.name) ? `${row.name} (on demand)` : row.name, row.kind === 'deferred' ? P.muted2 : P.fg2)}
       </Box>
       <Box flexShrink={0}>
         <Text color={P.muted2}>{num(row.tokens)}</Text>

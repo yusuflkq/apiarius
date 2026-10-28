@@ -544,6 +544,9 @@ export type V2Compaction = {
   at: number
   agent: string
   agentName: string
+  /** Who asked for it (`manual`, `auto`, `plugin`), and how full before and after: "92% → 18%" of a known window, else "176k → 44k tokens"; '' where the engine gave no counts. */
+  trigger: string
+  figures: string
   /** "Orchestrator · auto · 92% → 18%". */
   text: string
   /** The summary's first words; '' for none. */
@@ -741,7 +744,7 @@ export function inspectMoreOf(data: DeckData, percent: number | null, spend: { c
     const to = percentOf(one.after, one.window)
     const figures = from !== null && to !== null ? `${from}% → ${to}%` : one.before !== undefined && one.after !== undefined ? `${num(one.before)} → ${num(one.after)} tokens` : ''
     const text = one.skipped !== undefined ? [agentName, one.trigger, 'not compacted'].join(' · ') : [agentName, one.trigger, figures].filter(Boolean).join(' · ')
-    return { id: one.messageId ? names.idOf(one.messageId) : '', at: one.at, agent: one.agent, agentName, text, summary: one.summary, ...(one.skipped !== undefined ? { skipped: one.skipped } : {}) }
+    return { id: one.messageId ? names.idOf(one.messageId) : '', at: one.at, agent: one.agent, agentName, trigger: one.trigger, figures, text, summary: one.summary, ...(one.skipped !== undefined ? { skipped: one.skipped } : {}) }
   })
   const decisions: V2Decision[] = [...records.decisions].reverse().map(d => ({ id: names.idOf(d.id), at: d.at, agent: d.agent, agentName: names.nameOf(d.agent), tool: d.tool, target: d.target, ...decisionWords(d) }))
   const count = (outcome: DecisionWords['outcome']) => decisions.filter(one => one.outcome === outcome).length
