@@ -202,9 +202,10 @@ test('each style has its own one-character terminal face: mood and a ring follow
   const main = { id: 'main', name: 'Orchestrator', role: 'main' }
   const builder = { id: 'b81c6f3e2a9d4c17', name: 'builder' }
   const of = (style, agent, status, more = {}) => A.terminalFace({ ...agent, status, ...more }, style)
-  // every style draws one narrow cell, and no two styles draw the Orchestrator alike
+  // every style draws one narrow cell (a pixel sprite two), and no two styles draw the Orchestrator alike
   const faces = A.STYLE_IDS.map(style => of(style, main, 'running').glyph)
-  for (const glyph of faces) assert.equal(Array.from(glyph).length, 1)
+  A.STYLE_IDS.forEach((style, i) => assert.equal(Array.from(faces[i]).length, A.terminalCells(style)))
+  assert.deepEqual(A.STYLE_IDS.filter(style => A.terminalCells(style) === 2), ['pixel'])
   assert.equal(new Set(faces).size, A.STYLE_IDS.length)
   // no style named: the default's
   assert.deepEqual(A.terminalFace({ ...builder, status: 'running' }), of(A.DEFAULT_STYLE, builder, 'running'))
@@ -215,9 +216,27 @@ test('each style has its own one-character terminal face: mood and a ring follow
   assert.deepEqual(of('mono', builder, 'running'), { glyph: 'B', color: '#ffffff', background: A.colorsOf(builder)[0], bold: true, mark: '◐', markColor: A.LOOK_HUE.running })
   assert.equal(of('mono', { id: 'x1', name: '研究 agent' }, 'running').glyph, 'A')
   assert.equal(of('orbit', main, 'running').glyph, '☼')
-  assert.equal(of('orbit', builder, 'running').glyph, '⊙')
+  // the others a planet in their light colour or stars in their deep one, by their seed
+  const ids = ['a1b2c3', 'f9e8d7', '5c4d3e', 'c4d7e8f9a0b1263d']
+  for (const id of ids) {
+    const one = of('orbit', { id }, 'running')
+    assert.deepEqual([one.glyph, one.color], one.glyph === 'ʘ' ? ['ʘ', A.colorsOf({ id })[1]] : ['⁂', A.colorsOf({ id })[0]])
+  }
+  assert.deepEqual(new Set(ids.map(id => of('orbit', { id }, 'running').glyph)), new Set(['ʘ', '⁂']))
   assert.ok(A.BAUHAUS_GLYPHS.includes(of('bauhaus', builder, 'done').glyph))
-  assert.match(of('pixel', builder, 'idle').glyph, /^[⠀-⣿]$/)
+  // a robot's head, one of four by its seed, in its deep colour
+  assert.deepEqual(A.ROBOT_GLYPHS, ['⧇', '⧈', '◫', '⚇'])
+  const heads = Array.from({ length: 40 }, (_, i) => of('robot', { id: `agent-${i}` }, 'running'))
+  for (const one of heads) assert.ok(A.ROBOT_GLYPHS.includes(one.glyph))
+  assert.deepEqual(new Set(heads.map(one => one.glyph)), new Set(A.ROBOT_GLYPHS))
+  // a pixel sprite: two braille cells, the right the left's mirror, five dots a half at least
+  for (const id of ['main', 'a1b2c3', 'f9e8d7', '5c4d3e', 'b81c6f3e2a9d4c17', 'c4d7e8f9a0b1263d', 'd2e3f4a5b6c7089a', 'aa11bb22cc33dd44']) {
+    const [left, right] = Array.from(of('pixel', { id }, 'idle').glyph).map(ch => ch.charCodeAt(0) - 0x2800)
+    assert.ok(left > 0 && left < 256 && right > 0 && right < 256)
+    const swap = bits => ((bits & 0x07) << 3) | ((bits & 0x38) >> 3) | ((bits & 0x40) << 1) | ((bits & 0x80) >> 1)
+    assert.equal(swap(left), right)
+    assert.ok(left.toString(2).split('1').length - 1 >= 5)
+  }
   // the seed alone picks it: the same agent, the same face, on every redraw
   assert.deepEqual(of('critter', builder, 'running'), of('critter', builder, 'running'))
 })

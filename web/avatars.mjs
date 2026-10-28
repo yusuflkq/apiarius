@@ -22,7 +22,7 @@
  *   as an image;
  * - the mod imports it too (hooks/ui/v2/look.tsx): the Desktop pane draws an
  *   Svg element as an image of the same document;
- * - the terminal draws no SVG: `terminalFace` is one character in the
+ * - the terminal draws no SVG: `terminalFace` is a character or two in the
  *   style (a ☻ for mood, a sun for the Orchestrator's orbit, a letter on
  *   its colour for mono), then its status mark.
  *
@@ -74,6 +74,9 @@ export const LOOK_MARK = { running: '◐', waiting: '‖', done: '✓', failed: 
 
 /** The terminal's glyphs: one an agent, by its seed. */
 export const GLYPHS = ['◆', '●', '▲', '■', '✦', '⬢', '★', '◉']
+
+/** Robots on the terminal: a head, one an agent, by its seed (an eye box, a square, a split screen, two eyes). */
+export const ROBOT_GLYPHS = ['⧇', '⧈', '◫', '⚇']
 
 /** Bauhaus on the terminal: a half-filled shape, one an agent, by its seed. */
 export const BAUHAUS_GLYPHS = ['◧', '◩', '◭', '◓', '◨', '◪', '◮', '◒']
@@ -517,14 +520,36 @@ export function avatarStackSvg(style, agents, opts = {}) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${n2(width)}" height="${n2(size)}" viewBox="0 0 ${n2(width)} ${n2(size)}">${faces.join('')}</svg>`
 }
 
-/** A pixel sprite in one braille cell: rows 1 to 4 lit in both columns by the seed (the SVG sprite's hash), two at least. */
+/** A braille cell's dots by row (0 to 3), its left column then its right. */
+const DOTS = [
+  [0x01, 0x02, 0x04, 0x40],
+  [0x08, 0x10, 0x20, 0x80],
+]
+
+/**
+ * A pixel sprite in two braille cells, a mirrored 4 by 4 grid as the SVG
+ * sprite's 5 by 5 is: its left half lit by the seed's hash (the SVG
+ * sprite's), five dots at least, its right half the left's mirror.
+ */
 function brailleSprite(seed) {
   const h = pickOf(`${seed}#`)
-  let rows = [0, 1, 2, 3].filter(row => (h >> row) & 1)
-  if (rows.length < 2) rows = [1, 2]
-  const left = [0x01, 0x02, 0x04, 0x40]
-  const right = [0x08, 0x10, 0x20, 0x80]
-  return String.fromCharCode(0x2800 + rows.reduce((bits, row) => bits | left[row] | right[row], 0))
+  let lit = []
+  for (let row = 0; row < 4; row++) for (let col = 0; col < 2; col++) if ((h >> (row * 2 + col)) & 1) lit.push([row, col])
+  // too sparse to read as a sprite: the seed's next eight bits as well
+  if (lit.length < 5) for (let row = 0; row < 4; row++) for (let col = 0; col < 2; col++) if ((h >> (8 + row * 2 + col)) & 1 && !lit.some(([r, c]) => r === row && c === col)) lit.push([row, col])
+  if (lit.length < 5) lit = [[0, 1], [1, 0], [1, 1], [2, 0], [3, 1]]
+  let left = 0
+  let right = 0
+  for (const [row, col] of lit) {
+    left |= DOTS[col][row]
+    right |= DOTS[1 - col][row]
+  }
+  return String.fromCharCode(0x2800 + left, 0x2800 + right)
+}
+
+/** The cells a style's terminal face takes: two for a pixel sprite, one for every other. */
+export function terminalCells(style) {
+  return styleOf(style) === 'pixel' ? 2 : 1
 }
 
 /** How full a progress ring is, as a pie: ○ ◔ ◑ ◕ ●. */
@@ -549,12 +574,12 @@ function initialOf(name, seed) {
  * The owner chose them from mocks in Cascadia Mono (2026-10-27).
  */
 const TERMINAL = {
-  robot: c => ({ glyph: '◙', color: c.c1 }),
+  robot: c => ({ glyph: ROBOT_GLYPHS[pickOf(`${c.seed}r`) % ROBOT_GLYPHS.length], color: c.c1 }),
   mood: c => ({ glyph: c.look === 'done' || c.look === 'idle' ? '☺' : c.look === 'failed' ? '☹' : '☻', color: c.c1 }),
   critter: c => ({ glyph: 'ᴥ', color: c.c1 }),
   pixel: c => ({ glyph: brailleSprite(c.seed), color: c.c1 }),
   mono: c => ({ glyph: initialOf(c.name, c.seed), color: '#ffffff', background: c.c1, bold: true }),
-  orbit: c => (c.role === 'main' ? { glyph: '☼', color: c.c2 } : { glyph: '⊙', color: c.c1 }),
+  orbit: c => (c.role === 'main' ? { glyph: '☼', color: c.c2 } : (pickOf(`${c.seed}o`) >> 7) & 1 ? { glyph: 'ʘ', color: c.c2 } : { glyph: '⁂', color: c.c1 }),
   bauhaus: c => ({ glyph: BAUHAUS_GLYPHS[pickOf(`${c.seed}b`) % BAUHAUS_GLYPHS.length], color: c.c1 }),
   ring: c => ({ glyph: pieOf(c.progress ?? (c.look === 'done' || c.look === 'failed' ? 1 : c.look === 'idle' ? 0 : 0.5)), color: LOOK_HUE[c.look] }),
   glyph: c => ({ glyph: GLYPHS[c.h % GLYPHS.length], color: c.c1 }),

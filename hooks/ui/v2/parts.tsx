@@ -102,7 +102,7 @@ export function faces(kit: Kit, who: readonly (Face | null)[], px: number, names
 export function facesCells(kit: Kit, n: number, px: number, most = 3): number {
   const shown = Math.min(n, most)
   const more = n > most ? String(n - most).length + 2 : 0
-  return (svgOf(kit) ? cellsForPx(AV.stackWidth(shown, px)) : shown) + more
+  return (svgOf(kit) ? cellsForPx(AV.stackWidth(shown, px)) : shown * AV.terminalCells(avatarStyleOf(kit))) + more
 }
 
 /** The rule between a list's rows where Svg draws (1 px, in the card's edge, as the web's `.list`); nothing on the terminal, whose rows need none. */

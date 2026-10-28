@@ -211,9 +211,8 @@ test('one sender`s messages within a few minutes stack under one avatar and name
     if (surface === 'desktop') {
       expect(under(group, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["Orchestrator's avatar", "builder's avatar", "docs's avatar", "scout's avatar"])
     } else {
-      // each a robot's one character, the default style's on the terminal
-      const robot = AV.terminalFace({ id: IDS.builder }).glyph
-      const glyphs = under(group, node => node.type === 'Text' && node.children?.[0] === robot)
+      // each a robot's head, the default style's on the terminal
+      const glyphs = under(group, node => node.type === 'Text' && AV.ROBOT_GLYPHS.includes(node.children?.[0] as string))
       expect(glyphs.length).toBe(4)
     }
     // another sender between starts a group of its own

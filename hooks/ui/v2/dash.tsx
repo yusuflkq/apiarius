@@ -465,7 +465,7 @@ function activityRow(kit: Kit, state: WebStateV2, row: ActivityRow, actions: Das
   const open = () => {
     if (isKnown) actions.openAgent(row.agent)
   }
-  const faceCells = svgOf(kit) ? cellsForPx(AVATAR.list) : 1
+  const faceCells = svgOf(kit) ? cellsForPx(AVATAR.list) : avatarCells(kit, AVATAR.list)
   // the words' room: the row inside the list's edges and its own padding, less the face, the outcome, the age and the gaps
   const room = Math.max(12, width - edgesOf(kit) - 2 - faceCells - 1 - 1 - OUTCOME - 1 - TIME)
   const name = cutCells(row.name, Math.min(22, Math.max(6, room * 0.45)), adv)

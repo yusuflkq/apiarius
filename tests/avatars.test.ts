@@ -127,7 +127,8 @@ test('the terminal draws no image: each card leads with the agent`s one-characte
     }
   }
   await cardsSay('robot')
-  expect((await ui.find({ key: `card:${shown[0]!.id}` }))?.text).toContain('◙')
+  const first = (await ui.find({ key: `card:${shown[0]!.id}` }))?.text ?? ''
+  expect(AV.ROBOT_GLYPHS.filter(head => first.includes(head))).toHaveLength(1)
   for (const style of ['mono', 'ring', 'glyph'] as const) {
     await $.command.run(deck(`avatars ${style}`))
     await ui.redraw()

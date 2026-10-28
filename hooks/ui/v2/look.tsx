@@ -99,9 +99,9 @@ export function terminalCell(kit: Kit, face: ReturnType<typeof AV.terminalFace>)
   )
 }
 
-/** The cells `avatar` takes: its px in a desktop's cells (7.85 px each); on the terminal its glyph, and its mark with `dot`. */
+/** The cells `avatar` takes: its px in a desktop's cells (7.85 px each); on the terminal its face (two cells for a pixel sprite), and its mark with `dot`. */
 export function avatarCells(kit: Kit, px: number, dot = false): number {
-  return svgOf(kit) ? px / 7.85 : dot ? 2 : 1
+  return svgOf(kit) ? px / 7.85 : AV.terminalCells(avatarStyleOf(kit)) + (dot ? 1 : 0)
 }
 
 /** The status dot: ● in its status's hue (amber waiting, blue at work, green done, red failed, grey idle). */
