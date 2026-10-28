@@ -369,6 +369,8 @@ export type Outcome = { text: string; tone: 'live' | 'wait' | 'fail' | 'quiet'; 
 export type ActivityRow = { key: string; agent: string; name: string; avatar: number | null; verb: string; text: string; outcome: Outcome; at: number }
 
 function outcomeOf(state: Pick<WebStateV2, 'agents'>, call: V2Activity): Outcome {
+  // refused, as Inspect's permission decisions say: by a hook, or by auto mode, a rule or you
+  if (call.refused) return { text: call.refused, tone: 'fail', mark: '⊘' }
   if (call.ok === false) return { text: 'failed', tone: 'fail', mark: '✕' }
   if (call.ok === true) return { text: msText(call.ms) || 'ok', tone: 'quiet', mark: '' }
   const row = rowOf(state, call.agent)

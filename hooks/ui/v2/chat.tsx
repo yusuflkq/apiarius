@@ -71,6 +71,7 @@ import { FINISHED_FOLD, MAIN, ORCHESTRATOR } from '../../model'
 import { isFinishedRow, needKeyOf, recipientOf, type V2AgentRow, type V2ChatRow, type V2Files, type V2Need, type WebAck, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { rowsOf } from './fit'
+import { compactionLine } from './inspect'
 import { AVATAR, icon, quiet, svgOf } from './look'
 import { P, mix, toneOf } from './palette'
 import { chevronOf, face, finishedRow, openFoldsWith } from './parts'
@@ -281,8 +282,8 @@ export function ackLine(ack: WebAck): { mark: string; hue: string; text: string 
 }
 
 function sideOf(row: V2ChatRow): Side {
-  // a slash command you ran alone is no words of yours: a line in the middle; so is what you stopped from the deck
-  if (row.kind === 'command' || row.kind === 'stop') return 'notice'
+  // a slash command you ran alone is no words of yours: a line in the middle; so is what you stopped from the deck, and a compaction (./inspect's divider)
+  if (row.kind === 'command' || row.kind === 'stop' || row.kind === 'compaction') return 'notice'
   if (row.from === 'you') return 'mine'
   if (row.from === 'engine') return 'notice'
   return 'theirs'
@@ -919,6 +920,7 @@ function noticeOf(ctx: Ctx, entry: Entry): RenderElement {
   const { kit, state } = ctx
   const { Box, Text } = kit
   const row = entry.row
+  if (row.kind === 'compaction') return compactionLine(kit, state, row, entry.key)
   const words = cut(flat(clean(row.text)), NOTICE_MOST)
   const about = row.kind === 'notification' && row.agent && row.agent !== MAIN ? partyName(state, row.agent, '') : ''
   const parts =

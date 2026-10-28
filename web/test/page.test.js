@@ -175,10 +175,13 @@ test('reads the live state (v1 with v2 under its key) and the bare sample alike;
   assert.match(bare.text('Header()'), /^Waiting on you/)
 })
 
-test('the header: the state in one word, your latest request in your words, and model · context · cost; the goal opens on its whole text', async () => {
+test('the header: the state in one word, your latest request in your words, and model · mode · context · cost, the mode lit; the goal opens on its whole text', async () => {
   const p = page()
   p.load(SAMPLE)
-  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · context 41% · \\$4\\.12 Stop turn Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Settings`))
+  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · auto mode · context 41% · \\$4\\.12 Stop turn Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Inspect Settings`))
+  // the permission mode, lit as Claude Code's footer lights it; the whole line on hover
+  assert.deepEqual(find(p.view('Header()'), 'hd-mode').map(one => flat(textOf(one))), ['auto mode', 'auto mode'])
+  assert.equal(find(p.view('Header()'), 'hd-line')[0].p.title, 'opus-5.5 · auto mode · context 41% · $4.12')
   click(find(p.view('Header()'), 'goal')[0])
   assert.match(p.text('Header()'), /Your latest request · 4m ago Also exempt \/health and \/metrics from the limiter\./)
   // a goal the state cut short: its whole text from /message/<messageId>, fetched once
@@ -199,8 +202,8 @@ test('Now is called the Dashboard: its tab says so; its route stays #/now, and #
   p.load(SAMPLE)
   assert.equal(p.run('route.tab'), 'now')
   const tabs = () => find(p.view('Header()'), 'tab')
-  assert.deepEqual(tabs().map(t => flat(textOf(t))), ['Dashboard 4', 'Chat', 'Org', `Changes ${SAMPLE.changes.files.length}`, 'Settings'])
-  assert.deepEqual(tabs().map(t => t.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/settings'])
+  assert.deepEqual(tabs().map(t => flat(textOf(t))), ['Dashboard 4', 'Chat', 'Org', `Changes ${SAMPLE.changes.files.length}`, 'Inspect', 'Settings'])
+  assert.deepEqual(tabs().map(t => t.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/inspect', '#/settings'])
   assert.ok(tabs()[0].p.class.includes(' on'))
   p.key('2')
   p.key('1')
@@ -529,7 +532,8 @@ test('the sample`s own figures, activity and files, as the mod`s builder writes 
   assert.equal(feed.length, Math.min(10, SAMPLE.activity.length))
   assert.deepEqual(feed.map(r => r.k), SAMPLE.activity.slice(0, 10).map(x => x.id))
   assert.equal(flat(textOf(feed[0])), 'reviewer asked you: Which routes should skip the limiter? waiting 2m')
-  assert.equal(flat(textOf(feed.find(r => /failed/.test(textOf(r))))), 'Lint the new files ran Lint the new files failed 18m')
+  // the newest ten hold builder's force-push auto mode refused (the linter's failed call is older: its mark is checked below, with the refused ones)
+  assert.match(flat(textOf(feed.find(r => /denied/.test(textOf(r))))), /^builder ran Push the limiter ⊘ ?denied 13m$/)
   const files = p.view('FilesSection()')
   assert.match(flat(textOf(find(files, 'sec-head')[0])), new RegExp(`^Files ${SAMPLE.files.filter(f => !f.isOutside).length} Changes$`))
   assert.equal(flat(textOf(find(files, 'file-row')[0])), 'src/ rateLimit.ts shared +7 −1 19m')
@@ -699,9 +703,9 @@ test('the plan: every source Claude used, each as made (the board with owners, t
 // ---- Chat
 
 /** The chat's groups and notices, in order: a group's key is `g:` and its first message's key, a notice's its message's. */
-const groupsIn = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(cgroup|notice)( |$)/.test(one.p.class))
-/** The keys of every message drawn: each bubble's, each notice's. */
-const messageKeys = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(brow|notice)( |$)/.test(one.p.class)).map(one => one.k)
+const groupsIn = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(cgroup|notice|cmp-line)( |$)/.test(one.p.class))
+/** The keys of every message drawn: each bubble's, each notice's, each compaction's line. */
+const messageKeys = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(brow|notice|cmp-line)( |$)/.test(one.p.class)).map(one => one.k)
 
 test('Chat is a group chat: others` bubbles at the left under their avatar and name, "to X" with X`s small avatar; yours at the right in blue under "You"; one sender`s run stacks under one head; Claude Code`s notices in the middle', () => {
   const p = page({ hash: '#/chat' })
@@ -711,7 +715,7 @@ test('Chat is a group chat: others` bubbles at the left under their avatar and n
   assert.equal(find(chat(), 'crow').length, 0, 'no sentence rows')
   // every message once, in the state's order
   assert.deepEqual(messageKeys(chat()), SAMPLE.chat.map(m => m.id))
-  assert.equal(groupsIn(chat()).length, 21)
+  assert.equal(groupsIn(chat()).length, 23)
   const group = id => groupsIn(chat()).find(g => g.k === `g:${id}` || g.k === id)
   const head = id => flat(textOf(find(group(id), 'cg-head')[0]))
   // the Orchestrator's answer to you and its three spawns minutes after: one head (no "to you"), each spawn saying whom it went to
@@ -1167,14 +1171,15 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   assert.deepEqual(acts().map(a => flat(textOf(find(a, 'act-head')[0]))), [
     'Bash Run the limiter tests waiting 2m',
     'Write C:/Users/sam/AppData/Local/Temp/bench.js 200ms 11m',
+    'Bash Push the limiter failed 13m',
     'Edit src/app.ts 300ms 24m',
     'Write src/rateLimit.ts 400ms 27m',
   ])
   click(find(acts()[0], 'act-head')[0])
   assert.match(flat(textOf(acts()[0])), /npm test -- rateLimit toolu_01BldB2 · no result yet/)
-  click(find(acts()[2], 'act-head')[0])
+  click(find(acts()[3], 'act-head')[0])
   await settle()
-  assert.ok(find(acts()[2], 'dl-add').length > 0, 'an edit opens on its patch')
+  assert.ok(find(acts()[3], 'dl-add').length > 0, 'an edit opens on its patch')
   assert.match(flat(textOf(drawer())), /Edits 3 files src\/ rateLimit\.ts 1 edit \+6 −0/)
   assert.match(flat(textOf(drawer())), /→ builder via SendMessage/)
   // the file is fetched again only when the row changes
@@ -1214,68 +1219,107 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   assert.match(flat(textOf(drawer())), /This agent is not in the session/)
 })
 
-test('Settings (5, #/settings) holds Inspect, the avatar style and Help, laid out as a page: the header keeps no Inspect or Keys button, and no key badge', () => {
+test('Inspect (5, #/inspect): Context, Permissions, Loaded and Spend, as the state holds them, each folding to its head and one line; the header keeps no Inspect or Keys button, and no key badge', () => {
   const p = page()
   p.load(SAMPLE)
   const header = p.view('Header()')
   assert.equal(find(header, 'icon-btn').length, 0)
   assert.equal(findAll(header, v => v.t === 'kbd' || (v.p && v.p.title && /\(\d\)|\([a-z]\)/.test(v.p.title))).length, 0)
   assert.equal(p.key('5'), true)
-  assert.equal(p.run('route.tab'), 'settings')
-  assert.equal(p.run('location.hash'), '#/settings')
+  assert.equal(p.run('route.tab'), 'inspect')
+  assert.equal(p.run('location.hash'), '#/inspect')
   assert.ok(find(p.view('Header()'), 'tab')[4].p.class.includes(' on'))
-  assert.deepEqual(find(p.view('Page()'), 'sec-title').map(t => flat(textOf(t))), ['Inspect', 'Avatar style', 'Help'])
-  // Inspect: the context, the spend, the tokens and the agents; then each agent's tokens, requests, tool calls and failures
+  assert.deepEqual(find(p.view('Page()'), 'sec-title').map(t => flat(textOf(t))), ['Context', 'Permissions 7', 'Loaded', 'Spend'])
+  // Context: its size and share, a bar of /context's rows (those in the window), each row, then the compactions
+  const ctx = p.text('ContextSection()')
+  assert.match(ctx, /^Context as \/context counts it 82\.2k of 200k 41% · auto-compacts at 83% · opus-5\.5 System prompt 3\.1k System tools 12\.4k MCP tools 8\.2k/)
+  assert.match(ctx, /MCP tools \(deferred\) 4\.1k Compactions 3\dm researcher auto · 176k → 44k tokens “Mapping the public routes/)
+  assert.match(ctx, /1\dm Orchestrator auto · 92% → 18% “This session is being continued/)
+  assert.equal(find(p.view('ContextSection()'), 'ctx-seg').length, 8)
+  // Permissions: every decision, newest first; who decided and why, verbatim; the mode at the head's right
+  const perms = find(p.view('PermissionsSection()'), 'perm-row')
+  assert.deepEqual(perms.map(r => r.k), SAMPLE.inspect.permissions.decisions.map(d => d.id))
+  assert.match(p.text('PermissionsSection()'), /^Permissions 7 auto mode builder Bash npm test -- rateLimit Waiting on you its dialog is open in Claude Code 2m/)
+  assert.match(flat(textOf(perms[1])), /^builder Bash git push --force origin main Denied by auto mode Force-pushing to main overwrites history/)
+  assert.match(flat(textOf(perms[3])), /^docs Edit \.env Blocked by your hook PreToolUse: “\.env files are off limits”/)
+  assert.deepEqual(perms.map(r => find(r, 'perm-verdict')[0].p.class), ['perm-verdict tx-wait', 'perm-verdict tx-fail', 'perm-verdict tx-done', 'perm-verdict tx-fail', 'perm-verdict tx-done', 'perm-verdict tx-wait', 'perm-verdict tx-done'])
+  // a name opens its drawer over Inspect
+  click(find(perms[1], 'who-link')[0])
+  assert.equal(p.run('location.hash'), `#/inspect/agent/${BUILDER}`)
+  p.run('closeDrawer()')
+  // Loaded: the model and its settings, the files, memory, the skills, the MCP servers, the hooks and what their event decided
+  const ld = p.text('LoadedSection()')
+  assert.match(ld, /^Loaded Model opus-5\.5 effort high · output style default auto mode Instructions ~\/\.claude\/CLAUDE\.md yours, for every project · 6 lines · 310 tokens loaded at start acme-api\/CLAUDE\.md this project · 41 lines · 1\.5k tokens loaded at start src\/CLAUDE\.md this project · 240 tokens loaded on reading app\.ts/)
+  assert.match(ld, /Memory Memory · 4 files MEMORY\.md · redis-in-ci\.md · api-conventions\.md · ask-before-pushing\.md 570 tokens Skills 23 skills used this session: code-review, run Every name/)
+  assert.match(ld, /MCP servers github 12 tools · 2 loaded on demand · used 4 times linear 8 tools · 8 loaded on demand Hooks Stop powershell .* yours PreToolUse · Edit\|Write node \.claude\/hooks\/protect-secrets\.js project PreToolUse hooks decided 1 call, blocked 1$/)
+  // every skill's name on demand
+  click(find(p.view('LoadedSection()'), 'btn-xs')[0])
+  assert.match(p.text('LoadedSection()'), /code-review · run · simplify · security-review/)
+  // Spend: the context, the spend, the tokens and the agents; then each agent's tokens, requests, tool calls and failures
   const ins = p.text('InspectSection()')
-  assert.match(ins, /^Inspect This session Context 41% Spend \$4\.12 Tokens 2\.3M Agents 8 Tokens by agent Agent Model In Out Cache Total Req Tools Err/)
+  assert.match(ins, /^Spend This session Context 41% Spend \$4\.12 Tokens 2\.3M Agents 8 Tokens by agent Agent Model In Out Cache Total Req Tools Err/)
   assert.match(ins, /Orchestrator opus-5\.5 182k 21\.3k 1\.2M 1\.4M 31 10 0 researcher haiku-4\.5 41k 2\.1k 88k 131k 6 18 0/)
   assert.match(ins, /Lint the new files haiku-4\.5 9k 600 12k 21\.6k 2 1 1/)
   assert.equal(find(p.view('InspectSection()'), 'bar-fill')[0].p.style.width, '41%')
-  // an agent's name opens its drawer over Settings
-  click(find(find(p.view('InspectSection()'), 'ins-who')[2], 'who-link')[0])
-  assert.equal(p.run('location.hash'), `#/settings/agent/${BUILDER}`)
+  // folded: each section its head and its one line
+  for (const id of ['ins-context', 'ins-permissions', 'ins-loaded', 'ins-spend']) p.run(`setShut("${id}", true)`)
+  assert.equal(p.text('Page()'), 'Context 41% · compacted 2 times Permissions 7 7 decisions · 1 waiting on you · 1 denied · 1 blocked Loaded 3 instruction files · 4 memory files · 23 skills · 2 MCP servers · 2 hooks Spend $4.12 · 2.3M tokens')
+  // an old link to Inspect over a tab, and #/inspect, open Inspect; #/help opens Settings
+  for (const [hash, tab] of [['#/chat/inspect', 'inspect'], ['#/inspect', 'inspect'], ['#/help', 'settings']]) {
+    const old = page({ hash })
+    assert.deepEqual({ tab: old.run('route.tab'), drawer: old.run('route.drawer') }, { tab, drawer: null }, hash)
+  }
+  // a state with nothing of Inspect's (an older mod's): the spend alone; nothing yet: the welcome
+  const older = page({ hash: '#/inspect' })
+  older.load(sample(s => { s.inspect = { contextPercent: 41, costUsd: 4.12, agents: s.inspect.agents } }))
+  assert.deepEqual(find(older.view('Page()'), 'sec-title').map(t => flat(textOf(t))), ['Spend'])
+  const empty = page({ hash: '#/inspect' })
+  empty.load({ v: 1, empty: true })
+  assert.match(empty.text('Page()'), /Nothing yet/)
+})
+
+test('Settings (6, #/settings) holds the avatar style and Help, laid out as a page', () => {
+  const p = page()
+  p.load(SAMPLE)
+  assert.equal(p.key('6'), true)
+  assert.equal(p.run('route.tab'), 'settings')
+  assert.equal(p.run('location.hash'), '#/settings')
+  assert.ok(find(p.view('Header()'), 'tab')[5].p.class.includes(' on'))
+  assert.deepEqual(find(p.view('Page()'), 'sec-title').map(t => flat(textOf(t))), ['Avatar style', 'Help'])
   // Help: what each tab is for, each name going to it; then the keys
   const help = p.text('HelpSection()')
-  assert.match(help, /^Help Dashboard What needs you, a card per agent.* Chat The session as a group chat\..* Org Every agent under the one that started it.* Changes Git's uncommitted files.* Settings This page/)
-  assert.match(help, /Keys .* 1 2 3 4 5 Dashboard · Chat · Org · Changes · Settings j k Move the focus down, up/)
+  assert.match(help, /^Help Dashboard What needs you, a card per agent.* Chat The session as a group chat\..* Org Every agent under the one that started it.* Changes Git's uncommitted files.* Inspect What fills the context and each compaction.* Settings This page/)
+  assert.match(help, /Keys .* 1 2 3 4 5 6 Dashboard · Chat · Org · Changes · Inspect · Settings j k Move the focus down, up/)
   // no f key, said or kept
-  assert.match(help, /1 to 5, Enter and b work in the Desktop pane and the terminal too/)
+  assert.match(help, /1 to 6, Enter and b work in the Desktop pane and the terminal too/)
   assert.equal(findAll(p.view('HelpSection()'), one => one.t === 'dt' && flat(textOf(one)) === 'f').length, 0)
-  assert.deepEqual(find(p.view('HelpSection()'), 'help-tab-name').map(a => a.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/settings'])
-  // the only drawer is an agent's: an old link to Inspect, and #/inspect and #/help, open Settings
-  for (const hash of ['#/chat/inspect', '#/inspect', '#/help']) {
-    const old = page({ hash })
-    assert.deepEqual({ tab: old.run('route.tab'), drawer: old.run('route.drawer') }, { tab: 'settings', drawer: null }, hash)
-  }
+  assert.deepEqual(find(p.view('HelpSection()'), 'help-tab-name').map(a => a.p.href), ['#/now', '#/chat', '#/org', '#/changes', '#/inspect', '#/settings'])
   // with nothing yet, Settings still draws: the avatar style and the help are the deck's own
   const empty = page({ hash: '#/settings' })
   empty.load({ v: 1, empty: true })
-  assert.match(empty.text('Page()'), /^Inspect This session .*No agent has spent tokens yet.* Avatar style .* Help Dashboard/)
+  assert.match(empty.text('Page()'), /^Avatar style .* Help Dashboard/)
   assert.equal(empty.key('n'), false)
   assert.equal(empty.key('1'), true)
   assert.match(empty.text('Page()'), /Nothing yet/)
 })
 
-test('i and h quietly bring Settings` Inspect and Help into view (a folded one opened); pressed again there, back to the tab you came from', () => {
+test('i opens Inspect and h brings Settings` Help into view (a folded one opened); pressed again there, back to the tab you came from', () => {
   const p = page({ hash: '#/org' })
   p.load(SAMPLE)
-  p.run('setShut("inspect", true)')
   assert.equal(p.key('i'), true)
-  assert.equal(p.run('route.tab'), 'settings')
-  assert.equal(p.run('ui.scrollTo.id'), 'sec-inspect')
-  assert.equal(find(p.view('InspectSection()'), 'ins-table').length, 1, 'opened')
+  assert.equal(p.run('route.tab'), 'inspect')
+  assert.equal(p.run('location.hash'), '#/inspect')
+  p.key('i')
+  assert.equal(p.run('route.tab'), 'org')
+  p.run('setShut("help", true)')
   p.key('h')
   assert.equal(p.run('route.tab'), 'settings')
   assert.equal(p.run('ui.scrollTo.id'), 'sec-help')
+  assert.equal(p.run('shut.has("help")'), false, 'opened')
   p.key('?')
   assert.equal(p.run('route.tab'), 'org')
-  p.key('h')
-  p.key('h')
-  assert.equal(p.run('route.tab'), 'org')
-  // the Settings tab itself, then i: Inspect; again: back
+  // the Inspect tab itself, then i: back
   p.key('5')
-  p.key('i')
-  assert.equal(p.run('ui.scrollTo.id'), 'sec-inspect')
   p.key('i')
   assert.equal(p.run('route.tab'), 'org')
   // none fires while you type
@@ -1297,6 +1341,8 @@ test('keys: 1 2 3 4 5 the routes, n the next need (opened and focused), m and @ 
   p.key('4')
   assert.equal(p.run('route.tab'), 'changes')
   p.key('5')
+  assert.equal(p.run('route.tab'), 'inspect')
+  p.key('6')
   assert.equal(p.run('route.tab'), 'settings')
   p.key('1')
   assert.equal(p.run('location.hash'), '#/now')
@@ -1513,4 +1559,31 @@ test('what you stopped from the deck shows in Chat as a small line in the middle
   assert.equal(line.length, 1)
   assert.equal(flat(textOf(line[0])), 'You stopped builder now')
   assert.equal(find(line[0], 'notice-who').length, 0)
+})
+
+test('Recent activity says a refused call was "⊘ denied" (auto mode) or "⊘ blocked" (your hook); Chat draws each compaction as a line across, which opens on the summary it goes on from, read whole when the state cut it', async () => {
+  const p = page()
+  // the refused calls and the linter's failed one brought among the ten newest
+  p.load(sample(s => { for (const x of s.activity) if (['toolu_01BldB1', 'toolu_01DocE0', 'toolu_01LntB1'].includes(x.id)) x.at = NOW - 30_000 }))
+  const rows = find(p.view('ActivitySection()'), 'ra-row')
+  const outcome = id => flat(textOf(find(rows.find(r => r.k === id), 'outcome')[0]))
+  assert.match(outcome('toolu_01BldB1'), /^⊘ ?denied$/)
+  assert.match(outcome('toolu_01DocE0'), /^⊘ ?blocked$/)
+  assert.match(outcome('toolu_01LntB1'), /failed$/)
+  // Chat: a line for each compaction, whoever's context it was, where it happened
+  p.run('navigate("chat")')
+  const lines = () => find(p.view('ChatPage()'), 'cmp-line')
+  assert.equal(lines().length, 2)
+  assert.match(flat(textOf(lines()[0])), /^researcher’s context compacted 176k → 44k tokens · auto 3\dm$/)
+  assert.match(flat(textOf(lines()[1])), /^Context compacted 92% → 18% · 184k → 36k tokens · auto 1\dm$/)
+  const main = SAMPLE.chat.find(m => m.kind === 'compaction' && m.from === 'main')
+  assert.equal(main.isCut, true)
+  click(find(lines()[1], 'cmp-head')[0])
+  assert.match(flat(textOf(lines()[1])), /The summary it goes on from This session is being continued/)
+  assert.deepEqual(p.fetched('message'), [`/message/${main.id}`])
+  await settle()
+  assert.match(flat(textOf(lines()[1])), /The summary it goes on from This session is being continued .* Next: wait for builder, then run the limiter tests\./)
+  // an agent's own conversation keeps its compaction
+  p.run(`pickMember("${RESEARCHER}")`)
+  assert.equal(lines().length, 1)
 })

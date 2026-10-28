@@ -29,6 +29,20 @@ import * as B from './background'
 import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
+import {
+  contextWaitOf,
+  inspectCalled,
+  inspectCheck,
+  inspectCompaction,
+  inspectDenied,
+  inspectDialog,
+  inspectEnded,
+  inspectInstructionLoaded,
+  inspectInstructions,
+  inspectMode,
+  readInspectContext,
+  readInspectLoaded,
+} from './inspectHooks'
 import * as M from './model'
 import * as R from './repos'
 import * as SR from './registry'
@@ -282,6 +296,39 @@ function touched($: EngineInterface, now: number) {
   redrawIfChanged($, now)
   probeStops($, now)
 }
+
+/** Inspect's read of the context put off (./inspectHooks reads it at most every 10 s). */
+let inspectTimer: Timer | undefined
+
+/** Inspect: the context's breakdown read again, now when the last read was 10 s ago or more, else once that has passed. */
+async function readContextSoon($: EngineInterface): Promise<void> {
+  try {
+    const wait = contextWaitOf(await $.clock.now())
+    if (wait > 0) {
+      if (!inspectTimer) {
+        inspectTimer = $.clock.after(wait, () => {
+          inspectTimer = undefined
+          void readContextSoon($)
+        })
+      }
+      return
+    }
+    if (await readInspectContext($, data)) touched($, await $.clock.now())
+  } catch {
+    // Inspect's context is read again at the next measure
+  }
+}
+
+/** Inspect: what is loaded (the model, the output style, the settings' hooks), then the context, read now. */
+async function readInspected($: EngineInterface): Promise<void> {
+  try {
+    if (await readInspectLoaded($, data)) touched($, await $.clock.now())
+    if (await readInspectContext($, data)) touched($, await $.clock.now())
+  } catch {
+    // Inspect shows what it had
+  }
+}
+
 
 /**
  * Each directory edited in as the file system spells it, by `R.keyOf`:
@@ -3116,6 +3163,9 @@ export const register: Register = on => {
       // the model shows once a request reports it
     }
 
+    // Inspect: what is loaded and the context, read in the background
+    void readInspected($)
+
     // a reload while the sample showed reads it again, on the tab and page it was on
     if (view.isDemo) void loadDemo($, false)
 
@@ -3128,9 +3178,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes or settings; /deck demo: sample data; /deck web: in the Browser pane)',
-        // now (the Dashboard's id), inspect and help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
-        argumentHint: '[dashboard|chat|org|changes|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
+        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes, inspect or settings; /deck demo: sample data; /deck web: in the Browser pane)',
+        // now (the Dashboard's id), help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
+        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -3253,6 +3303,7 @@ export const register: Register = on => {
       const said = file ? { ...input, file_path: knownRealOf(file) } : input
       const activity = M.activityOf(e.tool_use_id, tool, said, git.root || null, start, data.board)
       M.beginTool(data, agent, activity)
+      inspectCalled(data, tool, input, start)
       // the call goes on at once; its target follows when the file system spells a new directory
       if (file && !isSpelledOf(file)) void respell($, activity, tool, input, file)
     } catch {
@@ -3310,6 +3361,8 @@ export const register: Register = on => {
     try {
       end = await $.clock.now()
       ok = ran.deny === undefined && ran.isError !== true
+      // Inspect: the call ran (its permission was given), or it was refused
+      inspectEnded(data, e.tool_use_id, ran.deny === undefined, ran.deny ?? '')
       if (agent) {
         M.endTool(agent, e.tool_use_id, ok, end)
         // a permission prompt holds its call: the call's end is the person's answer
@@ -3710,12 +3763,13 @@ export const register: Register = on => {
     return result
   })
 
-  // Claude stopped: Claude Code's snapshot of the background work (its tasks and schedules) brings Background up to date. Observe only.
+  // Claude stopped: Claude Code's snapshot of the background work (its tasks and schedules) brings Background up to date, and its input names the main loop's permission mode and effort (Inspect). Observe only.
   on('classic.Stop', async ($, e, next) => {
     const seen = await $.clock.now()
     const result = await next(e)
     try {
-      if (noteBackground(e, seen)) touched($, seen)
+      const isBackground = noteBackground(e, seen)
+      if (inspectMode(data, e) || isBackground) touched($, seen)
     } catch {
       // the stop stands whatever the deck makes of it
     }
@@ -3839,6 +3893,8 @@ export const register: Register = on => {
   // A call the engine puts to the mode's decider: a permission prompt, if its dialog shows (classic.PermissionRequest). Observe only.
   on('tool.check', async ($, e, next) => {
     const verdict = await next(e)
+    // Inspect's permissions log: every verdict on a real call, as the engine gave it
+    if (await inspectCheck($, data, e, verdict, next.origin.plugin === $.plugin.name, git.root || null)) touched($, await $.clock.now())
     try {
       // the deck's own calls, a query (no call), and the tools whose dialog is the person's own answer (a question, a plan) are no permission prompt
       const isPrompt = verdict.decision === 'ask' && e.tool_use_id !== undefined && e.tool_use_id !== '' && !PERSON_TOOLS.includes(e.tool) && next.origin.plugin !== $.plugin.name
@@ -3855,6 +3911,8 @@ export const register: Register = on => {
   // The permission dialog shows for a call the engine asked about: it is held on you until the call ends or is denied. Observe only.
   on('classic.PermissionRequest', async ($, e, next) => {
     const result = await next(e)
+    // Inspect: the dialog showed, or a PermissionRequest hook answered in its place
+    if (inspectDialog(data, askFor(e.tool_name, e.tool_input, e.agent_id ?? M.MAIN), result, e)) touched($, await $.clock.now())
     try {
       // a settings hook that decided spares you the dialog
       if (result.decision === undefined && result.block === undefined) {
@@ -3876,6 +3934,7 @@ export const register: Register = on => {
   // The permission was refused (the auto-mode classifier): nothing waits on you for it.
   on('classic.PermissionDenied', async ($, e, next) => {
     const result = await next(e)
+    if (inspectDenied(data, e)) touched($, await $.clock.now())
     try {
       asks.delete(e.tool_use_id)
       if (M.dropPending(data, e.tool_use_id)) touched($, await $.clock.now())
@@ -3952,6 +4011,56 @@ export const register: Register = on => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
       return bandOf(kit, modelOf(now), actionsFor($), theirs) ?? theirs
     })
+  })
+
+  // Inspect's own events (./inspectHooks), each observing only: a compaction, the context measured, the instruction files, the mode, the settings
+
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (await inspectCompaction($, data, e, result)) {
+      touched($, await $.clock.now())
+      void readContextSoon($)
+    }
+    return result
+  })
+
+  // the engine measured the session (after each main-thread turn): the breakdown read again, at most every 10 s
+  on('session.measure', async ($, e, next) => {
+    const result = await next(e)
+    void readContextSoon($)
+    return result
+  })
+
+  on('prompt.context', async ($, e, next) => {
+    const result = await next(e)
+    if (await inspectInstructions($, data, result.instructionFiles ?? e.instructionFiles)) touched($, await $.clock.now())
+    return result
+  })
+
+  on('classic.InstructionsLoaded', async ($, e, next) => {
+    const result = await next(e)
+    if (await inspectInstructionLoaded($, data, e)) touched($, await $.clock.now())
+    return result
+  })
+
+  // the main loop's permission mode and effort, as each of these names them
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const result = await next(e)
+    if (inspectMode(data, e)) touched($, await $.clock.now())
+    return result
+  })
+
+  on('classic.PostToolUse', async ($, e, next) => {
+    const result = await next(e)
+    if (inspectMode(data, e)) touched($, await $.clock.now())
+    return result
+  })
+
+  // a settings file changed: its hooks and the output style read again
+  on('classic.ConfigChange', async ($, e, next) => {
+    const result = await next(e)
+    void readInspected($)
+    return result
   })
 
   on('ui.render', { component: 'Pane', requestId: PROBE }, async ($, e) => {

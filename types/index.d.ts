@@ -215,9 +215,11 @@ export type DeckLane = {
  * `command` a slash command you ran alone ("/login", from `you` to nobody
  * in particular): no words of yours, so no bubble, a line of its own;
  * `stop` what you stopped from the deck, through Claude Code's own channels
- * ("You stopped builder", "You stopped the turn"): a line of its own too.
+ * ("You stopped builder", "You stopped the turn"): a line of its own too;
+ * `compaction` a loop's context compacted (`session.compact`), from that
+ * loop to nobody, its words the summary it goes on from: a divider line.
  */
-export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task' | 'command' | 'stop'
+export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task' | 'command' | 'stop' | 'compaction'
 
 export type DeckMessage = {
   /** `[A-Za-z0-9_]` and `-` only: the web deck serves it as a file name. */
@@ -247,6 +249,137 @@ export type DeckMessage = {
   title?: string
   /** The agent a notification is about: the loop it fired in, or the agent whose task it reports. */
   agent?: string
+  /** A `compaction` row's facts, as `session.compact` gave them (hooks/inspect.ts). */
+  compaction?: DeckCompactionFacts
+}
+
+/** What one compaction did, as the engine said it: who asked for it, and the conversation's size before and after; absent where it did not say. */
+export type DeckCompactionFacts = {
+  /** `manual` (your /compact), `auto` (the engine at its threshold), `plugin`. */
+  trigger: string
+  before?: number
+  after?: number
+  /** The context window the percentages are of: the main loop's, as `session.usage` gave it when the compaction ran; absent for an agent's. */
+  window?: number
+}
+
+/**
+ * One permission decision the deck saw (hooks/inspect.ts): a call's
+ * `tool.check` verdict as the engine gave it, then how an ask was settled
+ * (its dialog shown, auto mode's refusal, a PermissionRequest hook's
+ * answer) and how the call ended.
+ */
+export type DeckDecision = {
+  /** The call's tool_use_id. */
+  id: string
+  at: number
+  /** `main`, or the agent whose call it is. */
+  agent: string
+  tool: string
+  /** What the call was aimed at, verbatim as the deck keeps it: a shell's command, a file, a pattern, a URL. */
+  target: string
+  /** `tool.check`'s verdict. */
+  verdict: 'allow' | 'ask' | 'deny'
+  /** The verdict's reason, the settings rule that decided (as written), the classic hook event that decided, the option that asked, the plugin whose hook asked: each as the engine gave it. */
+  reason?: string
+  rule?: string
+  hook?: string
+  setting?: string
+  plugin?: string
+  /** Who the engine said answers this call's asks: `host` (a program), `person`. */
+  approver?: string
+  /** The permission mode the loop ran in, as the engine last named it (`auto`, `default`, ...); absent while it had not. */
+  mode?: string
+  /** The permission dialog showed (classic.PermissionRequest), so the person answered. */
+  isDialog?: true
+  /** A PermissionRequest settings hook answered in the dialog's place. */
+  hookAnswer?: { behavior: 'allow' | 'deny'; message?: string }
+  /** Auto mode's classifier refused it (classic.PermissionDenied): its reason. */
+  denied?: string
+  /** How the call ended: it ran (true) or was refused (false); absent while it is open. */
+  ran?: boolean
+  /** A refused call's words, as the model read them (at most 300 characters). */
+  refusal?: string
+}
+
+/** One compaction of a loop's context (`session.compact`): the chat row that marks it, and its facts. */
+export type DeckCompaction = DeckCompactionFacts & {
+  /** Its chat row's id (`DeckMessage.id`); '' for a compaction refused (`skipped`). */
+  messageId: string
+  at: number
+  /** `main`, or the agent whose context it was. */
+  agent: string
+  /** The summary's first words (at most 300 characters); the whole is its chat row's. */
+  summary: string
+  /** Refused (SessionCompactSkipped): why, as its notice read. */
+  skipped?: string
+}
+
+/** One row of the context as /context breaks it down (`$.session.usage({ breakdown })`). */
+export type DeckContextRow = { name: string; tokens: number; kind: 'used' | 'free' | 'buffer' | 'deferred'; color: string }
+
+/** The context window as /context last counted it, and the window the header's percentage is of. */
+export type DeckContext = {
+  at: number
+  /** The breakdown's total, its window (`rawMaxTokens`), and the share as /context prints it. */
+  total: number
+  max: number
+  percent: number
+  model: string
+  rows: DeckContextRow[]
+  /** The token count auto-compaction runs at; absent when it is off. */
+  autoCompactAt?: number
+  /** The model's window (`session.usage().context.window`): what the header's percentage, and a compaction's, are of. */
+  window?: number
+}
+
+/** One instruction or memory file the session loaded, from whichever source told the deck (prompt.context, classic.InstructionsLoaded, the breakdown). */
+export type DeckInstruction = {
+  path: string
+  /** Its tier: `user`, `project`, `local`, `managed`, `memory` (prompt.context's), else the engine's own word for it (`User`, `AutoMem`). */
+  kind: string
+  lines?: number
+  tokens?: number
+  /** Why it loaded (InstructionsLoaded's `load_reason`), and the file that brought it. */
+  reason?: string
+  trigger?: string
+  parent?: string
+}
+
+/** One hook the settings configure (`$.settings.read({ source })`'s `hooks`). */
+export type DeckHook = { event: string; matcher: string; command: string; source: string }
+
+/** What shapes the session, as the engine gave it: read at the start, at a settings change, and as the breakdown is read. */
+export type DeckLoaded = {
+  at: number
+  /** The session's model, as `$.session.model()` gave it. */
+  model?: string
+  /** The output style: the settings' `outputStyle`, or `/config`'s row for it. */
+  outputStyle?: string
+  instructions: DeckInstruction[]
+  /** The skills the context lists (the breakdown's `skills`); null until read. */
+  skills: { total: number; names: string[] } | null
+  /** The MCP servers whose tools the context carries, with their tool counts (the breakdown's `mcpTools`). */
+  mcp: { server: string; tools: number; deferred: number; names: string[] }[]
+  hooks: DeckHook[]
+}
+
+/** Inspect's own records (hooks/inspect.ts): what Claude Code said of permissions, compactions, the context and what is loaded. */
+export type DeckInspect = {
+  /** The main loop's permission mode, as a classic hook's `permission_mode` last named it; '' until one did. */
+  mode: string
+  /** The main loop's effort, as a classic hook's `effort.level` last named it; '' until one did. */
+  effort: string
+  /** The permission decisions, newest last (at most 100). */
+  decisions: DeckDecision[]
+  /** The compactions, newest last (at most 20). */
+  compactions: DeckCompaction[]
+  context: DeckContext | null
+  loaded: DeckLoaded | null
+  /** The skills the Skill tool ran this session, by name: how many times, and when last. */
+  skillsUsed: Record<string, { count: number; at: number }>
+  /** MCP tool calls this session, by the tool's name (`mcp__server__tool`). */
+  mcpCalls: Record<string, number>
 }
 
 /** One question of an AskUserQuestion call, as its dialog draws it. */
@@ -472,6 +605,8 @@ export type DeckData = {
    * asks again first. Absent in a snapshot of a build that kept none.
    */
   verdicts?: Record<string, DeckVerdict>
+  /** Inspect's records (hooks/inspect.ts): permission decisions, compactions, the context and what is loaded; absent until the first. */
+  inspect?: DeckInspect
 }
 
 /**
@@ -491,17 +626,18 @@ export type DeckMapView = 'tree' | 'wire'
 
 /**
  * What the v2 screens (web/CONTRACT.md v2) keep of their own in the pane:
- * the tab open (Dashboard, Chat, Org, Changes, Settings; keys 1 to 5), the
- * fold rows opened and Chat's filter. The agent page open is `page`.
+ * the tab open (Dashboard, Chat, Org, Changes, Inspect, Settings; keys 1 to
+ * 6), the fold rows opened and Chat's filter. The agent page open is `page`.
  */
 export type DeckView2 = {
   /** The tab open: `now` is the Dashboard (its id from before it was renamed, so `/deck now` and saved views still land). */
-  tab: 'now' | 'chat' | 'org' | 'changes' | 'settings'
+  tab: 'now' | 'chat' | 'org' | 'changes' | 'inspect' | 'settings'
   /**
    * The fold rows opened, by their id: a tree's (`fold:` and the parent's
-   * id), and the "N finished" rows of the Dashboard (`finished:now`) and of
-   * Chat's members (`finished:chat`); oldest first, at most 50. Every other
-   * stays folded.
+   * id), the "N finished" rows of the Dashboard (`finished:now`) and of
+   * Chat's members (`finished:chat`), and Inspect's sections
+   * (`inspect:context`, `inspect:permissions`, `inspect:loaded`,
+   * `inspect:spend`); oldest first, at most 50. Every other stays folded.
    */
   openFolds: string[]
   /** Chat's filter: '' for Everyone, `between` (agent to agent), or the id of the agent picked in its member list. */
@@ -519,8 +655,8 @@ export type DeckView2 = {
   orgView?: 'chart' | 'timeline'
   /**
    * Inspect over the tab, as earlier builds had it: always false now, as
-   * Inspect is a section of Settings. A view saved with `true`, or a patch
-   * that sets it, opens Settings (`M.view2With`).
+   * Inspect is a tab of its own. A view saved with `true`, or a patch that
+   * sets it, opens Inspect (`M.view2With`).
    */
   isInspectOpen: boolean
 }

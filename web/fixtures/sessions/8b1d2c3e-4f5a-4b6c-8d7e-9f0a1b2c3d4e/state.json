@@ -19,6 +19,7 @@
     "model": "opus-5.5",
     "contextPercent": 22,
     "costUsd": 1.8,
+    "mode": "",
     "line": "opus-5.5 · context 22% · $1.80",
     "turn": null
   },
@@ -253,7 +254,25 @@
         "tools": 1,
         "errors": 0
       }
-    ]
+    ],
+    "mode": "",
+    "modeText": "",
+    "summary": {
+      "context": "22%",
+      "permissions": "",
+      "loaded": "",
+      "spend": "$1.80"
+    },
+    "context": null,
+    "compactions": [],
+    "permissions": {
+      "decisions": [],
+      "total": 0,
+      "denied": 0,
+      "blocked": 0,
+      "waiting": 0
+    },
+    "loaded": null
   },
   "acks": [],
   "cleared": {

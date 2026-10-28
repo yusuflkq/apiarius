@@ -3,16 +3,17 @@
  * design the web page and the terminal draw:
  *
  * - the header: the session's state in one word, your latest request in
- *   your words, then `model · context % · $cost`;
+ *   your words, then `model · permission mode · context % · $cost`, the mode
+ *   in amber (bypass permissions in red) as Claude Code's footer marks it;
  * - the tabs, `1` Dashboard · `2` Chat · `3` Org · `4` Changes · `5`
- *   Settings (the Dashboard's id stays `now`);
- * - under them the open tab (./now, ./chat, ./org, ./changes, ./settings),
- *   or over it an agent's page (./page), `b` going back.
+ *   Inspect · `6` Settings (the Dashboard's id stays `now`);
+ * - under them the open tab (./now, ./chat, ./org, ./changes, ./inspect,
+ *   ./settings), or over it an agent's page (./page), `b` going back.
  *
  * Each tab is a Button with its digit as its hotkey, so it presses while the
- * pane has the keyboard; Enter presses the focused one. Inspect and Help are
- * sections of Settings; the header's one key is All sessions (`s`, ./sessions:
- * every session on this machine, listed over the tab).
+ * pane has the keyboard; Enter presses the focused one. Help is a section of
+ * Settings; the header's one key is All sessions (`s`, ./sessions: every
+ * session on this machine, listed over the tab).
  *
  * Pure: Kit, the state, its lazy files, the deck model and DashActions come
  * from the hooks module.
@@ -26,6 +27,7 @@ import type { DashActions, DeckModel, Kit, WebPane } from '../types'
 import { changesTab } from './changes'
 import { chatTab } from './chat'
 import { FEWEST_ROWS, rowsOf } from './fit'
+import { inspectTab } from './inspect'
 import { nowTab } from './now'
 import { orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
@@ -40,7 +42,8 @@ export const TABS: readonly { id: DeckView2['tab']; label: string; hotkey: strin
   { id: 'chat', label: 'Chat', hotkey: '2' },
   { id: 'org', label: 'Org', hotkey: '3' },
   { id: 'changes', label: 'Changes', hotkey: '4' },
-  { id: 'settings', label: 'Settings', hotkey: '5' },
+  { id: 'inspect', label: 'Inspect', hotkey: '5' },
+  { id: 'settings', label: 'Settings', hotkey: '6' },
 ]
 
 /** How Org stands when the hooks module says nothing of it: its chart not failed, no agent marked. */
@@ -63,11 +66,41 @@ export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckM
 const STATE_HUE: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.runText, waiting: P.waitText, idle: P.muted }
 const STATE_DOT: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.run, waiting: P.wait, idle: P.idleDot }
 
-/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · context % · $cost` and, once the sessions on this machine are known, "All sessions" (`s`). */
+/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · mode · context % · $cost`, the mode lit, and, once the sessions on this machine are known, "All sessions" (`s`). */
 function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const head = state.header
   const goal = head.goal ? clean(head.goal.headline) : 'No request yet'
+  // the permission mode in the line, lit as Claude Code's footer lights it (a state of an earlier build names none)
+  const mode = typeof head.mode === 'string' ? head.mode : ''
+  const at = mode !== '' ? head.line.indexOf(mode) : -1
+  // three parts in a row, so the mode keeps its own colour and the line cuts at its end: the model and the mode whole, the rest cut to the room left
+  const lineParts =
+    at < 0
+      ? [
+          <Box flexShrink={1} minWidth={0}>
+            <Text color={P.muted2} wrap="truncate-end">
+              {head.line}
+            </Text>
+          </Box>,
+        ]
+      : [
+          <Box flexShrink={0}>
+            <Text color={P.muted2} wrap="truncate-end">
+              {head.line.slice(0, at)}
+            </Text>
+          </Box>,
+          <Box flexShrink={0}>
+            <Text color={mode === 'bypass permissions' ? P.failText : P.waitText} wrap="truncate-end">
+              {mode}
+            </Text>
+          </Box>,
+          <Box flexShrink={1} minWidth={0}>
+            <Text color={P.muted2} wrap="truncate-end">
+              {head.line.slice(at + mode.length)}
+            </Text>
+          </Box>,
+        ]
   return (
     <Box key="deck:header" flexDirection="column">
       <Box flexDirection="row" columnGap={1}>
@@ -87,10 +120,8 @@ function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElemen
         {stopTurnButton(kit, state, actions)}
       </Box>
       <Box flexDirection="row" columnGap={2}>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={P.muted2} wrap="truncate-end">
-            {head.line}
-          </Text>
+        <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row">
+          {lineParts}
         </Box>
         {sessionsButton(kit, state.sessions, actions)}
       </Box>
@@ -117,7 +148,7 @@ function webLine(kit: Kit, web: WebPane): RenderElement | null {
   return <Markdown key="web:link" text={`[Open Agent Deck](${web.url}) in the Browser pane`} />
 }
 
-/** The tabs (1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Settings, the open one lit). A tab pressed on a page leaves it for that tab. */
+/** The tabs (1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Inspect · 6 Settings, the open one lit). A tab pressed on a page leaves it for that tab. */
 function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActions): RenderElement {
   const { Box, Button } = kit
   const { view } = model
@@ -147,6 +178,7 @@ function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, a
   if (v2.tab === 'chat') return chatTab(kit, state, files, v2, actions, isDemo)
   if (v2.tab === 'changes') return changesTab(kit, state, files, model, actions, isDemo)
   if (v2.tab === 'org') return orgTab(kit, state, actions, org, { files, ...(v2.orgView ? { orgView: v2.orgView } : {}) })
+  if (v2.tab === 'inspect') return inspectTab(kit, state, v2, actions)
   if (v2.tab === 'settings') return settingsTab(kit, state, model, actions)
   return nowTab(kit, state, view.collapsed, actions, () => actions.setV2View({ tab: 'org' }), v2.openFolds)
 }

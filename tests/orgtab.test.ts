@@ -81,7 +81,7 @@ function wirePiecesOf(layout: OrgLayout): number {
   return layout.segments.reduce((sum, segment) => sum + (segment.down ? 1 : orgPiecesOf(segment.glyphs).length), 0)
 }
 
-test('the tabs are 1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Settings; on the desktop Org is a chart of the pane`s own elements: a card an agent where the layout puts it, its avatar, its name a Button that opens its page, over box-drawing connectors', async ($, on) => {
+test('the tabs are 1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Inspect · 6 Settings; on the desktop Org is a chart of the pane`s own elements: a card an agent where the layout puts it, its avatar, its name a Button that opens its page, over box-drawing connectors', async ($, on) => {
   const state = sampleState()
   await demo($, on, state)
   const ui = await $.ui.mount(pane('desktop'))
@@ -90,7 +90,8 @@ test('the tabs are 1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Settings; on
     ['tab:chat', '2'],
     ['tab:org', '3'],
     ['tab:changes', '4'],
-    ['tab:settings', '5'],
+    ['tab:inspect', '5'],
+    ['tab:settings', '6'],
   ])
   await press(ui, 'tab:org')
   expect((await ui.find({ key: 'tab:org' }))?.props).toMatchObject({ label: 'Org', dimColor: false })

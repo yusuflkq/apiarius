@@ -19,6 +19,7 @@
     "model": "sonnet-4.5",
     "contextPercent": 7,
     "costUsd": 0.31,
+    "mode": "",
     "line": "sonnet-4.5 · context 7% · $0.31",
     "turn": null
   },
@@ -119,7 +120,25 @@
         "tools": 0,
         "errors": 0
       }
-    ]
+    ],
+    "mode": "",
+    "modeText": "",
+    "summary": {
+      "context": "7%",
+      "permissions": "",
+      "loaded": "",
+      "spend": "$0.31"
+    },
+    "context": null,
+    "compactions": [],
+    "permissions": {
+      "decisions": [],
+      "total": 0,
+      "denied": 0,
+      "blocked": 0,
+      "waiting": 0
+    },
+    "loaded": null
   },
   "acks": [],
   "cleared": {
