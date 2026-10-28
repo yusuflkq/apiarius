@@ -449,10 +449,14 @@ async function isListed(id: string, now: number): Promise<boolean> {
 export async function registryTick(now: number, isWebOn: boolean): Promise<void> {
   if (reg.dir === '') return
   reg.tickAt = now
-  await pollInbox(now)
-  if (reg.isOpen || reg.viewing !== null || isWebOn) await readRegistry(now)
-  for (const [id, until] of reg.looks) if (until <= now) reg.looks.delete(id)
-  if (reg.viewing) await readViewed(now)
+  try {
+    await pollInbox(now)
+    if (reg.isOpen || reg.viewing !== null || isWebOn) await readRegistry(now)
+    for (const [id, until] of reg.looks) if (until <= now) reg.looks.delete(id)
+    if (reg.viewing) await readViewed(now)
+  } catch {
+    // the deck's own tick goes on: the next one reads again
+  }
 }
 
 // ---------------------------------------------------------------- the list

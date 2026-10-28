@@ -376,3 +376,37 @@ test('this session`s inbox: a deck viewing it has its state written (no /deck we
   await clock.advance(3000)
   expect(w.submitted.filter(one => one.text === 'Also run the linter').length).toBe(1)
 })
+
+test('/deck demo lists the sample`s sessions (s) and opens one`s deck from the fixtures, under "Sample data": nothing is sent', async ($, on) => {
+  const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
+  const own = sampleState()
+  const sample = sampleSessions()
+  on('fs.read', ($, e) => {
+    const path = norm(e.path)
+    if (path.endsWith('/web/fixtures/state.v2.json')) return { value: JSON.stringify(own) }
+    if (path.endsWith('/web/fixtures/sessions.v2.json')) return { value: JSON.stringify({ now: sample.now, me: sample.me, entries: sample.entries, view: sample.view }) }
+    const one = sample.decks.find(deck => path.endsWith(`/web/fixtures/${deck.dir}/state.json`))
+    return one ? { value: JSON.stringify(one.state) } : { deny: 'no such file' }
+  })
+  on('ui.focus', () => ({}))
+  world(on, newWorld())
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await $.command.run(deck('demo'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount(pane('desktop'))
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('◆ 1 other session needs you')
+  await ui.press({ key: 'key:s' })
+  await clock.advance(500)
+  await ui.redraw()
+  expect((await ui.findAll({ type: 'Button' })).map(one => one.key ?? '').filter(key => key.startsWith('session:'))).toEqual(sample.view.rows.map(row => `session:${row.id}`))
+  const ci = sample.view.rows.find(row => row.title === 'Fix the flaky CI job')!
+  expect((await ui.find({ key: `session-row:${ci.id}` }))?.text).toContain('Terminal · Windows Terminal · api-server')
+  await ui.press({ key: `session:${ci.id}` })
+  await clock.advance(500)
+  await ui.redraw()
+  const bar = await ui.find({ key: 'viewing:head' })
+  expect(bar?.text).toContain('Fix the flaky CI job')
+  expect(bar?.text).toContain('Sample data')
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Fix the flaky CI job')
+  await ui.unmount()
+})
