@@ -16,6 +16,7 @@ import * as AV from '../web/avatars.mjs'
 import type { Hunk } from './diff'
 import * as F from './format'
 import type { GitState } from './git'
+import * as I from './inspect'
 import * as M from './model'
 import type { UsageInfo } from './ui/types'
 
@@ -557,7 +558,9 @@ export type V2Header = {
   model: string
   contextPercent: number | null
   costUsd: number | null
-  /** "opus-5.5 · context 41% · $4.12", each part left out while unknown. */
+  /** The main loop's permission mode in words ("auto mode"), as Claude Code's footer says it; '' for the default mode and while no hook has named it (hooks/inspect.ts). */
+  mode: string
+  /** "opus-5.5 · auto mode · context 41% · $4.12", each part left out while unknown. */
   line: string
   /** The main loop's running turn, the one `abortTurn` ends (`$.turn.abort`), and when it started (null when the deck did not see it start); null between turns. */
   turn: { id: string; at: number | null } | null
@@ -705,6 +708,8 @@ export type V2ChatRow = {
   agent?: string
   /** From, to or about an agent "Clear finished" hid: left out of Chat's Everyone and Between agents. */
   isCleared?: true
+  /** A `compaction` row's facts and words: whose context, the trigger, its size before and after (hooks/inspect.ts). */
+  compaction?: I.V2ChatCompaction
 }
 
 /** The plan, only as Claude made it, from every source it used; null when it made none. */
@@ -735,12 +740,12 @@ export type V2Changes = {
   commits: WebState['commits']
 }
 
-/** Inspect's first part (Phase 2 adds context, loaded, permissions and background): the context, the spend, and each agent's tokens. */
+/** Inspect (tab 5): the context, the spend and each agent's tokens (Spend), then what hooks/inspect.ts records: the mode, the context's breakdown, the compactions, the permission decisions and what is loaded, with each section's one line. */
 export type V2Inspect = {
   contextPercent: number | null
   costUsd: number | null
   agents: { id: string; title: string; model: string; tokens: { in: number; out: number; cacheRead: number }; requests: number; tools: number; errors: number }[]
-}
+} & I.V2InspectMore
 
 /** One tool call of any agent's, as Now's Recent activity lists it. */
 export type V2Activity = {
@@ -759,6 +764,8 @@ export type V2Activity = {
   ok: boolean | null
   /** How long it took; null until it ends. */
   ms: number | null
+  /** Refused, as Inspect's permission decisions say: by a hook (`blocked`), or by auto mode, a rule or you (`denied`); absent for every other call. */
+  refused?: 'denied' | 'blocked'
 }
 
 /** One file the agents edited, as Now's Files lists it: who edited it and how much, nothing read into it. */
@@ -1179,6 +1186,7 @@ function chatRowOf(data: DeckData, message: DeckMessage): V2ChatRow {
     ...(message.ackId ? { ackId: message.ackId } : {}),
     ...(message.callId ? { callId: webIdOf(message.callId) } : {}),
     ...(message.agent ? { agent: message.agent } : {}),
+    ...(message.kind === 'compaction' && message.compaction ? { compaction: I.chatCompactionOf(message.compaction, message.from, from) } : {}),
   }
 }
 
@@ -1223,7 +1231,10 @@ export function planOfV2(data: DeckData): V2Plan | null {
 export function activityListOf(data: DeckData): V2Activity[] {
   const calls = data.agents.filter(isTreeAgent).flatMap(agent => {
     const agentName = partyOf(data, agent.id, true)
-    return agent.recent.map(call => ({ id: webIdOf(call.id), at: call.at, agent: agent.id, agentName, tool: call.tool, text: call.description || call.target, ok: call.ok ?? null, ms: call.ms ?? null }))
+    return agent.recent.map(call => {
+      const refused = I.refusalOf(data, call.id)
+      return { id: webIdOf(call.id), at: call.at, agent: agent.id, agentName, tool: call.tool, text: call.description || call.target, ok: call.ok ?? null, ms: call.ms ?? null, ...(refused ? { refused } : {}) }
+    })
   })
   // newest first; of two at the same moment, the one recorded later first
   return calls
@@ -1291,10 +1302,10 @@ function figuresOf(data: DeckData, rows: readonly V2Row[], plan: V2Plan | null, 
   }
 }
 
-/** The header's line: "opus-5.5 · context 41% · $4.12", each part left out while unknown. */
-function headerLineOf(model: string, usage: UsageInfo | null): string {
+/** The header's line: "opus-5.5 · auto mode · context 41% · $4.12", each part left out while unknown. */
+function headerLineOf(model: string, usage: UsageInfo | null, mode = ''): string {
   const percent = usage?.contextPercent
-  const parts = [model, percent !== undefined ? `context ${Math.round(percent)}%` : '', usage?.costUsd !== undefined ? F.money(usage.costUsd) : '']
+  const parts = [model, mode, percent !== undefined ? `context ${Math.round(percent)}%` : '', usage?.costUsd !== undefined ? F.money(usage.costUsd) : '']
   return parts.filter(part => part !== '').join(' · ')
 }
 
@@ -1331,6 +1342,10 @@ export function deckStateOf(
   const edits = data.edits.slice(-V2_CAPS.edits)
   const rows = agentRowsOf(data, now, needsBy)
   const plan = planOfV2(data)
+  const mode = I.headerModeOf(data)
+  const spendAgents = data.agents
+    .filter(isTreeAgent)
+    .map(agent => ({ id: agent.id, title: rowTitleOf(agent), model: shortModel(agent.model), tokens: { in: agent.tokensIn, out: agent.tokensOut, cacheRead: agent.cacheRead }, requests: agent.requests, tools: agent.tools, errors: agent.errors }))
   // what "Clear finished" hid is marked last, over the state as built
   return clearedStateOf({
     v: 2,
@@ -1344,7 +1359,8 @@ export function deckStateOf(
       model,
       contextPercent: usage?.contextPercent ?? null,
       costUsd: usage?.costUsd ?? null,
-      line: headerLineOf(model, usage),
+      mode,
+      line: headerLineOf(model, usage, mode),
       turn: turnId !== undefined ? { id: turnId, at: data.mainTurnAt ?? null } : null,
     },
     needs,
@@ -1378,9 +1394,8 @@ export function deckStateOf(
     inspect: {
       contextPercent: usage?.contextPercent ?? null,
       costUsd: usage?.costUsd ?? null,
-      agents: data.agents
-        .filter(isTreeAgent)
-        .map(agent => ({ id: agent.id, title: rowTitleOf(agent), model: shortModel(agent.model), tokens: { in: agent.tokensIn, out: agent.tokensOut, cacheRead: agent.cacheRead }, requests: agent.requests, tools: agent.tools, errors: agent.errors })),
+      agents: spendAgents,
+      ...I.inspectMoreOf(data, usage?.contextPercent ?? null, { costUsd: usage?.costUsd ?? null, tokens: spendAgents.reduce((sum, one) => sum + one.tokens.in + one.tokens.out + one.tokens.cacheRead, 0) }, { nameOf: id => partyOf(data, id, true), short: shortModel, idOf: webIdOf }),
     },
     acks: data.acks.slice(-V2_CAPS.acks).map(ack => ({ id: ack.id, ok: ack.ok, status: ack.status, text: ack.text, at: ack.at })),
     cleared: { count: 0, at: null },

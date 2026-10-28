@@ -256,27 +256,26 @@ export function clearedWith(current: DeckView2, ids: readonly string[], at: numb
   return { ...current, cleared: [...new Set([...current.cleared, ...ids])].slice(-CLEARED_KEPT), clearedAt: at }
 }
 
-/** The v2 tabs, in their keys' order (1 Dashboard, 2 Chat, 3 Org, 4 Changes, 5 Settings); the Dashboard's id stays `now`. */
-export const V2_TABS: readonly DeckView2['tab'][] = ['now', 'chat', 'org', 'changes', 'settings']
+/** The v2 tabs, in their keys' order (1 Dashboard, 2 Chat, 3 Org, 4 Changes, 5 Inspect, 6 Settings); the Dashboard's id stays `now`. */
+export const V2_TABS: readonly DeckView2['tab'][] = ['now', 'chat', 'org', 'changes', 'inspect', 'settings']
 
-/** The v2 tab a tab of either build is: Changes, Chat, Org and Settings stay as they are; Stats goes to Settings (where Inspect is); the Dashboard, Plan and Classic fold into the Dashboard (`now`). */
+/** The v2 tab a tab of either build is: Changes, Chat, Org, Inspect and Settings stay as they are; Stats goes to Inspect (its Spend); the Dashboard, Plan and Classic fold into the Dashboard (`now`). */
 export function v2TabOf(tab: DeckTab | DeckView2['tab']): DeckView2['tab'] {
-  if (tab === 'stats') return 'settings'
-  return tab === 'changes' || tab === 'chat' || tab === 'org' || tab === 'settings' ? tab : 'now'
+  if (tab === 'stats') return 'inspect'
+  return tab === 'changes' || tab === 'chat' || tab === 'org' || tab === 'inspect' || tab === 'settings' ? tab : 'now'
 }
 
-/** The names `/deck` takes for a v2 tab beside the tabs' own ids: the Dashboard's (its id is `now`), and what Settings holds, Inspect and Help. */
+/** The names `/deck` takes for a v2 tab beside the tabs' own ids: the Dashboard's (its id is `now`), and Help, which Settings holds. */
 export const V2_TAB_NAMES: ReadonlyMap<string, DeckView2['tab']> = new Map<string, DeckView2['tab']>([
   ['dashboard', 'now'],
-  ['inspect', 'settings'],
   ['help', 'settings'],
 ])
 
 /**
  * The v2 tab a `/deck` argument asks for: `now` (or `dashboard`), `chat`,
- * `org`, `changes` or `settings` (or `inspect`, `help`), or the start of
- * one (`c` is Chat); else an earlier build's tab, where it went (`v2TabOf`
- * of `tabFor`: `stats` is Settings). Undefined for anything else.
+ * `org`, `changes`, `inspect` or `settings` (or `help`), or the start of
+ * one (`c` is Chat, `i` Inspect); else an earlier build's tab, where it went
+ * (`v2TabOf` of `tabFor`: `stats` is Inspect). Undefined for anything else.
  */
 export function v2TabFor(arg: string): DeckView2['tab'] | undefined {
   const wanted = arg.trim().toLowerCase()
@@ -296,13 +295,13 @@ const OPEN_FOLDS_KEPT = 50
  * reload's would be (a tab of the five, fold ids and a filter as strings,
  * the oldest folds dropped past 50); what `patch` leaves out stays.
  *
- * Inspect is a section of Settings now: `isInspectOpen` stays false, and a
- * `true` (a view an earlier build saved) opens Settings.
+ * Inspect is a tab of its own now: `isInspectOpen` stays false, and a
+ * `true` (a view an earlier build saved) opens Inspect.
  */
 export function view2With(current: DeckView2, patch: unknown): DeckView2 {
   const p = patch && typeof patch === 'object' ? (patch as Record<string, unknown>) : {}
   return {
-    tab: p.isInspectOpen === true ? 'settings' : oneOf(p.tab, V2_TABS, current.tab),
+    tab: p.isInspectOpen === true ? 'inspect' : oneOf(p.tab, V2_TABS, current.tab),
     openFolds: Array.isArray(p.openFolds) ? [...new Set(p.openFolds.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-OPEN_FOLDS_KEPT) : current.openFolds,
     chatFilter: typeof p.chatFilter === 'string' ? p.chatFilter : current.chatFilter,
     isInspectOpen: false,

@@ -28,6 +28,7 @@ import * as AV from '../web/avatars.mjs'
 import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
+import { inspectHooks } from './inspectHooks'
 import * as M from './model'
 import * as R from './repos'
 import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
@@ -271,6 +272,9 @@ function touched($: EngineInterface, now: number) {
   save($)
   redrawIfChanged($, now)
 }
+
+/** Inspect's hooks (./inspectHooks): permission decisions, compactions, the context and what is loaded, recorded into this module's data. */
+const inspect = inspectHooks({ data: () => data, touched: ($, now) => touched($, now), root: () => git.root || null })
 
 /**
  * Each directory edited in as the file system spells it, by `R.keyOf`:
@@ -2846,6 +2850,9 @@ export const register: Register = on => {
       // the model shows once a request reports it
     }
 
+    // Inspect: what is loaded and the context, read in the background
+    void inspect.start($)
+
     // a reload while the sample showed reads it again, on the tab and page it was on
     if (view.isDemo) void loadDemo($, false)
 
@@ -2858,9 +2865,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes or settings; /deck demo: sample data; /deck web: in the Browser pane)',
-        // now (the Dashboard's id), inspect and help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
-        argumentHint: '[dashboard|chat|org|changes|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
+        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes, inspect or settings; /deck demo: sample data; /deck web: in the Browser pane)',
+        // now (the Dashboard's id), help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
+        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
         immediate: true,
       })
     } catch (error) {
@@ -2969,6 +2976,7 @@ export const register: Register = on => {
       const said = file ? { ...input, file_path: knownRealOf(file) } : input
       const activity = M.activityOf(e.tool_use_id, tool, said, git.root || null, start, data.board)
       M.beginTool(data, agent, activity)
+      inspect.called(tool, input, start)
       // the call goes on at once; its target follows when the file system spells a new directory
       if (file && !isSpelledOf(file)) void respell($, activity, tool, input, file)
     } catch {
@@ -3024,6 +3032,8 @@ export const register: Register = on => {
     try {
       end = await $.clock.now()
       ok = ran.deny === undefined && ran.isError !== true
+      // Inspect: the call ran (its permission was given), or it was refused
+      inspect.ended(e.tool_use_id, ran.deny === undefined, ran.deny ?? '')
       if (agent) {
         M.endTool(agent, e.tool_use_id, ok, end)
         // a permission prompt holds its call: the call's end is the person's answer
@@ -3525,6 +3535,8 @@ export const register: Register = on => {
   // A call the engine puts to the mode's decider: a permission prompt, if its dialog shows (classic.PermissionRequest). Observe only.
   on('tool.check', async ($, e, next) => {
     const verdict = await next(e)
+    // Inspect's permissions log: every verdict on a real call, as the engine gave it
+    await inspect.check($, e, verdict, next.origin.plugin === $.plugin.name)
     try {
       // the deck's own calls, a query (no call), and the tools whose dialog is the person's own answer (a question, a plan) are no permission prompt
       const isPrompt = verdict.decision === 'ask' && e.tool_use_id !== undefined && e.tool_use_id !== '' && !PERSON_TOOLS.includes(e.tool) && next.origin.plugin !== $.plugin.name
@@ -3541,6 +3553,8 @@ export const register: Register = on => {
   // The permission dialog shows for a call the engine asked about: it is held on you until the call ends or is denied. Observe only.
   on('classic.PermissionRequest', async ($, e, next) => {
     const result = await next(e)
+    // Inspect: the dialog showed, or a PermissionRequest hook answered in its place
+    await inspect.dialog($, askFor(e.tool_name, e.tool_input, e.agent_id ?? M.MAIN), result, e)
     try {
       // a settings hook that decided spares you the dialog
       if (result.decision === undefined && result.block === undefined) {
@@ -3562,6 +3576,7 @@ export const register: Register = on => {
   // The permission was refused (the auto-mode classifier): nothing waits on you for it.
   on('classic.PermissionDenied', async ($, e, next) => {
     const result = await next(e)
+    await inspect.denied($, e)
     try {
       asks.delete(e.tool_use_id)
       if (M.dropPending(data, e.tool_use_id)) touched($, await $.clock.now())
@@ -3639,6 +3654,9 @@ export const register: Register = on => {
       return bandOf(kit, modelOf(now), actionsFor($), theirs) ?? theirs
     })
   })
+
+  // Inspect's own events: compactions, the context's measure, the instruction files, the mode and the settings
+  inspect.register(on)
 
   on('ui.render', { component: 'Pane', requestId: PROBE }, async ($, e) => {
     const ui = $.ui.resolve(e)
