@@ -327,7 +327,7 @@ test('each section`s head is one plain Button, "▾ AGENTS 8"; a press folds it 
   const n = D.agentRowsOf(state).length
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    expect(await keysOf(ui, 'fold:dash:')).toEqual(['fold:dash:agents', 'fold:dash:figures', 'fold:dash:plan', 'fold:dash:activity', 'fold:dash:files'])
+    expect(await keysOf(ui, 'fold:dash:')).toEqual(['fold:dash:agents', 'fold:dash:background', 'fold:dash:figures', 'fold:dash:plan', 'fold:dash:activity', 'fold:dash:files'])
     expect((await ui.find({ key: 'fold:dash:agents' }))?.props).toMatchObject({ label: `▾ AGENTS ${n}`, plain: true })
     await press(ui, 'fold:dash:agents')
     expect((await ui.find({ key: 'fold:dash:agents' }))?.props.label).toBe(`▸ AGENTS ${n}`)

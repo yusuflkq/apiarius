@@ -267,10 +267,11 @@ function redrawIfChanged($: EngineInterface, now: number) {
   redraw($)
 }
 
-/** An event changed the data: keep it, and draw if the screen would change. */
+/** An event changed the data: keep it, and draw if the screen would change. Whatever it brought that the deck could stop is put to Claude Code's permission check at once (`probeStops`), so its Stop shows with it. */
 function touched($: EngineInterface, now: number) {
   save($)
   redrawIfChanged($, now)
+  probeStops($, now)
 }
 
 /**

@@ -655,7 +655,7 @@ test('/deck demo reads the v2 sample beside v1: web/fixtures/state.v2.json, then
   )
 })
 
-test('stopAgent and abortTurn from the page are checked and acked: not in this build yet, said so, never left waiting; refused ones say why', async ($, on) => {
+test('stopAgent and abortTurn from the page are checked and acked, never left waiting: Stop only where Claude Code`s check allows TaskStop, Stop turn through $.turn.abort; refused ones say why', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -663,18 +663,24 @@ test('stopAgent and abortTurn from the page are checked and acked: not in this b
   await clock.advance(400)
   const child = w.children[0]
   const submitted = w.submitted.length
+  // Claude Code would ask you before TaskStop: the deck does not stop it
   command(child, { cmd: 'stopAgent', id: 's-1', agentId: 'agent-x1' })
   command(child, { cmd: 'stopAgent', id: 's-2', agentId: M.MAIN })
-  command(child, { cmd: 'abortTurn', id: 't-1', turnId: 't1' })
   command(child, { cmd: 'abortTurn', id: 't-2', turnId: 't0' })
   await clock.advance(400)
-  expect(lastState(w).acks.map(ack => [ack.id, ack.status, ack.text])).toEqual([
-    ['s-1', 'failed', 'Not in this build yet: stop it in Claude Code'],
-    ['s-2', 'failed', 'The Orchestrator stops with its turn: Stop turn'],
-    ['t-1', 'failed', 'Not in this build yet: press Esc in Claude Code'],
-    ['t-2', 'failed', 'That turn has ended'],
-  ])
-  // nothing reached the session: no send, no prompt
+  command(child, { cmd: 'abortTurn', id: 't-1', turnId: 't1' })
+  await clock.advance(400)
+  const acks = new Map(lastState(w).acks.map(ack => [ack.id, [ack.status, ack.text]]))
+  expect(Object.fromEntries(acks)).toEqual({
+    's-1': ['failed', 'Claude Code asks you before TaskStop here: stop it in Claude Code'],
+    's-2': ['failed', 'The Orchestrator stops with its turn: Stop turn'],
+    't-1': ['delivered', 'Stopped the turn'],
+    't-2': ['failed', 'That turn has ended'],
+  })
+  expect(w.aborted).toEqual(['t1'])
+  // Chat says so, from you; nothing else reached the session: no send, no prompt
+  const v2 = (lastState(w) as W.WebState & { v2: W.WebStateV2 }).v2
+  expect(v2.chat.filter(row => row.kind === 'stop').map(row => [row.from, row.to, row.text])).toEqual([['you', 'main', 'You stopped the turn']])
   expect([w.sent, w.submitted.length]).toEqual([[], submitted])
 })
 
@@ -716,7 +722,7 @@ test('the band says in one line how many agents are at work and what waits on yo
   M.notePending(data, { id: 'toolu_q', agentId: M.MAIN, kind: 'question', tool: 'AskUserQuestion', at: NOW - 60_000, questions: [question] })
   expect(W.bandOf(stateOf(data))?.text).toBe('● 3 working · ? 1 question')
 
-  // the sample: no agent runs (builder and reviewer wait on you), so only its needs, each kind counted
+  // the sample: no agent runs (builder and reviewer wait on you), so its needs, each kind counted, then what runs in the background and what is scheduled
   const session = v2Session()
   const sample = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
   expect(W.bandOf(sample)).toEqual({
@@ -724,8 +730,10 @@ test('the band says in one line how many agents are at work and what waits on yo
       { kind: 'question', glyph: '?', count: 2, text: '2 questions' },
       { kind: 'permission', glyph: '?', count: 1, text: '1 permission' },
       { kind: 'notification', glyph: '?', count: 1, text: '1 notification' },
+      { kind: 'background', glyph: '◐', count: 3, text: '3 in the background' },
+      { kind: 'scheduled', glyph: '◷', count: 2, text: '2 scheduled' },
     ],
-    text: '? 2 questions · ? 1 permission · ? 1 notification',
+    text: '? 2 questions · ? 1 permission · ? 1 notification · ◐ 3 in the background · ◷ 2 scheduled',
   })
 })
 

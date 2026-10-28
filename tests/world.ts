@@ -55,6 +55,10 @@ export type World = {
   store?: Map<string, unknown>
   /** Each pane opened (`$.ui.open`), as asked: its id, and the body rows it asked for. */
   opens: { id: string; rows?: number }[]
+  /** Each permission check raised (`tool.check`: a call's, or a plugin's `$.tool.check`), its tool and input as asked. */
+  checks: { tool: string; input: unknown }[]
+  /** Each turn the deck ended (`$.turn.abort`), by its id. */
+  aborted: string[]
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -75,6 +79,8 @@ export function newWorld(extra: Partial<World> = {}): World {
     verdict: 'ask',
     isDecided: false,
     opens: [],
+    checks: [],
+    aborted: [],
     ...extra,
   }
 }
@@ -161,7 +167,16 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     return { turnId: e.turnId, index: e.index, answer: step.answer, toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
   on('agent.spawn', () => ({ model: 'claude-haiku', agentId: 'agent-x1' }))
-  on('tool.check', () => ({ decision: w.verdict }))
+  on('tool.check', ($, e) => {
+    w.checks.push({ tool: e.tool, input: e.input })
+    return { decision: w.verdict }
+  })
+  on('turn.abort', ($, e) => {
+    w.aborted.push(e.turnId)
+    return { value: undefined }
+  })
+  on('classic.Stop', () => ({}))
+  on('classic.SubagentStop', () => ({}))
   on('classic.PermissionRequest', () => (w.isDecided ? { decision: { behavior: 'allow' as const } } : {}))
   on('classic.PermissionDenied', () => ({}))
   on('classic.Notification', () => ({}))
