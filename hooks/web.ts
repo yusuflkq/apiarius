@@ -631,6 +631,14 @@ export type V2AgentRow = {
   title: string
   /** Its call in flight, verbatim: the tool and what it was given (a shell's command, a file, a pattern); null between calls. */
   live: { tool: string; text: string; at: number } | null
+  /**
+   * While it is at work (running or starting): its latest words, as Claude
+   * Code gave them (a step's visible text), when it said them after the
+   * latest call it began; at most 600 characters (`isCut`). Absent
+   * otherwise. Its live line shows them while no call is in flight (`live`
+   * null), never as a message: Chat does not hold them.
+   */
+  said?: { text: string; at: number; isCut?: true }
   startedAt: number
   endedAt: number | null
   /** When a message last woke it, finished or idle (a SendMessage resuming it): the same agent, no new spawn; null for one never resumed. */
@@ -757,19 +765,23 @@ export type V2Inspect = {
   agents: { id: string; title: string; model: string; tokens: { in: number; out: number; cacheRead: number }; requests: number; tools: number; errors: number }[]
 } & I.V2InspectMore
 
-/** One tool call of any agent's, as Now's Recent activity lists it. */
+/** One tool call of any agent's, as Now's Recent activity lists it; or, `kind` `said`, its words between its calls. */
 export type V2Activity = {
-  /** The call's tool_use_id, `webIdOf`'d. */
+  /** The call's tool_use_id, `webIdOf`'d; for words, `said:` and the agent's id, the step's turn and its index, `webIdOf`'d. */
   id: string
-  /** When it started. */
+  /** When it started; when the words were said. */
   at: number
   /** Whose: `main`, or an agent's id. */
   agent: string
   /** Its row's title in `agents` ("Orchestrator" for the main loop), cut after a word at 40 characters. */
   agentName: string
+  /** `said`: the words a step of the agent's said besides its calls (its visible text, as Claude Code gave it), never its thinking, and never words Chat holds already (a turn's answer, a reply to you). Absent for a call. */
+  kind?: 'said'
+  /** The call's tool; '' for words. */
   tool: string
-  /** The call's own description (a shell call's), else what it was aimed at (a file, a pattern, a URL, a question), verbatim as the deck kept it. */
+  /** The call's own description (a shell call's), else what it was aimed at (a file, a pattern, a URL, a question), verbatim as the deck kept it; for words, the words, at most 600 characters (`isCut`). */
   text: string
+  isCut?: true
   /** How it went; null while it runs (and for one whose end never came). */
   ok: boolean | null
   /** How long it took; null until it ends. */
@@ -828,7 +840,7 @@ export type WebStateV2 = {
   agents: V2Row[]
   /** What runs when no agent is talking (hooks/background.ts): background shells, monitors, workflows, crons and wakeups; empty rows when none. */
   background: B.V2Background
-  /** Every agent's latest tool calls (the newest 14 of each the deck keeps), the newest 40 of them, newest first. */
+  /** Every agent's latest tool calls (the newest 14 of each the deck keeps) and what each said between them (`kind` `said`), the newest 40 of them, newest first. */
   activity: V2Activity[]
   /** Every file the agents edited: the repository's first, then those outside it, each list the one edited last first. */
   files: V2File[]
@@ -857,8 +869,44 @@ export type V2AgentFile = {
   todos: V2Todo[]
   /** Its latest tool calls (the newest 14 the deck keeps), oldest first: what each was given, verbatim, and how it went. */
   activity: { id: string; at: number; tool: string; target: string; command?: string; description?: string; ok: boolean | null; ms: number | null }[]
+  /**
+   * What its steps gave besides their calls, oldest first, from where its
+   * calls in `activity` begin (`V2Word`): its words, and its thinking as
+   * Claude Code showed it. Its page's Activity lays them between its calls
+   * (`agentLogOf`).
+   */
+  words: V2Word[]
   /** Its edits' ids, oldest first: each patch at /patch/<id>. */
   edits: string[]
+}
+
+/**
+ * One step's words in an agent's file: its visible text (`said`) or its
+ * thinking as Claude Code showed it (`thought`: perhaps a summary; none
+ * when thinking is off), whole up to 4000 characters (`isCut` past them).
+ * `after` is the id of the call in `activity` they came after, '' before
+ * its first.
+ */
+export type V2Word = { kind: 'said' | 'thought'; at: number; step: number; text: string; after: string; isCut?: true }
+
+/** One line of an agent's log: a call of its file's, or a step's words. */
+export type V2LogEntry = { kind: 'call'; call: V2AgentFile['activity'][number] } | { kind: 'said' | 'thought'; word: V2Word }
+
+/**
+ * An agent's log, oldest first: each call of its file, and with `withWords`
+ * the words that followed it (said and thought, in the order they came);
+ * words from before its first call first.
+ */
+export function agentLogOf(file: Pick<V2AgentFile, 'activity'> & { words?: readonly V2Word[] }, withWords: boolean): V2LogEntry[] {
+  const words = withWords && Array.isArray(file.words) ? file.words : []
+  const ids = new Set(file.activity.map(call => call.id))
+  const after = new Map<string, V2Word[]>()
+  for (const word of words) {
+    const key = ids.has(word.after) ? word.after : ''
+    after.set(key, [...(after.get(key) ?? []), word])
+  }
+  const wordsAfter = (key: string): V2LogEntry[] => (after.get(key) ?? []).map(word => ({ kind: word.kind, word }))
+  return [...wordsAfter(''), ...file.activity.flatMap((call): V2LogEntry[] => [{ kind: 'call', call }, ...wordsAfter(call.id)])]
 }
 
 /** v2's sizes: the chat rows kept, a text's characters in the state, the edits, commits and acks kept, a title's and a name's characters, the tool calls in `activity`. */
@@ -1017,11 +1065,22 @@ export function finishedIdsOf(state: Pick<WebStateV2, 'agents'>): string[] {
 }
 
 /** One agent's row, out of the tree: its `depth` and `fold` are the walk's to set. */
+/** Its latest words since its latest call while it is at work, cut for the state; undefined otherwise. */
+function saidOf(agent: DeckAgent, status: V2Status): V2AgentRow['said'] {
+  if (status !== 'running' && status !== 'starting') return undefined
+  const word = M.saidSinceCallOf(agent)
+  if (!word) return undefined
+  const cut = cutOf(word.text, V2_CAPS.text)
+  return { text: cut.text, at: word.at, ...(cut.isCut || word.isCut ? { isCut: true as const } : {}) }
+}
+
 function agentRowOf(data: DeckData, agent: DeckAgent, now: number, needs: ReadonlyMap<string, number>): V2AgentRow {
   const isMain = agent.kind === 'main'
   const task = cutOf(isMain ? '' : agent.prompt, V2_CAPS.text)
   const result = cutOf(resultOf(agent), V2_CAPS.text)
   const turnAt = data.mainTurnAt
+  const status: V2Status = agent.status === 'starting' ? 'starting' : M.shownStatusOf(agent, data)
+  const said = saidOf(agent, status)
   return {
     row: 'agent',
     id: agent.id,
@@ -1029,7 +1088,7 @@ function agentRowOf(data: DeckData, agent: DeckAgent, now: number, needs: Readon
     parent: isMain ? null : (M.parentIdOf(data, agent) ?? M.MAIN),
     depth: 0,
     kind: rowKindOf(agent),
-    status: agent.status === 'starting' ? 'starting' : M.shownStatusOf(agent, data),
+    status,
     isStopped: agent.status === 'killed',
     name: isMain || M.isNameless(agent) ? '' : F.oneLine(agent.name),
     description: isMain ? '' : F.oneLine(agent.description),
@@ -1037,6 +1096,7 @@ function agentRowOf(data: DeckData, agent: DeckAgent, now: number, needs: Readon
     shortId: shortIdOf(agent),
     title: rowTitleOf(agent),
     live: liveOf(agent),
+    ...(said ? { said } : {}),
     startedAt: agent.startedAt,
     endedAt: agent.endedAt ?? null,
     resumedAt: isMain ? null : (agent.resumedAt ?? null),
@@ -1238,17 +1298,31 @@ export function planOfV2(data: DeckData): V2Plan | null {
 }
 
 /**
- * Every agent's latest tool calls, the newest 40, newest first: the deck's
- * own record of each (`recent`, its newest 14 per agent), its words as kept:
- * a shell call's description, else what the call was aimed at.
+ * Every agent's latest tool calls and words, the newest 40, newest first:
+ * the deck's own record of each call (`recent`, its newest 14 per agent),
+ * its words as kept (a shell call's description, else what the call was
+ * aimed at); and what each said between its calls (`kind` `said`): never
+ * its thinking, nor words Chat holds already.
  */
 export function activityListOf(data: DeckData): V2Activity[] {
   const calls = data.agents.filter(isTreeAgent).flatMap(agent => {
     const agentName = partyOf(data, agent.id, true)
-    return agent.recent.map(call => {
+    const callRows: V2Activity[] = agent.recent.map(call => {
       const refused = I.refusalOf(data, call.id)
       return { id: webIdOf(call.id), at: call.at, agent: agent.id, agentName, tool: call.tool, text: call.description || call.target, ok: call.ok ?? null, ms: call.ms ?? null, ...(refused ? { refused } : {}) }
     })
+    const said = (agent.words ?? []).filter(word => word.kind === 'said' && word.isChat !== true)
+    if (said.length === 0) return callRows
+    // its words in their place among its calls: after the call they followed, so of the same moment the call after them is the newer
+    const after = new Map<string, V2Activity[]>()
+    const ids = new Set(agent.recent.map(call => call.id))
+    for (const word of said) {
+      const cut = cutOf(word.text, V2_CAPS.text)
+      const row: V2Activity = { id: webIdOf(`said:${agent.id}:${word.turnId}:${word.step}`), at: word.at, agent: agent.id, agentName, kind: 'said', tool: '', text: cut.text, ...(cut.isCut || word.isCut ? { isCut: true as const } : {}), ok: null, ms: null }
+      const key = ids.has(word.after) ? word.after : ''
+      after.set(key, [...(after.get(key) ?? []), row])
+    }
+    return [...(after.get('') ?? []), ...agent.recent.flatMap((call, i) => [callRows[i] as V2Activity, ...(after.get(call.id) ?? [])])]
   })
   // newest first; of two at the same moment, the one recorded later first
   return calls
@@ -1436,8 +1510,23 @@ export function agentFileOf(data: DeckData, agent: DeckAgent): V2AgentFile {
       ok: call.ok ?? null,
       ms: call.ms ?? null,
     })),
+    words: wordsOf(agent),
     edits: data.edits.filter(edit => edit.agent === agent.id).map(edit => webIdOf(edit.id)),
   }
+}
+
+/**
+ * An agent's words for its file: from where its kept calls begin (words
+ * that came between calls no longer kept would read as said one after the
+ * other), each whole as the deck keeps it.
+ */
+function wordsOf(agent: DeckAgent): V2Word[] {
+  const ids = new Set(agent.recent.map(call => call.id))
+  // its first words came before any call only while every call it made is still kept
+  const isWhole = agent.tools <= agent.recent.length
+  return (agent.words ?? [])
+    .filter(word => ids.has(word.after) || (word.after === '' && isWhole))
+    .map(word => ({ kind: word.kind, at: word.at, step: word.step, text: word.text, after: word.after === '' ? '' : webIdOf(word.after), ...(word.isCut ? { isCut: true as const } : {}) }))
 }
 
 /** Every agent's file as `agents/<id>.json` holds it (the Orchestrator's, its agents', its teammates'), by its file-safe id (`webIdOf`). */
