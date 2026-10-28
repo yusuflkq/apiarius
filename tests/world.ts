@@ -55,6 +55,10 @@ export type World = {
   store?: Map<string, unknown>
   /** Each pane opened (`$.ui.open`), as asked: its id, and the body rows it asked for. */
   opens: { id: string; rows?: number }[]
+  /** Each permission check raised (`tool.check`: a call's, or a plugin's `$.tool.check`), its tool and input as asked. */
+  checks: { tool: string; input: unknown }[]
+  /** Each turn the deck ended (`$.turn.abort`), by its id. */
+  aborted: string[]
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -75,6 +79,8 @@ export function newWorld(extra: Partial<World> = {}): World {
     verdict: 'ask',
     isDecided: false,
     opens: [],
+    checks: [],
+    aborted: [],
     ...extra,
   }
 }
@@ -163,6 +169,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('agent.spawn', () => ({ model: 'claude-haiku', agentId: 'agent-x1' }))
   // an ask is core's (the mode's decider): since 2.1.311 a hook's own ask goes to a person, whom a test has none of; a test's query of its own has nothing beneath, and asks
   on('tool.check', async ($, e, next) => {
+    w.checks.push({ tool: e.tool, input: e.input })
     if (w.verdict !== 'ask') return { decision: w.verdict }
     try {
       return await next(e)
@@ -170,6 +177,12 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
       return { decision: 'ask' as const }
     }
   })
+  on('turn.abort', ($, e) => {
+    w.aborted.push(e.turnId)
+    return { value: undefined }
+  })
+  on('classic.Stop', () => ({}))
+  on('classic.SubagentStop', () => ({}))
   on('classic.PermissionRequest', () => (w.isDecided ? { decision: { behavior: 'allow' as const } } : {}))
   on('classic.PermissionDenied', () => ({}))
   on('classic.Notification', () => ({}))

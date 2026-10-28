@@ -8,9 +8,11 @@
  * beside agents/, patches/, messages/ and gitdiffs/. Its times move to now,
  * so ages read as they would live. It plays the mod's part for the page's
  * commands: each gets its ack, a chat shows in the stream and its agent
- * answers a moment later, an answer resolves its question, and stopAgent and
- * abortTurn get this build's "Not in this build yet", and Clear finished hides
- * the finished agents until Show N cleared. Commands are printed here too.
+ * answers a moment later, an answer resolves its question, Stop (stopAgent,
+ * stopBackground) and Stop turn (abortTurn) stop what they name where the
+ * sample's `stop.can` allows it, saying so in the chat, and Clear finished
+ * hides the finished agents until Show N cleared. Commands are printed here
+ * too.
  * Editing the sample starts the copy again from it. `--static` keeps the
  * sample's own times and only prints commands. Ctrl+C stops both processes.
  */
@@ -30,7 +32,7 @@ const stateFile = path.join(dir, 'state.json')
 let state = null // the v2 state
 
 // ---- the copy: the sample, every time moved by the same amount so the state's `now` is now (hooks/web.ts v2TimesMoved)
-const TIMES = new Set(['at', 'now', 'startedAt', 'endedAt', 'lastAt'])
+const TIMES = new Set(['at', 'now', 'startedAt', 'endedAt', 'lastAt', 'nextAt'])
 function shift(value, by) {
   if (Array.isArray(value)) { for (const one of value) if (one && typeof one === 'object') shift(one, by) }
   else for (const [key, one] of Object.entries(value)) {
@@ -132,9 +134,45 @@ function play(cmd) {
       ack(cmd.id, true, 'queued', 'Claude reviews it when it finishes its current turn')
     })
   } else if (cmd.cmd === 'stopAgent') {
-    later(300, () => ack(cmd.id, false, 'failed', 'Not in this build yet: stop it in Claude Code'))
+    // as the mod: only where Claude Code's check allowed TaskStop (the row's stop.can); the agent stopped, Chat says so
+    later(400, () => {
+      const a = rowOf(cmd.agentId)
+      if (!a || !a.stop) return ack(cmd.id, false, 'failed', 'It is not at work')
+      if (!a.stop.can) return ack(cmd.id, false, 'failed', a.stop.why)
+      Object.assign(a, { status: 'failed', isStopped: true, live: null, endedAt: Date.now(), needs: 0 })
+      delete a.stop
+      state.needs = state.needs.filter(n => n.agent !== a.id)
+      settle()
+      say('you', a.id, `You → ${a.title}`, 'stop', `You stopped ${a.title}`, cmd.id ? { ackId: cmd.id } : {})
+      ack(cmd.id, true, 'delivered', `Stopped ${a.title}`)
+    })
   } else if (cmd.cmd === 'abortTurn') {
-    later(300, () => ack(cmd.id, false, 'failed', 'Not in this build yet: press Esc in Claude Code'))
+    later(300, () => {
+      if (!state.header.turn || (cmd.turnId && cmd.turnId !== state.header.turn.id)) return ack(cmd.id, false, 'failed', state.header.turn ? 'That turn has ended' : 'No turn is running')
+      state.header.turn = null
+      const main = rowOf('main')
+      if (main) { delete main.stop; main.live = null }
+      say('you', 'main', 'You → Orchestrator', 'stop', 'You stopped the turn', cmd.id ? { ackId: cmd.id } : {})
+      ack(cmd.id, true, 'delivered', 'Stopped the turn')
+    })
+  } else if (cmd.cmd === 'stopBackground') {
+    later(400, () => {
+      const bg = state.background
+      const x = bg && bg.rows.find(one => one.id === cmd.bgId)
+      if (!x || !x.stop) return ack(cmd.id, false, 'failed', 'Nothing runs in the background by that name: it may have ended')
+      if (!x.stop.can) return ack(cmd.id, false, 'failed', x.stop.why)
+      bg.rows = bg.rows.filter(one => one !== x)
+      if (x.status === 'scheduled') bg.scheduled -= 1
+      else bg.tasks -= 1
+      // its line of counts, worded as the mod words it (hooks/background.ts backgroundOf)
+      const words = [['shell', 'shell', 'shells'], ['monitor', 'monitor', 'monitors'], ['workflow', 'workflow', 'workflows'], ['agent', 'agent', 'agents'], ['other', 'task', 'tasks']]
+      const counts = words.flatMap(([kind, one, many]) => { const n = bg.rows.filter(r => r.kind === kind && r.status !== 'scheduled').length; return n ? [`${n} ${n === 1 ? one : many}`] : [] })
+      if (bg.scheduled) counts.push(`${bg.scheduled} scheduled`)
+      bg.text = counts.join(' · ')
+      const verb = x.stop.tool === 'CronDelete' ? 'cancelled' : 'stopped'
+      say('you', null, 'You', 'stop', `You ${verb} ${x.title}`, { ...(x.by ? { agent: x.by } : {}), ...(cmd.id ? { ackId: cmd.id } : {}) })
+      ack(cmd.id, true, 'delivered', `${verb[0].toUpperCase()}${verb.slice(1)} ${x.title}`)
+    })
   } else if (cmd.cmd === 'clearFinished') {
     // as the mod, roughly (W.clearedStateOf): every finished agent hidden from the deck, their messages from Everyone, their fold rows gone
     later(200, () => {

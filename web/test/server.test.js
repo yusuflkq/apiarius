@@ -395,6 +395,27 @@ test('POST /cmd passes stopAgent and abortTurn on in exactly their shapes, with 
   ])
 })
 
+test('POST /cmd passes stopBackground on in exactly its shape: a background row`s bgId, with the page`s id', async () => {
+  const count = main.lines.length
+  const good = [
+    { cmd: 'stopBackground', id: 'st-1', bgId: 'bash_7' },
+    { bgId: 'cron_4e1', cmd: 'stopBackground' },
+  ]
+  for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const bad = [
+    { cmd: 'stopBackground' },
+    { cmd: 'stopBackground', bgId: '' },
+    { cmd: 'stopBackground', bgId: 'bash 7' },
+    { cmd: 'stopBackground', bgId: '../bash_7' },
+    { cmd: 'stopBackground', bgId: 7 },
+    { cmd: 'stopBackground', bgId: 'x'.repeat(201) },
+    { cmd: 'stopBackground', bgId: 'bash_7', agentId: 'main' },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
+  await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"stopBackground","id":"st-1","bgId":"bash_7"}', '{"cmd":"stopBackground","bgId":"cron_4e1"}'])
+})
+
 test('POST /cmd passes avatarStyle on in exactly its shape: a style`s id, lowercase letters, with the page`s id', async () => {
   const count = main.lines.length
   const good = [{ cmd: 'avatarStyle', id: 'a-1', style: 'critter' }, { style: 'robot', cmd: 'avatarStyle' }]

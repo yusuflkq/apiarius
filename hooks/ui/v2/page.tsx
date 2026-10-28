@@ -22,6 +22,7 @@ import { editBlock, titleOf, type Budget } from './diffs'
 import { AVATAR, avatar, glyph, keyButton, quiet, sectionHead, statusPill } from './look'
 import { needsSection } from './needs'
 import { P } from './palette'
+import { pageStop } from './stop'
 import { ago, flat, foldText, msText, num } from './text'
 
 
@@ -62,6 +63,7 @@ export function agentPage(kit: Kit, state: WebStateV2, files: V2Files, id: strin
     <Box key={`page:${row.id}`} flexDirection="column" gap={1}>
       {back}
       {head(kit, state, row, actions)}
+      {pageStop(kit, row, actions)}
       {row.live ? liveLine(kit, state, row) : null}
       {needsSection(kit, state, state.needs.filter(need => need.agent === row.id), actions, 'page')}
       {textPart(kit, row, 'task', 'Task', file?.task || row.task, false, actions)}

@@ -1,9 +1,11 @@
 /**
  * The band above the prompt: one line, shown only while an agent is at
- * work or something needs you, "● 3 working · ? 1 question", then `/deck`,
- * which opens the deck on Now. Its words are the v2 state's (`W.bandOf`,
- * handed in as `DeckModel.band`); the glyphs carry the status hues (blue at
- * work, amber what needs you). No hotkeys: a bare digit in an empty prompt
+ * work, something needs you, or something runs in the background or is
+ * scheduled, "● 3 working · ? 1 question · ◐ 2 in the background · ◷ 1
+ * scheduled", then `/deck`, which opens the deck on Now. Its words are the
+ * v2 state's (`W.bandOf`, handed in as `DeckModel.band`); the glyphs carry
+ * the status hues (blue at work and in the background, amber what needs
+ * you, grey what is scheduled). No hotkeys: a bare digit in an empty prompt
  * would answer a band Button.
  *
  * Pure: Kit, the band and Actions come from the hooks module.
@@ -25,7 +27,7 @@ export function bandView(kit: Kit, band: V2Band | null | undefined, actions: Pic
           <Text wrap="truncate-end">
             {band.parts.flatMap((part, i) => [
               i > 0 ? <Text color={P.muted2}> · </Text> : null,
-              <Text color={part.kind === 'working' ? P.run : P.wait}>{part.glyph}</Text>,
+              <Text color={part.kind === 'working' ? P.run : part.kind === 'background' ? P.runText : part.kind === 'scheduled' ? P.muted : P.wait}>{part.glyph}</Text>,
               <Text color={P.fg2}>{` ${part.text}`}</Text>,
             ])}
             <Text color={P.muted2}> · </Text>

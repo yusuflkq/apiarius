@@ -281,8 +281,8 @@ export function ackLine(ack: WebAck): { mark: string; hue: string; text: string 
 }
 
 function sideOf(row: V2ChatRow): Side {
-  // a slash command you ran alone is no words of yours: a line in the middle
-  if (row.kind === 'command') return 'notice'
+  // a slash command you ran alone is no words of yours: a line in the middle; so is what you stopped from the deck
+  if (row.kind === 'command' || row.kind === 'stop') return 'notice'
   if (row.from === 'you') return 'mine'
   if (row.from === 'engine') return 'notice'
   return 'theirs'
@@ -924,6 +924,8 @@ function noticeOf(ctx: Ctx, entry: Entry): RenderElement {
   const parts =
     row.kind === 'command'
       ? [`You ran ${words}`, ago(row.at, state.now)]
+      : row.kind === 'stop'
+        ? [words, ago(row.at, state.now)]
       : ['Claude Code', words || flat(clean(row.title ?? '')), about && !words.includes(about) ? about : '', ago(row.at, state.now)].filter(Boolean)
   return (
     <Box key={entry.key} flexDirection="row" justifyContent="center">

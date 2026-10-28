@@ -146,7 +146,7 @@ test('Now: Needs you as Claude Code holds them (a question answerable here, a pe
     const cards = [...front, ...behind]
     expect(await keysOf(ui, 'agent:')).toEqual(cards.map(row => W.agentKeyOf(row.id)))
     expect((await ui.find({ key: 'finished:now:fold' }))?.props.label).toBe(`${behind.length} finished ▾`)
-    expect(await keysOf(ui, 'fold:')).toEqual(['fold:dash:agents', 'fold:dash:figures', 'fold:dash:plan', 'fold:dash:activity', 'fold:dash:files'])
+    expect(await keysOf(ui, 'fold:')).toEqual(['fold:dash:agents', 'fold:dash:background', 'fold:dash:figures', 'fold:dash:plan', 'fold:dash:activity', 'fold:dash:files'])
     const builder = await ui.find({ key: `card:${IDS.builder}` })
     expect(builder?.text).toContain('Bash npm test -- rateLimit')
     expect(builder?.text).toContain('Waiting · 29m')

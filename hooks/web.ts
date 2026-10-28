@@ -13,6 +13,7 @@
  */
 import type { DeckAgent, DeckData, DeckMessage, DeckMessageKind, DeckPending, DeckQuestion, DeckStepStatus, DeckView, DeckView2 } from '../types'
 import * as AV from '../web/avatars.mjs'
+import * as B from './background'
 import type { Hunk } from './diff'
 import * as F from './format'
 import type { GitState } from './git'
@@ -653,6 +654,13 @@ export type V2AgentRow = {
   tokens: number
   /** Hidden by the deck's "Clear finished" (`clearedStateOf`): left out of the Dashboard, Chat's members and Everyone, and Org; still on its page, in Changes and Inspect. Never anything in Claude Code. */
   isCleared?: true
+  /**
+   * While it is at work: its Stop (`stopAgent`, Claude Code's TaskStop), shown
+   * only where `can` (a background agent or a teammate whose TaskStop Claude
+   * Code's permission check allows), else why not in one line (the
+   * Orchestrator's while its turn runs: Stop turn ends it). Absent otherwise.
+   */
+  stop?: B.V2Stop
 }
 
 /** A TodoWrite item, or a board task's words, with Claude's own status: `doing` its activeForm. */
@@ -809,6 +817,8 @@ export type WebStateV2 = {
   needs: V2Need[]
   /** The tree of who started whom, as rows: the Orchestrator first, each agent under the one that started it (spawn order), the ones at work first and then their parent's fold row and its members. */
   agents: V2Row[]
+  /** What runs when no agent is talking (hooks/background.ts): background shells, monitors, workflows, crons and wakeups; empty rows when none. */
+  background: B.V2Background
   /** Every agent's latest tool calls (the newest 14 of each the deck keeps), the newest 40 of them, newest first. */
   activity: V2Activity[]
   /** Every file the agents edited: the repository's first, then those outside it, each list the one edited last first. */
@@ -1329,7 +1339,8 @@ export function deckStateOf(
   const model = shortModel(main?.model)
   const turnId = data.mainTurnId
   const edits = data.edits.slice(-V2_CAPS.edits)
-  const rows = agentRowsOf(data, now, needsBy)
+  // each agent at work with its Stop, or why none, by Claude Code's own verdicts (hooks/background.ts)
+  const rows = B.withStops(agentRowsOf(data, now, needsBy), data)
   const plan = planOfV2(data)
   // what "Clear finished" hid is marked last, over the state as built
   return clearedStateOf({
@@ -1349,6 +1360,7 @@ export function deckStateOf(
     },
     needs,
     agents: rows,
+    background: B.backgroundOf(data, rows, now),
     activity: activityListOf(data),
     files: editedFilesOf(data, root),
     figures: figuresOf(data, rows, plan, needs.length, usage, now),
@@ -1655,8 +1667,8 @@ export function nextNeedKeyOf(state: Pick<WebStateV2, 'needs'>, current: string)
 
 // The band above the prompt: one line, "● 3 working · ? 1 question".
 
-/** One part of the band's line: the agents at work, or the needs of one kind; `text` its words ("3 working", "1 question"). */
-export type V2BandPart = { kind: 'working' | V2Need['kind']; glyph: '●' | '?'; count: number; text: string }
+/** One part of the band's line: the agents at work, the needs of one kind, the background tasks or the schedules; `text` its words ("3 working", "1 question", "2 in the background", "1 scheduled"). */
+export type V2BandPart = { kind: 'working' | V2Need['kind'] | B.BandPart['kind']; glyph: '●' | '?' | B.BandPart['glyph']; count: number; text: string }
 
 /** The band's line, made once here: its parts in order (at work, then questions, permissions, notifications) and them as one string. */
 export type V2Band = { parts: V2BandPart[]; text: string }
@@ -1666,10 +1678,11 @@ const BAND_NOUNS: Readonly<Record<V2Need['kind'], readonly [string, string]>> = 
 /**
  * What the band says, from the v2 state: how many agents are at work (each
  * row but the Orchestrator's and Claude Code's own loops, starting or
- * running), then how many of each kind of need wait on you. Null when no
- * agent is at work and nothing needs you: the band then shows nothing.
+ * running), then how many of each kind of need wait on you, then what runs
+ * in the background and what is scheduled (`background`). Null when none
+ * is: the band then shows nothing.
  */
-export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs'>): V2Band | null {
+export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs'> & { background?: B.V2Background }): V2Band | null {
   const working = state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine' && (row.status === 'running' || row.status === 'starting')).length
   const parts: V2BandPart[] = working > 0 ? [{ kind: 'working', glyph: '●', count: working, text: `${working} working` }] : []
   for (const kind of ['question', 'permission', 'notification'] as const) {
@@ -1677,6 +1690,7 @@ export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs'>): V2Band | nu
     const [one, many] = BAND_NOUNS[kind]
     if (count > 0) parts.push({ kind, glyph: '?', count, text: `${count} ${count === 1 ? one : many}` })
   }
+  parts.push(...B.bandPartsOf(state.background))
   if (parts.length === 0) return null
   return { parts, text: parts.map(part => `${part.glyph} ${part.text}`).join(' · ') }
 }
@@ -1707,9 +1721,9 @@ export function answeredInSample(state: WebStateV2, callId: string, answers: Rea
 }
 
 /** The fields of a v2 state, or of its agent files, that hold a time: moved together when a recorded state is shown now. */
-const TIME_KEYS: ReadonlySet<string> = new Set(['now', 'at', 'startedAt', 'endedAt', 'lastAt'])
+const TIME_KEYS: ReadonlySet<string> = new Set(['now', 'at', 'startedAt', 'endedAt', 'lastAt', 'nextAt'])
 
-/** `value` (a v2 state, or an agent file) with every time in it (`now`, `at`, `startedAt`, `endedAt`, `lastAt`, past 2001) moved by `by` ms. */
+/** `value` (a v2 state, or an agent file) with every time in it (`now`, `at`, `startedAt`, `endedAt`, `lastAt`, a schedule's `nextAt`, past 2001) moved by `by` ms. */
 export function v2TimesMoved<T>(value: T, by: number): T {
   const move = (one: unknown): unknown => {
     if (Array.isArray(one)) return one.map(move)
@@ -1775,6 +1789,8 @@ export type WebRoute =
   | { kind: 'stopAgent'; agentId: string }
   /** Ends the main loop's running turn (`$.turn.abort`), as Esc in Claude Code does. */
   | { kind: 'abortTurn'; turnId: string }
+  /** Stops a background task (TaskStop) or cancels a schedule (CronDelete): its row's `bgId` in `background`. */
+  | { kind: 'stopBackground'; bgId: string }
   /** Draws the agents' avatars in another style (web/avatars.mjs `STYLE_IDS`): the person's setting, on every surface. */
   | { kind: 'avatarStyle'; style: AV.AvatarStyle }
   /** "Clear finished": the finished agents hidden from the Dashboard, Chat and Org (the deck's own tidying, nothing in Claude Code). */
@@ -1880,6 +1896,7 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
     if (turnId === undefined || (cmd.turnId !== undefined && cmd.turnId !== turnId)) return null
     return { kind: 'abortTurn', turnId }
   }
+  if (cmd.cmd === 'stopBackground') return B.rowByBgId(data, cmd.bgId) ? { kind: 'stopBackground', bgId: cmd.bgId as string } : null
   if (cmd.cmd === 'avatarStyle') return AV.isStyle(cmd.style) ? { kind: 'avatarStyle', style: cmd.style } : null
   if (cmd.cmd === 'clearFinished') return { kind: 'clearFinished' }
   if (cmd.cmd === 'showCleared') return { kind: 'showCleared' }
@@ -1917,6 +1934,7 @@ export function refusalOf(cmd: unknown, data: DeckData): string {
     return 'Not stopped'
   }
   if (cmd.cmd === 'abortTurn') return data.mainTurnId === undefined ? 'No turn is running' : 'That turn has ended'
+  if (cmd.cmd === 'stopBackground') return 'Nothing runs in the background by that name: it may have ended'
   if (cmd.cmd === 'avatarStyle') return `Not an avatar style the deck knows: ${F.trunc(F.oneLine(String(cmd.style ?? '')), 40)}`
   if (cmd.cmd !== 'chat' && cmd.cmd !== 'review') return `Not a command the deck knows: ${F.trunc(F.oneLine(cmd.cmd), 40)}`
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''

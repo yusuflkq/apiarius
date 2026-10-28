@@ -30,6 +30,7 @@ import { orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
 import { P } from './palette'
 import { settingsTab } from './settings'
+import { stopTurnButton } from './stop'
 
 /** The tabs, in their keys' order. */
 export const TABS: readonly { id: DeckView2['tab']; label: string; hotkey: string }[] = [
@@ -46,7 +47,7 @@ const ORG_FRESH: OrgSpot = { isDown: false, selected: null }
 /** The whole v2 pane: the header, the tabs, and the tab or the page over it; `org` how Org's chart stands on this surface. */
 export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot = ORG_FRESH): RenderElement {
   const { Box } = kit
-  const top = [header(kit, state), model.web ? webLine(kit, model.web) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
+  const top = [header(kit, state, actions), model.web ? webLine(kit, model.web) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
   // the terminal: the tab gets the rows the header, the tabs and the gaps between leave it
   const rows = kit.rows === undefined ? undefined : Math.max(FEWEST_ROWS / 2, kit.rows - rowsOf(top, kit.columns) - top.length)
   return (
@@ -60,8 +61,8 @@ export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckM
 const STATE_HUE: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.runText, waiting: P.waitText, idle: P.muted }
 const STATE_DOT: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.run, waiting: P.wait, idle: P.idleDot }
 
-/** The header: the state's word and your latest request, then `model · context % · $cost`. */
-function header(kit: Kit, state: WebStateV2): RenderElement {
+/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · context % · $cost`. */
+function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const head = state.header
   const goal = head.goal ? clean(head.goal.headline) : 'No request yet'
@@ -81,6 +82,7 @@ function header(kit: Kit, state: WebStateV2): RenderElement {
             {goal}
           </Text>
         </Box>
+        {stopTurnButton(kit, state, actions)}
       </Box>
       <Box flexDirection="row">
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
