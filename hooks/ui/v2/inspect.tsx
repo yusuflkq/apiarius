@@ -38,7 +38,7 @@ import type { V2AgentRow, V2ChatRow, V2Inspect, WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { isAiry, listBox, listRow } from './dash'
 import { AVATAR, avatar, quiet, svgOf, type Face } from './look'
-import { P } from './palette'
+import { P, ruleSvg } from './palette'
 import { foldHead, openFoldsWith, rule, widthFor, type Fold } from './parts'
 import { ago, num, plural, usd } from './text'
 
@@ -314,7 +314,7 @@ function decisionRow(kit: Kit, state: WebStateV2, d: V2Decision, actions: DashAc
     twoLines(
       kit,
       <Box flexDirection="row" columnGap={1} alignItems="center">
-        {svgOf(kit) ? <Box flexShrink={0}>{avatar(kit, faceOf(state, d.agent, d.agentName), 14)}</Box> : null}
+        <Box flexShrink={0}>{avatar(kit, faceOf(state, d.agent, d.agentName), 14)}</Box>
         <Box flexShrink={0}>
           {isKnown ? (
             <Button key={`perm:open:${d.id}`} label={d.agentName} plain onPress={() => actions.openAgent(d.agent)}>
@@ -660,10 +660,13 @@ export function compactionLine(kit: Kit, state: WebStateV2, row: V2ChatRow, key:
       </Box>
     )
   }
+  // the rules in the stronger edge: a divider to be seen, where a list's rules are faint; each grows into the room the words leave (its own width 0)
+  const Svg = svgOf(kit)
+  const divider = Svg ? <Svg source={ruleSvg(P.borderStrong)} alt="Divider" height={1} /> : null
   return (
     <Box key={key} flexDirection="row" columnGap={1} alignItems="center">
-      <Box flexGrow={1} flexShrink={1} minWidth={2}>
-        {rule(kit)}
+      <Box flexGrow={1} flexShrink={1} width={0} minWidth={2} flexDirection="column">
+        {divider}
       </Box>
       <Box flexShrink={0}>{mark(kit, 'shrink', P.muted, '⇲', 'Compacted', 14)}</Box>
       <Box flexShrink={0}>
@@ -674,8 +677,8 @@ export function compactionLine(kit: Kit, state: WebStateV2, row: V2ChatRow, key:
       <Box flexShrink={1} minWidth={0}>
         {line(kit, figures, P.muted2)}
       </Box>
-      <Box flexGrow={1} flexShrink={1} minWidth={2}>
-        {rule(kit)}
+      <Box flexGrow={1} flexShrink={1} width={0} minWidth={2} flexDirection="column">
+        {divider}
       </Box>
     </Box>
   )
