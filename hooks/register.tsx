@@ -25,6 +25,7 @@ import type {
 
 import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckMessage, DeckStatus, DeckView } from '../types'
 import * as AV from '../web/avatars.mjs'
+import * as B from './background'
 import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
@@ -950,9 +951,10 @@ function onWebLine($: EngineInterface, line: string): boolean {
   else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
   else if (route.kind === 'review') void sendReview($, route.text, ackId)
   else if (route.kind === 'answer') answerCall($, route.callId, route.answers, ackId)
-  // Stop agent and Stop turn come with the deck's next build: the page is told so, never left waiting
-  else if (route.kind === 'stopAgent') void ack($, ackId, 'failed', 'Not in this build yet: stop it in Claude Code')
-  else if (route.kind === 'abortTurn') void ack($, ackId, 'failed', 'Not in this build yet: press Esc in Claude Code')
+  // Stop, Stop turn and Cancel: only through Claude Code's own channels (TaskStop, CronDelete, $.turn.abort)
+  else if (route.kind === 'stopAgent') void stopAgent($, route.agentId, ackId)
+  else if (route.kind === 'abortTurn') void abortTurn($, route.turnId, ackId)
+  else if (route.kind === 'stopBackground') void stopBackground($, route.bgId, ackId)
   else if (route.kind === 'avatarStyle') {
     setAvatarStyle($, route.style)
     void ack($, ackId, 'delivered', `Avatars: ${AV.styleName(route.style)}`)
@@ -1009,6 +1011,141 @@ async function ack($: EngineInterface, id: string, status: DeckAck['status'], te
   } catch {
     // the page goes on without the word
   }
+}
+
+// Stop: the deck stops only through Claude Code's own channels, and never grants itself a permission.
+
+/** The stopping calls whose verdict is being asked for now, by their key: one question each at a time. */
+const probing = new Set<string>()
+
+/**
+ * Asks Claude Code's permission check about every stopping call the deck
+ * could make whose verdict is missing or old (`B.staleCallsOf`): TaskStop of
+ * a background agent, a teammate or a background task, CronDelete of a
+ * schedule. `$.tool.check` runs nothing, opens no dialog and asks no
+ * classifier. Each verdict is kept (`B.noteVerdict`); Stop and Cancel show
+ * only where it is `allow`.
+ */
+function probeStops($: EngineInterface, now: number): void {
+  for (const call of B.staleCallsOf(data, now)) {
+    if (probing.has(call.key)) continue
+    probing.add(call.key)
+    void verdictOf($, call).finally(() => probing.delete(call.key))
+  }
+}
+
+/** Claude Code's permission check on stopping call `call`, asked now and kept; a check that fails reads as a refusal, its reason said. */
+async function verdictOf($: EngineInterface, call: B.StopCall): Promise<{ decision: 'allow' | 'ask' | 'deny'; reason?: string }> {
+  let verdict: { decision: 'allow' | 'ask' | 'deny'; reason?: string }
+  try {
+    const said = await $.tool.check({ tool: call.tool, input: call.input })
+    verdict = { decision: said.decision, ...(said.reason ? { reason: said.reason } : {}) }
+  } catch (error) {
+    verdict = { decision: 'deny', reason: firstSentenceOf(error instanceof Error ? error.message : String(error)) || `Claude Code could not check ${call.tool}` }
+  }
+  try {
+    const now = await $.clock.now()
+    if (B.noteVerdict(data, call.key, verdict, now)) touched($, now)
+  } catch {
+    // the verdict holds for this press whatever the deck keeps of it
+  }
+  return verdict
+}
+
+/**
+ * Runs stopping call `call` through Claude Code's own tool (`$.tool.call`:
+ * its hooks, its permission check, then the tool), once its permission
+ * check, asked again now, allows it; never with a consent of the deck's
+ * own. Answers '' when it ran, else why not, in a sentence.
+ */
+async function runStop($: EngineInterface, call: B.StopCall): Promise<string> {
+  const verdict = await verdictOf($, call)
+  if (verdict.decision !== 'allow') return B.stopOf(data, call.tool, call.id).why
+  try {
+    const ran = await $.tool.call({ tool: call.tool, ...call.input } as unknown as Parameters<EngineInterface['tool']['call']>[0])
+    if (ran.deny !== undefined) return `Claude Code refused ${call.tool}: ${firstSentenceOf(ran.deny) || 'no reason given'}`
+    if (ran.isError === true) return `${call.tool} failed: ${firstSentenceOf(typeof ran.text === 'string' ? ran.text : '') || 'no reason given'}`
+    return ''
+  } catch (error) {
+    return `${call.tool} failed: ${firstSentenceOf(error instanceof Error ? error.message : String(error)) || 'no reason given'}`
+  }
+}
+
+/** A stop the deck could not make: the page's command and a toast say why. */
+async function stopFailed($: EngineInterface, ackId: string, why: string): Promise<void> {
+  $.ui.toast(why)
+  await ack($, ackId, 'failed', why)
+}
+
+/**
+ * Stop on a background agent or a teammate at work: Claude Code's own
+ * TaskStop of it (`runStop`). Then its row ends as stopped, Chat says "You
+ * stopped builder", and the page's command is told.
+ */
+async function stopAgent($: EngineInterface, agentId: string, ackId = ''): Promise<void> {
+  const agent = M.agentOf(data, agentId)
+  if (!agent || !B.isStoppableAgent(agent)) return stopFailed($, ackId, W.refusalOf({ cmd: 'stopAgent', agentId }, data))
+  const name = W.rowTitleOf(agent)
+  const why = await runStop($, B.stopCallOf('TaskStop', agent.id))
+  if (why !== '') return stopFailed($, ackId, why)
+  const now = await $.clock.now()
+  if (M.isLive(agent.status)) {
+    agent.status = 'killed'
+    agent.endedAt = now
+    delete agent.current
+    delete agent.todo
+  }
+  M.addMessage(data, { from: M.YOU, to: agent.id, kind: 'stop', text: `You stopped ${name}`, at: now, ...(ackId ? { ackId } : {}) })
+  $.ui.toast(`Stopped ${name}`)
+  await ack($, ackId, 'delivered', `Stopped ${name}`)
+  touched($, now)
+}
+
+/**
+ * Stop turn: Claude Code's own `$.turn.abort` of the main loop's running
+ * turn, as Esc does (an op: no permission is asked or granted); the
+ * foreground agents end with it. Then Chat says "You stopped the turn".
+ */
+async function abortTurn($: EngineInterface, turnId: string, ackId = ''): Promise<void> {
+  if (turnId === '' || data.mainTurnId !== turnId) return stopFailed($, ackId, data.mainTurnId === undefined ? 'No turn is running' : 'That turn has ended')
+  try {
+    await $.turn.abort({ turnId })
+  } catch (error) {
+    return stopFailed($, ackId, `Could not stop the turn: ${firstSentenceOf(error instanceof Error ? error.message : String(error)) || 'Claude Code refused'}`)
+  }
+  const now = await $.clock.now()
+  M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'stop', text: 'You stopped the turn', at: now, ...(ackId ? { ackId } : {}) })
+  $.ui.toast('Stopped the turn')
+  await ack($, ackId, 'delivered', 'Stopped the turn')
+  touched($, now)
+}
+
+/**
+ * Stop on a background shell, monitor or workflow (Claude Code's own
+ * TaskStop), or Cancel on a cron or wakeup (its CronDelete), by the row's
+ * `bgId` (`runStop`). Then its row goes, Chat says "You stopped npm run
+ * dev" or "You cancelled …", and the page's command is told.
+ */
+async function stopBackground($: EngineInterface, bgId: string, ackId = ''): Promise<void> {
+  const row = B.rowByBgId(data, bgId)
+  if (!row) return stopFailed($, ackId, W.refusalOf({ cmd: 'stopBackground', bgId }, data))
+  const call = B.stopCallOfRow(row)
+  const name = B.rowNameOf(row)
+  const by = row.by
+  const why = await runStop($, call)
+  if (why !== '') return stopFailed($, ackId, why)
+  const now = await $.clock.now()
+  B.noteEnd(data, { toolUseId: '', tool: call.tool, input: call.input, by: '', at: now, ok: true, result: null })
+  const said = `You ${call.tool === 'CronDelete' ? 'cancelled' : 'stopped'} ${name}`
+  M.addMessage(data, { from: M.YOU, to: '', kind: 'stop', text: said, at: now, ...(by ? { agent: by } : {}), ...(ackId ? { ackId } : {}) })
+  $.ui.toast(said.replace(/^You s/, 'S').replace(/^You c/, 'C'))
+  await ack($, ackId, 'delivered', said.replace(/^You s/, 'S').replace(/^You c/, 'C'))
+  touched($, now)
+}
+
+/** Claude Code's snapshot of the background work that a Stop or SubagentStop carried (`background_tasks`, `session_crons`), taken at `at`, kept (`B.noteSnapshot`); whether the record changed. */
+function noteBackground(e: { background_tasks?: unknown; session_crons?: unknown }, at: number): boolean {
+  return B.noteSnapshot(data, { tasks: e.background_tasks, crons: e.session_crons, at, agents: new Set(data.agents.map(agent => agent.id)) })
 }
 
 /** Starts the web deck when it is not running, and waits (10 s at most) for its server to be up. */
@@ -1205,6 +1342,7 @@ async function restore($: EngineInterface, now: number): Promise<boolean> {
     const { value } = await $.state.get(SNAPSHOT)
     if (value && value.v === M.SNAPSHOT_VERSION) {
       data = M.healData(M.copyOf(value.data), now)
+      B.heal(data)
       // healView builds a fresh view from the snapshot's fields: one missing or unknown takes its default
       view = M.healView(value.view, data)
       return true
@@ -1906,6 +2044,8 @@ async function tick($: EngineInterface): Promise<void> {
     if (now - lastGitAt > 6000) void refreshGit($)
     if (now - usageAt > 10_000) void loadUsage($)
   }
+  // what the deck may stop: Claude Code's permission check asked again where its verdict is missing or old
+  if (isPaneOpen || web.isOn) probeStops($, now)
   // the pane's first tick looks again for what a reload lost (once a pass under way is done)
   if (!isPaneOpen) {
     recovery.isPaneSeen = false
@@ -2143,6 +2283,10 @@ function actionsFor($: EngineInterface): DeckActions {
     // the deck's own tidying, nothing in Claude Code: finished agents hidden, or shown again
     clearFinished: () => void clearFinished($),
     showCleared: () => void showCleared($),
+    // Stop, Stop turn and Cancel: Claude Code's own TaskStop, $.turn.abort and CronDelete; the sample stops nothing
+    stopAgent: id => (view.isDemo ? $.ui.toast('Sample data: nothing is stopped. Back to this chat to stop your agents.') : void stopAgent($, id)),
+    abortTurn: () => (view.isDemo ? $.ui.toast('Sample data: nothing is stopped. Back to this chat to stop your turn.') : void abortTurn($, data.mainTurnId ?? '')),
+    stopBackground: id => (view.isDemo ? $.ui.toast('Sample data: nothing is stopped. Back to this chat to stop your background work.') : void stopBackground($, id)),
 
     // the sample's chat sends nothing: its agents are a recording, and its Orchestrator is not this session's
     // a send from the pane's composer carries an id: its ack says what came of it, under the message; Chat keeps to its end, where it shows
@@ -2992,6 +3136,8 @@ export const register: Register = on => {
         const named = typeof input.name === 'string' ? input.name : ''
         M.noteWorkflow(data, { id: e.tool_use_id, caller: agentId, name: meta?.name || named, phases: meta?.phases ?? [], at: start })
       }
+      // background work it starts (a shell in the background, Monitor, Workflow, CronCreate, ScheduleWakeup): its row at once
+      B.noteStart(data, { toolUseId: e.tool_use_id, tool, input, by: agentId, at: start })
       touched($, start)
     } catch {
       // the call goes ahead whatever the deck makes of it
@@ -3119,6 +3265,13 @@ export const register: Register = on => {
     }
 
     try {
+      // background work: its row takes Claude Code's id, or goes (it never started, or TaskStop or CronDelete ended it)
+      B.noteEnd(data, { toolUseId: e.tool_use_id, tool, input, by: agentId, at: start, ok, result: ran.result })
+    } catch {
+      // the row stands as it was
+    }
+
+    try {
       if (isEdit || shellEdits > 0 || (isShell && G.mayChangeTree(command))) scheduleGit($, 700)
       // a commit the shell reports by its sha is this agent's; else git is asked what is new
       const operation = record?.gitOperation
@@ -3224,7 +3377,11 @@ export const register: Register = on => {
         if (e.origin.kind === 'task-notification') {
           isChanged = M.noteTaskNotices(data, e.text, now) || isChanged
           isChanged = M.endWorkflows(data, e.text, now) || isChanged
+          // a background task's notification that it ended takes its row down
+          isChanged = B.noteTaskEnds(data, e.text) || isChanged
         }
+        // a cron or a wakeup fired: a one-shot one is done, a recurring one's next run unknown
+        if (e.origin.kind === 'scheduled-trigger') isChanged = B.noteFired(data, e.text) || isChanged
       }
       if (isChanged) touched($, now)
     } catch {
@@ -3280,6 +3437,8 @@ export const register: Register = on => {
       if (e.text.trim() && isTheirs && !isDecks && !isTyped) M.addPrompt(data, { text: e.text, at: now, ...(prompt?.command ? { command: prompt.command } : {}) })
       // a turn the engine starts with a background task's notification, no prompt.submit before it: Claude Code's row, once
       if (M.isNoticeText(e.text)) M.noteTaskNotices(data, e.text, now)
+      // and a background task it says ended takes its row down
+      if (M.isNoticeText(e.text)) B.noteTaskEnds(data, e.text)
       // a new turn: no call of the Orchestrator's last one is held on you any more
       M.dropStale(data, M.MAIN, openCalls)
       touched($, now)
@@ -3395,6 +3554,7 @@ export const register: Register = on => {
 
   // a subagent stopped: its row ends at once, and with no report handed back its last message is its result
   on('classic.SubagentStop', async ($, e, next) => {
+    const seen = await $.clock.now()
     const result = await next(e)
     try {
       // a stop a hook blocked goes on working
@@ -3402,6 +3562,20 @@ export const register: Register = on => {
         const now = await $.clock.now()
         if (M.noteStop(data, e.agent_id, e.last_assistant_message ?? '', now)) touched($, now)
       }
+      // Claude Code's snapshot of the background work, as it stood when the stop was raised
+      if (noteBackground(e, seen)) touched($, seen)
+    } catch {
+      // the stop stands whatever the deck makes of it
+    }
+    return result
+  })
+
+  // Claude stopped: Claude Code's snapshot of the background work (its tasks and schedules) brings Background up to date. Observe only.
+  on('classic.Stop', async ($, e, next) => {
+    const seen = await $.clock.now()
+    const result = await next(e)
+    try {
+      if (noteBackground(e, seen)) touched($, seen)
     } catch {
       // the stop stands whatever the deck makes of it
     }

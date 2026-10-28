@@ -179,9 +179,11 @@ export type DeckAgent = {
  * (classic Notification, from `engine`), `task` a background task's
  * notification to the main loop (`<task-notification>`, from `engine`),
  * `command` a slash command you ran alone ("/login", from `you` to nobody
- * in particular): no words of yours, so no bubble, a line of its own.
+ * in particular): no words of yours, so no bubble, a line of its own;
+ * `stop` what you stopped from the deck, through Claude Code's own channels
+ * ("You stopped builder", "You stopped the turn"): a line of its own too.
  */
-export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task' | 'command'
+export type DeckMessageKind = 'prompt' | 'spawn' | 'result' | 'message' | 'chat' | 'answer' | 'question' | 'choice' | 'notification' | 'task' | 'command' | 'stop'
 
 export type DeckMessage = {
   /** `[A-Za-z0-9_]` and `-` only: the web deck serves it as a file name. */
@@ -324,6 +326,56 @@ export type DeckWorkflow = {
   endedAt?: number
 }
 
+/**
+ * What runs when no agent is talking: a background shell, a monitor, a
+ * workflow or a background agent Claude Code holds as a task, and a cron or
+ * a wakeup scheduled to wake the session. Seen the moment the call that
+ * starts it ends (Bash with run_in_background, Monitor, Workflow, CronCreate,
+ * ScheduleWakeup), or first in a snapshot (the `background_tasks` and
+ * `session_crons` of Stop and SubagentStop); gone when a later snapshot no
+ * longer lists it, or its stop is seen (TaskStop, CronDelete, a task
+ * notification that it ended, a one-shot schedule firing).
+ */
+export type DeckBackground = {
+  /**
+   * Claude Code's id for it: the task's (a shell's `backgroundTaskId`,
+   * Monitor's and Workflow's `taskId`) or the schedule's (CronCreate's `id`,
+   * a snapshot's); a wakeup has none until a snapshot lists it, and keeps
+   * its call's id until then (`isBound` false).
+   */
+  id: string
+  /** Whether `id` is Claude Code's own (TaskStop and CronDelete take it), not the starting call's stand-in. */
+  isBound: boolean
+  kind: 'shell' | 'monitor' | 'workflow' | 'agent' | 'other' | 'cron' | 'wakeup'
+  /** The snapshot's own type label verbatim (`shell`, `monitor`, …); '' until a snapshot lists it. */
+  type: string
+  /** The snapshot's own status verbatim (`running`, `pending`); '' until a snapshot lists it. */
+  status: string
+  /** A shell's command, a monitor's or an agent's description, a workflow's name, a schedule's prompt (a wakeup's reason), as given. */
+  title: string
+  /** What else Claude Code said of it: a shell's description, a monitor's server and tool, an agent's type, a cron's schedule in words. */
+  note: string
+  /** A schedule's prompt as given (what it submits when it fires); '' for a task. */
+  prompt: string
+  /** A cron's expression, as given; '' for a task. */
+  schedule: string
+  /** A cron that fires on every match; false for a one-shot cron and a wakeup. */
+  recurring: boolean
+  /** When it fires next, as CronCreate (`nextFireAt`) or ScheduleWakeup (`scheduledFor`) said; absent when not said. */
+  nextAt?: number
+  /** The loop whose call started it (`main` or an agent's id); '' when the deck first saw it in a snapshot. */
+  by: string
+  /** The call that started it (its tool_use_id); '' for one first seen in a snapshot. */
+  call: string
+  /** When its call started it, or a snapshot first listed it. */
+  at: number
+  /** When a snapshot last listed it; 0 for never. */
+  seenAt: number
+}
+
+/** What Claude Code's permission check (`$.tool.check`, no classifier asked) said of the deck's stopping call `<tool>:<id>`, and when. */
+export type DeckVerdict = { decision: 'allow' | 'ask' | 'deny'; reason?: string; at: number }
+
 /** One agent's share of a file's edits. */
 export type DeckFileEditor = { agent: string; count: number; added: number; removed: number; firstAt: number; lastAt: number }
 
@@ -377,6 +429,15 @@ export type DeckData = {
   mainTurnId?: string
   /** When that turn started (its `turn.start`); absent with it, and in a snapshot of a build that did not keep it. */
   mainTurnAt?: number
+  /** What runs in the background or is scheduled (hooks/background.ts), oldest first (at most 50); absent in a snapshot of a build that kept none. */
+  background?: DeckBackground[]
+  /**
+   * Claude Code's permission verdicts on the deck's stopping calls (TaskStop
+   * of an agent or a task, CronDelete of a schedule), by `<tool>:<id>`: a
+   * Stop or Cancel shows only where the newest says `allow`, and a press
+   * asks again first. Absent in a snapshot of a build that kept none.
+   */
+  verdicts?: Record<string, DeckVerdict>
 }
 
 /**

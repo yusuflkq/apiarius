@@ -165,6 +165,16 @@ export type DashActions = Actions & {
   clearFinished: () => void
   /** "Show N cleared" (as `/deck clear show`): the agents "Clear finished" hid shown again. */
   showCleared: () => void
+  /**
+   * Stop on a background agent or a teammate at work (as the page's
+   * `stopAgent`): Claude Code's own TaskStop of it, once its permission check,
+   * asked again, allows it. In the sample, nothing is stopped.
+   */
+  stopAgent: (id: string) => void
+  /** Stop turn (as the page's `abortTurn`): `$.turn.abort` of the main loop's running turn, as Esc does. In the sample, nothing is stopped. */
+  abortTurn: () => void
+  /** Stop on a background task or Cancel on a schedule (as the page's `stopBackground`), by its row's id in `background`: TaskStop or CronDelete, once allowed. In the sample, nothing is stopped. */
+  stopBackground: (id: string) => void
 }
 
 /** What the pane draws from, beside the deck's model. */
