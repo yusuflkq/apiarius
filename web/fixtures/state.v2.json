@@ -168,7 +168,13 @@
           "doing": "Updating the docs"
         }
       ],
-      "tokens": 1407700
+      "tokens": 1407700,
+      "stop": {
+        "tool": "TaskStop",
+        "label": "Stop",
+        "can": false,
+        "why": "The Orchestrator stops with its turn: Stop turn ends it"
+      }
     },
     {
       "row": "agent",
@@ -201,7 +207,13 @@
       "task": "Write a sliding-window rate limiter in src/rateLimit.ts: 100 requests a minute per user by default, set per route. A Redis store (REDIS_URL) and an in-memory one for tests. Answer 429 with Retry-After. Mount it in src/app.ts after auth().",
       "result": "",
       "todos": [],
-      "tokens": 512800
+      "tokens": 512800,
+      "stop": {
+        "tool": "TaskStop",
+        "label": "Stop",
+        "can": true,
+        "why": ""
+      }
     },
     {
       "row": "fold",
@@ -307,7 +319,13 @@
       "task": "Review src/rateLimit.ts once builder says it is ready: correctness of the window, the Redis keys, the 429 answer.",
       "result": "",
       "todos": [],
-      "tokens": 96200
+      "tokens": 96200,
+      "stop": {
+        "tool": "TaskStop",
+        "label": "Stop",
+        "can": true,
+        "why": ""
+      }
     },
     {
       "row": "fold",
@@ -413,6 +431,113 @@
       "tokens": 15300
     }
   ],
+  "background": {
+    "rows": [
+      {
+        "id": "bash_7",
+        "kind": "shell",
+        "what": "Shell · Start the dev server",
+        "title": "npm run dev",
+        "status": "running",
+        "by": "b81c6f3e2a9d4c17",
+        "byName": "builder",
+        "at": 1792012500000,
+        "nextAt": null,
+        "schedule": "",
+        "recurring": false,
+        "when": "18m",
+        "stop": {
+          "tool": "TaskStop",
+          "label": "Stop",
+          "can": true,
+          "why": ""
+        }
+      },
+      {
+        "id": "mon_2",
+        "kind": "monitor",
+        "what": "Monitor",
+        "title": "CI checks on PR 42",
+        "status": "running",
+        "by": "main",
+        "byName": "Orchestrator",
+        "at": 1792013370000,
+        "nextAt": null,
+        "schedule": "",
+        "recurring": false,
+        "when": "3m",
+        "stop": {
+          "tool": "TaskStop",
+          "label": "Stop",
+          "can": true,
+          "why": ""
+        }
+      },
+      {
+        "id": "bash_3",
+        "kind": "shell",
+        "what": "Shell · Watch the limiter tests",
+        "title": "npx vitest --watch",
+        "status": "running",
+        "by": null,
+        "byName": "",
+        "at": 1792013532000,
+        "nextAt": null,
+        "schedule": "",
+        "recurring": false,
+        "when": "",
+        "stop": {
+          "tool": "TaskStop",
+          "label": "Stop",
+          "can": false,
+          "why": "Claude Code asks you before TaskStop here: stop it in Claude Code"
+        }
+      },
+      {
+        "id": "wake_9c2",
+        "kind": "wakeup",
+        "what": "Wakeup",
+        "title": "Check the deploy finished",
+        "status": "scheduled",
+        "by": "main",
+        "byName": "Orchestrator",
+        "at": 1792013490000,
+        "nextAt": 1792014690000,
+        "schedule": "54 21 14 10 *",
+        "recurring": false,
+        "when": "in 18m",
+        "stop": {
+          "tool": "CronDelete",
+          "label": "Cancel",
+          "can": true,
+          "why": ""
+        }
+      },
+      {
+        "id": "cron_4e1",
+        "kind": "cron",
+        "what": "Cron · Every weekday at 9:00",
+        "title": "Summarise yesterday's PRs",
+        "status": "scheduled",
+        "by": "main",
+        "byName": "Orchestrator",
+        "at": 1792013508000,
+        "nextAt": 1792054800000,
+        "schedule": "0 9 * * 1-5",
+        "recurring": true,
+        "when": "in 11h",
+        "stop": {
+          "tool": "CronDelete",
+          "label": "Cancel",
+          "can": true,
+          "why": ""
+        }
+      }
+    ],
+    "tasks": 3,
+    "scheduled": 2,
+    "text": "2 shells · 1 monitor · 2 scheduled"
+  },
   "activity": [
     {
       "id": "toolu_01AskMany",

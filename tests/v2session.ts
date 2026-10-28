@@ -19,12 +19,18 @@
  * builder and then tester (its off-by-one fixed, so git still counts the
  * file builder wrote), and builder's bench script outside the repository;
  * 15 tool calls, the linter's eslint call failed, builder's `npm test` and
- * the two questions still running.
+ * the two questions still running. In the background (hooks/background.ts):
+ * builder's dev server, the Orchestrator's CI monitor, a test watcher the
+ * deck saw first in Claude Code's snapshot (no starter), the Orchestrator's
+ * wakeup (its id from that snapshot) and its weekday cron; Claude Code's
+ * permission check allows each TaskStop and CronDelete but the watcher's,
+ * which it would ask you about.
  *
  * Plain TypeScript that Node runs as it is (no `claude-code` import), so the
  * fixture's generator can load it.
  */
 import type { DeckAgent, DeckData, DeckEdit, DeckQuestion } from '../types'
+import * as B from '../hooks/background'
 import { emptyGit, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
 import type { UsageInfo } from '../hooks/ui/types'
@@ -123,6 +129,12 @@ function spawn(data: DeckData, one: { toolUseId: string; agentId: string; parent
   const { agent } = M.noteSpawn(data, { ...one, isTeammate: one.isTeammate === true })
   M.addMessage(data, { from: one.parentId, to: agent.id, kind: 'spawn', text: one.prompt, at: one.at })
   return agent
+}
+
+/** A call that starts background work, started and ended as the hooks module records it, with Claude Code's result. */
+function background(data: DeckData, call: B.Call, result: Record<string, unknown>) {
+  B.noteStart(data, call)
+  B.noteEnd(data, { ...call, ok: true, result })
 }
 
 export type V2Session = { data: DeckData; git: GitState; usage: UsageInfo; now: number; sessionId: string; cwd: string; answerable: Set<string>; gitDiffs: GitDiffs }
@@ -393,6 +405,29 @@ export function v2Session(): V2Session {
   M.addMessage(data, { from: IDS.reviewer, to: M.YOU, kind: 'question', text: M.questionsTextOf([QUESTION_MANY]), at: ago(2), callId: 'toolu_01AskMany' })
 
   M.noteNotification(data, { type: 'elicitation_dialog', message: 'The github MCP server is asking for your input', title: 'github', at: ago(1) })
+
+  // what runs when no agent is talking: builder's dev server, the Orchestrator's CI monitor, its wakeup and its weekday cron
+  background(data, { toolUseId: 'toolu_01BgDev', tool: 'Bash', input: { command: 'npm run dev', description: 'Start the dev server', run_in_background: true }, by: IDS.builder, at: ago(18) }, { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bash_7' })
+  background(data, { toolUseId: 'toolu_01BgMon', tool: 'Monitor', input: { description: 'CI checks on PR 42', command: 'gh pr checks 42 --watch', timeout_ms: 1_800_000 }, by: M.MAIN, at: ago(3.5) }, { taskId: 'mon_2', timeoutMs: 1_800_000 })
+  background(data, { toolUseId: 'toolu_01BgWake', tool: 'ScheduleWakeup', input: { delaySeconds: 1200, reason: 'Check the deploy finished', prompt: '/loop check the deploy' }, by: M.MAIN, at: ago(1.5) }, { scheduledFor: ago(-18.5), clampedDelaySeconds: 1200, wasClamped: false })
+  background(data, { toolUseId: 'toolu_01BgCron', tool: 'CronCreate', input: { cron: '0 9 * * 1-5', prompt: "Summarise yesterday's PRs", recurring: true }, by: M.MAIN, at: ago(1.2) }, { id: 'cron_4e1', humanSchedule: 'Every weekday at 9:00', recurring: true, nextFireAt: ago(-(11 * 60 + 27)) })
+  // Claude Code's snapshot as builder's last step stopped: it lists a test watcher the deck never saw start, and names the wakeup
+  B.noteSnapshot(data, {
+    tasks: [
+      { id: 'bash_7', type: 'shell', status: 'running', description: 'Start the dev server', command: 'npm run dev' },
+      { id: 'mon_2', type: 'monitor', status: 'running', description: 'CI checks on PR 42' },
+      { id: 'bash_3', type: 'shell', status: 'running', description: 'Watch the limiter tests', command: 'npx vitest --watch' },
+      { id: IDS.builder, type: 'subagent', status: 'running', description: 'Write the limiter and its stores', agent_type: 'general-purpose' },
+    ],
+    crons: [
+      { id: 'cron_4e1', schedule: '0 9 * * 1-5', recurring: true, prompt: "Summarise yesterday's PRs" },
+      { id: 'wake_9c2', schedule: '54 21 14 10 *', recurring: false, prompt: '/loop check the deploy' },
+    ],
+    at: ago(0.8),
+    agents: new Set(data.agents.map(one => one.id)),
+  })
+  // Claude Code's permission check on each stopping call the deck could make: TaskStop and CronDelete allowed, but for the watcher, which it would ask you about
+  for (const call of B.stopCallsOf(data)) B.noteVerdict(data, call.key, call.id === 'bash_3' ? { decision: 'ask' } : { decision: 'allow' }, ago(0.5))
 
   const git: GitState = {
     ...emptyGit(),
