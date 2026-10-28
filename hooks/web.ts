@@ -17,6 +17,7 @@ import type { Hunk } from './diff'
 import * as F from './format'
 import type { GitState } from './git'
 import * as M from './model'
+import { othersLineOf, type SessionsV2 } from './sessions'
 import type { UsageInfo } from './ui/types'
 
 // The state file (web/CONTRACT.md, v1).
@@ -823,6 +824,8 @@ export type WebStateV2 = {
   acks: WebAck[]
   /** The agents "Clear finished" hid (their rows `isCleared`), how many, and when it was pressed last; 0 and null when none are. "Show N cleared" brings them back. */
   cleared: { count: number; at: number | null }
+  /** Every session on this machine (./sessions, "All sessions"), this chat first; absent until the registry was read (and in another session's state as a deck shows it). */
+  sessions?: SessionsV2
 }
 
 /** An agent's own file, `agents/<id>.json`, read when its page opens: its words whole and its calls. */
@@ -1655,8 +1658,8 @@ export function nextNeedKeyOf(state: Pick<WebStateV2, 'needs'>, current: string)
 
 // The band above the prompt: one line, "● 3 working · ? 1 question".
 
-/** One part of the band's line: the agents at work, or the needs of one kind; `text` its words ("3 working", "1 question"). */
-export type V2BandPart = { kind: 'working' | V2Need['kind']; glyph: '●' | '?'; count: number; text: string }
+/** One part of the band's line: the agents at work, the needs of one kind, or the other sessions waiting on you; `text` its words ("3 working", "1 question", "1 other session needs you"). */
+export type V2BandPart = { kind: 'working' | V2Need['kind'] | 'sessions'; glyph: '●' | '?' | '◆'; count: number; text: string }
 
 /** The band's line, made once here: its parts in order (at work, then questions, permissions, notifications) and them as one string. */
 export type V2Band = { parts: V2BandPart[]; text: string }
@@ -1666,10 +1669,11 @@ const BAND_NOUNS: Readonly<Record<V2Need['kind'], readonly [string, string]>> = 
 /**
  * What the band says, from the v2 state: how many agents are at work (each
  * row but the Orchestrator's and Claude Code's own loops, starting or
- * running), then how many of each kind of need wait on you. Null when no
+ * running), then how many of each kind of need wait on you, then how many
+ * other sessions on this machine wait on you (`sessions`). Null when no
  * agent is at work and nothing needs you: the band then shows nothing.
  */
-export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs'>): V2Band | null {
+export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs' | 'sessions'>): V2Band | null {
   const working = state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine' && (row.status === 'running' || row.status === 'starting')).length
   const parts: V2BandPart[] = working > 0 ? [{ kind: 'working', glyph: '●', count: working, text: `${working} working` }] : []
   for (const kind of ['question', 'permission', 'notification'] as const) {
@@ -1677,6 +1681,8 @@ export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs'>): V2Band | nu
     const [one, many] = BAND_NOUNS[kind]
     if (count > 0) parts.push({ kind, glyph: '?', count, text: `${count} ${count === 1 ? one : many}` })
   }
+  const others = othersLineOf(state.sessions)
+  if (others !== null && state.sessions) parts.push({ kind: 'sessions', glyph: '◆', count: state.sessions.others.waiting, text: others })
   if (parts.length === 0) return null
   return { parts, text: parts.map(part => `${part.glyph} ${part.text}`).join(' · ') }
 }
@@ -1757,9 +1763,9 @@ export function webUrlOf(port: number, token: string): string {
   return `http://127.0.0.1:${port}/?t=${encodeURIComponent(token)}`
 }
 
-/** The server's command line (no shell): node, web/server.js, its folder, the session's pid to outlive no longer, and the port to take again. */
-export function serverArgvOf(script: string, dir: string, pid: string, port: number): string[] {
-  return ['node', script, '--dir', dir, ...(pid ? ['--parent', pid] : []), ...(port > 0 ? ['--port', String(port)] : [])]
+/** The server's command line (no shell): node, web/server.js, its folder, the session's pid to outlive no longer, the port to take again, and the registry of sessions (./sessions) whose folders it may read too. */
+export function serverArgvOf(script: string, dir: string, pid: string, port: number, sessions = ''): string[] {
+  return ['node', script, '--dir', dir, ...(pid ? ['--parent', pid] : []), ...(port > 0 ? ['--port', String(port)] : []), ...(sessions ? ['--sessions', sessions] : [])]
 }
 
 /** A line the server printed: its first, `{"ready":<port>}`, or a command from the page. */
