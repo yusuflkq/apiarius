@@ -3362,7 +3362,7 @@ function ViewingBar() {
   if (!route.session) return null;
   const row = sessionRow(route.session);
   const where = row ? [row.place, row.repo].filter(Boolean).join(' · ') : '';
-  const note = VIEW.error || (row && row.canSteer ? 'Read-only here: an answer or a message goes to its own deck, which passes it to Claude Code.' : 'Read-only here: answer it in its window. Its deck takes nothing from another.');
+  const note = VIEW.error || (row && row.canSteer ? 'Read-only: answers and messages go through its own deck.' : 'Read-only: answer it in its window.');
   return h('div', { key: 'viewbar', class: 'viewbar' },
     h('span', { class: 'viewbar-tag' }, 'Viewing'),
     h('span', { class: 'viewbar-title' }, row ? row.title : 'Another session'),

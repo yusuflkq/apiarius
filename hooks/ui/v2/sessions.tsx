@@ -120,7 +120,7 @@ const AGE = 4
 function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const open = () => (row.isMe ? actions.closeSessions() : actions.openSession(row.id))
-  const title = row.isMe || row.canOpen ? pressText(kit, `session:${row.id}`, [<Text bold color={P.text}>{row.title}</Text>], open) : <Text bold color={P.text} wrap="truncate-end">{row.title}</Text>
+  const title = row.isMe || row.canOpen ? pressText(kit, `session:${row.id}`, [<Text bold color={P.text} wrap="truncate-end">{row.title}</Text>], open) : <Text bold color={P.text} wrap="truncate-end">{row.title}</Text>
   const where = [row.place, row.repo].filter(part => part !== '').join(' · ')
   const icon = surfaceIcon(kit, row)
   return listRow(kit, `session-row:${row.id}`, [
@@ -173,7 +173,7 @@ export function viewingBar(kit: Kit, viewing: Viewing, actions: DashActions): Re
   const { Box, Text, Button } = kit
   const row = viewing.row
   const where = row ? [row.place, row.repo].filter(part => part !== '').join(' · ') : ''
-  const steer = viewing.canSteer ? 'Read-only here: an answer or a message goes to its own deck, which passes it to Claude Code.' : 'Read-only here: answer it in its window. Its deck takes nothing from another.'
+  const steer = viewing.canSteer ? 'Read-only: answers and messages go through its own deck.' : 'Read-only: answer it in its window.'
   return (
     <Box key="viewing:head" flexDirection="column">
       <Box flexDirection="row" columnGap={2} alignItems="center">
