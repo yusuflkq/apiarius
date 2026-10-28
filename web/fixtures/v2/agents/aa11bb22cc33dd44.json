@@ -46,5 +46,14 @@
       "ms": null
     }
   ],
+  "words": [
+    {
+      "kind": "said",
+      "at": 1792013052000,
+      "step": 0,
+      "text": "Checking the window math first, then how Retry-After rounds.",
+      "after": ""
+    }
+  ],
   "edits": []
 }

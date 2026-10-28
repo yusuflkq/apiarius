@@ -19,7 +19,10 @@
  * builder and then tester (its off-by-one fixed, so git still counts the
  * file builder wrote), and builder's bench script outside the repository;
  * 15 tool calls, the linter's eslint call failed, builder's `npm test` and
- * the two questions still running. In the background (hooks/background.ts):
+ * the two questions still running. Between its calls builder says what it
+ * is doing (each step's visible text) and once Claude Code shows what it
+ * thought, after auto mode refused its push; its reply to you is Chat's
+ * already; reviewer says where it starts. In the background (hooks/background.ts):
  * builder's dev server, the Orchestrator's CI monitor, a test watcher the
  * deck saw first in Claude Code's snapshot (no starter), the Orchestrator's
  * wakeup (its id from that snapshot) and its weekday cron; Claude Code's
@@ -150,6 +153,11 @@ function edit(data: DeckData, agent: DeckAgent, one: { id: string; tool: string;
   M.addEdit(data, agent, made)
 }
 
+/** What a step of an agent's loop gave besides its calls (the hooks module's `turn.step`): its words, or its thinking as Claude Code showed it. */
+function words(agent: DeckAgent, kind: 'said' | 'thought', text: string, at: number, step: number, isChat = false) {
+  M.noteWord(agent, { kind, text, at, turnId: `turn-${agent.id}`, step, isChat })
+}
+
 /** A spawn as the engine reports it, its task handed down as a message. */
 function spawn(data: DeckData, one: { toolUseId: string; agentId: string; parentId: string; name: string; description: string; prompt: string; type: string; background: boolean; isTeammate?: boolean; model: string; at: number }): DeckAgent {
   const { agent } = M.noteSpawn(data, { ...one, isTeammate: one.isTeammate === true })
@@ -274,6 +282,7 @@ export function v2Session(): V2Session {
   })
   call(data, main, 'toolu_01SpBld', 'Agent', { description: 'Write the limiter and its stores', run_in_background: true }, ago(29), 1_200)
   Object.assign(builder, { tokensIn: 96_000, tokensOut: 14_800, cacheRead: 402_000, requests: 18 })
+  words(builder, 'said', "Nothing there yet. I'll keep a sliding log per user and route, so the window slides, with a Redis store and an in-memory one for the tests.", ago(28), 0)
   call(data, builder, 'toolu_01BldW1', 'Write', { file_path: `${ROOT}\\src\\rateLimit.ts` }, ago(27), 400)
   edit(data, builder, {
     id: 'toolu_01BldW1',
@@ -286,6 +295,7 @@ export function v2Session(): V2Session {
     // with an off-by-one tester's tests find: `<` refuses the 100th request
     patch: patchOf('src/rateLimit.ts', ['+export type Store = { hit(key: string, now: number): Promise<number> }', '+', '+export function limiter(store: Store, perMinute = 100) {', '+  return async (key: string, now = Date.now()) => (await store.hit(key, now)) < perMinute', '+}', '+'], true),
   })
+  words(builder, 'said', 'The limiter is in. Mounting it in `src/app.ts`, after `auth()`.', ago(24.5), 1)
   call(data, builder, 'toolu_01BldE1', 'Edit', { file_path: `${ROOT}\\src\\app.ts` }, ago(24), 300)
   edit(data, builder, {
     id: 'toolu_01BldE1',
@@ -297,8 +307,13 @@ export function v2Session(): V2Session {
     patch: patchOf('src/app.ts', [" import { auth } from './auth'", "+import { limiter } from './rateLimit'", ' app.use(auth())', '-app.use(routes)', '+app.use(limit(limiter(store)), routes)']),
   })
   // auto mode refused its force-push (Inspect's permissions): a call refused
+  words(builder, 'said', 'Both stores pass in memory. Pushing so CI runs them against Redis.', ago(13.5), 2)
   call(data, builder, 'toolu_01BldB1', 'Bash', FORCE_PUSH, ago(13), 900, false)
+  // what Claude Code showed of its thinking once the push was refused, then its words
+  words(builder, 'thought', "Auto mode refused the force-push, and pushing isn't mine to do anyway. CI can wait for a Redis service; a quick bench against the in-memory store tells me enough for now…", ago(11.6), 3)
+  words(builder, 'said', "I won't push. A quick bench against the in-memory store instead.", ago(11.6), 3)
   call(data, builder, 'toolu_01BldW2', 'Write', { file_path: 'C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js' }, ago(11), 200)
+  words(builder, 'said', "The bench holds 10,000 hits in well under a second. Telling reviewer it's ready.", ago(9.2), 4)
   edit(data, builder, {
     id: 'toolu_01BldW2',
     tool: 'Write',
@@ -459,6 +474,7 @@ export function v2Session(): V2Session {
 
   M.addMessage(data, { from: IDS.builder, to: IDS.reviewer, kind: 'message', title: 'Limiter ready for review', text: '`src/rateLimit.ts` and both stores are in. The tests pass against the in-memory store; the Redis one needs a server.', at: ago(9), isDelivered: true })
   M.reopen(reviewer, ago(8.9))
+  words(reviewer, 'said', 'Checking the window math first, then how Retry-After rounds.', ago(8.8), 0)
   looks(data, reviewer, 'toolu_01RevB', [
     [8.6, 'Read', 'src/rateLimit.ts'],
     [6.9, 'Grep', 'Retry-After'],
@@ -474,6 +490,8 @@ export function v2Session(): V2Session {
   M.addMessage(data, { from: M.YOU, to: IDS.builder, kind: 'chat', text: 'Keep the Redis store optional: the tests must run without it.', at: ago(8), isDelivered: true, ackId: 'c-2' })
   M.noteAck(data, { id: 'c-2', ok: true, status: 'delivered', text: 'It reads it at its next step', at: ago(8) })
   M.addMessage(data, { from: IDS.builder, to: '', kind: 'chat', text: 'Will do: the store is picked by REDIS_URL, in memory without it.', at: ago(7.5) })
+  // that reply is builder's first words since your message: Chat's already, and its log's too
+  words(builder, 'said', 'Will do: the store is picked by REDIS_URL, in memory without it.', ago(7.5), 5, true)
   M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'chat', text: 'Also exempt /health and /metrics from the limiter.', at: ago(4), ackId: 'c-3' })
   M.noteAck(data, { id: 'c-3', ok: true, status: 'queued', text: 'Claude reads it when it finishes its current turn', at: ago(4) })
 
@@ -483,6 +501,7 @@ export function v2Session(): V2Session {
   M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'question', text: M.questionsTextOf([QUESTION_ONE]), at: ago(3), callId: 'toolu_01AskOne' })
 
   const test = { command: 'npm test -- rateLimit', description: 'Run the limiter tests' }
+  words(builder, 'said', 'Running the limiter tests without `REDIS_URL`, as you asked.', ago(2.6), 6)
   M.beginTool(data, builder, M.activityOf('toolu_01BldB2', 'Bash', test, ROOT, ago(2.5)))
   M.notePending(data, M.permissionOf({ id: 'toolu_01BldB2', tool: 'Bash', input: test, agentId: IDS.builder, at: ago(2.5) }, ROOT))
   // Claude Code's own notification of that prompt: a chat row, and no second need

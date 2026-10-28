@@ -439,7 +439,7 @@ test('the v2 sample (web/fixtures/state.v2.json) holds every part the screens dr
   expect(rowOf(state, IDS.builder)).toMatchObject({ background: true, status: 'waiting', live: { tool: 'Bash', text: 'npm test -- rateLimit' } })
   // Now's activity, files and figures: calls still running and one that failed; a file two agents edited, one outside the repository
   expect(state.activity.length).toBeGreaterThanOrEqual(12)
-  expect(state.activity.filter(one => one.ok === null).map(one => [one.agentName, one.tool, one.text])).toEqual([
+  expect(state.activity.filter(one => one.kind !== 'said' && one.ok === null).map(one => [one.agentName, one.tool, one.text])).toEqual([
     ['reviewer', 'AskUserQuestion', 'Which routes should skip the limiter?'],
     ['builder', 'Bash', 'Run the limiter tests'],
     ['Orchestrator', 'AskUserQuestion', 'Which store should back the limiter in production?'],
@@ -449,6 +449,16 @@ test('the v2 sample (web/fixtures/state.v2.json) holds every part the screens dr
     ['builder', 'Bash', 'Push the limiter', 900, 'denied'],
     ['Lint the new files', 'Bash', 'Lint the new files', 2100, null],
     ['docs', 'Edit', '.env', 120, 'blocked'],
+  ])
+  // what builder and reviewer said between their calls, among them: never a thought, nor builder's reply to you (Chat has it)
+  expect(state.activity.filter(one => one.kind === 'said').map(one => [one.agentName, one.text.slice(0, 24)])).toEqual([
+    ['builder', 'Running the limiter test'],
+    ['reviewer', 'Checking the window math'],
+    ['builder', 'The bench holds 10,000 h'],
+    ['builder', "I won't push. A quick be"],
+    ['builder', 'Both stores pass in memo'],
+    ['builder', 'The limiter is in. Mount'],
+    ['builder', "Nothing there yet. I'll "],
   ])
   expect(state.files.map(file => [file.path, file.editors, file.added, file.removed, file.isOutside ?? false])).toEqual([
     ['src/rateLimit.ts', [IDS.builder, IDS.tester], 7, 1, false],
