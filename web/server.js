@@ -5,7 +5,12 @@
  * SSE, and turns the page's commands into stdout lines for the mod.
  * web/CONTRACT.md is the spec.
  *
- *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid>
+ *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid> [--sessions <registry>]
+ *
+ * With `--sessions` (the registry of every session on this machine,
+ * hooks/sessions.ts) it also serves another session's state and lazy files
+ * under /s/<sessionId>/…, read from the folder its registry file names, and
+ * only from a folder shaped as the deck makes them (`…/.web/<sessionId>`).
  *
  * Plain Node (18+), no dependencies. stdout carries the ready line
  * `{"ready":<port>}` and then one `{"cmd":…}` line per command, nothing else;
@@ -30,6 +35,8 @@ const CALL_ID = /^[A-Za-z0-9_-]{1,100}$/ // a tool call's tool_use_id
 const TURN_ID = /^[A-Za-z0-9_-]{1,100}$/ // the main loop's running turn (abortTurn's)
 const BG_ID = /^[A-Za-z0-9_-]{1,200}$/ // a background row's id (stopBackground's bgId): a task's or a schedule's, made web-safe
 const STYLE = /^[a-z]{1,20}$/ // an avatar style's id (web/avatars.mjs STYLE_IDS); the mod says whether it knows it
+const SESSION_ID = /^[A-Za-z0-9_-]{1,100}$/ // another session's id, as its registry file is named
+const SESSION_LIVE_MS = 3 * 60_000 // a registry file whose heartbeat is older is no live session's (hooks/sessions.ts STALE_MS)
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never open them as files
 const JSON_TYPE = 'application/json; charset=utf-8'
 const TEXT_TYPE = 'text/plain; charset=utf-8'
@@ -51,11 +58,13 @@ const fail = message => { log(message); process.exit(2) }
 const args = {}
 for (let i = 2; i < process.argv.length; i += 2) {
   const key = process.argv[i]
-  if (!['--dir', '--parent', '--port'].includes(key) || process.argv[i + 1] === undefined) fail('usage: node server.js --dir <dir> [--parent <pid>] [--port <port>]')
+  if (!['--dir', '--parent', '--port', '--sessions'].includes(key) || process.argv[i + 1] === undefined) fail('usage: node server.js --dir <dir> [--parent <pid>] [--port <port>] [--sessions <registry>]')
   args[key.slice(2)] = process.argv[i + 1]
 }
 if (!args.dir) fail('--dir is required')
 const dir = path.resolve(args.dir)
+// the registry of every session on this machine; null: this session's own files alone
+const sessions = args.sessions ? path.resolve(args.sessions) : null
 const parent = args.parent === undefined ? null : Number(args.parent)
 if (parent !== null && !(Number.isInteger(parent) && parent > 0)) fail('--parent must be a pid')
 // A restart asks for its last port again, so the open page reconnects; when it is taken the OS picks one.
@@ -180,6 +189,46 @@ function written(res, id, folder, ext, what, type = TEXT_TYPE) {
 
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
+/**
+ * Another session's state folder, as its registry file names it: only a live
+ * session's (its heartbeat within 3 minutes, not ended), only a folder named
+ * `.web/<its id>` (and still so once every link is followed); null for any
+ * other. A request names the session by its id alone, never a path.
+ */
+function sessionDirOf(id) {
+  if (!sessions || !SESSION_ID.test(id) || DEVICE.test(id)) return null
+  let entry
+  try { entry = JSON.parse(fs.readFileSync(path.join(sessions, `${id}.json`), 'utf8')) } catch { return null }
+  if (!isRecord(entry) || entry.id !== id || typeof entry.dir !== 'string' || entry.dir === '' || entry.endedAt !== undefined) return null
+  if (!(typeof entry.heartbeatAt === 'number' && Date.now() - entry.heartbeatAt <= SESSION_LIVE_MS)) return null
+  const isShaped = p => path.basename(p) === id && path.basename(path.dirname(p)) === '.web'
+  const named = path.resolve(entry.dir)
+  if (!isShaped(named)) return null
+  let real
+  try { real = fs.realpathSync(named) } catch { return null }
+  return isShaped(real) ? real : null
+}
+
+/** GET /s/<sessionId>/<what>: another session's state (`state`) or one of its lazy files, as this session's own are served; 404 for a session not listed. */
+function otherSession(res, route) {
+  const [, , id = '', what = '', file = '', extra] = route.split('/')
+  const other = extra === undefined ? sessionDirOf(id) : null
+  if (!other) return send(res, 404, 'no such session\n')
+  if (what === 'state' && file === '') {
+    return fs.readFile(path.join(other, 'state.json'), 'utf8', (err, text) => {
+      if (err) return send(res, 200, EMPTY, JSON_TYPE)
+      let value
+      try { value = JSON.parse(text.trim()) } catch { return send(res, 503, 'state being written\n') }
+      send(res, 200, JSON.stringify(value), JSON_TYPE)
+    })
+  }
+  const lazy = { patch: ['patches', '.diff', 'patch', TEXT_TYPE], gitdiff: ['gitdiffs', '.diff', 'git diff', TEXT_TYPE], message: ['messages', '.md', 'message', TEXT_TYPE], agent: ['agents', '.json', 'agent file', JSON_TYPE] }[what]
+  if (!lazy || !Object.prototype.hasOwnProperty.call({ patch: 1, gitdiff: 1, message: 1, agent: 1 }, what)) return send(res, 404, 'not found\n')
+  const [folder, ext, word, type] = lazy
+  if (!FILE_ID.test(file) || DEVICE.test(file)) return send(res, 400, `bad ${word} id\n`)
+  fs.readFile(path.join(other, folder, `${file}${ext}`), 'utf8', (err, text) => (err ? send(res, 404, `no such ${word}\n`) : send(res, 200, text, type)))
+}
+
 /** An answer command's answers: 1 to 4 of question text → answer, each a string that is not blank and at most 2000 characters. */
 function answersOf(value) {
   if (!isRecord(value)) return null
@@ -199,6 +248,19 @@ function answersOf(value) {
  */
 function commandOf(value) {
   if (!isRecord(value)) return null
+  // for another session (the page views its deck): `view` names it alone; a chat or an answer is checked as this session's, then carries it
+  if (Object.prototype.hasOwnProperty.call(value, 'session')) {
+    if (!(sessions && typeof value.session === 'string' && SESSION_ID.test(value.session))) return null
+    const { session, ...rest } = value
+    if (rest.cmd === 'view') {
+      const hasId = Object.prototype.hasOwnProperty.call(rest, 'id')
+      if (hasId && !(typeof rest.id === 'string' && CMD_ID.test(rest.id))) return null
+      return Object.keys(rest).filter(key => key !== 'id').join(',') === 'cmd' ? { cmd: 'view', ...(hasId ? { id: rest.id } : {}), session } : null
+    }
+    if (rest.cmd !== 'chat' && rest.cmd !== 'answer') return null
+    const inner = commandOf(rest)
+    return inner ? { ...inner, session } : null
+  }
   const hasId = Object.prototype.hasOwnProperty.call(value, 'id')
   if (hasId && !(typeof value.id === 'string' && CMD_ID.test(value.id))) return null
   const id = hasId ? { id: value.id } : {}
@@ -273,6 +335,7 @@ function handle(req, res) {
   if (route.startsWith('/gitdiff/')) return written(res, route.slice('/gitdiff/'.length), 'gitdiffs', '.diff', 'git diff')
   if (route.startsWith('/message/')) return written(res, route.slice('/message/'.length), 'messages', '.md', 'message')
   if (route.startsWith('/agent/')) return written(res, route.slice('/agent/'.length), 'agents', '.json', 'agent file', JSON_TYPE)
+  if (route.startsWith('/s/')) return otherSession(res, route)
   if (route === '/favicon.ico') return res.writeHead(204).end()
   send(res, 404, 'not found\n')
 }

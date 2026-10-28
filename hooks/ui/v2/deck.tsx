@@ -11,7 +11,8 @@
  *
  * Each tab is a Button with its digit as its hotkey, so it presses while the
  * pane has the keyboard; Enter presses the focused one. Inspect and Help are
- * sections of Settings, so the header carries no keys of its own.
+ * sections of Settings; the header's one key is All sessions (`s`, ./sessions:
+ * every session on this machine, listed over the tab).
  *
  * Pure: Kit, the state, its lazy files, the deck model and DashActions come
  * from the hooks module.
@@ -29,6 +30,7 @@ import { nowTab } from './now'
 import { orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
 import { P } from './palette'
+import { sessionsButton, sessionsPage } from './sessions'
 import { settingsTab } from './settings'
 import { stopTurnButton } from './stop'
 
@@ -61,7 +63,7 @@ export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckM
 const STATE_HUE: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.runText, waiting: P.waitText, idle: P.muted }
 const STATE_DOT: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.run, waiting: P.wait, idle: P.idleDot }
 
-/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · context % · $cost`. */
+/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · context % · $cost` and, once the sessions on this machine are known, "All sessions" (`s`). */
 function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const head = state.header
@@ -84,12 +86,13 @@ function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElemen
         </Box>
         {stopTurnButton(kit, state, actions)}
       </Box>
-      <Box flexDirection="row">
+      <Box flexDirection="row" columnGap={2}>
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
           <Text color={P.muted2} wrap="truncate-end">
             {head.line}
           </Text>
         </Box>
+        {sessionsButton(kit, state.sessions, actions)}
       </Box>
     </Box>
   )
@@ -119,7 +122,7 @@ function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
   const { Box, Button } = kit
   const { view } = model
   const v2 = view.v2
-  const isOver = view.page !== ''
+  const isOver = view.page !== '' || model.isSessionsOpen === true
   const go = (tab: DeckView2['tab']) => {
     actions.setV2View({ tab })
     if (view.page !== '') actions.back()
@@ -139,6 +142,7 @@ function tabRow(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
 function bodyOf(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot): RenderElement {
   const { view } = model
   const v2 = view.v2
+  if (model.isSessionsOpen) return sessionsPage(kit, state.sessions, actions)
   if (view.page !== '') return agentPage(kit, state, files, view.page, actions)
   if (v2.tab === 'chat') return chatTab(kit, state, files, v2, actions, isDemo)
   if (v2.tab === 'changes') return changesTab(kit, state, files, model, actions, isDemo)

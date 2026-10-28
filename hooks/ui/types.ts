@@ -8,6 +8,7 @@ import type { Elements, RenderSurface } from 'claude-code'
 import type { DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
 import type { V2Band, V2Files, WebStateV2 } from '../web'
+import type { Viewing } from './v2/sessions'
 
 type TerminalTable = Elements['terminal']
 
@@ -74,6 +75,8 @@ export type DeckModel = {
   web?: WebPane
   /** What the band above the prompt says, from this session's v2 state (`W.bandOf`): null (or absent) when it says nothing. */
   band?: V2Band | null
+  /** Every session on this machine is listed over the tab (`s`, ./v2/sessions); absent reads as not. */
+  isSessionsOpen?: boolean
 }
 
 export type Actions = {
@@ -175,6 +178,14 @@ export type DashActions = Actions & {
   abortTurn: () => void
   /** Stop on a background task or Cancel on a schedule (as the page's `stopBackground`), by its row's id in `background`: TaskStop or CronDelete, once allowed. In the sample, nothing is stopped. */
   stopBackground: (id: string) => void
+  /** `s`, or the header's "All sessions": every session on this machine listed over the tab (./v2/sessions); pressed again, closed. */
+  openSessions: () => void
+  /** Leaves the list of sessions for the tab it was opened over. */
+  closeSessions: () => void
+  /** Opens session `id`'s deck read-only, from its state folder, under "Viewing <title>"; its own deck is asked to write it while it shows. */
+  openSession: (id: string) => void
+  /** Back to this chat: off another session's deck and the list, to this session's own. */
+  backToThisChat: () => void
 }
 
 /** What the pane draws from, beside the deck's model. */
@@ -196,4 +207,12 @@ export type DashModel = {
   isOrgDown: boolean
   /** The agent Org's chart marks: the one whose page was opened last; null for none. */
   selected: string | null
+  /**
+   * Another session's deck, shown read-only in place of this one's (./v2/sessions
+   * `viewingBar` over it): its bar, its state as read from its folder (null
+   * until it is), its lazy files, the model and the presses it is drawn with
+   * (its own agent page; answers and messages to its deck, or refused). Absent
+   * or null: this session's own.
+   */
+  viewing?: { bar: Viewing; state: WebStateV2 | null; files: V2Files; model: DeckModel; actions: DashActions } | null
 }

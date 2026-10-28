@@ -31,6 +31,8 @@ import * as F from './format'
 import * as G from './git'
 import * as M from './model'
 import * as R from './repos'
+import * as SR from './registry'
+import * as SE from './sessions'
 import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
 import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from './ui/v2/chat'
 import { openRowsFor, paneRowsFor } from './ui/v2/fit'
@@ -46,6 +48,8 @@ let view: DeckView = M.defaultView()
 let git: G.GitState = G.emptyGit()
 let cwd = ''
 let sessionId = ''
+/** The mod's folder (`$.plugin.root`, no trailing separator): where each session's state folder lies (`.web/<sessionId>`). */
+let pluginRoot = ''
 let usage: UsageInfo | null = null
 let usageAt = 0
 let fileDiff: G.FileDiff | null = null
@@ -99,10 +103,13 @@ const v2Memo: { key: string; data: DeckData | null; git: G.GitState | null; usag
 
 function v2Of(now: number, isFresh = false): W.WebStateV2 {
   const asking = [...askers.keys()]
-  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd, view.avatarStyle, clearedKey()].join('\u0001')
+  const key = [dataGen, M.minuteOf(now), asking.join(','), sessionId, cwd, view.avatarStyle, clearedKey(), SR.listKey()].join('\u0001')
   if (!isFresh && v2Memo.state && v2Memo.key === key && v2Memo.data === data && v2Memo.git === git && v2Memo.usage === usage && v2Memo.diffs === gitDiffs) return v2Memo.state
   // a question the page may answer is one whose race runs in this module: none after a reload
-  const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs, view.avatarStyle, clearedOf())
+  const built = W.deckStateOf(data, git, usage, now, sessionId, cwd, new Set(asking), gitDiffs, view.avatarStyle, clearedOf())
+  // every session on this machine, this one first (./registry): once the registry was read
+  const sessions = SR.sessionsFor(built, now)
+  const state = sessions ? { ...built, sessions } : built
   Object.assign(v2Memo, { key, data, git, usage, diffs: gitDiffs, state, shows: W.v2KeyOf(state) })
   return state
 }
@@ -250,7 +257,7 @@ function screenKey(now: number): string {
   const shown = webPaneOf()
   const webKey = `${shown.status}\t${shown.url}\t${shown.opened}\t${shown.note}`
   const sample = view.isDemo ? [demo.version, demo.v2 !== null, demo.note, clearedKey()].join('|') : ''
-  return [v2Memo.shows, gitKeyOf(git), webKey, sample].join('\n\u0001')
+  return [v2Memo.shows, gitKeyOf(git), webKey, sample, SR.registryKey()].join('\n\u0001')
 }
 
 /**
@@ -264,6 +271,7 @@ function redrawIfChanged($: EngineInterface, now: number) {
   if (key === shownKey) return
   shownKey = key
   scheduleWeb($)
+  SR.noteChanged(now)
   redraw($)
 }
 
@@ -705,9 +713,14 @@ function askWeb() {
   wake?.()
 }
 
-/** The data changed: the web deck's state is written within 300 ms while it is on; changes meanwhile ride along. */
+/** Whether the state folder is written: while the web deck is on, or another session's deck views this one (./registry). */
+function isSharing(): boolean {
+  return web.isOn || SR.isShared()
+}
+
+/** The data changed: the web deck's state is written within 300 ms while it is on (or this session is viewed); changes meanwhile ride along. */
 function scheduleWeb($: EngineInterface) {
-  if (!web.isOn || web.dir === '' || timers.web) return
+  if (!isSharing() || web.dir === '' || timers.web) return
   timers.web = $.clock.after(W.WEB_WRITE_MS, () => {
     timers.web = undefined
     void writeWeb($)
@@ -725,7 +738,7 @@ function scheduleWeb($: EngineInterface) {
  * time: a change during one writes again after it.
  */
 async function writeWeb($: EngineInterface): Promise<void> {
-  if (!web.isOn || web.dir === '') return
+  if (!isSharing() || web.dir === '') return
   if (web.isWriting) {
     web.isWriteQueued = true
     return
@@ -845,10 +858,10 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
     return
   }
   web.keptPort = web.port
-  let ran = await spawnWeb($, W.serverArgvOf(script, web.dir, web.pid, web.port))
+  let ran = await spawnWeb($, W.serverArgvOf(script, web.dir, web.pid, web.port, SR.registryDir()))
   if (!ran.isReady && !ran.isMissing && web.port > 0 && web.isOn && epoch === web.epoch) {
     web.port = 0
-    ran = await spawnWeb($, W.serverArgvOf(script, web.dir, web.pid, 0))
+    ran = await spawnWeb($, W.serverArgvOf(script, web.dir, web.pid, 0, SR.registryDir()))
   }
   web.keptPort = 0
   if (epoch !== web.epoch) return
@@ -945,6 +958,12 @@ function onWebLine($: EngineInterface, line: string): boolean {
     if (kept > 0 && kept !== said.port) $.ui.toast('Agent Deck web started again on another port: /deck web gives its new link.')
     redraw($)
     return true
+  }
+  // a command for another session's deck (the page views it): into its inbox, where its own deck takes it
+  const other = SE.sessionCmdOf(said.cmd, sessionId)
+  if (other) {
+    void SR.fromPage(other.session, other.cmd)
+    return false
   }
   const ackId = W.cmdIdOf(said.cmd)
   const route = W.routeOf(said.cmd, data)
@@ -1599,7 +1618,7 @@ const gitDiffRead = { isBusy: false, isQueued: false }
  * when one changed, and only for the repository the deck still shows.
  */
 async function readGitDiffs($: EngineInterface): Promise<void> {
-  if (!web.isOn || git.isRepo !== true || git.root === '') {
+  if (!isSharing() || git.isRepo !== true || git.root === '') {
     if (gitDiffs.size > 0) gitDiffs = new Map()
     return
   }
@@ -2040,8 +2059,10 @@ async function tick($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   // workflow agents and housekeeping loops fold away: they keep nothing on screen live
   const isAnyLive = M.hasLiveAgents(data)
-  if (isAnyLive || isPaneOpen || web.isOn) await syncAgents($)
-  if (isPaneOpen || web.isOn) {
+  // every session on this machine: this one's inbox, the others' files while they show, the one viewed (./registry)
+  await SR.registryTick(now, web.isOn)
+  if (isAnyLive || isPaneOpen || isSharing()) await syncAgents($)
+  if (isPaneOpen || isSharing()) {
     if (now - lastGitAt > 6000) void refreshGit($)
     if (now - usageAt > 10_000) void loadUsage($)
   }
@@ -2055,7 +2076,7 @@ async function tick($: EngineInterface): Promise<void> {
     void recoverLost($)
   }
   // with the pane shut, no agent at work and no web deck nothing of the deck's is on screen: the next event draws
-  if (isPaneOpen || isAnyLive || web.isOn) redrawIfChanged($, now)
+  if (isPaneOpen || isAnyLive || isSharing()) redrawIfChanged($, now)
 }
 
 /** The terminal's height as its last drawing of the deck (the pane or the band) measured it; 0 until one has. */
@@ -2247,12 +2268,15 @@ function actionsFor($: EngineInterface): DeckActions {
     loadMessage: (id, onRead) => void readMessage($, id, onRead),
     reveal: (key, block) => scrollTo($, key, block),
     exitDemo: () => {
+      SR.backToThisChat()
       leaveDemo()
       view.page = ''
       changed($)
     },
     // the v2 screens' own state: each field checked as a reload checks it; Changes reads the file it shows again
     setV2View: patch => {
+      // a tab pressed over the list of sessions leaves it for that tab
+      if (patch.tab !== undefined) SR.closeList()
       // Chat opened by a press (its tab, m) or filtered anew: the next drawing takes the pane to its newest message
       if (patch.tab === 'chat' || (patch.chatFilter !== undefined && patch.chatFilter !== view.v2.chatFilter)) chatFollow.isShown = false
       view.v2 = M.view2With(view.v2, patch)
@@ -2300,8 +2324,14 @@ function actionsFor($: EngineInterface): DeckActions {
       void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))
     },
     review: text => fillReview($, text),
+    // every session on this machine (./registry): the list over the tab (`s`), another session's deck read-only, and back
+    openSessions: () => SR.toggleList(),
+    closeSessions: () => SR.closeList(),
+    openSession: id => void SR.openSession(id, view.isDemo),
+    backToThisChat: () => SR.backToThisChat(),
     // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
     open: tab => {
+      SR.backToThisChat()
       leaveDemo()
       view.v2 = M.view2With(view.v2, { tab: M.v2TabOf(tab), isInspectOpen: false })
       view.page = ''
@@ -2332,11 +2362,14 @@ function kitOf(ui: ReturnType<EngineInterface['ui']['resolve']>, surface: Kit['s
   }
 }
 
-/** What the pane draws from: this session's v2 state and its lazy files, or the sample's while it shows; whether Org's chart failed on `surface`, and the agent it marks. */
-function dashOf(now: number, surface: RenderSurface): DashModel {
+/** What the pane draws from: this session's v2 state and its lazy files, or the sample's while it shows (with the sample's sessions); whether Org's chart failed on `surface`, and the agent it marks; another session's deck while one is viewed. */
+function dashOf(now: number, surface: RenderSurface, $: EngineInterface): DashModel {
   const isDemo = view.isDemo
+  const sample = isDemo ? demoShown() : null
+  const sampleSessions = sample ? SR.sessionsFor(null, now) : null
   return {
-    v2: isDemo ? demoShown() : v2Of(now),
+    v2: isDemo ? (sample && sampleSessions ? { ...sample, sessions: sampleSessions } : sample) : v2Of(now),
+    viewing: SR.viewingFor(modelOf(now), actionsFor($)),
     v2Files: isDemo ? demo.v2Files : W.v2FilesOf(data, gitDiffs),
     isDemo,
     demoNote: demo.note,
@@ -2363,6 +2396,7 @@ async function openFromChart($: EngineInterface, posted: unknown): Promise<void>
 
 /** Leaves the sample: the pane shows this session again. */
 function leaveDemo() {
+  SR.leaveSample()
   if (!view.isDemo && demo.v2 === null) return
   view.isDemo = false
   demo.v2 = null
@@ -2429,6 +2463,8 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   const readAt = await $.clock.now()
   let shown: W.WebStateV2 | null = null
   let files: W.V2Files | null = null
+  // the sample's other sessions, for its All sessions (`s`)
+  void SR.readSample(root, readAt)
   try {
     const text = await $.fs.read(`${root}/web/fixtures/state.v2.json`)
     shown = W.v2StateFromText(text, readAt)
@@ -2467,7 +2503,79 @@ function modelOf(now: number): DeckModel {
     web: webPaneOf(),
     // what the band says: this session's, never the sample's
     band: W.bandOf(v2Of(now)),
+    isSessionsOpen: SR.isListOpen(),
   }
+}
+
+/**
+ * What the registry of sessions (./registry) reads of this deck: its id, its
+ * state, its folder, its process; a command another session's deck sent
+ * runs here as the page's own would (`steerFromSession`).
+ */
+function registryHost($: EngineInterface): SR.RegistryHost {
+  const read = async (get: () => Promise<string | undefined>) => {
+    try {
+      return await get()
+    } catch {
+      // nothing answers (the tests): unset
+      return undefined
+    }
+  }
+  return {
+    env: async () => ({
+      override: await read(() => $.env.get('AGENT_DECK_SESSIONS')),
+      configDir: await read(() => $.env.get('CLAUDE_CONFIG_DIR')),
+      home: (await read(() => $.env.get('USERPROFILE'))) ?? (await read(() => $.env.get('HOME'))),
+      wtSession: await read(() => $.env.get('WT_SESSION')),
+      termProgram: await read(() => $.env.get('TERM_PROGRAM')),
+    }),
+    now: () => $.clock.now(),
+    read: path => $.fs.read(path),
+    write: (path, text) => $.fs.write(path, text),
+    list: path => $.fs.list(path),
+    stat: path => $.fs.stat(path),
+    node: args => $.process.run(['node', ...args], { timeoutMs: 10_000 }),
+    every: (ms, fn) => $.clock.every(ms, fn),
+    after: (ms, fn) => $.clock.after(ms, fn),
+    surfaces: () => $.session.surfaces(),
+    repoRoot: async () => (await $.session.repo())?.root ?? null,
+    sessionId: () => sessionId,
+    stateOf: now => v2Of(now),
+    dirOf: () => web.dir || (pluginRoot !== '' && sessionId !== '' ? W.webDirOf(pluginRoot, sessionId) : ''),
+    pidOf: async () => {
+      if (web.pid === '') web.pid = await enginePidOf($)
+      return web.pid
+    },
+    steer: cmd => steerFromSession($, cmd),
+    hasAck: id => data.acks.some(one => one.id === id),
+    ack: (id, status, text) => void ack($, id, status, text),
+    changed: () => changed($),
+    refresh: now => redrawIfChanged($, now),
+    share: () => {
+      // a deck views this session: its folder written from now, as for /deck web
+      if (web.dir === '' && pluginRoot !== '' && sessionId !== '') web.dir = W.webDirOf(pluginRoot, sessionId)
+      web.lastKey = ''
+      web.agentFiles.clear()
+      void readGitDiffs($)
+      scheduleWeb($)
+    },
+    toast: text => $.ui.toast(text),
+  }
+}
+
+/**
+ * A command another session's deck sent (its inbox, ./registry): a `chat` or
+ * an `answer` runs exactly as the page's own (`sendChat`, `answerCall`),
+ * through Claude Code's channels, its ack in this session's state; anything
+ * else is refused.
+ */
+function steerFromSession($: EngineInterface, cmd: Record<string, unknown>) {
+  const ackId = W.cmdIdOf(cmd)
+  const route = W.routeOf(cmd, data)
+  if (route === null) void ack($, ackId, 'failed', W.refusalOf(cmd, data))
+  else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
+  else if (route.kind === 'answer') answerCall($, route.callId, route.answers, ackId)
+  else void ack($, ackId, 'failed', "Not from another session's deck: do it in its window")
 }
 
 function editedPathOf(input: Record<string, unknown>): string {
@@ -2966,6 +3074,9 @@ export const register: Register = on => {
     } catch {
       sessionId = ''
     }
+    pluginRoot = $.plugin.root.replace(/[\\/]+$/, '')
+    // every session on this machine: this deck's file in the registry, and the others' read (never awaited)
+    void SR.startRegistry(registryHost($))
 
     // the web deck's supervisor, this session.start's: on again at once when a reload found it on
     web.epoch += 1
@@ -3025,6 +3136,13 @@ export const register: Register = on => {
     return result
   })
 
+  // the session ends (not a /clear or a resume, where the process goes on): its file in the registry goes
+  on('session.end', async ($, e, next) => {
+    const result = await next(e)
+    await SR.endRegistry(e.reason)
+    return result
+  })
+
   on('command.run', { command: 'deck' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'close' || arg === 'off' || arg === 'hide') {
@@ -3052,6 +3170,13 @@ export const register: Register = on => {
     }
     // an Org chart Client that failed is tried again whenever /deck opens
     orgDown.clear()
+    // every session on this machine, listed over the tab
+    if (arg === 'sessions' || arg === 'all') {
+      if (!SR.isListOpen()) SR.toggleList()
+      const isShown = await openPane($)
+      changed($)
+      return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+    }
     // the sample: the deck drawn from the v2 sample
     if (arg === 'demo' || arg === 'sample') {
       const why = await loadDemo($, true)
@@ -3768,7 +3893,7 @@ export const register: Register = on => {
     const rows = e.surface === 'terminal' ? paneRowsFor(e.props.scroll.bodyRows, e.viewport?.rows) : undefined
     return drawn.of(`pane:${e.surface}`, [e.props.bodyColumns, rows ?? 0, shownKey, view], () => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns - 1), rows)
-      return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface))
+      return deckView(kit, modelOf(now), actionsFor($), dashOf(now, e.surface, $))
     })
   })
 
