@@ -1849,7 +1849,7 @@ const tlLanesOf = d => d.lanes.filter(l => l.id === 'main' || !IX.byId.has(l.id)
 function TimelineView() {
   const t = timelineNow();
   if (!t.data) {
-    return h('div', { key: 'tl', class: 'card tl tl-loading' },
+    return h('div', { key: 'tl', class: 'card tl tl-loading', ref: el => { tl.box = el; } },
       t.status === 'error' ? Empty('gantt', 'No timeline', t.error) : h('p', { class: 'muted small' }, 'Reading the timeline…'));
   }
   const d = t.data;

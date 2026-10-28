@@ -40,6 +40,8 @@ export const TL = {
   run: P.run,
   wait: P.wait,
   idle: P.muted3,
+  /** Idle as a line of text: a thin glyph wants a lighter grey than the image's dotted line. */
+  idleText: P.muted2,
   done: P.done,
   fail: P.fail,
   stopped: P.idle,
@@ -293,7 +295,7 @@ export function laneCellsOf(lane: V2Lane, cells: number, span: number, marks: re
   for (const one of lane.spans) {
     const a = cellOf(one.from)
     const b = one.to === null ? cells - 1 : cellOf(Math.max(one.from, one.to - 1))
-    const cell: Cell = one.kind === 'idle' ? { ch: '┄', color: TL.idle } : { ch: '━', color: one.kind === 'wait' ? TL.wait : TL.run }
+    const cell: Cell = one.kind === 'idle' ? { ch: '┄', color: TL.idleText } : { ch: '━', color: one.kind === 'wait' ? TL.wait : TL.run }
     for (let i = a; i <= b; i++) {
       if ((seen[i] ?? 0) >= rank[one.kind]) continue
       seen[i] = rank[one.kind]
@@ -371,7 +373,7 @@ function textLanes(kit: Kit, timeline: V2Timeline, lanes: readonly V2Lane[], act
   const LEGEND: Readonly<Record<string, Cell>> = {
     work: { ch: '━', color: TL.run },
     wait: { ch: '━', color: TL.wait },
-    idle: { ch: '┄', color: TL.idle },
+    idle: { ch: '┄', color: TL.idleText },
     done: { ch: '●', color: TL.done },
     failed: { ch: '✕', color: TL.fail },
     stopped: { ch: '■', color: TL.stopped },
@@ -416,7 +418,7 @@ function textLanes(kit: Kit, timeline: V2Timeline, lanes: readonly V2Lane[], act
           })}
         </Box>
       ) : null}
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={2} marginTop={1}>
         {legend
           .filter(item => LEGEND[item.kind])
           .map(item => (
