@@ -58,6 +58,12 @@
       "tokens": 0
     }
   ],
+  "background": {
+    "rows": [],
+    "tasks": 0,
+    "scheduled": 0,
+    "text": ""
+  },
   "activity": [
     {
       "id": "toolu_ci_m1",

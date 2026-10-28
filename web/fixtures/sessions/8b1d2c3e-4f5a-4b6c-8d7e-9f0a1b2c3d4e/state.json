@@ -84,7 +84,13 @@
       "task": "Add terminalFace to web/avatars.mjs and run the tests.",
       "result": "",
       "todos": [],
-      "tokens": 0
+      "tokens": 0,
+      "stop": {
+        "tool": "TaskStop",
+        "label": "Stop",
+        "can": false,
+        "why": "Not asked yet whether Claude Code allows TaskStop here"
+      }
     },
     {
       "row": "agent",
@@ -117,9 +123,21 @@
       "task": "Draw a glyph per agent in hooks/ui/v2/look.tsx.",
       "result": "",
       "todos": [],
-      "tokens": 0
+      "tokens": 0,
+      "stop": {
+        "tool": "TaskStop",
+        "label": "Stop",
+        "can": false,
+        "why": "Not asked yet whether Claude Code allows TaskStop here"
+      }
     }
   ],
+  "background": {
+    "rows": [],
+    "tasks": 0,
+    "scheduled": 0,
+    "text": ""
+  },
   "activity": [
     {
       "id": "toolu_fc_p1",
