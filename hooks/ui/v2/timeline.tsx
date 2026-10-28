@@ -341,6 +341,31 @@ export function axisLineOf(span: number, cells: number): string {
 /** The cells of a text lane's glyphs where `kit` draws: the terminal's one a glyph; a desktop's face about 1.17 a box-drawing glyph. */
 const BOX_CELLS = 1.17
 
+/** Each run's whole cells off the terminal, its glyphs about 1.17 cells each: where each run ends, rounded, so the runs keep in step down the lanes. */
+function widthsOf(runs: readonly { ch: string; color: string; count: number }[]): { run: { ch: string; color: string; count: number }; width: number }[] {
+  let glyphs = 0
+  let cells = 0
+  return runs.map(run => {
+    glyphs += run.count
+    const end = Math.round(glyphs * BOX_CELLS)
+    const width = end - cells
+    cells = end
+    return { run, width }
+  })
+}
+
+/** The axis's words off the terminal: each where its glyph cells put it (`BOX_CELLS` a glyph), as wide as `advance` has it, the gap before it whole cells. */
+function axisWordsOf(line: string, advance: (ch: string) => number): { text: string; gap: number; width: number }[] {
+  let used = 0
+  return Array.from(line.matchAll(/\S+/g)).map(word => {
+    const at = Math.round((word.index ?? 0) * BOX_CELLS)
+    const gap = Math.max(0, at - used)
+    const width = Math.ceil(Array.from(word[0]).reduce((sum, ch) => sum + advance(ch), 0))
+    used += gap + width
+    return { text: word[0], gap, width }
+  })
+}
+
 /** Text lanes: the axis, a row a lane (its name a Button that opens its page), the background shells, the legend. */
 function textLanes(kit: Kit, timeline: V2Timeline, lanes: readonly V2Lane[], actions: DashActions): RenderElement {
   const { Box, Text, Button } = kit
@@ -362,9 +387,9 @@ function textLanes(kit: Kit, timeline: V2Timeline, lanes: readonly V2Lane[], act
       </Text>
     ) : (
       <Box key={key} flexDirection="row">
-        {runs.map((run, i) => (
-          <Box key={`r${i}`} width={Math.max(1, Math.round(run.count * BOX_CELLS * 100) / 100)} flexShrink={0}>
-            {run.ch === ' ' ? null : <Text color={run.color}>{run.ch.repeat(Math.max(1, Math.floor((run.count * BOX_CELLS) / Math.max(0.4, advance(run.ch)))))}</Text>}
+        {widthsOf(runs).map(({ run, width }, i) => (
+          <Box key={`r${i}`} width={width} flexShrink={0}>
+            {run.ch === ' ' || width === 0 ? null : <Text color={run.color} wrap="truncate-end">{run.ch.repeat(Math.max(1, Math.floor(width / Math.max(BOX_CELLS + 0.05, advance(run.ch)))))}</Text>}
           </Box>
         ))}
       </Box>
@@ -383,9 +408,23 @@ function textLanes(kit: Kit, timeline: V2Timeline, lanes: readonly V2Lane[], act
     <Box key="org:timeline:lanes" flexDirection="column">
       <Box flexDirection="row">
         <Box width={label + 1} flexShrink={0} />
-        <Text color={TL.axis} wrap="truncate-end">
-          {axisLineOf(span, cells)}
-        </Text>
+        {isMono ? (
+          <Text color={TL.axis} wrap="truncate-end">
+            {axisLineOf(span, cells)}
+          </Text>
+        ) : (
+          // off the terminal a space is narrower than a glyph: each word of the axis a Box where its glyph cells put it
+          <Box flexDirection="row">
+            {axisWordsOf(axisLineOf(span, cells), advance).map((word, i) => (
+              <Box key={`x${i}`} flexDirection="row" flexShrink={0}>
+                <Box width={word.gap} flexShrink={0} />
+                <Box width={word.width} flexShrink={0}>
+                  <Text color={TL.axis}>{word.text}</Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        )}
       </Box>
       {lanes.map(lane => {
         const indent = Math.min(lane.depth, 3)
