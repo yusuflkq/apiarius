@@ -345,18 +345,26 @@ function between(state: W.WebStateV2): W.WebStateV2 {
   }
 }
 
-test('the pane and the terminal: builder`s Activity lays its words and its thought between its calls under Calls only · With their words; Calls only leaves them out and the view keeps it', async ($, on) => {
+/** The entries an agent page's log draws, by their rows' keys: `page:call:<id>`, `page:said:…`, `page:thought:…`. */
+async function entriesOf(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Box' })).map(one => one.key ?? '').filter(key => /^page:(call|said|thought):/.test(key))
+}
+
+test('the pane and the terminal: builder`s Activity lays its words and its thought between its calls, newest first, under Calls only · With their words; Calls only leaves them out and the view keeps it', async ($, on) => {
   await demo($, on)
   for (const surface of SURFACES) {
     const ui = (await $.ui.mount(pane(surface))) as unknown as Drawing
     await press(ui, W.agentKeyOf(IDS.builder))
     if (!(await ui.find({ key: 'page:log' }))) await press(ui, 'page:fold:activity')
-    // 5 calls, 7 words and a thought, oldest first
-    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY 13')
+    // 5 calls, 7 words and a thought, newest first, as the web's drawer lists them; its head counts the calls
+    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY')
+    expect((await ui.find({ key: 'page:activity' }))?.text).toContain('5 tool calls')
+    expect((await entriesOf(ui)).length).toBe(13)
     expect((await ui.find({ key: 'page:words:calls' }))?.props).toMatchObject({ label: 'Calls only', plain: true, dimColor: true })
     expect((await ui.find({ key: 'page:words:with' }))?.props).toMatchObject({ label: 'With their words', plain: true, dimColor: false })
     const log = (await ui.find({ key: 'page:log' }))?.text ?? ''
-    const order = ['“Nothing there yet.', 'Write', '“The limiter is in.', 'Edit', '“Both stores pass', 'git push', `${THOUGHT_WORD}  Auto mode refused`, "“I won't push.", 'bench.js', '“Running the limiter tests', 'npm test']
+    // each call by its own description, else its target
+    const order = ['“Nothing there yet.', 'rateLimit.ts', '“The limiter is in.', 'src/app.ts', '“Both stores pass', 'Push the limiter', `${THOUGHT_WORD}  Auto mode refused`, "“I won't push.", 'bench.js', '“Running the limiter tests', 'Run the limiter tests'].reverse()
     const at = order.map(words => log.indexOf(words))
     expect(at.every(one => one >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
@@ -376,17 +384,17 @@ test('the pane and the terminal: builder`s Activity lays its words and its thoug
     const italics = (await ui.findAll({ type: 'Text' })).filter(one => one.props.italic === true && one.text.includes('Both stores pass'))
     expect(italics.length).toBeGreaterThan(0)
     await press(ui, 'page:words:calls')
-    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY 5')
+    expect((await entriesOf(ui)).length).toBe(5)
     const calls = (await ui.find({ key: 'page:log' }))?.text ?? ''
-    expect([calls.includes('Nothing there yet'), calls.includes(`${THOUGHT_WORD}  `), calls.includes('git push')]).toEqual([false, false, true])
+    expect([calls.includes('Nothing there yet'), calls.includes(`${THOUGHT_WORD}  `), calls.includes('Push the limiter')]).toEqual([false, false, true])
     expect((await ui.find({ key: 'page:activity' }))?.text).not.toContain(THOUGHT_NOTE)
     expect((await ui.find({ key: 'page:words:calls' }))?.props.dimColor).toBe(false)
     // the pick stays for the next page
     await press(ui, 'key:b')
     await press(ui, W.agentKeyOf(IDS.builder))
-    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY 5')
+    expect((await entriesOf(ui)).length).toBe(5)
     await press(ui, 'page:words:with')
-    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY 13')
+    expect((await entriesOf(ui)).length).toBe(13)
     await press(ui, 'key:b')
     await ui.unmount()
   }
@@ -445,10 +453,10 @@ test('words with Markdown: a line of them quoted in italics, the marks dropped; 
     expect(said).toMatch(/^.?Yes, your read is right\.\n\nPEL = …/)
     expect(said).not.toMatch(/[“”*]/)
     if (!(await ui.find({ key: 'page:log' }))) await press(ui, 'page:fold:activity')
-    // the log's rows by their keys (the sample's times are moved to now as it is read)
+    // the log's rows by their keys, newest first (the sample's times are moved to now as it is read)
     const rows = (await ui.findAll({ type: 'Box' })).filter(one => /^page:(said|thought):/.test(one.key ?? ''))
-    expect(rows.map(one => (one.key ?? '').split(':')[1])).toEqual(['said', 'said', 'thought'])
-    const [line, lines, thought] = rows
+    expect(rows.map(one => (one.key ?? '').split(':')[1])).toEqual(['thought', 'said', 'said'])
+    const [thought, lines, line] = rows
     // one line: quoted in italics, the marks dropped
     expect(line?.text).toMatch(/^.?“Yes, your read is right\. PEL = the pending entries list, see the docs\.”/)
     expect(typed(line, 'Markdown')).toEqual([])
@@ -482,7 +490,9 @@ test('a log too long for the pane: its newest 40 entries with "and n more", each
     const ui = (await $.ui.mount(pane(surface))) as unknown as Drawing
     await press(ui, W.agentKeyOf(IDS.builder))
     if (!(await ui.find({ key: 'page:log' }))) await press(ui, 'page:fold:activity')
-    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY 74')
+    // 14 calls and 60 words: the newest 40, its head saying the file keeps the newest 14 calls
+    expect((await ui.find({ key: 'page:activity' }))?.text).toContain('the newest 14')
+    expect((await entriesOf(ui)).length).toBe(40)
     expect((await ui.findAll({ type: 'Text' })).some(one => one.text === 'and 34 more')).toBe(true)
     const size = sizeOf(await ui.drawn())
     expect(size.nodes).toBeLessThan(2000)

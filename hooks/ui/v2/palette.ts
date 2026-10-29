@@ -198,6 +198,19 @@ export type IconName =
   | 'chevronDown'
   | 'said'
   | 'thought'
+  | 'eye'
+  | 'pencil'
+  | 'filePlus'
+  | 'terminal'
+  | 'search'
+  | 'folder'
+  | 'globe'
+  | 'message'
+  | 'sparkles'
+  | 'wrench'
+  | 'arrowRight'
+  | 'arrowUp'
+  | 'arrowDown'
 
 const ICONS: Readonly<Record<IconName, string>> = {
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
@@ -221,9 +234,81 @@ const ICONS: Readonly<Record<IconName, string>> = {
   // an agent's words between its calls (a speech bubble), and its thinking as Claude Code shows it (a cloud)
   said: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   thought: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  // a tool call's chip (the web's TOOL_ICON), and an agent page's Message, Chat with and the links between its calls and its edits
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  filePlus: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  arrowDown: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
 }
 
 /** An icon as a whole SVG document, its strokes in `color`, `px` CSS pixels square. */
 export function iconSvg(name: IconName, color: string, px: number): string {
   return memo(`icon|${name}|${color}|${px}`, () => `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`)
+}
+
+/** Each tool's icon on its chip, as the web's TOOL_ICON; a wrench for any other. */
+const TOOL_ICON: Readonly<Record<string, IconName>> = {
+  Read: 'eye',
+  Edit: 'pencil',
+  MultiEdit: 'pencil',
+  NotebookEdit: 'pencil',
+  Write: 'filePlus',
+  Bash: 'terminal',
+  PowerShell: 'terminal',
+  Grep: 'search',
+  Glob: 'folder',
+  WebFetch: 'globe',
+  WebSearch: 'globe',
+  Agent: 'bot',
+  Task: 'bot',
+  SendMessage: 'message',
+  TodoWrite: 'listChecks',
+  TaskCreate: 'listChecks',
+  TaskUpdate: 'listChecks',
+  TaskGet: 'listChecks',
+  TaskList: 'listChecks',
+  ToolSearch: 'search',
+  Skill: 'sparkles',
+  AskUserQuestion: 'help',
+}
+
+/** The icon on tool `tool`'s chip: the web's, a wrench for a tool it names none for. */
+export function toolIconOf(tool: string): IconName {
+  return TOOL_ICON[tool] ?? 'wrench'
+}
+
+/** A tool chip's height in CSS px, as the web's `.tooltag`. */
+export const TOOL_TAG_HEIGHT = 20
+
+/** A tool chip's width in CSS px: 7 px of padding, its 12 px icon and a gap, its name at 11.5 px of a monospaced face (about 7 px a letter), and 7 px. */
+export function toolTagWidth(tool: string): number {
+  return Math.ceil(7 + 12 + 5 + Array.from(tool).length * 6.9 + 7)
+}
+
+/**
+ * A tool call's chip as the web draws it (`.tooltag`): the tool's icon, dim,
+ * then its name in a monospaced face, on a faint ground ringed in the cards'
+ * edge, rounded.
+ */
+export function toolTagSvg(tool: string): string {
+  const width = toolTagWidth(tool)
+  const height = TOOL_TAG_HEIGHT
+  return memo(`tooltag|${tool}`, () =>
+    [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<rect x=".5" y=".5" width="${width - 1}" height="${height - 1}" rx="5.5" fill="#ffffff" fill-opacity=".03" stroke="#ffffff" stroke-opacity=".09"/>`,
+      `<g transform="translate(7 4) scale(.5)" fill="none" stroke="${P.muted}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">${ICONS[toolIconOf(tool)]}</g>`,
+      `<text x="24" y="14" font-family="Cascadia Mono, Consolas, ui-monospace, monospace" font-size="11.5" font-weight="500" fill="${P.fg2}">${esc(tool)}</text>`,
+      '</svg>',
+    ].join(''),
+  )
 }

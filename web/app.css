@@ -988,6 +988,18 @@ span.cg-av { cursor: default; }
 .edit-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; font-size: 12px; color: var(--muted); }
 .edit-head .who { font-size: 12.5px; }
 .edit-time { margin-left: auto; font: 11px var(--mono); color: var(--muted-2); white-space: nowrap; }
+/* on its agent's drawer: its chip, when and its lines together, its links at the right */
+.edit-own .edit-time { margin-left: 0; }
+.edit-links { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.link-btn {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 24px; padding: 0 7px; border: 0; border-radius: 5px; background: none;
+  font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer;
+  transition: background-color 0.12s, color 0.12s;
+}
+.link-btn:hover { background: var(--hover-2); color: var(--fg); }
+.link-btn .ic { width: 13px; height: 13px; }
+.act-body .link-btn { align-self: flex-start; margin-left: -7px; }
 .code-badge {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 20px; height: 20px; border-radius: 5px;
@@ -1074,13 +1086,30 @@ span.cg-av { cursor: default; }
 }
 @keyframes slide { from { transform: translateX(16px); opacity: 0.6; } }
 @media (min-width: 1180px) {
-  .app.has-drawer { grid-template-columns: minmax(0, 1fr) var(--drawer-w); }
+  /* beside the page: as wide as dragged (--drawer-w), never so wide the page has less than 420px */
+  .app.has-drawer { grid-template-columns: minmax(0, 1fr) clamp(360px, var(--drawer-w), calc(100vw - 420px)); }
   .drawer {
     position: relative; top: auto; right: auto; bottom: auto; z-index: 1;
     grid-row: 3; grid-column: 2; width: auto;
     border-left-color: var(--border); box-shadow: none; animation: none;
   }
   .scrim { display: none; }
+}
+
+/* The drawer's left edge, to drag: a strip over its border, a line lit under the pointer, while dragged and when focused. */
+.drawer-grip {
+  position: absolute; top: 0; bottom: 0; left: -4px; z-index: 2; width: 9px;
+  cursor: col-resize; touch-action: none; outline: none;
+}
+.drawer-grip::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 3px; border-radius: 2px;
+  background: transparent; transition: background-color 0.12s;
+}
+.drawer-grip:hover::after, .drawer-grip:focus-visible::after, .is-resizing .drawer-grip::after { background: var(--run); }
+.is-resizing, .is-resizing * { cursor: col-resize !important; user-select: none !important; }
+/* over a narrow window the drawer takes its width: no edge to drag */
+@media (max-width: 720px) {
+  .drawer-grip { display: none; }
 }
 .drawer-head { display: flex; align-items: center; gap: 12px; flex: none; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--border); }
 .drawer-id { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }

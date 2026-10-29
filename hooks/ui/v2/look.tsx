@@ -4,8 +4,8 @@
  * its status dot at its foot, where the surface draws Svg; its glyph and
  * status mark on the terminal), a
  * status dot, a status pill (an image on a desktop, its word on the
- * terminal), a status glyph, an icon, a section's head, a quiet line, and
- * how much room a character takes where it is drawn.
+ * terminal), a status glyph, an icon, a tool call's chip, a section's head,
+ * a quiet line, and how much room a character takes where it is drawn.
  *
  * A desktop draws a plain Button's label alone, in its own ink (the Text in
  * it keeps neither colour nor weight), so what carries colour beside a
@@ -19,7 +19,7 @@ import type { RenderElement } from 'claude-code'
 import * as AV from '../../../web/avatars.mjs'
 import type { V2AgentRow } from '../../web'
 import type { Kit } from '../types'
-import { P, PILL_HEIGHT, glyphOf, iconSvg, pillSvg, pillWidth, toneOf, type IconName } from './palette'
+import { P, PILL_HEIGHT, TOOL_TAG_HEIGHT, glyphOf, iconSvg, pillSvg, pillWidth, toneOf, toolTagSvg, toolTagWidth, type IconName } from './palette'
 import { monoAdvance, uiAdvance, type Advance } from './text'
 
 /** The Svg element where the surface draws one as an image: every table but the terminal's, which answers to Svg with an empty box. */
@@ -151,6 +151,19 @@ const ICON_ALT: Readonly<Record<IconName, string>> = {
   chevronDown: 'Open',
   said: 'Said',
   thought: 'Thinking',
+  eye: 'Read',
+  pencil: 'Edit',
+  filePlus: 'Write',
+  terminal: 'Shell',
+  search: 'Search',
+  folder: 'Folder',
+  globe: 'Web',
+  message: 'Message',
+  sparkles: 'Skill',
+  wrench: 'Tool',
+  arrowRight: 'Go to',
+  arrowUp: 'Up',
+  arrowDown: 'Down',
 }
 
 /** An icon where the surface draws Svg; else `mark` in `color` (the terminal draws text alone). */
@@ -158,6 +171,23 @@ export function icon(kit: Kit, name: IconName, color: string, mark: string, px =
   const { Text } = kit
   const Svg = svgOf(kit)
   return Svg ? <Svg source={iconSvg(name, color, px)} alt={ICON_ALT[name]} width={px} height={px} /> : <Text color={color}>{mark}</Text>
+}
+
+/** A tool call's chip, as the web's `.tooltag`: its icon and name on a faint ringed ground where Svg draws (alt the tool); its name on the chips' grey on the terminal. */
+export function toolTag(kit: Kit, tool: string): RenderElement {
+  const { Text } = kit
+  const Svg = svgOf(kit)
+  if (Svg) return <Svg source={toolTagSvg(tool)} alt={tool} width={toolTagWidth(tool)} height={TOOL_TAG_HEIGHT} />
+  return (
+    <Text color={P.fg2} backgroundColor={P.chip}>
+      {` ${tool} `}
+    </Text>
+  )
+}
+
+/** The cells `toolTag` takes. */
+export function toolTagCells(kit: Kit, tool: string): number {
+  return svgOf(kit) ? toolTagWidth(tool) / 7.85 : Array.from(tool).length + 2
 }
 
 /** The text glyph of an agent's words where the surface draws no icon (the terminal): `»` what it said, `∴` what it thought. */

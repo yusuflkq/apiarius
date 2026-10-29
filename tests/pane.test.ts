@@ -189,22 +189,37 @@ test('a section`s head folds it to one line (and it stays so), another press ope
     if (String((await ui.find({ key: 'finished:now:fold' }))?.props.label).endsWith('▸')) await press(ui, 'finished:now:fold')
     expect((await ui.find({ key: `card:${IDS.scout}` }))?.text).toContain('Stopped')
 
-    // builder's page: who it is, its live call, what it waits on you for, its task; Activity and Edits on demand
+    // builder's page, as the web's drawer: who it is (Back at its head's right), its facts, Message and Chat with, its live call, what it waits on you for, its task; Activity and Edits open
     await press(ui, `agent:${IDS.builder}`)
     expect((await ui.find({ key: 'key:b' }))?.props).toMatchObject({ hotkey: 'b', label: '← Back' })
     const head = await ui.find({ key: 'page:head' })
     expect(head?.text).toContain('builder')
+    expect(head?.text).toContain('general-purpose · sonnet-4.5 · background')
     expect(head?.text).toContain('started by')
+    expect((await ui.find({ key: 'page:facts' }))?.text).toMatch(/waiting on you.*started by.*Orchestrator.*513k tokens.*b81c6f3/s)
+    expect((await ui.find({ key: 'page:message' }))?.props).toMatchObject({ label: 'Message', plain: true })
+    expect((await ui.find({ key: 'page:chatwith' }))?.props.label).toMatch(/Chat with builder$/)
     expect((await ui.find({ key: 'page:live' }))?.text).toContain('Bash npm test -- rateLimit')
     expect(await keysOf(ui, 'need:')).toEqual(['need:toolu_01BldB2'])
     expect((await ui.find({ key: 'page:task' }))?.text).toContain('Write a sliding-window rate limiter')
-    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toMatch(/^▸ ACTIVITY \d+$/)
+    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY')
+    expect((await ui.find({ key: 'page:activity' }))?.text).toContain('5 tool calls')
+    // its calls newest first, each a press that opens it
+    expect(await keysOf(ui, 'page:act:')).toEqual(['toolu_01BldB2', 'toolu_01BldW2', 'toolu_01BldB1', 'toolu_01BldE1', 'toolu_01BldW1'].map(id => `page:act:${id}`))
+    expect((await ui.find({ key: 'page:fold:edits' }))?.props.label).toBe('▾ EDITS')
+    // its edits a file a row, the one edited last first and open on its diff
+    expect(await keysOf(ui, 'page:edits:')).toEqual(['C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js', 'src/app.ts', 'src/rateLimit.ts'].map(path => `page:edits:${path}`))
+    expect((await ui.find({ key: 'edit:toolu_01BldW2' }))?.text).toContain('10,000 hits against the in-memory store')
+    if (surface === 'terminal') expect((await ui.findAll({ type: 'Code' })).some(code => code.props.format === 'diff')).toBe(true)
+    // the composer at its foot: its words to builder by SendMessage
+    expect((await ui.find({ type: 'Input' }))?.props).toMatchObject({ placeholder: 'Message builder…', submitLabel: 'Send' })
+    expect((await ui.find({ key: 'page:compose' }))?.text).toContain('→ builder via SendMessage')
+    // a head folds its part; another press opens it again
     await press(ui, 'page:fold:activity')
-    expect((await ui.find({ key: 'page:activity' }))?.text).toContain('Edit')
-    await press(ui, 'page:fold:edits')
-    expect((await ui.findAll({ type: 'Code' })).some(code => code.props.format === 'diff')).toBe(true)
+    expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▸ ACTIVITY')
+    expect(await ui.find({ key: 'page:log' })).toBeUndefined()
     await press(ui, 'page:fold:activity')
-    await press(ui, 'page:fold:edits')
+    expect(await ui.find({ key: 'page:log' })).toBeDefined()
     // its parent's name opens the Orchestrator's page; b comes back to Now
     await press(ui, 'page:parent:main')
     expect((await ui.find({ key: 'page:head' }))?.text).toContain('Orchestrator')

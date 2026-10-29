@@ -43,6 +43,7 @@ const BESIDE = 140
 const MOST_FACES = 3
 const FACE = 16
 const CHEVRON = 14
+const FILE_ICON = 14
 
 /**
  * The agents' edits of each file opened or shut, by path, while the module
@@ -179,13 +180,13 @@ function picksList(kit: Kit, state: WebStateV2, actions: DashActions): RenderEle
 }
 
 /** A row's chevron: an icon where Svg draws, else ▸ shut and ▾ open, dim. */
-function chevron(kit: Kit, isOpen: boolean): RenderElement {
+export function chevron(kit: Kit, isOpen: boolean): RenderElement {
   const { Text } = kit
   return svgOf(kit) ? icon(kit, isOpen ? 'chevronDown' : 'chevronRight', P.muted2, '', CHEVRON) : <Text color={P.muted2}>{chevronOf(isOpen)}</Text>
 }
 
 /** The cells `chevron` takes. */
-function chevronCells(kit: Kit): number {
+export function chevronCells(kit: Kit): number {
   return svgOf(kit) ? cellsForPx(CHEVRON) : 1
 }
 
@@ -331,11 +332,11 @@ export function openEditsOf(path: string): void {
 
 /**
  * The agents' edits outside the repository (or, with none, every one), a
- * row a file as the web page's: its chevron, its path (a plain Button keyed
- * `edits:<path>` that opens or shuts it), the faces of who edited it, "2
- * edits", `+a −r` and when, then, open, each edit's tool, agent and time and
- * its exact patch. With `opensNewest`, the newest file is open the first time
- * the list is drawn.
+ * row a file as the web page's: its chevron, its folder dim and its file's
+ * name (a plain Button keyed `edits:<path>` that opens or shuts it), the
+ * faces of who edited it, "2 edits", `+a −r` and when, then, open, each
+ * edit's tool, agent and time and its exact patch. With `opensNewest`, the
+ * newest file is open the first time the list is drawn.
  */
 function editsList(kit: Kit, state: WebStateV2, files: V2Files, edits: readonly Edit[], budget: Budget, actions: DashActions, title: string, opensNewest: boolean): RenderElement {
   const { Box } = kit
@@ -371,23 +372,62 @@ function editsList(kit: Kit, state: WebStateV2, files: V2Files, edits: readonly 
   )
 }
 
-/** One file of the agents' edits, as the web page's row: chevron, path (the Button), faces, "n edits", `+a −r`, and when it was edited last. */
-function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: boolean, toggle: () => void): RenderElement {
+/** The cells the file icon before a row's path takes: an icon where Svg draws, none on the terminal. */
+function fileIconCells(kit: Kit): number {
+  return svgOf(kit) ? cellsForPx(FILE_ICON) : 0
+}
+
+/** A path as its folder and its file's name: "src/" and "rateLimit.ts"; '' and the whole of one with no folder. */
+export function pathParts(path: string): { dir: string; base: string } {
+  const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return at < 0 ? { dir: '', base: path } : { dir: path.slice(0, at + 1), base: path.slice(at + 1) }
+}
+
+/**
+ * How a file's row of the agents' edits reads: Changes' (the faces of who
+ * edited it, and when it was edited last), or an agent page's (`isOwn`:
+ * neither, the agent being the page's own), its Button keyed `key`.
+ */
+export type EditsRowLook = { key?: string; isOwn?: boolean }
+
+/**
+ * One file of the agents' edits, as the web page's row: chevron, the file
+ * icon where Svg draws, its folder dim and cut at its end, its file's name
+ * (the Button), faces, "n edits", `+a −r`, and when it was edited last.
+ */
+export function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: boolean, toggle: () => void, look: EditsRowLook = {}): RenderElement {
   const { Box, Text, Button } = kit
   const adv = advanceOf(kit)
+  const isOwn = look.isOwn === true
   const count = plural(group.edits.length, 'edit')
-  const when = ago(group.lastAt, state.now)
+  const when = isOwn ? '' : ago(group.lastAt, state.now)
   const lines = `${group.added > 0 ? `+${group.added}` : ''}${group.added > 0 && group.removed > 0 ? ' ' : ''}${group.removed > 0 ? `−${group.removed}` : ''}`
-  // the path's room: the row less the chevron, the Button's chrome, the faces, the count, the lines, the age and the gaps
-  const taken = chevronCells(kit) + plainSlack(kit) + facesCells(kit, group.agents.length, FACE, MOST_FACES) + cellsOf(count, adv) + cellsOf(lines, adv) + cellsOf(when, adv) + 6
-  const path = cutCells(group.path, Math.max(16, kit.columns - taken), adv)
+  const faceCells = isOwn ? 0 : facesCells(kit, group.agents.length, FACE, MOST_FACES) + 1
+  // the path's room: the row less the chevron, the icon, the Button's chrome, the faces, the count, the lines, the age and the gaps
+  const taken = chevronCells(kit) + fileIconCells(kit) + plainSlack(kit) + faceCells + cellsOf(count, adv) + cellsOf(lines, adv) + cellsOf(when, adv) + 6
+  const room = Math.max(16, kit.columns - taken)
+  const { dir, base } = pathParts(group.path)
+  const name = cutCells(base, room, adv)
+  // the folder takes what the name leaves, cut at its end as the web's ("C:/Users/sam…"); too little left, it goes
+  const left = room - cellsOf(name, adv)
+  const folder = dir !== '' && left >= 6 ? cutCells(dir, left, adv) : ''
   return (
-    <Box key={`editrow:${group.path}`} flexDirection="row" columnGap={1} alignItems="center">
+    <Box key={isOwn ? `page:editrow:${group.path}` : `editrow:${group.path}`} flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>{chevron(kit, isOpen)}</Box>
-      <Box flexShrink={1} minWidth={0}>
-        <Button key={editsKeyOf(group.path)} label={path} plain onPress={toggle} />
+      {svgOf(kit) ? <Box flexShrink={0}>{icon(kit, 'file', P.muted2, '', FILE_ICON)}</Box> : null}
+      <Box flexShrink={1} minWidth={0} flexDirection="row" alignItems="center">
+        {folder ? (
+          <Box flexShrink={1} minWidth={0}>
+            <Text color={P.muted2} wrap="truncate-end">
+              {folder}
+            </Text>
+          </Box>
+        ) : null}
+        <Box flexShrink={0}>
+          <Button key={look.key ?? editsKeyOf(group.path)} label={name} plain onPress={toggle} />
+        </Box>
       </Box>
-      <Box flexShrink={0}>{facesOf(kit, state, group.agents)}</Box>
+      {isOwn ? null : <Box flexShrink={0}>{facesOf(kit, state, group.agents)}</Box>}
       <Box flexShrink={0}>
         <Text color={P.muted2}>{count}</Text>
       </Box>
