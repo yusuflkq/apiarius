@@ -22,7 +22,7 @@ import { agentLogOf, type V2AgentFile, type V2AgentRow, type V2Files, type V2Log
 import type { DashActions, Kit } from '../types'
 import { composerKey } from './chat'
 import { isAiry, listBox, listRow } from './dash'
-import { ticks } from './dashModel'
+import { ticks, unmarked } from './dashModel'
 import { editBlock, titleOf, type Budget } from './diffs'
 import { AVATAR, avatar, glyph, keyButton, quiet, sectionHead, statusPill, svgOf, wordMark } from './look'
 import { needsSection } from './needs'
@@ -147,12 +147,13 @@ function liveLine(kit: Kit, state: WebStateV2, row: V2AgentRow): RenderElement {
   )
 }
 
-/** Its words since its latest call, while it is at work with no call in flight: quoted in italics after a speech mark (cut at a few rows), then how long ago. */
+/** Its words since its latest call, while it is at work with no call in flight: in italics after a speech mark, their Markdown marks dropped, quoted when they are one line (cut at a few rows), then how long ago. */
 function saidLine(kit: Kit, state: WebStateV2, row: V2AgentRow): RenderElement | null {
   const { Box, Text } = kit
   const said = row.said
   if (!said) return null
-  const words = foldText(`“${clean(said.text).trim()}”`, kit.columns - 3, SAID_ROWS)
+  const text = unmarked(clean(said.text))
+  const words = foldText(text.includes('\n') ? text : `“${text}”`, kit.columns - 3, SAID_ROWS)
   return (
     <Box key="page:said" flexDirection="row" columnGap={1}>
       <Box flexShrink={0}>{wordMark(kit, 'said', P.runText)}</Box>
@@ -251,15 +252,20 @@ const WORD_ROWS = 4
 /** The cells a log row's age takes at its right ("12m"). */
 const AGE = 4
 
-/** What a thought of the log is labelled: Claude Code's live view of the thinking, which may be a summary. */
-export const THOUGHT_LABEL = 'Thinking, as Claude Code shows it'
+/** The word a thought of the log leads with, muted beside its cloud. */
+export const THOUGHT_WORD = 'thinking'
+
+/** What Activity says once, under its head, while it shows a thought: Claude Code's live view of the thinking, which may be a summary. */
+export const THOUGHT_NOTE = 'Thinking as Claude Code shows it, which may be a summary.'
 
 /**
  * Its log, from its agent file, on demand: each tool call (its outcome, the
  * tool and what it was given, its lines or how long it took, when) and,
- * unless "Calls only" is picked (`activityView`), what it said between them,
- * quoted in italics after a speech mark, and its thinking as Claude Code
- * showed it, dimmer, under its label; oldest first, the newest MOST_LOG. The
+ * unless "Calls only" is picked (`activityView`), what it said between them
+ * after a speech mark (one line quoted in italics; more as Chat draws a
+ * message, its Markdown), and its thinking as Claude Code showed it, dimmer,
+ * after a cloud and the word "thinking" (THOUGHT_NOTE says once, under the
+ * head, that it may be a summary); oldest first, the newest MOST_LOG. The
  * switch at the head's right, shown while it has words, keeps the pick in
  * the view.
  */
@@ -272,9 +278,11 @@ function activityPart(kit: Kit, state: WebStateV2, row: V2AgentRow, file: V2Agen
   const shown = log.slice(-MOST_LOG)
   const more = log.length - shown.length
   const room = kit.columns - 4 - 2 - 2 - AGE
+  const hasThought = shown.some(entry => entry.kind === 'thought')
   return (
     <Box key="page:activity" flexDirection="column" rowGap={open && isAiry(kit) ? 1 : 0}>
       {foldHead(kit, row, 'activity', 'Activity', log.length, actions, open && hasWords ? wordsSwitch(kit, withWords, actions) : null)}
+      {open && hasThought ? quiet(kit, THOUGHT_NOTE) : null}
       {open && log.length === 0 ? quiet(kit, file ? 'No tool calls yet.' : 'Its agent file is not to be had.') : null}
       {open && more > 0 ? quiet(kit, `and ${more} more`) : null}
       {open && shown.length > 0 ? listBox(kit, 'page:log', shown.flatMap((entry, i) => [i > 0 ? rule(kit) : null, logRow(kit, state, entry, room)])) : null}
@@ -327,26 +335,36 @@ function callRow(kit: Kit, state: WebStateV2, call: V2AgentFile['activity'][numb
 }
 
 /**
- * A step's words in the log: what it said, quoted in italics after a speech
- * mark, on a shade of its own where the surface draws one; or its thinking,
- * dimmer, under THOUGHT_LABEL; each cut at WORD_ROWS rows; then when.
+ * A step's words in the log, each cut at WORD_ROWS rows, then when. What it
+ * said, after a speech mark, on a shade of its own where the surface draws
+ * one: a line of it quoted in italics, its Markdown marks dropped; words of
+ * more lines as Chat draws a message, its Markdown (no quotes round them).
+ * Or its thinking, dimmer, after a cloud and THOUGHT_WORD, its marks dropped.
  */
 function wordRow(kit: Kit, state: WebStateV2, kind: V2Word['kind'], word: V2Word, room: number): RenderElement {
-  const { Box, Text } = kit
+  const { Box, Text, Markdown } = kit
   const isThought = kind === 'thought'
-  const text = clean(word.text).trim()
-  const folded = foldText(isThought ? text : `“${text}”`, room, isThought ? WORD_ROWS - 1 : WORD_ROWS)
+  const raw = clean(word.text).trim()
+  const text = unmarked(raw)
+  const isLines = !isThought && raw.includes('\n')
+  const lead = isThought ? `${THOUGHT_WORD}  ` : ''
+  const folded = foldText(isLines ? raw : isThought ? `${lead}${text}` : `“${text}”`, room, WORD_ROWS)
+  const cut = (word.isCut && !folded.isCut ? `${folded.text}…` : folded.text).slice(lead.length)
+  // Markdown cut inside a fence: the fence closed, so what follows the row draws as words again
+  const shown = isLines && (cut.match(/^\s*(?:```|~~~)/gm)?.length ?? 0) % 2 === 1 ? `${cut}\n\`\`\`` : cut
   const shade = svgOf(kit) && !isThought ? { backgroundColor: P.saidBox } : {}
   return (
     <Box key={`page:${kind}:${word.at}:${word.step}`} flexDirection="row" columnGap={1} alignItems="flex-start" paddingX={1} paddingY={isAiry(kit) ? 1 : 0} {...shade}>
       <Box flexShrink={0}>{wordMark(kit, kind, isThought ? P.muted2 : P.muted)}</Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-        {isThought ? (
-          <Text color={P.muted2} wrap="truncate-end">
-            {THOUGHT_LABEL}
+        {isLines ? (
+          <Markdown text={shown} />
+        ) : (
+          <Text wrap="wrap">
+            {isThought ? <Text color={P.muted2}>{lead}</Text> : null}
+            {wordParts(kit, ticks(shown), isThought ? P.muted : P.fg2)}
           </Text>
-        ) : null}
-        <Text wrap="wrap">{wordParts(kit, ticks(word.isCut && !folded.isCut ? `${folded.text}…` : folded.text), isThought ? P.muted : P.fg2)}</Text>
+        )}
       </Box>
       <Box flexShrink={0} width={AGE} justifyContent="flex-end">
         <Text color={P.muted2}>{ago(word.at, state.now)}</Text>

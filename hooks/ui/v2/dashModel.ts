@@ -81,15 +81,47 @@ export function firstLine(text: string): string {
   return flat(String(text ?? '').split('\n').find(line => line.trim() !== '') ?? '')
 }
 
-/** Markdown read as one line of words: each line's heading, list and quote marks dropped, bold marks dropped, code spans kept. */
+/** Markdown read as one line of words: its marks dropped (`unmarked`), each line's list marks too, code spans kept. */
 export function plainLine(markdown: string): string {
   return flat(
-    String(markdown ?? '')
+    unmarked(markdown)
       .split('\n')
-      .map(line => line.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)/, ''))
-      .join(' ')
-      .replace(/\*\*|__/g, ''),
+      .map(line => line.replace(/^\s*(?:[-*+•]\s+|\d+[.)]\s+)/, ''))
+      .join(' '),
   )
+}
+
+/** A run of words with its inline marks dropped: bold, italic and struck-out marks, a link or an image its words. */
+function unmarkedRun(text: string): string {
+  return text
+    .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
+    .replace(/\*\*|__|~~/g, '')
+    .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1$2')
+    .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1$2')
+}
+
+/**
+ * Markdown as words to read in one face, its lines kept: a fence's own
+ * lines (```ts, ~~~) and rules (---) gone, the lines between kept; each
+ * line's heading and quote marks gone and a bullet a •; bold, italic and
+ * struck-out marks gone, a link its words. Code spans keep their backticks
+ * and what is in them (`ticks` draws them as code).
+ */
+export function unmarked(markdown: string): string {
+  return String(markdown ?? '')
+    .split('\n')
+    .filter(line => !/^\s*(?:```|~~~|(?:[-*_][ \t]*){3,}$)/.test(line))
+    .map(line =>
+      line
+        .replace(/^\s*(?:#{1,6}\s+|>\s?)/, '')
+        .replace(/^(\s*)[-*+]\s+/, '$1• ')
+        .split(/(`[^`\n]+`)/)
+        .map((part, i) => (i % 2 === 1 ? part : unmarkedRun(part)))
+        .join(''),
+    )
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 /** One run of a line: plain words, or a code span's. */
@@ -266,9 +298,9 @@ export function isSaidLine(row: V2AgentRow): boolean {
   return !row.live && row.said !== undefined
 }
 
-/** An agent's words as the deck quotes them: on one line, in curly quotes. */
+/** An agent's words as the deck quotes them: on one line, their Markdown marks dropped, in curly quotes. */
 export function quoted(text: string): string {
-  return `“${flat(text)}”`
+  return `“${plainLine(text)}”`
 }
 
 /** "haiku-4.5 · 48k": the model and the tokens spent, these left out until there are some. */

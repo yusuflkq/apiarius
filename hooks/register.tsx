@@ -49,7 +49,7 @@ import * as R from './repos'
 import * as SR from './registry'
 import * as SE from './sessions'
 import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
-import { chatEndOf, followStep, isAtEndOf, type ChatFollow } from './ui/v2/chat'
+import { chatEndOf, followStep, isAtEndAfter, type ChatFollow } from './ui/v2/chat'
 import { openRowsFor, paneRowsFor } from './ui/v2/fit'
 import { newRenderMemo } from './renderMemo'
 import * as T from './timeline'
@@ -2232,17 +2232,19 @@ function scrollTo($: EngineInterface, key: string, block: 'start' | 'nearest' = 
  * drawing, what it ended with then, and whether you are at the end. You
  * are there once Chat comes into view (its tab, `/deck chat`, `m`, Back to
  * it, a new filter) or you send from it, and while your own scrolling
- * (`ui.scroll`) leaves you there; not once you scroll up.
+ * (`ui.scroll`) leaves you there; not once you scroll up, by a row or more.
  */
 const chatFollow: ChatFollow = { isShown: false, end: '', isAtEnd: false }
 
 /**
  * Takes the pane to its end, where the engine keeps it while the drawing
- * grows and nothing else moves it, once the drawing is up. It scrolls and
- * never redraws, so a click in flight still lands.
+ * grows and nothing else moves it, once the drawing is up: unless, by then,
+ * you scrolled away from the end or Chat left view. It scrolls and never
+ * redraws, so a click in flight still lands.
  */
 function scrollToEnd($: EngineInterface) {
   $.clock.after(SCROLL_MS, () => {
+    if (!chatFollow.isShown || !chatFollow.isAtEnd) return
     try {
       void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
     } catch {
@@ -2252,13 +2254,31 @@ function scrollToEnd($: EngineInterface) {
 }
 
 /**
+ * Takes the pane to its top at once, before the screen drawn now is up:
+ * what ends the end Chat kept to (the engine and the Desktop keep a window
+ * taken to its end there through every draw after, whatever it shows, until
+ * a move takes it off), so the screen in Chat's place neither opens at its
+ * foot nor follows it as it grows. A reveal a press asked for lands after it.
+ */
+function scrollToStart($: EngineInterface) {
+  try {
+    void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
+  } catch {
+    // no scroll on this engine: the pane stays where it is
+  }
+}
+
+/**
  * At each drawing of the pane: Chat coming into view takes the pane to its
- * end, and something new at Chat's end does too while you were there.
- * Anything else on show leaves the pane to you.
+ * end, and something new at Chat's end does too while you were there; Chat
+ * leaving view while the pane kept to its end takes it to the top of what
+ * shows instead. Anything else leaves the pane to you.
  */
 function keepChat($: EngineInterface, now: number) {
   const state = view.v2.tab === 'chat' && view.page === '' && !view.v2.isInspectOpen ? shownV2Of(now) : null
-  if (followStep(chatFollow, state ? chatEndOf(state, view.v2.chatFilter) : null)) scrollToEnd($)
+  const step = followStep(chatFollow, state ? chatEndOf(state, view.v2.chatFilter) : null)
+  if (step === 'end') scrollToEnd($)
+  else if (step === 'start') scrollToStart($)
 }
 
 /**
@@ -4051,11 +4071,10 @@ export const register: Register = on => {
     return result
   })
 
-  // your own scrolling of the pane: whether it leaves you at the end, where Chat keeps to its newest message
+  // your own scrolling of the pane: whether it leaves you at the end, where Chat keeps to its newest message; read from the move as you made it, before the engine answers, so nothing the deck does meanwhile takes you back down
   on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
-    const result = await next(e)
-    if (e.origin.kind === 'person' && result.deny === undefined) chatFollow.isAtEnd = isAtEndOf(e)
-    return result
+    if (e.origin.kind === 'person') chatFollow.isAtEnd = isAtEndAfter(e)
+    return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
