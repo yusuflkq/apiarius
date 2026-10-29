@@ -2222,7 +2222,8 @@ async function tick($: EngineInterface): Promise<void> {
   const isAnyLive = M.hasLiveAgents(data)
   // every session on this machine: this one's inbox, the others' files while they show, the one viewed (./registry)
   await SR.registryTick(now, web.isOn)
-  if (isAnyLive || isPaneOpen || isSharing()) await syncAgents($)
+  // a loop of Claude Code's own at work may be an agent the deck has not placed (a reload lost its spawn): the list says
+  if (isAnyLive || isPaneOpen || isSharing() || M.hasLiveEngineLoops(data)) await syncAgents($)
   if (isPaneOpen || isSharing()) {
     if (now - lastGitAt > 6000) void refreshGit($)
     if (now - usageAt > 10_000) void loadUsage($)
@@ -3842,7 +3843,9 @@ export const register: Register = on => {
       // its run ended: no call of it is held on you any more
       M.dropStale(data, e.agentId ?? M.MAIN, openCalls)
       if (e.agentId) {
-        const agent = M.agentOf(data, e.agentId)
+        // a loop no spawn and no list named that the list still leaves out was Claude Code's own (a prompt suggestion, a compaction): forgotten
+        if (M.isEngineLoopId(data, e.agentId)) await syncAgents($)
+        const agent = M.forgetLoop(data, e.agentId) ? undefined : M.agentOf(data, e.agentId)
         if (agent) {
           agent.status = e.reason === 'aborted' ? 'killed' : e.reason === 'answer' ? (agent.kind === 'teammate' ? 'idle' : 'completed') : 'failed'
           agent.endedAt = now
@@ -3881,27 +3884,31 @@ export const register: Register = on => {
     return result
   })
 
-  // a subagent starting again (one the deck saw end) runs; one it never saw spawn waits for its first call
+  // a subagent starting again (one the deck saw end) runs; one it never saw spawn waits for its first call. Claude Code raises it for an
+  // agent's run alone: a loop the deck took for the engine's own is that agent, the list naming the rest of it
   on('classic.SubagentStart', async ($, e, next) => {
     try {
-      const agent = M.agentOf(data, e.agent_id)
+      const isEngine = M.isEngineLoopId(data, e.agent_id)
       const now = await $.clock.now()
-      if (agent && M.reopen(agent, now)) touched($, now)
+      if (M.noteSubagentStart(data, e.agent_id, e.agent_type, now)) touched($, now)
+      if (isEngine && !M.isEngineLoopId(data, e.agent_id)) void syncAgents($)
     } catch {
       // the start stands whatever the deck makes of it
     }
     return next(e)
   })
 
-  // a subagent stopped: its row ends at once, and with no report handed back its last message is its result
+  // a subagent stopped: its row ends at once, and with no report handed back its last message is its result. A loop no spawn, no list and no
+  // SubagentStart named that the list still leaves out was Claude Code's own (a prompt suggestion, whose last words are its guess at your next prompt): forgotten
   on('classic.SubagentStop', async ($, e, next) => {
     const seen = await $.clock.now()
     const result = await next(e)
     try {
       // a stop a hook blocked goes on working
       if (result.block === undefined) {
+        if (M.isEngineLoopId(data, e.agent_id)) await syncAgents($)
         const now = await $.clock.now()
-        if (M.noteStop(data, e.agent_id, e.last_assistant_message ?? '', now)) touched($, now)
+        if (M.forgetLoop(data, e.agent_id) || M.noteStop(data, e.agent_id, e.last_assistant_message ?? '', now)) touched($, now)
       }
       // Claude Code's snapshot of the background work, as it stood when the stop was raised
       if (noteBackground(e, seen)) touched($, seen)

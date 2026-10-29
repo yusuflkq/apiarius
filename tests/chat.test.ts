@@ -19,6 +19,7 @@ import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/
 import * as M from '../hooks/model'
 import { chatEndOf, fieldRowsOf, followStep, isAtEndAfter, isAtEndOf, membersOf, routeFrom, type ChatFollow } from '../hooks/ui/v2/chat'
 import type { Kit } from '../hooks/ui/types'
+import { rowsOf } from '../hooks/ui/v2/fit'
 import * as AV from '../web/avatars.mjs'
 import { P, mix } from '../hooks/ui/v2/palette'
 import * as W from '../hooks/web'
@@ -188,34 +189,55 @@ test('Chat is a group chat: yours at the right in a blue bubble, when under it; 
   }
 })
 
-test('one sender`s messages within a few minutes stack under one avatar and name; one to another recipient says so over it, with that one`s avatar and name', async ($, on) => {
-  const { v2 } = await demo($, on)
-  // the Orchestrator answers you, then starts builder, docs and scout, each within minutes of the last
+test('one sender`s messages within a few minutes stack under one avatar and name; one to another recipient says so over it, with that one`s avatar and name; its hand-offs are a line each, one under the other, a press opening one', async ($, on) => {
+  // the Orchestrator answers you, tells builder something, then starts builder, docs and scout, each within minutes of the last
+  const { v2 } = await demo($, on, newWorld(), state => {
+    const said = state.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
+    const told: W.V2ChatRow = { id: 'm_told_builder', at: said.at + 30_000, from: 'main', to: IDS.builder, who: 'Orchestrator → builder', kind: 'message', text: 'Start with the in-memory store.' }
+    return { ...state, chat: [...state.chat, told].sort((a, b) => a.at - b.at) }
+  })
   const answer = v2.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
+  const told = v2.chat.find(row => row.id === 'm_told_builder')!
   const spawns = v2.chat.filter(row => row.from === 'main' && row.kind === 'spawn' && row.at > answer.at && row.at - answer.at < 6 * 60_000)
   expect(spawns.map(row => row.to)).toEqual([IDS.builder, IDS.docs, IDS.scout])
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
     await press(ui, 'tab:chat')
     const group = await ui.find({ key: `grp:msg:${answer.id}` })
-    // one head for the four
-    for (const row of spawns) expect(await ui.find({ key: `grp:msg:${row.id}` })).toBeUndefined()
-    expect(under(group, node => keyOf(node).startsWith('msg:')).map(keyOf)).toEqual([answer, ...spawns].map(row => `msg:${row.id}`))
-    // each spawn after the answer to you names whom it went to: its face, its name a press, when
+    // one head for the two
+    expect(await ui.find({ key: `grp:msg:${told.id}` })).toBeUndefined()
+    expect(under(group, node => keyOf(node).startsWith('msg:')).map(keyOf)).toEqual([answer, told].map(row => `msg:${row.id}`))
+    // the one after the answer to you names whom it went to: its face, its name a press, when
     expect(await ui.find({ key: `to:msg:${answer.id}` })).toBeUndefined()
-    for (const [i, name] of ['builder', 'docs', 'scout'].entries()) {
-      const row = spawns[i]!
-      expect((await ui.find({ key: `to:msg:${row.id}` }))?.text).toMatch(new RegExp(`^to.?${name}· [0-9]+m$`))
-      expect((await ui.find({ key: `chat:to:msg:${row.id}` }))?.props.label).toBe(name)
-    }
-    // the sender's face once, at the group's left; each recipient's beside its name
+    expect((await ui.find({ key: `to:msg:${told.id}` }))?.text).toMatch(/^to.?builder· [0-9]+m$/)
+    expect((await ui.find({ key: `chat:to:msg:${told.id}` }))?.props.label).toBe('builder')
+    // the sender's face once, at the group's left; the recipient's beside its name
     if (surface === 'desktop') {
-      expect(under(group, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["Orchestrator's avatar", "builder's avatar", "docs's avatar", "scout's avatar"])
+      expect(under(group, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["Orchestrator's avatar", "builder's avatar"])
     } else {
       // each a robot's head, the default style's on the terminal
       const glyphs = under(group, node => node.type === 'Text' && AV.ROBOT_GLYPHS.includes(node.children?.[0] as string))
-      expect(glyphs.length).toBe(4)
+      expect(glyphs.length).toBe(2)
     }
+    // the hand-offs: a line each, one under the other, "▸ Orchestrator → builder: Write a sliding-window…" and when; one row on the terminal
+    const lines = await ui.find({ key: `grp:msg:${spawns[0]!.id}` })
+    for (const row of spawns.slice(1)) expect(await ui.find({ key: `grp:msg:${row.id}` })).toBeUndefined()
+    expect(under(lines, node => keyOf(node).startsWith('msg:')).map(keyOf)).toEqual(spawns.map(row => `msg:${row.id}`))
+    for (const [i, name] of ['builder', 'docs', 'scout'].entries()) {
+      const row = spawns[i]!
+      expect(String((await ui.find({ key: `chat:handoff:${row.id}` }))?.props.label)).toMatch(new RegExp(`^▸ Orchestrator → ${name}: ${row.text.slice(0, 12)}`))
+      const line = await ui.find({ key: `msg:${row.id}` })
+      expect(line?.text).toMatch(/[0-9]+m$/)
+      expect(under(line, node => node.type === 'Markdown')).toEqual([])
+      if (surface === 'terminal') expect(rowsOf(line, 84)).toBe(1)
+    }
+    // a press opens one, its words under its line; another folds it again
+    const builder = spawns[0]!
+    await press(ui, `chat:handoff:${builder.id}`)
+    expect((await ui.find({ key: `chat:handoff:${builder.id}` }))?.props.label).toBe('▾ Orchestrator → builder')
+    expect(under(await ui.find({ key: `msg:${builder.id}` }), node => node.type === 'Markdown').map(node => String(node.props?.text).slice(0, 40))).toEqual([builder.text.slice(0, 40)])
+    await press(ui, `chat:handoff:${builder.id}`)
+    expect(String((await ui.find({ key: `chat:handoff:${builder.id}` }))?.props.label)).toMatch(/^▸ Orchestrator → builder: /)
     // another sender between starts a group of its own
     const result = v2.chat.find(row => row.from === IDS.researcher && row.kind === 'result')!
     expect(await ui.find({ key: `grp:msg:${result.id}` })).toBeDefined()

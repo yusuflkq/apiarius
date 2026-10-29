@@ -1,8 +1,9 @@
-import type { AgentInfo, Args, On } from 'claude-code'
+import type { AgentInfo, Args, On, ToolCallResult } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
+import { timelineOf } from '../hooks/timeline'
 import * as W from '../hooks/web'
 import type { DeckSnapshot } from '../types'
 
@@ -36,8 +37,8 @@ function handback(agentId: string, message: string): Args<'tool.call'> {
   return { tool: 'SubagentHandback', message, agentId } as unknown as Args<'tool.call'>
 }
 
-/** The engine in Claude Code's place, outside a repository; `listed` is what `$.agent.list` answers, `saved` each snapshot the deck keeps. */
-function world(on: On, saved: DeckSnapshot[], listed: Map<string, AgentInfo>) {
+/** The engine in Claude Code's place, outside a repository; `listed` is what `$.agent.list` answers, `saved` each snapshot the deck keeps, `ended` what a call ends with other than ok, by its tool_use_id. */
+function world(on: On, saved: DeckSnapshot[], listed: Map<string, AgentInfo>, ended: Record<string, ToolCallResult> = {}) {
   mock.store(on)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -56,7 +57,7 @@ function world(on: On, saved: DeckSnapshot[], listed: Map<string, AgentInfo>) {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
-  on('tool.call', () => ({ result: 'ok' }))
+  on('tool.call', ($, e) => ended[e.tool_use_id] ?? { result: 'ok' })
   let version = 0
   on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
   on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
@@ -148,4 +149,132 @@ test('Live QA 3: a hand-back that starts the Orchestrator`s next turn is the age
   await $.turn.start({ text: 'Now commit it', turnId: 't3' })
   await clock.advance(2000)
   expect(lastOf(saved).data.messages.filter(message => message.from === M.YOU).map(message => message.text)).toEqual(['Fix the off-by-one in src/retry.js', 'Now commit it'])
+})
+
+/** Claude Code's prompt suggestion's loop, as a real session's dump held it: a fork with no spawn, no task (the list never names it) and no SubagentStart. */
+const FORK = 'aeec0d50e30ef62df'
+
+/** A call in a loop no spawn named. */
+function loopCall(agentId: string, tool: string, input: Record<string, unknown>): Args<'tool.call'> {
+  return { tool, tool_use_id: `toolu_${agentId}_${tool}`, ...input, agentId } as unknown as Args<'tool.call'>
+}
+
+test('Live QA 4: Claude Code`s own fork (a prompt suggestion: no spawn, no list, no SubagentStart, its SubagentStop`s type empty, its last words a guess at your next prompt) is no agent: no card, Org node, lane, chat row or band count while it runs, and gone once it ends; a forked skill the list names, and a loop SubagentStart names, are agents', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  const listed = new Map<string, AgentInfo>()
+  world(on, saved, listed)
+  on('classic.SubagentStart', () => ({}))
+  on('classic.SubagentStop', () => ({}))
+  const stateNow = async () => W.deckStateOf(lastOf(saved).data, emptyGit(), null, clock.now(), 'session-1', '/work')
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  const ask = 'spin up some agents i wanna see what they look like'
+  await $.prompt.submit({ text: ask, origin: { kind: 'composer' }, wait: false })
+  await $.turn.start({ text: ask, turnId: 't1' })
+  await $.agent.spawn(spawned('explorer', 'Explore working directory'))
+  await $.classic.SubagentStart({ agent_id: 'agent-explorer', agent_type: 'general-purpose' })
+  await $.turn.complete({ turnId: 't1', answer: 'One agent is running in the background now.', durationMs: 1000, isAborted: false, reason: 'answer' })
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'agent-explorer', agent_transcript_path: '', agent_type: 'general-purpose', last_assistant_message: 'The folder is empty.' })
+
+  // the turn over, Claude Code guesses your next prompt in a fork of its own: it reaches for a tool (refused it), then says its guess
+  await $.tool.call(loopCall(FORK, 'ToolSearch', { query: 'select:SendMessage', max_results: 1 }))
+  await clock.advance(3000)
+  // the list, read while it runs, does not name it: Claude Code's own, shown nowhere
+  expect(M.agentOf(lastOf(saved).data, FORK)?.origin).toBe('engine')
+  let state = await stateNow()
+  expect(state.agents.some(row => row.id === FORK)).toBe(false)
+  expect([state.header.state, W.bandOf(state), state.figures.running]).toEqual(['idle', null, 0])
+  expect(state.activity.some(one => one.agent === FORK)).toBe(false)
+  expect(timelineOf(lastOf(saved).data, state).lanes.some(lane => lane.id === FORK)).toBe(false)
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: FORK, agent_transcript_path: '', agent_type: '', last_assistant_message: 'spin up a couple more' })
+  await clock.advance(2000)
+  // ended: forgotten, its guess no words to the Orchestrator
+  let data = lastOf(saved).data
+  expect(M.agentOf(data, FORK)).toBeUndefined()
+  expect(data.messages.some(message => message.text.includes('spin up a couple more'))).toBe(false)
+  state = await stateNow()
+  expect(state.chat.map(row => row.who)).toEqual(['You → Orchestrator', 'Orchestrator → explorer', 'Orchestrator → you', 'explorer → Orchestrator'])
+
+  // a compaction's fork that ends with its turn, no SubagentStop: gone as well
+  await $.tool.call(loopCall('fork-compact', 'Grep', { pattern: 'TODO' }))
+  await $.turn.complete({ turnId: 'tc', answer: 'The conversation so far, summarised.', durationMs: 500, isAborted: false, reason: 'answer', agentId: 'fork-compact' })
+  await clock.advance(2000)
+  data = lastOf(saved).data
+  expect(M.agentOf(data, 'fork-compact')).toBeUndefined()
+  expect(data.messages.some(message => message.from === 'fork-compact')).toBe(false)
+
+  // a forked skill: no spawn, but Claude Code starts it as an agent (SubagentStart, its type) and tracks it as one (the list): an agent, its result Chat's
+  listed.set('askill01', { id: 'askill01', description: 'Review the diff', type: 'general-purpose', status: 'running' })
+  await $.classic.SubagentStart({ agent_id: 'askill01', agent_type: 'general-purpose' })
+  await $.tool.call(loopCall('askill01', 'Grep', { pattern: 'TODO' }))
+  await clock.advance(3000)
+  state = await stateNow()
+  expect(state.agents.find(row => row.id === 'askill01')).toMatchObject({ kind: 'agent', title: 'Review the diff', type: 'general-purpose', status: 'running' })
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'askill01', agent_transcript_path: '', agent_type: 'general-purpose', last_assistant_message: 'Two TODOs are left.' })
+  await clock.advance(2000)
+  state = await stateNow()
+  expect(state.chat.at(-1)).toMatchObject({ from: 'askill01', to: M.MAIN, kind: 'result', text: 'Two TODOs are left.' })
+
+  // a loop its first call showed before SubagentStart named it, which the list leaves out (it no longer tracks it): an agent from then on
+  await $.tool.call(loopCall('agent-late', 'Grep', { pattern: 'retry' }))
+  await $.classic.SubagentStart({ agent_id: 'agent-late', agent_type: 'Explore' })
+  await clock.advance(2000)
+  state = await stateNow()
+  expect(state.agents.find(row => row.id === 'agent-late')).toMatchObject({ kind: 'agent', status: 'running' })
+  expect(W.bandOf(state)?.text).toBe('● 1 working')
+})
+
+test('an Agent call that errors before any agent starts ("Cannot create agent worktree") is no agent: no card, Org node, lane or band count, only the Orchestrator`s failed call in its Activity; the agent a later call starts under the same description is', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const saved: DeckSnapshot[] = []
+  const WHY = 'Cannot create agent worktree: not in a git repository and no WorktreeCreate hooks are configured.'
+  world(on, saved, new Map(), { toolu_failed: { isError: true, result: `Error: ${WHY}`, text: WHY } as never })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'Build the redesigned Timeline', turnId: 't1' })
+  await $.tool.call({ tool: 'Agent', tool_use_id: 'toolu_failed', description: 'Build the redesigned Timeline', prompt: 'Build it.', subagent_type: 'general-purpose', isolation: 'worktree' } as unknown as Args<'tool.call'>)
+  await clock.advance(2000)
+  let data = lastOf(saved).data
+  expect(M.agentOf(data, 'toolu_failed')).toBeUndefined()
+  expect(M.agentOf(data, M.MAIN)?.recent.map(one => [one.id, one.tool, one.target, one.ok])).toEqual([['toolu_failed', 'Agent', 'Build the redesigned Timeline', false]])
+  let state = W.deckStateOf(data, emptyGit(), null, NOW + 2000, 'session-1', '/work')
+  expect(state.agents.map(row => row.id)).toEqual([M.MAIN])
+  expect(state.activity.map(one => [one.agent, one.tool, one.text, one.ok])).toEqual([[M.MAIN, 'Agent', 'Build the redesigned Timeline', false]])
+  expect(timelineOf(data, state).lanes.map(lane => lane.id)).toEqual([M.MAIN])
+
+  // the call again, without the worktree: an agent starts, and it is the one agent of that name
+  await $.agent.spawn({ ...spawned('timeline', 'Build the redesigned Timeline'), tool_use_id: 'toolu_again' })
+  await clock.advance(2000)
+  data = lastOf(saved).data
+  state = W.deckStateOf(data, emptyGit(), null, NOW + 4000, 'session-1', '/work')
+  expect(state.agents.flatMap(row => (row.row === 'agent' ? [[row.id, row.title, row.status]] : []))).toEqual([
+    [M.MAIN, 'Orchestrator', 'running'],
+    ['agent-timeline', 'timeline', 'running'],
+  ])
+})
+
+test('a reload forgets what an earlier build kept of Claude Code`s own loops once they ended (the prompt suggestion`s row and its guess as a result to the Orchestrator) and of Agent calls that started no agent (their stopped rows); the agents, a loop still at work and a call in a cloud session stay', () => {
+  const data = M.emptyData(NOW - 600_000)
+  // as two real sessions' dumps held them
+  const explorer = M.addPlaceholder(data, { toolUseId: 'toolu_explore', parentId: M.MAIN, description: 'Explore working directory', prompt: 'Look around.', type: 'Explore', at: NOW - 500_000 })
+  M.bindAgent(data, explorer, 'a283c02285180ef71')
+  M.noteResult(data, explorer, 'The folder is empty.', NOW - 400_000, 'handback')
+  const fork = M.ensureAgent(data, FORK, NOW - 300_000, 'engine')
+  M.noteResult(data, fork, 'spin up a couple more', NOW - 290_000, 'stop')
+  Object.assign(fork, { status: 'completed', endedAt: NOW - 290_000 })
+  M.ensureAgent(data, 'fork-live', NOW - 1000, 'engine')
+  for (const [id, description] of [['toolu_01LCGGZyKiUpmrC8RMYYeB3W', 'Build peer sessions rail and switcher'], ['toolu_01Pvwu8i7RYpyqn243vmFsbv', 'Build the redesigned Timeline']] as const) {
+    const failed = M.addPlaceholder(data, { toolUseId: id, parentId: M.MAIN, description, prompt: 'Build it.', at: NOW - 200_000 })
+    Object.assign(failed, { status: 'killed', endedAt: NOW - 199_000 })
+  }
+  M.addPlaceholder(data, { toolUseId: 'toolu_cloud', parentId: M.MAIN, description: 'Run it in the cloud', prompt: 'Go.', at: NOW - 100_000 })
+  M.settleAgentCall(data, { toolUseId: 'toolu_cloud', isStarted: true, isRemote: true, at: NOW - 99_000 })
+
+  const healed = M.healData(M.copyOf(data), NOW)
+  expect(healed.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'a283c02285180ef71', 'fork-live', 'toolu_cloud'])
+  expect(healed.messages.map(message => [message.from, message.to, message.kind, message.text])).toEqual([['a283c02285180ef71', M.MAIN, 'result', 'The folder is empty.']])
+  // the loop still at work stays, shown nowhere: its stop (or the list) settles it
+  const state = W.deckStateOf(healed, emptyGit(), null, NOW, 'session-1', '/work')
+  expect(state.agents.flatMap(row => (row.row === 'agent' ? [row.id] : []))).toEqual([M.MAIN, 'a283c02285180ef71', 'toolu_cloud'])
 })

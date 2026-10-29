@@ -34,6 +34,10 @@
  * - Claude Code's own notices (`engine`: its notifications, a task's end)
  *   centred, small and dim: "Claude Code · Agent "X" completed · 12m". A
  *   slash command you ran alone sits there too: "You ran /login · 12m".
+ * - A hand-off (a spawn row: the task an agent was started with) is one
+ *   line, "▸ Orchestrator → scout: Find the off-by-one in … · 12m", its
+ *   words cut to the row; a press opens them under it, as any message's,
+ *   and folds them again.
  * - A question held on you: its bubble edged amber, and "Answer on
  *   Dashboard →", which takes the Dashboard's card for it into view, the
  *   focus on it.
@@ -43,7 +47,10 @@
  *   drawing keeps inside the pane's bounds (its elements and characters),
  *   the member list's share counted. On the terminal it keeps inside the
  *   rows it may take too (`Kit.rows`): the newest that fit between the
- *   member list and the composer, "N earlier" over them.
+ *   member list and the composer (one alone taller than that its words
+ *   folded shorter, then cut), "▲ N earlier" over them, a press on it the
+ *   page before; a page back, "▼ N newer" beside it, a press on it the
+ *   newest again (and so does a send, or picking a member).
  * - The composer: one field and its own Send, growing to three lines as
  *   words are typed. With an agent picked, words go to it by SendMessage,
  *   no @ needed ("Message builder…"); with Everyone, words with no @ go to
@@ -133,8 +140,8 @@ type Send = { id: string; to: string; who: string; text: string; at: number }
 /** A cut message's whole text, as read: on its way, read, or not to be had. */
 type Whole = { status: 'loading' | 'ok' | 'error'; text: string }
 
-/** Where a message stands: yours at the right, others' at the left, Claude Code's own in the middle. */
-type Side = 'mine' | 'theirs' | 'notice'
+/** Where a message stands: yours at the right, others' at the left, Claude Code's own in the middle, a hand-off a line of its own. */
+type Side = 'mine' | 'theirs' | 'notice' | 'handoff'
 
 /** One message of the window: its key, its row (a send not in the state yet as the row it becomes), the send it was, its side. */
 type Entry = { key: string; row: V2ChatRow; send: Send | null; side: Side }
@@ -174,6 +181,10 @@ const view = {
   count: 0,
   /** The member list open or folded by a press; null while the pane's width has it. */
   isListOpen: null as boolean | null,
+  /** On the terminal, a page back ("▲ N earlier"): the key of the newest message the window shows, by filter; none at the newest. */
+  ends: new Map<string, string>(),
+  /** The hand-offs opened from their line, by message id. */
+  handoffs: new Set<string>(),
 }
 
 /** The composer's key as drawn now: `m` moves the focus to it. */
@@ -288,6 +299,8 @@ export function ackLine(ack: WebAck): { mark: string; hue: string; text: string 
 function sideOf(row: V2ChatRow): Side {
   // a slash command you ran alone is no words of yours: a line in the middle; so is what you stopped from the deck, and a compaction (./inspect's divider)
   if (row.kind === 'command' || row.kind === 'stop' || row.kind === 'compaction') return 'notice'
+  // the task an agent was started with: one line of its own, which a press opens
+  if (row.kind === 'spawn') return 'handoff'
   if (row.from === 'you') return 'mine'
   if (row.from === 'engine') return 'notice'
   return 'theirs'
@@ -376,7 +389,7 @@ export function isAtEndAfter(move: { offset: number; by: number; bodyRows: numbe
   return move.by >= 0 && isAtEndOf(move)
 }
 
-/** Whether `next` stacks under `prev`'s name: the same sender (not Claude Code), on the same side, within a few minutes. */
+/** Whether `next` stacks under `prev`'s name (a hand-off's line under the one before it, with no gap): the same sender (not Claude Code), on the same side, within a few minutes. */
 function joins(prev: Entry | undefined, next: Entry): boolean {
   if (!prev || next.side === 'notice' || prev.side !== next.side || prev.row.from !== next.row.from) return false
   return next.row.at - prev.row.at <= GROUP_MS
@@ -447,19 +460,24 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   const ctx: Ctx = { kit, state, files, actions, held: new Map(state.needs.filter(need => need.kind === 'question').map(need => [need.id, need])), picked, openFolds: view2.openFolds }
   const members = memberList(ctx, filter)
   const entries = entriesOf(state, filter)
-  const draw = (i: number, isHead: boolean) => {
+  // the terminal a page back: the window ends at the message it keeps; with none (or one the chat no longer holds), at the newest
+  const kept = kit.rows === undefined ? -1 : entries.findIndex(entry => entry.key === view.ends.get(filter))
+  if (kept < 0) view.ends.delete(filter)
+  const last = kept >= 0 ? kept : entries.length - 1
+  const newer = entries.length - 1 - last
+  const draw = (i: number, isHead: boolean, most = FOLD_ROWS) => {
     const entry = entries[i] as Entry
     const prev = entries[i - 1]
     const showTo = !isHead && prev !== undefined && prev.row.to !== entry.row.to
-    return entryOf(ctx, entry, showTo)
+    return entryOf(ctx, entry, showTo, most)
   }
   // a message's rows on the terminal: its own, its head's line, the gap over it
   const tallOf = (el: RenderElement, head: RenderElement[] | null) => rowsOf(el, kit.columns) + (head && head.length > 0 ? Math.max(1, rowsOf(head[head.length - 1], Math.max(1, kit.columns - 2))) : 0) + 1
   let compose = composer(ctx, isDemo)
   // the terminal: a field that grew takes only the rows the newest message leaves it, so the drawing keeps inside the terminal
   if (kit.rows !== undefined && view.rows > 1) {
-    const last = entries[entries.length - 1]
-    const newest = last ? tallOf(draw(entries.length - 1, true), headOf(ctx, last)) : 0
+    const end = entries[last]
+    const newest = end ? tallOf(draw(last, true), headOf(ctx, end)) : 0
     const spare = kit.rows - rowsOf(members, kit.columns) - rowsOf(composer(ctx, isDemo, 1), kit.columns) - 5 - newest
     compose = composer(ctx, isDemo, Math.max(1, 1 + spare))
   }
@@ -477,14 +495,23 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   let isFull = false
   // cut by the terminal's rows, not by the pane's bounds
   let isShort = false
-  for (let i = entries.length - 1; i >= 0 && drawn.length < want; i--) {
+  // the rows the window's newest message folds its words to: fewer where it alone is taller than the room
+  let newestMost = FOLD_ROWS
+  for (let i = last; i >= 0 && drawn.length < want; i--) {
     const entry = entries[i] as Entry
     const isHead = !joins(entries[i - 1], entry)
-    const el = draw(i, isHead)
+    let el = draw(i, isHead)
     const head = isHead ? headOf(ctx, entry) : null
+    // a hand-off's line stacks under the one before it with no gap
+    const less = entry.side === 'handoff' && !isHead ? 1 : 0
+    let tall = roomRows === Infinity ? 0 : tallOf(el, head) - less
+    if (drawn.length === 0 && tall > roomRows) {
+      newestMost = Math.max(1, FOLD_ROWS - (tall - roomRows))
+      el = draw(i, isHead, newestMost)
+      tall = tallOf(el, head) - less
+    }
     const size = sizeOf([el, head])
     const more = size.nodes + (head ? GROUP_FRAME : 0)
-    const tall = roomRows === Infinity ? 0 : tallOf(el, head)
     if ((nodes + more > roomNodes || chars + size.chars > roomChars || rows + tall > roomRows) && drawn.length > 0) {
       isFull = true
       isShort = nodes + more <= roomNodes && chars + size.chars <= roomChars
@@ -496,12 +523,43 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
     drawn.unshift({ entry, el, head })
   }
   // the oldest drawn starts a group, with its head, though its sender spoke just before it
+  const earlier = last + 1 - drawn.length
   const first = drawn[0]
   if (first && first.head === null) {
     first.head = headOf(ctx, first.entry)
-    first.el = draw(entries.length - drawn.length, true)
+    first.el = draw(earlier, true, drawn.length === 1 ? newestMost : FOLD_ROWS)
   }
-  const earlier = entries.length - drawn.length
+  // the terminal past its rows, or a page back already: a page at a time, the one before ending at the message over the oldest shown; a page back, the newest beside it
+  const isPaged = kit.rows !== undefined && (isShort || kept >= 0)
+  const pages = [
+    earlier > 0 && isPaged ? (
+      <Button
+        key="chat:earlier"
+        label={`▲ ${earlier} earlier`}
+        plain
+        dimColor
+        onPress={() => {
+          view.ends.set(filter, (entries[earlier - 1] as Entry).key)
+          actions.redraw()
+        }}
+      />
+    ) : null,
+    newer > 0 ? (
+      <Button
+        key="chat:newest"
+        label={`▼ ${newer} newer`}
+        plain
+        dimColor
+        onPress={() => {
+          view.ends.delete(filter)
+          actions.redraw()
+        }}
+      />
+    ) : null,
+  ].filter(one => one !== null)
+  // the window's one message, taller than the terminal's room even folded shorter: cut to the room, so the drawing keeps inside the terminal
+  const groups = groupsOf(kit, drawn)
+  const isClipped = kit.rows !== undefined && drawn.length === 1 && rows > roomRows
   const empty = picked
     ? `Nothing between you and ${partyName(state, picked, picked)} yet: what you write below goes to it.`
     : filter === 'between'
@@ -510,8 +568,13 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   return (
     <Box key="chat" flexDirection="column" gap={1}>
       {members}
-      {earlier > 0 && isFull ? quiet(kit, !isShort ? `${earlier} earlier: more than the pane holds. Pick an agent above, or read them all with /deck web.` : `${earlier} earlier: more than the terminal holds. Pick an agent above, make the pane taller, or read them all with /deck web.`) : null}
-      {earlier > 0 && !isFull ? (
+      {pages.length > 0 ? (
+        <Box flexDirection="row" justifyContent="center" columnGap={3}>
+          {pages}
+        </Box>
+      ) : null}
+      {earlier > 0 && !isPaged && isFull ? quiet(kit, `${earlier} earlier: more than the pane holds. Pick an agent above, or read them all with /deck web.`) : null}
+      {earlier > 0 && !isPaged && !isFull ? (
         <Box flexDirection="row" justifyContent="center">
           <Button
             key="chat:earlier"
@@ -526,7 +589,13 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
         </Box>
       ) : null}
       {drawn.length === 0 ? quiet(kit, empty) : null}
-      {groupsOf(kit, drawn)}
+      {isClipped ? (
+        <Box flexDirection="column" height={Math.max(1, roomRows + 1)} overflow="hidden">
+          {groups}
+        </Box>
+      ) : (
+        groups
+      )}
       {compose}
     </Box>
   )
@@ -546,6 +615,7 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
   const isTerminal = kit.surface === 'terminal'
   const { members, finished, hidden } = membersOf(state, filter)
   const pick = (id: string) => {
+    view.ends.delete(id)
     actions.setV2View({ chatFilter: id })
     actions.reveal('chat:compose', 'nearest')
     actions.focusNext(1, [composerKey()])
@@ -714,15 +784,23 @@ function groupsOf(kit: Kit, drawn: readonly Drawn[]): RenderElement[] {
 }
 
 /**
- * A group: Claude Code's notice alone in the middle; yours at the right,
- * whom they went to over them when it says something; others' at the left,
- * the sender's avatar beside its name and the messages under the name.
+ * A group: Claude Code's notice alone in the middle; one sender's hand-offs
+ * a line each, one under the other; yours at the right, whom they went to
+ * over them when it says something; others' at the left, the sender's
+ * avatar beside its name and the messages under the name.
  */
 function groupOf(kit: Kit, start: Drawn, els: RenderElement[]): RenderElement {
   const { Box } = kit
   const key = `grp:${start.entry.key}`
   const head = start.head ?? []
   if (start.entry.side === 'notice') return els[0] as RenderElement
+  if (start.entry.side === 'handoff') {
+    return (
+      <Box key={key} flexDirection="column">
+        {els}
+      </Box>
+    )
+  }
   if (start.entry.side === 'mine') {
     return (
       <Box key={key} flexDirection="column">
@@ -799,7 +877,7 @@ function headOf(ctx: Ctx, entry: Entry): RenderElement[] {
   const { Box, Text } = kit
   const row = entry.row
   const isTo = namesTo(ctx, entry)
-  if (entry.side === 'notice') return []
+  if (entry.side === 'notice' || entry.side === 'handoff') return []
   if (entry.side === 'mine') {
     if (!isTo) return []
     return [
@@ -822,11 +900,12 @@ function headOf(ctx: Ctx, entry: Entry): RenderElement[] {
   ]
 }
 
-/** One message: a notice, yours or another's; `showTo` names its recipient over it (stacked under a name that spoke to another). */
-function entryOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
+/** One message: a notice, yours or another's, a hand-off; `showTo` names its recipient over it (stacked under a name that spoke to another); `most` the rows its words fold to. */
+function entryOf(ctx: Ctx, entry: Entry, showTo: boolean, most = FOLD_ROWS): RenderElement {
   if (entry.side === 'notice') return noticeOf(ctx, entry)
-  if (entry.side === 'mine') return mineOf(ctx, entry, showTo)
-  return theirsOf(ctx, entry, showTo)
+  if (entry.side === 'handoff') return handoffOf(ctx, entry, most)
+  if (entry.side === 'mine') return mineOf(ctx, entry, showTo, most)
+  return theirsOf(ctx, entry, showTo, most)
 }
 
 /** The cells a bubble's words are folded to: three quarters of the pane for yours, nearly all beside the avatar for others'. */
@@ -859,14 +938,14 @@ function toLine(ctx: Ctx, entry: Entry): RenderElement | null {
  * with "Answer on Dashboard →"; on the terminal, an indented block. What came of
  * it under it, when Claude Code said it was not delivered.
  */
-function theirsOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
+function theirsOf(ctx: Ctx, entry: Entry, showTo: boolean, most = FOLD_ROWS): RenderElement {
   const { kit, actions } = ctx
   const { Box, Text, Button } = kit
   const row = entry.row
   const isTerminal = kit.surface === 'terminal'
   const need = row.kind === 'question' && row.callId !== undefined ? ctx.held.get(row.callId) : undefined
   const title = row.title && row.kind === 'message' ? flat(clean(row.title)) : ''
-  const words = wordsOf(ctx, entry, foldWidth(kit, 'theirs'))
+  const words = wordsOf(ctx, entry, foldWidth(kit, 'theirs'), most)
   const go = (callId: string) => () => {
     actions.setV2View({ tab: 'now', isInspectOpen: false })
     actions.reveal(`needs:${callId}`, 'start')
@@ -914,11 +993,11 @@ function theirsOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
 }
 
 /** One of yours: the blue bubble at the right (on the terminal, a block after a `›`), what came of it and when under it. */
-function mineOf(ctx: Ctx, entry: Entry, showTo: boolean): RenderElement {
+function mineOf(ctx: Ctx, entry: Entry, showTo: boolean, most = FOLD_ROWS): RenderElement {
   const { kit } = ctx
   const { Box, Text } = kit
   const isTerminal = kit.surface === 'terminal'
-  const words = wordsOf(ctx, entry, foldWidth(kit, 'mine'))
+  const words = wordsOf(ctx, entry, foldWidth(kit, 'mine'), most)
   const bubble = isTerminal ? (
     <Box flexDirection="row" columnGap={1}>
       <Box flexShrink={0}>
@@ -970,12 +1049,75 @@ function noticeOf(ctx: Ctx, entry: Entry): RenderElement {
 }
 
 /**
- * A message's words: folded to about six lines, with Show more when there
+ * A hand-off in one line, "▸ Orchestrator → scout: Find the off-by-one in …"
+ * and when, its words cut to the row (on the terminal, the names lit); a
+ * press opens them under it, as any message's (folded to about six lines,
+ * Show more), and folds them again.
+ */
+function handoffOf(ctx: Ctx, entry: Entry, most = FOLD_ROWS): RenderElement {
+  const { kit, state, actions } = ctx
+  const { Box, Text, Button } = kit
+  const row = entry.row
+  const isOpen = view.handoffs.has(row.id)
+  const from = senderOf(state, row)
+  const to = recipientName(state, row)
+  const when = ago(row.at, state.now)
+  const head = `${chevronOf(isOpen)} ${from} → ${to}`
+  // one row: the words take what the names and the time leave them
+  const room = kit.columns - cellsOf(head) - 2 - (when ? cellsOf(when) + 1 : 0)
+  const gist = cut(flat(clean(row.text)), Math.max(12, room))
+  // open, the words show whole under the line
+  const label = isOpen ? head : `${head}: ${gist}`
+  const toggle = () => {
+    if (isOpen) view.handoffs.delete(row.id)
+    else view.handoffs.add(row.id)
+    actions.redraw()
+  }
+  const press =
+    kit.surface === 'terminal' ? (
+      <Button key={`chat:handoff:${row.id}`} label={label} plain onPress={toggle}>
+        <Text wrap="truncate-end">
+          <Text color={P.muted2}>{`${chevronOf(isOpen)} `}</Text>
+          <Text bold color={P.text}>
+            {from}
+          </Text>
+          <Text color={P.muted2}>{' → '}</Text>
+          <Text color={P.fg2}>{to}</Text>
+          {isOpen ? null : <Text color={P.muted}>{`: ${gist}`}</Text>}
+        </Text>
+      </Button>
+    ) : (
+      <Button key={`chat:handoff:${row.id}`} label={label} plain dimColor onPress={toggle} />
+    )
+  return (
+    <Box key={entry.key} flexDirection="column">
+      <Box flexDirection="row" alignItems="center" columnGap={1}>
+        <Box flexShrink={1} minWidth={0}>
+          {press}
+        </Box>
+        {when ? (
+          <Box flexShrink={0}>
+            <Text color={P.muted2}>{when}</Text>
+          </Box>
+        ) : null}
+      </Box>
+      {isOpen ? (
+        <Box flexDirection="column" paddingLeft={2}>
+          {wordsOf(ctx, entry, foldWidth(kit, 'theirs') - 2, most)}
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/**
+ * A message's words: folded to about six lines (`most`: fewer where the
+ * terminal has no room for six), with Show more when there
  * is more (or the state cut it); open, its whole text, read once (and
  * kept) when the state cut it, then Show less. Others' as Markdown; yours
  * as plain words, white on the blue.
  */
-function wordsOf(ctx: Ctx, entry: Entry, width: number): RenderElement[] {
+function wordsOf(ctx: Ctx, entry: Entry, width: number, most = FOLD_ROWS): RenderElement[] {
   const { kit, files, actions } = ctx
   const { Box, Text, Button, Markdown } = kit
   const row = entry.row
@@ -988,7 +1130,7 @@ function wordsOf(ctx: Ctx, entry: Entry, width: number): RenderElement[] {
   // the whole text while the deck holds it (or the sample's file), else as read from its file
   const kept = isCut && isOpen ? files.message(row.id) : null
   const whole: Whole | undefined = kept !== null ? { status: 'ok', text: kept } : view.wholes.get(row.id)
-  const folded = foldText(said, width, FOLD_ROWS)
+  const folded = foldText(said, width, most)
   const hasMore = folded.isCut || isCut
   const read = () => {
     view.wholes.set(row.id, { status: 'loading', text: '' })
@@ -1189,6 +1331,8 @@ function composer(ctx: Ctx, isDemo: boolean, most = FIELD_ROWS): RenderElement {
     view.draft = ''
     view.field += 1
     view.refusal = null
+    // your words show at the newest
+    view.ends.clear()
     actions.sendChat(route.agentId, route.text, ackId)
     actions.reveal('chat:compose', 'nearest')
   }

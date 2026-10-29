@@ -3,6 +3,7 @@ import { expect, mock, test, type MockClock } from 'claude-code/testing'
 
 import { emptyGit, type FileRow, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
+import * as W from '../hooks/web'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
 import { bash, type BashArgs } from './tools'
 
@@ -339,7 +340,7 @@ test('goals keep the newest 20, each with its newest 10 follow-ups; a headline i
 
 // Spawns.
 
-test('an Agent call shows its agent at once, keyed by the call and labelled from its description; the spawn binds that same row; a refused call ends its row', async ($, on) => {
+test('an Agent call shows its agent at once, keyed by the call and labelled from its description; the spawn binds that same row; a refused call is no agent, only the Orchestrator`s failed call', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []
   world(on, clock, saved, { agentMs: 5000, refused: ['toolu_c'] })
@@ -366,7 +367,7 @@ test('an Agent call shows its agent at once, keyed by the call and labelled from
   await clock.advance(2000)
   await call
 
-  // a sibling with the same marker is "Phase A 2"; a refused call's row ends, saying why
+  // a sibling with the same marker is "Phase A 2"; a refused call's row goes
   const second = $.tool.call({ tool: 'Agent', tool_use_id: 'toolu_b', description: 'Phase A: tests', prompt: 'Write the tests.' })
   const refused = $.tool.call({ tool: 'Agent', tool_use_id: 'toolu_c', description: 'Phase C: review', prompt: 'Review it.' })
   await clock.advance(2000)
@@ -377,10 +378,12 @@ test('an Agent call shows its agent at once, keyed by the call and labelled from
   await clock.advance(2000)
   data = lastOf(saved)
   // the second call's result named its agent: no spawn was told, the row is bound by the call
-  expect(data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-n1', 'agent-bound', 'toolu_c'])
-  const stopped = agentIn(data, 'toolu_c')
-  // its row ends, with no words the agent never said
-  expect([stopped.status, stopped.answer]).toEqual(['killed', undefined])
+  expect(data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-n1', 'agent-bound'])
+  // no agent ran for the refused one: it is the Orchestrator's call that failed, and nothing more (no card, no lane, no band count)
+  expect(agentIn(data, M.MAIN).recent.filter(one => one.id === 'toolu_c').map(one => [one.tool, one.target, one.ok])).toEqual([['Agent', 'Phase C: review', false]])
+  const state = W.deckStateOf(data, emptyGit(), null, NOW + 20_000, 's', '/repo')
+  expect(state.agents.some(row => row.id === 'toolu_c')).toBe(false)
+  expect(state.activity.filter(one => one.id === 'toolu_c').map(one => [one.agent, one.tool, one.text, one.ok])).toEqual([[M.MAIN, 'Agent', 'Phase C: review', false]])
 })
 
 test('labels: the name, else the description`s marker (its scope after), else the description cut at a word; at most 18 characters (24 when that keeps little), fixed at spawn, never an id', () => {

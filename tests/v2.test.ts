@@ -286,7 +286,7 @@ test('a row`s call in flight is shown verbatim, tool and what it was given; its 
   M.beginTool(data, main, M.activityOf('toolu_2', 'Edit', { file_path: '/repo/src/a.ts' }, '/repo', NOW - 5000))
   const done = agent(data, 'agent-done', 'done', { status: 'completed', endedAt: NOW - 30_000, startedAt: NOW - 270_000 })
   M.noteResult(data, done, `All good. ${'y'.repeat(700)}`, NOW - 30_000, 'handback')
-  // an Agent call that started no agent (refused), and one that runs in a cloud session: the deck words no result for either
+  // an Agent call that started no agent (refused) is none; one that runs in a cloud session is, with no result the deck worded
   for (const [id, end] of [
     ['toolu_none', { isStarted: false, why: 'The person declined to start it' }],
     ['toolu_cloud', { isStarted: true, isRemote: true }],
@@ -300,13 +300,14 @@ test('a row`s call in flight is shown verbatim, tool and what it was given; its 
   expect(rowOf(state, 'agent-fixer').task).toHaveLength(600)
   expect(rowOf(state, M.MAIN)).toMatchObject({ live: { tool: 'Edit', text: 'src/a.ts' }, elapsed: '5m', task: '' })
   expect(rowOf(state, 'agent-done')).toMatchObject({ live: null, status: 'done', elapsed: '4m', isResultCut: true })
-  expect([rowOf(state, 'toolu_none').result, rowOf(state, 'toolu_none').status, rowOf(state, 'toolu_none').isStopped]).toEqual(['', 'failed', true])
+  expect(state.agents.some(row => row.id === 'toolu_none')).toBe(false)
   expect([rowOf(state, 'toolu_cloud').result, rowOf(state, 'toolu_cloud').status]).toEqual(['', 'idle'])
-  // a snapshot of an earlier build, which wrote words of its own there: healed to none
+  // a snapshot of an earlier build, which kept the refused call as a stopped agent and wrote words of its own on both: the refused one gone, the other's words healed to none
   const old = M.copyOf(data)
-  old.agents.find(one => one.id === 'toolu_none')!.answer = 'Not started: The person declined to start it'
-  old.agents.find(one => one.id === 'toolu_cloud')!.answer = 'Runs in a cloud session, outside this view'
-  expect(M.healData(old, NOW).agents.filter(one => one.id.startsWith('toolu_')).map(one => one.answer)).toEqual([undefined, undefined])
+  const cloud = old.agents.find(one => one.id === 'toolu_cloud')!
+  old.agents.push({ ...M.copyOf(cloud), id: 'toolu_none', toolUseId: 'toolu_none', status: 'killed', endedAt: NOW - 30_000, answer: 'Not started: The person declined to start it' })
+  cloud.answer = 'Runs in a cloud session, outside this view'
+  expect(M.healData(old, NOW).agents.filter(one => one.id.startsWith('toolu_')).map(one => [one.id, one.answer])).toEqual([['toolu_cloud', undefined]])
 
   const file = JSON.parse(W.agentFilesOf(data).find(one => one.id === W.webIdOf('agent-fixer'))?.text ?? '{}') as W.V2AgentFile
   expect(file).toMatchObject({ v: 2, id: 'agent-fixer', task: fixer.prompt, result: '', todos: [], edits: [] })
