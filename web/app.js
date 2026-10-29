@@ -3370,19 +3370,28 @@ function ActRow(a, x, i) {
       h('p', { class: 'act-meta' }, [x.id, x.ms != null ? msText(x.ms) : '', x.ok === true ? 'ok' : x.ok === false ? 'failed' : 'no result yet', x.at ? new Date(x.at).toLocaleTimeString() : ''].filter(Boolean).join(' · '))));
 }
 
-/** What a thought of the log is labelled: Claude Code's live view of the thinking, which may be a summary. */
-const THOUGHT_LABEL = 'Thinking, as Claude Code shows it';
+/** The word a thought of the log leads with, muted beside its cloud. */
+const THOUGHT_WORD = 'thinking';
+/** What Activity's head says once while it shows a thought: Claude Code's live view of the thinking, which may be a summary. */
+const THOUGHT_NOTE = 'thinking as Claude Code shows it, which may be a summary';
 
-/** A step's words in the log: what it said, quoted in italics after a speech mark; or its thinking, dimmer, under its label. Long ones fold. */
+/**
+ * A step's words in the log. What it said, after a speech mark: a line of it
+ * quoted in italics; words of more lines as Chat draws a message, its
+ * Markdown, unquoted. Or its thinking, dimmer, after a cloud and "thinking".
+ * Long ones fold.
+ */
 function WordRow(a, kind, w) {
   const key = `word|${a.id}|${kind}|${w.at}|${w.step}`;
   const isThought = kind === 'thought';
   const long = w.text.length > 420 || w.text.split('\n').length > 6;
-  const text = isThought ? h('p', { class: 'word-text' }, w.text, w.isCut ? '…' : '') : h('p', { class: 'word-text' }, '“', inline(w.text), w.isCut ? '…' : '', '”');
+  const said = String(w.text || '').trim();
+  const text = isThought ? h('p', { class: 'word-text' }, h('span', { class: 'word-lead' }, THOUGHT_WORD), inline(said), w.isCut ? '…' : '')
+    : said.includes('\n') ? h('div', { class: 'word-md' }, Markdown(w.isCut ? `${said}…` : said))
+    : h('p', { class: 'word-text' }, '“', inline(said), w.isCut ? '…' : '', '”');
   return h('div', { key, class: `act-word is-${kind}` },
     h('span', { class: 'word-mark' }, icon(isThought ? 'thought' : 'said')),
     h('div', { class: 'word-body' },
-      isThought && h('span', { class: 'word-label' }, THOUGHT_LABEL),
       Folded(key, long, text)),
     h('span', { class: 'act-time', title: w.at ? new Date(w.at).toLocaleString() : '' }, ageOf(w.at)));
 }
@@ -3397,10 +3406,12 @@ function WordsToggle() {
 /**
  * Its log, newest first: each tool call (it opens on all of it) and, unless
  * "Calls only" is picked, what it said between them and its thinking as
- * Claude Code showed it, as its file holds them.
+ * Claude Code showed it, as its file holds them; the head says once that
+ * the thinking may be a summary.
  */
 function ActivityBlock(a, f) {
   let body;
+  let hasThought = false;
   const hasWords = !!f.data && f.data.words.length > 0;
   if (!f.data) {
     body = f.status === 'error'
@@ -3408,11 +3419,13 @@ function ActivityBlock(a, f) {
       : h('div', { class: 'act-wait' }, h('span', { class: 'sk sk-line' }), h('span', { class: 'sk sk-line short' }));
   } else {
     const log = logOf(f.data, ui.actWords).reverse();
+    hasThought = log.some(e => e.kind === 'thought');
     body = log.length ? h('div', { class: 'acts' }, log.map((e, i) => (e.kind === 'call' ? ActRow(a, e.call, i) : WordRow(a, e.kind, e.word)))) : h('p', { class: 'muted small' }, 'No tool calls yet.');
   }
   const n = f.data ? f.data.activity.length : 0;
-  // the file keeps an agent's newest 14 calls
-  return Block('activity', 'Activity', n >= 14 ? `the newest ${n}` : n ? plural(n, 'tool call') : '', body, hasWords ? WordsToggle() : null);
+  // the file keeps an agent's newest 14 calls; that thinking may be a summary is said once, here
+  const note = [n >= 14 ? `the newest ${n}` : n ? plural(n, 'tool call') : '', hasThought ? THOUGHT_NOTE : ''].filter(Boolean).join(' · ');
+  return Block('activity', 'Activity', note, body, hasWords ? WordsToggle() : null);
 }
 
 function AgentDrawer(id) {

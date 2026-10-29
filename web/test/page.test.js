@@ -1591,7 +1591,7 @@ test('Recent activity says a refused call was "⊘ denied" (auto mode) or "⊘ b
 
 // ---- what the agents say between their calls
 
-test('the drawer`s Activity lays an agent`s words and its thinking between its calls, newest first: each word quoted in italics after a speech mark, the thought dimmer under its label; "Calls only" leaves them out, kept for every drawer', async () => {
+test('the drawer`s Activity lays an agent`s words and its thinking between its calls, newest first: each word quoted in italics after a speech mark, the thought dimmer after "thinking", the head saying once that it may be a summary; "Calls only" leaves them out, kept for every drawer', async () => {
   const storage = {}
   const p = page({ hash: `#/now/agent/${BUILDER}`, storage })
   p.load(SAMPLE)
@@ -1606,12 +1606,18 @@ test('the drawer`s Activity lays an agent`s words and its thinking between its c
   assert.equal(find(words[0], 'code').length, 1)
   assert.equal(find(words[0], 'word-mark').length, 1)
   const thought = words.find(one => one.p.class.includes('is-thought'))
-  assert.match(flat(textOf(thought)), /^Thinking, as Claude Code shows it Auto mode refused the force-push/)
+  assert.match(flat(textOf(thought)), /^thinking ?Auto mode refused the force-push/)
+  assert.equal(find(thought, 'word-lead').length, 1)
+  // no label on the row: the Activity head says it once
+  assert.ok(!flat(textOf(drawer())).includes('Thinking, as Claude Code shows it'))
+  const notes = () => find(drawer(), 'block-note').map(one => flat(textOf(one)))
+  assert.equal(notes().filter(one => one.includes('thinking as Claude Code shows it, which may be a summary')).length, 1)
   // the switch, at Activity's head: with their words by default
   const toggle = () => find(drawer(), 'seg-sm')[0]
   assert.deepEqual([...toggle().c].map(b => [flat(textOf(b)), b.p.class]), [['Calls only', ''], ['With their words', 'on']])
   click(toggle().c[0])
   assert.deepEqual(log(), ['act', 'act', 'act is-fail', 'act', 'act'])
+  assert.equal(notes().filter(one => one.includes('may be a summary')).length, 0)
   assert.equal(storage['agent-deck:actView'], '"calls"')
   // kept: another page starts on Calls only
   const again = page({ hash: `#/now/agent/${BUILDER}`, storage })
@@ -1627,6 +1633,24 @@ test('the drawer`s Activity lays an agent`s words and its thinking between its c
   await settle()
   assert.equal(find(drawer(), 'seg-sm').length, 0)
   assert.equal(find(drawer(), 'act-word').length, 0)
+})
+
+test('the drawer`s Activity draws words of more lines as Chat draws a message, its Markdown, unquoted; a line of them stays quoted in italics', async () => {
+  const file = JSON.parse(FILES.agent[BUILDER])
+  const last = file.activity[file.activity.length - 1]
+  file.words = [...file.words, { kind: 'said', at: last.at + 1000, step: 99, text: 'Here is the fix:\n\n```js\nconst limit = 10\n```\n\n- **one** store', after: last.id }]
+  const p = page({ hash: `#/now/agent/${BUILDER}`, files: { ...FILES, agent: { ...FILES.agent, [BUILDER]: JSON.stringify(file) } } })
+  p.load(SAMPLE)
+  p.view('Drawer()')
+  await settle()
+  const words = find(p.view('Drawer()'), 'act-word')
+  const lines = words.filter(one => find(one, 'md').length > 0)
+  assert.equal(lines.length, 1)
+  assert.equal(find(lines[0], 'pre').length, 1)
+  assert.match(flat(textOf(lines[0])), /^Here is the fix: const limit = 10 one store/)
+  assert.ok(!/[“”*`]/.test(textOf(lines[0])))
+  // the rest, a line each, stay quoted
+  assert.ok(words.filter(one => one.p.class.includes('is-said') && !lines.includes(one)).every(one => flat(textOf(one)).startsWith('“')))
 })
 
 test('an agent at work with no call in flight: its card, its row on Org and its drawer show its latest words in italics after a speech mark; a call in flight shows instead', async () => {

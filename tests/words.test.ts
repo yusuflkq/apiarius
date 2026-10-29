@@ -15,6 +15,7 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 import { emptyGit } from '../hooks/git'
 import * as M from '../hooks/model'
 import * as D from '../hooks/ui/v2/dashModel'
+import { THOUGHT_NOTE, THOUGHT_WORD } from '../hooks/ui/v2/page'
 import * as W from '../hooks/web'
 import type { DeckAgent, DeckData } from '../types'
 import { IDS, SAMPLE_NOW, v2Session } from './v2session'
@@ -275,7 +276,21 @@ function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   }
 }
 
-type Node = { key?: string; props: Record<string, unknown>; text: string }
+type Node = { key?: string; type?: string; props: Record<string, unknown>; text: string; children?: unknown[] }
+
+/** The elements under `node` whose tag is `type`, in document order. */
+function typed(node: { children?: unknown[] } | undefined, type: string): Node[] {
+  const found: Node[] = []
+  const walk = (list: unknown[]) => {
+    for (const one of list) {
+      if (!one || typeof one !== 'object') continue
+      if ((one as Node).type === type) found.push(one as Node)
+      walk((one as Node).children ?? [])
+    }
+  }
+  walk(node?.children ?? [])
+  return found
+}
 type Drawing = {
   press: (target: { key: string }) => Promise<unknown>
   redraw: () => Promise<void>
@@ -341,11 +356,14 @@ test('the pane and the terminal: builder`s Activity lays its words and its thoug
     expect((await ui.find({ key: 'page:words:calls' }))?.props).toMatchObject({ label: 'Calls only', plain: true, dimColor: true })
     expect((await ui.find({ key: 'page:words:with' }))?.props).toMatchObject({ label: 'With their words', plain: true, dimColor: false })
     const log = (await ui.find({ key: 'page:log' }))?.text ?? ''
-    const order = ['“Nothing there yet.', 'Write', '“The limiter is in.', 'Edit', '“Both stores pass', 'git push', 'Thinking, as Claude Code shows it', 'Auto mode refused', "“I won't push.", 'bench.js', '“Running the limiter tests', 'npm test']
+    const order = ['“Nothing there yet.', 'Write', '“The limiter is in.', 'Edit', '“Both stores pass', 'git push', `${THOUGHT_WORD}  Auto mode refused`, "“I won't push.", 'bench.js', '“Running the limiter tests', 'npm test']
     const at = order.map(words => log.indexOf(words))
     expect(at.every(one => one >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     expect(log).toContain('⊘ denied')
+    // the thought carries no label of its own: Activity says once, under its head, that thinking may be a summary
+    expect(log).not.toContain('Thinking, as Claude Code shows it')
+    expect(((await ui.find({ key: 'page:activity' }))?.text ?? '').split(THOUGHT_NOTE).length - 1).toBe(1)
     // where Svg draws, a speech bubble before each word and a cloud before the thought; the terminal's own marks
     if (surface === 'desktop') {
       const marks = (await ui.findAll({ type: 'Svg' })).map(one => one.props.alt).filter(alt => alt === 'Said' || alt === 'Thinking')
@@ -360,7 +378,8 @@ test('the pane and the terminal: builder`s Activity lays its words and its thoug
     await press(ui, 'page:words:calls')
     expect((await ui.find({ key: 'page:fold:activity' }))?.props.label).toBe('▾ ACTIVITY 5')
     const calls = (await ui.find({ key: 'page:log' }))?.text ?? ''
-    expect([calls.includes('Nothing there yet'), calls.includes('Thinking'), calls.includes('git push')]).toEqual([false, false, true])
+    expect([calls.includes('Nothing there yet'), calls.includes(`${THOUGHT_WORD}  `), calls.includes('git push')]).toEqual([false, false, true])
+    expect((await ui.find({ key: 'page:activity' }))?.text).not.toContain(THOUGHT_NOTE)
     expect((await ui.find({ key: 'page:words:calls' }))?.props.dimColor).toBe(false)
     // the pick stays for the next page
     await press(ui, 'key:b')
@@ -389,6 +408,60 @@ test('the pane and the terminal: an agent at work with no call in flight shows i
     await press(ui, W.agentKeyOf(IDS.builder))
     expect((await ui.find({ key: 'page:said' }))?.text).toMatch(/“The tests share one Redis mock that's never reset\.” {2}(now|1m)/)
     expect(await ui.find({ key: 'page:live' })).toBeUndefined()
+    await press(ui, 'key:b')
+    await ui.unmount()
+  }
+})
+
+test('words with Markdown: a line of them quoted in italics, the marks dropped; more lines as Chat draws a message, its Markdown, unquoted; a thought after "thinking", its marks dropped; the page`s live line and the card drop the marks too', async ($, on) => {
+  const session = v2Session()
+  const builder = M.agentOf(session.data, IDS.builder)!
+  const file = W.agentFileOf(session.data, builder)
+  const first = file.activity[0]!
+  const at = first.at
+  const md: W.V2AgentFile = {
+    ...file,
+    activity: [first],
+    words: [
+      { kind: 'said', at: at + 1000, step: 1, text: 'Yes, your read is right. **PEL = the pending entries list**, see [the docs](https://redis.io).', after: first.id },
+      { kind: 'said', at: at + 2000, step: 2, text: 'Here is the fix:\n\n```js\nconst limit = 10\n```\n\n- **one** store', after: first.id },
+      { kind: 'thought', at: at + 3000, step: 3, text: '**Weighing the stores**\n\nThe mock is shared.', after: first.id },
+    ],
+  }
+  const live = (state: W.WebStateV2): W.WebStateV2 => {
+    const next = between(state)
+    return { ...next, agents: next.agents.map(row => (row.row === 'agent' && row.id === IDS.builder ? { ...row, said: { text: 'Yes, your read is right.\n\n**PEL = …**', at: state.now - 40_000 } } : row)) }
+  }
+  await demo($, on, live, { [W.webIdOf(IDS.builder)]: md })
+  for (const surface of SURFACES) {
+    const ui = (await $.ui.mount(pane(surface))) as unknown as Drawing
+    // the card: its words quoted on one line, no marks
+    const card = (await ui.find({ key: `card:${IDS.builder}` }))?.text ?? ''
+    expect(card).toContain('PEL = …')
+    expect(card).not.toContain('**')
+    await press(ui, W.agentKeyOf(IDS.builder))
+    // the live line: more than one line, so unquoted; no marks
+    const said = (await ui.find({ key: 'page:said' }))?.text ?? ''
+    expect(said).toMatch(/^.?Yes, your read is right\.\n\nPEL = …/)
+    expect(said).not.toMatch(/[“”*]/)
+    if (!(await ui.find({ key: 'page:log' }))) await press(ui, 'page:fold:activity')
+    // the log's rows by their keys (the sample's times are moved to now as it is read)
+    const rows = (await ui.findAll({ type: 'Box' })).filter(one => /^page:(said|thought):/.test(one.key ?? ''))
+    expect(rows.map(one => (one.key ?? '').split(':')[1])).toEqual(['said', 'said', 'thought'])
+    const [line, lines, thought] = rows
+    // one line: quoted in italics, the marks dropped
+    expect(line?.text).toMatch(/^.?“Yes, your read is right\. PEL = the pending entries list, see the docs\.”/)
+    expect(typed(line, 'Markdown')).toEqual([])
+    expect(typed(line, 'Text').some(one => one.props.italic === true)).toBe(true)
+    // more lines: Chat's Markdown, unquoted, the fence and the list kept for it to draw
+    const marks = typed(lines, 'Markdown')
+    expect(marks.length).toBe(1)
+    // cut at a few rows inside its fence: the fence closed
+    expect(String(marks[0]?.props.text)).toBe('Here is the fix:\n\n```js\nconst limit = 10\n```')
+    expect(String(marks[0]?.props.text)).not.toContain('“')
+    // the thought: "thinking", then its words, the marks dropped
+    expect(thought?.text).toContain(`${THOUGHT_WORD}  Weighing the stores\n\nThe mock is shared.`)
+    expect(thought?.text).not.toContain('**')
     await press(ui, 'key:b')
     await ui.unmount()
   }
