@@ -20,7 +20,7 @@
     "contextPercent": 7,
     "costUsd": 0.31,
     "mode": "",
-    "line": "sonnet-4.5 · context 7% · $0.31",
+    "line": "sonnet-4.5 · context 7% · ≈$0.31",
     "turn": null
   },
   "needs": [],
@@ -127,7 +127,7 @@
       "context": "7%",
       "permissions": "",
       "loaded": "",
-      "spend": "$0.31"
+      "spend": "≈$0.31"
     },
     "context": null,
     "compactions": [],

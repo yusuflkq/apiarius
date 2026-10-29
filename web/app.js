@@ -75,7 +75,8 @@ function num(n) {
   if (n < 1e6) return `${Math.round(n / 1000)}k`;
   return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
 }
-const usd = x => (x == null ? '—' : `$${x.toFixed(2)}`);
+/** The session's spend, "≈$6.42": /cost's estimate at API list prices, never a bill. */
+const usd = x => (x == null ? '—' : `≈$${x.toFixed(2)}`);
 function msText(ms) {
   if (ms == null) return '';
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -607,7 +608,7 @@ function normalize(s) {
   const session = obj(s.session);
   return {
     v: 2, now: numOr(s.now, 0), empty: false,
-    session: { id: session ? str(session.id) : '', cwd: session ? str(session.cwd) : '', startedAt: session ? numOr(session.startedAt, 0) : 0 },
+    session: { id: session ? str(session.id) : '', cwd: session ? str(session.cwd) : '', startedAt: session ? numOr(session.startedAt, 0) : 0, isFork: !!session && session.isFork === true },
     header: {
       state, stateText: str(hd.stateText) || STATE_TEXT[state],
       goal: goal && typeof goal.text === 'string' ? { text: goal.text, headline: str(goal.headline) || firstLine(goal.text, 80), at: numOr(goal.at, 0), isCut: goal.isCut === true, messageId: str(goal.messageId) } : null,
@@ -1937,7 +1938,7 @@ function FiguresStrip() {
     Figure('bot', f.running, 'Agents running', counts.join(' · '), () => navigate('org')),
     f.plan && Figure('listChecks', `${f.plan.done}/${f.plan.total}`, 'Plan done', f.plan.done >= f.plan.total ? 'All done' : `${f.plan.total - f.plan.done} to go`,
       S.plan ? () => { setShut('plan', false); scrollSoon('sec-plan', 'now'); } : null),
-    Figure('dollar', usd(f.costUsd), 'Session spend', spend.join(' · ') || '—'),
+    Figure('dollar', usd(f.costUsd), 'Spend at API prices', spend.join(' · ') || '—'),
     Figure('hand', f.needs, 'Waiting on you', first ? needLine(first) : 'Nothing waits on you', first ? () => goToNeed(first) : null),
   ].filter(Boolean);
   return h('div', { key: 'figures', class: 'kpis', style: { '--n': String(tiles.length) }, role: 'group', 'aria-label': 'Figures' }, tiles);
@@ -3624,7 +3625,13 @@ function InspectStat(label, value, extra) {
   return h('div', { key: label, class: 'ins-stat' }, h('p', { class: 'ins-label' }, label), h('p', { class: 'ins-value' }, value), extra || null);
 }
 
-/** Spend: the context, the spend and the tokens, then each agent's tokens, requests, tool calls and failures. */
+/** What the spend is, said once under the figures, as the pane says it: /cost's estimate at API list prices, the runs it drops, and a fork's parent counted in. */
+function spendNote() {
+  const fork = S.session.isFork ? ' As a fork, it includes its parent session’s.' : '';
+  return `Claude Code’s /cost estimate at API list prices, not a bill on a subscription; it drops earlier runs that didn’t close normally (a crash, a kill or a shutdown).${fork}`;
+}
+
+/** Spend: the context, the spend and the tokens, then what the spend is, then each agent's tokens, requests, tool calls and failures. */
 function InspectSection() {
   const ins = S.inspect;
   const sum = total(ins.agents, a => a.tokens.in + a.tokens.out + a.tokens.cacheRead);
@@ -3634,9 +3641,10 @@ function InspectSection() {
     h('div', { key: 'stats', class: 'ins-stats' },
       InspectStat('Context', pct == null ? '—' : `${Math.round(pct)}%`,
         pct != null && h('span', { class: 'bar' }, h('span', { class: `bar-fill${pct >= 80 ? ' hot' : ''}`, style: { width: `${clamp(pct, 0, 100)}%` } }))),
-      InspectStat('Spend', usd(ins.costUsd)),
+      InspectStat('At API prices', usd(ins.costUsd)),
       InspectStat('Tokens', num(sum)),
       InspectStat('Agents', String(ins.agents.length))),
+    ins.costUsd != null && h('p', { key: 'note', class: 'ins-note' }, spendNote()),
     h('div', { key: 'by', class: 'ins-by' },
       h('p', { class: 'ins-caption' }, 'Tokens by agent'),
       ins.agents.length
@@ -4013,7 +4021,7 @@ function sessionsOf(x) {
       id: r.id, isMe: r.isMe === true, title: str(r.title) || 'No request yet', state, stateText: str(r.stateText) || STATE_TEXT[state],
       surface: str(r.surface), place: str(r.place), repo: str(r.repo), cwd: str(r.cwd),
       need: typeof r.need === 'string' && r.need ? r.need : null, say: str(r.say), working: numOr(r.working, 0),
-      costUsd: numOr(r.costUsd), cost: str(r.cost), at: numOr(r.at, 0), startedAt: numOr(r.startedAt, 0),
+      costUsd: numOr(r.costUsd), cost: str(r.cost), costNote: str(r.costNote), at: numOr(r.at, 0), startedAt: numOr(r.startedAt, 0),
       canOpen: r.canOpen === true, canSteer: r.canSteer === true,
     };
   });
@@ -4141,7 +4149,7 @@ function SessionsPage() {
       : 'No other session here runs Agent Deck now. Each one that does shows here, Desktop and terminal alike.'));
 }
 
-/** One session: its state's dot; its title and "this chat"; where it runs and what it waits on you for (amber) or is doing; its word, spend and age. */
+/** One session: its state's dot; its title and "this chat"; where it runs and what it waits on you for (amber) or is doing; its word, spend and age, a fork's "incl. its parent's" under its word and spend. */
 function SessionRow(r) {
   const href = r.isMe ? '#/now' : r.canOpen ? `#/s/${encodeURIComponent(r.id)}/now` : null;
   const kids = [
@@ -4157,10 +4165,12 @@ function SessionRow(r) {
     h('span', { class: `sess-state is-${r.state}` }, r.stateText),
     h('span', { class: 'sess-cost' }, r.cost),
     h('span', { class: 'sess-age' }, ageOf(r.at)),
+    r.costNote && h('span', { class: 'sess-cost-note' }, r.costNote),
   ];
+  const cls = `sess-row${r.isMe ? ' is-me' : ''}${r.costNote ? ' is-fork' : ''}`;
   return href
-    ? h('a', { key: r.id, class: `sess-row${r.isMe ? ' is-me' : ''}`, href, 'data-nav': '', title: r.cwd }, kids)
-    : h('div', { key: r.id, class: 'sess-row', title: r.cwd }, kids);
+    ? h('a', { key: r.id, class: cls, href, 'data-nav': '', title: r.cwd }, kids)
+    : h('div', { key: r.id, class: cls, title: r.cwd }, kids);
 }
 
 function boot() {

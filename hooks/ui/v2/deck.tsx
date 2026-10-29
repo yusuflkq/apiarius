@@ -3,7 +3,7 @@
  * design the web page and the terminal draw:
  *
  * - the header: the session's state in one word, your latest request in
- *   your words, then `model · permission mode · context % · $cost`, the mode
+ *   your words, then `model · permission mode · context % · ≈$cost`, the mode
  *   in amber (bypass permissions in red) as Claude Code's footer marks it;
  * - the tabs, `1` Dashboard · `2` Chat · `3` Org · `4` Changes · `5`
  *   Inspect · `6` Settings (the Dashboard's id stays `now`);
@@ -66,7 +66,7 @@ export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckM
 const STATE_HUE: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.runText, waiting: P.waitText, idle: P.muted }
 const STATE_DOT: Readonly<Record<WebStateV2['header']['state'], string>> = { working: P.run, waiting: P.wait, idle: P.idleDot }
 
-/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · mode · context % · $cost`, the mode lit, and, once the sessions on this machine are known, "All sessions" (`s`). */
+/** The header: the state's word and your latest request (Stop turn at its right while the main loop's turn runs, ./stop), then `model · mode · context % · ≈$cost`, the mode lit, and, once the sessions on this machine are known, "All sessions" (`s`). */
 function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const head = state.header

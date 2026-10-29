@@ -68,6 +68,8 @@ let sessionId = ''
 let pluginRoot = ''
 let usage: UsageInfo | null = null
 let usageAt = 0
+/** How this process's session began, as Claude Code's SessionStart said it just before `session.start`: '' until it has, and after a reload (its snapshot keeps `data.isFork`). */
+let startedAs = ''
 let fileDiff: G.FileDiff | null = null
 let commit: G.CommitDetail | null = null
 let isPaneOpen = false
@@ -2038,6 +2040,17 @@ function usageOf(raw: Awaited<ReturnType<EngineInterface['session']['usage']>>):
   }
 }
 
+/**
+ * How the session began, as Claude Code's SessionStart says it: a fork's
+ * /cost total starts at the session it was forked from (which the engine
+ * does not name), so its spend counts that one's; a fresh start, a resume
+ * or a /clear is no fork. A compaction says nothing of it.
+ */
+function noteStart(source: string) {
+  if (source === 'fork') data.isFork = true
+  else if (source !== 'compact') delete data.isFork
+}
+
 async function loadUsage($: EngineInterface): Promise<void> {
   try {
     usage = usageOf(await $.session.usage())
@@ -3169,6 +3182,8 @@ export const register: Register = on => {
       data = M.emptyData(now)
       view = M.defaultView()
     }
+    // Claude Code's SessionStart, heard just before: whether the session is a fork (a reload hears none, its snapshot keeping it)
+    if (startedAs !== '') noteStart(startedAs)
 
     try {
       const prefs = await $.store.get('prefs')
@@ -4104,10 +4119,23 @@ export const register: Register = on => {
     return result
   })
 
-  // the engine measured the session (after each main-thread turn): the breakdown read again, at most every 10 s
+  // the engine measured the session (after each main-thread turn): the breakdown read again, at most every 10 s; the spend and the context read again when they moved, the deck shut or not, so the header, state.json and this deck's registry file follow
   on('session.measure', async ($, e, next) => {
     const result = await next(e)
     void readContextSoon($)
+    if (e.changed.includes('cost') || e.changed.includes('context')) void loadUsage($)
+    return result
+  })
+
+  // how the main loop's session began (Claude Code's SessionStart): a fork's spend counts the session it was forked from
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agent_id !== undefined) return result
+    startedAs = e.source
+    const wasFork = data.isFork === true
+    noteStart(e.source)
+    // before session.start the deck has nothing to show yet: session.start applies it
+    if (sessionId !== '' && (data.isFork === true) !== wasFork) touched($, await $.clock.now())
     return result
   })
 

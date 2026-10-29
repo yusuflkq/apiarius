@@ -9,8 +9,8 @@
  *   back): a row a session, this chat first. Each row: its state's dot, its
  *   title (a press opens its deck) and "this chat"; where it runs (its
  *   surface's icon, its place and its repository) and what it waits on you
- *   for (amber) or what it is doing; its state's word, its spend and how
- *   long since it changed;
+ *   for (amber) or what it is doing; its state's word, its spend (a fork's
+ *   "incl. its parent's" under it) and how long since it changed;
  * - over another session's deck (`viewingBar`): "Viewing <title>", where it
  *   runs, whether its deck takes answers from here, and Back to this chat.
  *
@@ -146,7 +146,9 @@ function lineRoom(kit: Kit, isWord: boolean, isCost: boolean, hasIcon: boolean):
  * One session: its dot; its title (its deck's Open), cut to the room
  * "this chat" leaves, then where it runs and what it says, each cut before
  * it reaches the next; its word, spend and age, the spend and then the word
- * left out where the pane is narrow.
+ * left out where the pane is narrow. A fork's spend says under it that it
+ * counts its parent's ("incl. its parent's"), its line under the word and
+ * the spend, ending where the spend does.
  */
 function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
@@ -159,6 +161,32 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
   const isCost = kit.columns >= COST_FROM
   // where it runs stays whole while the line has room for it: what it says gives way first
   const whereWidth = Math.min(Math.ceil(cellsOf(where, wrapAdvanceOf(kit))), lineRoom(kit, isWord, isCost, icon !== null))
+  const right = [
+    isWord ? (
+      <Box flexShrink={0} width={WORD} justifyContent="flex-end">
+        <Text color={HUE[row.state]}>{row.stateText}</Text>
+      </Box>
+    ) : null,
+    isCost ? (
+      <Box flexShrink={0} width={COST} justifyContent="flex-end">
+        <Text color={P.muted2}>{row.cost}</Text>
+      </Box>
+    ) : null,
+    <Box flexShrink={0} width={AGE} justifyContent="flex-end">
+      <Text color={P.muted2}>{row.age}</Text>
+    </Box>,
+  ]
+  const noted =
+    isCost && row.costNote !== '' ? (
+      <Box key={`session-cost:${row.id}`} flexDirection="column" flexShrink={0} alignItems="flex-end">
+        <Box flexDirection="row" columnGap={1}>
+          {right}
+        </Box>
+        <Box paddingRight={AGE + 1}>
+          <Text color={P.muted2}>{row.costNote}</Text>
+        </Box>
+      </Box>
+    ) : null
   return listRow(kit, `session-row:${row.id}`, [
     <Box flexShrink={0}>
       <Text color={DOT[row.state]}>●</Text>
@@ -186,19 +214,7 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
         ) : null}
       </Box>
     </Box>,
-    isWord ? (
-      <Box flexShrink={0} width={WORD} justifyContent="flex-end">
-        <Text color={HUE[row.state]}>{row.stateText}</Text>
-      </Box>
-    ) : null,
-    isCost ? (
-      <Box flexShrink={0} width={COST} justifyContent="flex-end">
-        <Text color={P.muted2}>{row.cost}</Text>
-      </Box>
-    ) : null,
-    <Box flexShrink={0} width={AGE} justifyContent="flex-end">
-      <Text color={P.muted2}>{row.age}</Text>
-    </Box>,
+    ...(noted ? [noted] : right),
   ])
 }
 

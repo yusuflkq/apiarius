@@ -38,9 +38,9 @@ export function num(n: number | null | undefined): string {
   return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`
 }
 
-/** "$6.42"; "—" while the spend is not known. */
+/** The session's spend, "≈$6.42": /cost's estimate at API list prices, never a bill; "—" while it is not known. */
 export function usd(x: number | null | undefined): string {
-  return x === null || x === undefined ? '—' : `$${x.toFixed(2)}`
+  return x === null || x === undefined ? '—' : `≈$${x.toFixed(2)}`
 }
 
 /** A call's time: "840ms", "2.4s", "12s", then minutes; '' when not known. */

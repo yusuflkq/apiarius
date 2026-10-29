@@ -20,7 +20,7 @@
     "contextPercent": 41,
     "costUsd": 4.12,
     "mode": "auto mode",
-    "line": "opus-5.5 · auto mode · context 41% · $4.12",
+    "line": "opus-5.5 · auto mode · context 41% · ≈$4.12",
     "turn": {
       "id": "turn-7c1e",
       "at": 1792012860000
@@ -1603,7 +1603,7 @@
       "context": "41% · compacted 2 times",
       "permissions": "7 decisions · 1 waiting on you · 1 denied · 1 blocked",
       "loaded": "3 instruction files · 4 memory files · 23 skills · 2 MCP servers · 2 hooks",
-      "spend": "$4.12 · 2.3M tokens"
+      "spend": "≈$4.12 · 2.3M tokens"
     },
     "context": {
       "text": "82.2k of 200k",

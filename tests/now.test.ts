@@ -228,7 +228,8 @@ test('the figures, as the engine counts them: agents running with n waiting · n
     expect(running).toContain('2 waiting · 3 done · 1 failed · 1 stopped')
     expect((await ui.find({ key: 'tile:plan' }))?.text).toContain('1/3')
     const spend = (await ui.find({ key: 'tile:spend' }))!.text
-    expect(spend).toContain('$4.12')
+    expect(spend).toContain('≈$4.12')
+    expect(spend).toContain('Spend at API prices')
     expect(spend).toContain('2.3M tokens · 40 min · context 41%')
     const waiting = (await ui.find({ key: 'tile:waiting' }))!.text
     expect(waiting).toContain('4')
@@ -335,7 +336,7 @@ test('each section`s head is one plain Button, "▾ AGENTS 8"; a press folds it 
     expect((await ui.find({ key: 'now:agents' }))?.text).toContain('· 2 waiting · 1 failed · 1 stopped · 3 done')
     await press(ui, 'fold:dash:figures')
     expect(await ui.find({ key: 'tile:running' })).toBeUndefined()
-    expect((await ui.find({ key: 'now:figures' }))?.text).toContain('1 running · 1/3 steps · $4.12 · 4 waiting on you')
+    expect((await ui.find({ key: 'now:figures' }))?.text).toContain('1 running · 1/3 steps · ≈$4.12 · 4 waiting on you')
     await press(ui, 'fold:dash:plan')
     expect((await ui.find({ key: 'now:plan' }))?.text).not.toContain('Task board')
     // a new drawing of the pane keeps them folded

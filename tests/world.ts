@@ -70,6 +70,8 @@ export type World = {
   checkFails: number
   /** How many redraws the deck asked for (`$.ui.invalidate`). */
   invalidates: number
+  /** What /cost totals (`session.usage`'s `cost.usd`), when the test moves it; left out, $1.25. */
+  costUsd?: number
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -137,7 +139,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
   on('session.id', () => ({ value: 'session-1' }))
   on('session.model', () => ({ value: 'claude-test' }))
-  on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [], cost: { usd: 1.25 } } }))
+  on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [], cost: { usd: w.costUsd ?? 1.25 } } }))
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [] }))
   on('process.run', ($, e) =>

@@ -8,7 +8,8 @@
  * (web/fixtures/sessions/<id>/state.json and agents/), for `/deck demo`,
  * `web/dev.js` and the tests.
  *
- * - Agent Deck terminal faces (the Desktop, agent-deck): two agents at work.
+ * - Agent Deck terminal faces (the Desktop, agent-deck): two agents at work;
+ *   a fork of another session, so its spend counts its parent's.
  * - Fix the flaky CI job (Windows Terminal, api-server): the Orchestrator's
  *   own `gh run view` in flight.
  * - Landing page copy (a terminal, site): its `rm -rf dist` waits on your OK.
@@ -58,9 +59,10 @@ const CI = 'C:\\Users\\sam\\code\\api-server'
 const SITE = 'C:\\Users\\sam\\code\\site'
 const NOTES = 'C:\\Users\\sam\\notes'
 
-/** Agent Deck terminal faces: on the Desktop, builder's tests and painter's edit in flight. */
+/** Agent Deck terminal faces: on the Desktop, builder's tests and painter's edit in flight; begun as a fork of another session (`claude --resume … --fork-session`). */
 function faces(): SampleDeck {
   const { data } = begun(25, 'Agent Deck terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it.')
+  data.isFork = true
   const builder = started(data, { id: 'c1a2b3c4d5e6f708', name: 'builder', description: 'Build and test the faces', prompt: 'Add terminalFace to web/avatars.mjs and run the tests.', at: ago(20) })
   M.beginTool(data, builder, M.activityOf('toolu_fc_b1', 'Bash', { command: 'npm test', description: 'Run the tests' }, FACES, ago(0.6)))
   const painter = started(data, { id: 'd1e2f3a4b5c6d708', name: 'painter', description: 'Draw the glyphs', prompt: 'Draw a glyph per agent in hooks/ui/v2/look.tsx.', at: ago(18) })

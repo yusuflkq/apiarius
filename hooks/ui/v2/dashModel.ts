@@ -352,8 +352,8 @@ export function needLine(need: V2Need): string {
 
 /**
  * The figures' tiles: agents running ("n waiting · n done · n failed"), the
- * plan's items only where Claude made a plan, the session's spend ("tokens ·
- * min · context"), and what waits on you.
+ * plan's items only where Claude made a plan, the session's spend at API
+ * prices (/cost's estimate: "tokens · min · context"), and what waits on you.
  */
 export function tilesOf(state: WebStateV2, figures: V2Figures): Tile[] {
   const f = figures
@@ -366,7 +366,7 @@ export function tilesOf(state: WebStateV2, figures: V2Figures): Tile[] {
     tiles.push({ key: 'plan', value: `${f.plan.done}/${f.plan.total}`, label: 'Plan steps', desc })
   }
   const spend = [f.tokens > 0 ? `${num(f.tokens)} tokens` : '', f.minutes < 1 ? '<1 min' : `${f.minutes} min`, f.contextPercent === null ? '' : `context ${Math.round(f.contextPercent)}%`].filter(Boolean).join(' · ')
-  tiles.push({ key: 'spend', value: usd(f.costUsd), label: 'Session spend', desc: spend || '—' })
+  tiles.push({ key: 'spend', value: usd(f.costUsd), label: 'Spend at API prices', desc: spend || '—' })
   const first = state.needs[0]
   tiles.push({ key: 'waiting', value: String(f.needs), label: 'Waiting on you', desc: first ? needLine(first) : 'Nothing waits on you' })
   return tiles
@@ -550,7 +550,7 @@ export function agentsFoldOf(state: WebStateV2): string {
   return said || (agentRowsOf(state).length === 0 ? 'none yet' : '')
 }
 
-/** The figures folded: each one's value in a few words ("2 running · 1/3 steps · $0.42 · 1 waiting on you"). */
+/** The figures folded: each one's value in a few words ("2 running · 1/3 steps · ≈$0.42 · 1 waiting on you"). */
 export function figuresFoldOf(state: WebStateV2): string {
   const f = figuresOf(state)
   return foldLine([`${f.running} running`, f.plan ? `${f.plan.done}/${f.plan.total} steps` : '', usd(f.costUsd), `${f.needs} waiting on you`])

@@ -472,10 +472,16 @@ function figuresOf(inspect: V2Inspect): { key: string; value: string; label: str
   const sum = (of: (agent: InspectAgent) => number) => inspect.agents.reduce((total, agent) => total + of(agent), 0)
   return [
     { key: 'context', value: inspect.contextPercent !== null ? `${Math.round(inspect.contextPercent)}%` : '—', label: 'Context used' },
-    { key: 'spend', value: usd(inspect.costUsd), label: 'Spent' },
+    { key: 'spend', value: usd(inspect.costUsd), label: 'At API prices' },
     { key: 'tokens', value: num(sum(agent => agent.tokens.in + agent.tokens.out + agent.tokens.cacheRead)), label: 'Tokens' },
     { key: 'requests', value: num(sum(agent => agent.requests)), label: 'Requests' },
   ]
+}
+
+/** What the spend is, said once under the figures, as the page says it: /cost's estimate at API list prices, the runs it drops, and a fork's parent counted in. */
+function spendNoteOf(state: WebStateV2): string {
+  const fork = state.session.isFork === true ? ' As a fork, it includes its parent session’s.' : ''
+  return `Claude Code’s /cost estimate at API list prices, not a bill on a subscription; it drops earlier runs that didn’t close normally (a crash, a kill or a shutdown).${fork}`
 }
 
 /** The table's number columns: each one's head, its cells across, and its value for an agent. */
@@ -509,6 +515,7 @@ function spendSection(kit: Kit, state: WebStateV2, fold: Fold, actions: DashActi
   const more = inspect.agents.length - agents.length
   return section(kit, 'inspect:spend', head, [
     tiles(kit, figuresOf(inspect), across),
+    inspect.costUsd !== null ? quiet(kit, spendNoteOf(state)) : null,
     inspect.contextPercent === null && inspect.costUsd === null ? quiet(kit, 'The context and the spend show once Claude Code reports them.') : null,
     agents.length === 0 ? (
       quiet(kit, 'No agent has made a request yet: each agent’s tokens, requests and tool calls show here.')

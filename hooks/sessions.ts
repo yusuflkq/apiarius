@@ -11,7 +11,8 @@
  *   once its process is gone (or long after).
  * - **The list** (`SessionsV2`, the v2 state's `sessions`): each session's
  *   state in a word, its title, where it runs, what it waits on you for or
- *   what it is doing, its spend and how long since it changed. This chat
+ *   what it is doing, its spend (/cost's estimate at API list prices, a
+ *   fork's counting its parent's) and how long since it changed. This chat
  *   first, then the others, the newest started first, so rows stay put.
  * - **Opening one.** A session's deck shows from its state folder (the
  *   `state.json` and lazy files `/deck web` writes). A deck writes them only
@@ -78,8 +79,10 @@ export type SessionEntry = {
   working: number
   /** What it is doing, in a line, from its rows' calls in flight ("builder: Bash npm test"), else its latest answer when idle; '' for neither. */
   live: string
-  /** Its spend, as /cost reports it; null while unknown. */
+  /** Its spend, as /cost reports it (an estimate at API list prices); null while unknown. */
   costUsd: number | null
+  /** It began as a fork of another session (Claude Code's SessionStart said so): its spend counts that one's. The engine does not say which. Absent for any other. */
+  isFork?: true
   startedAt: number
   /** When what it shows last changed. */
   updatedAt: number
@@ -117,8 +120,10 @@ export type SessionRowV2 = {
   say: string
   working: number
   costUsd: number | null
-  /** "$4.12"; '' while unknown. */
+  /** "≈$4.12", whole dollars from $100 ("≈$491"); '' while unknown. */
   cost: string
+  /** Under it, for a fork's: "incl. its parent's" (its spend began at the session it was forked from); '' for any other, and while the spend is unknown. */
+  costNote: string
   /** When what it shows last changed, and how long ago: "now", "3m", "2h". */
   at: number
   age: string
@@ -280,6 +285,7 @@ export function entryOf(
     working: state.agents.filter((row): row is V2AgentRow => row.row === 'agent' && isWorkingAgent(row)).length,
     live: liveLineOf(state),
     costUsd: state.header.costUsd,
+    ...(state.session.isFork === true ? { isFork: true as const } : {}),
     startedAt: state.session.startedAt,
     updatedAt: facts.updatedAt,
     heartbeatAt: facts.heartbeatAt,
@@ -322,6 +328,7 @@ export function entryFromText(text: string): SessionEntry | null {
     working: Math.max(0, num(value.working)),
     live: str(value.live, 200),
     costUsd: typeof value.costUsd === 'number' && Number.isFinite(value.costUsd) ? value.costUsd : null,
+    ...(value.isFork === true ? { isFork: true as const } : {}),
     startedAt: num(value.startedAt),
     updatedAt: num(value.updatedAt),
     heartbeatAt: num(value.heartbeatAt),
@@ -351,9 +358,10 @@ export function staleStepOf(entry: SessionEntry, now: number, isAlive: boolean |
   return isAlive === true ? 'keep' : 'check'
 }
 
-/** "$4.12"; '' while unknown. */
+/** "≈$4.12", /cost's estimate at API list prices, whole dollars from $100 ("≈$491", so it keeps to its column); '' while unknown. */
 function costOf(usd: number | null): string {
-  return usd === null ? '' : `$${usd.toFixed(2)}`
+  if (usd === null) return ''
+  return usd < 100 ? `≈$${usd.toFixed(2)}` : `≈$${Math.round(usd)}`
 }
 
 /** A folder's last part: the place a session runs in when it has no repository. */
@@ -395,6 +403,7 @@ function rowOf(entry: SessionEntry, isMe: boolean, now: number): SessionRowV2 {
     working: entry.working,
     costUsd: entry.costUsd,
     cost: costOf(entry.costUsd),
+    costNote: entry.isFork === true && entry.costUsd !== null ? 'incl. its parent’s' : '',
     at: entry.updatedAt,
     age: entry.updatedAt > 0 ? F.since(now - entry.updatedAt) : '',
     startedAt: entry.startedAt,
