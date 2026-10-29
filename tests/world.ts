@@ -56,6 +56,8 @@ export type World = {
   git?: (argv: readonly string[]) => { exitCode: number; stdout: string }
   /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
   files?: Readonly<Record<string, string>>
+  /** What `fs.stat` says of a path, when the test says (null: there is none); left out, every path is a file of 12 bytes, as old as NOW. */
+  stat?: (path: string) => { size: number; mtimeMs: number } | null
   /** The plugin's own store (`$.store`: the person's prefs), when the test reads it back; left out, the testing kit's store in memory. */
   store?: Map<string, unknown>
   /** Each pane opened (`$.ui.open`), as asked: its id, and the body rows it asked for. */
@@ -66,6 +68,8 @@ export type World = {
   aborted: string[]
   /** How many of a plugin's own permission checks (`$.tool.check`, no call) reject next, as one asked inside a turn being stopped does. */
   checkFails: number
+  /** How many redraws the deck asked for (`$.ui.invalidate`). */
+  invalidates: number
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -89,6 +93,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     checks: [],
     aborted: [],
     checkFails: 0,
+    invalidates: 0,
     ...extra,
   }
 }
@@ -117,7 +122,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   })
   on('ui.close', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
-  on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.invalidate', () => {
+    w.invalidates += 1
+    return { value: undefined }
+  })
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -147,7 +155,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     })
   }
   on('fs.exists', () => ({ value: false }))
-  on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }))
+  on('fs.stat', ($, e) => {
+    const said = w.stat ? w.stat(e.path) : { size: 12, mtimeMs: NOW }
+    return said ? { value: { kind: 'file', size: said.size, mtimeMs: said.mtimeMs, isLink: false } } : { deny: 'no such file' }
+  })
   on('fs.write', ($, e) => {
     w.writes.push({ path: e.path, text: e.text })
     return { value: undefined }

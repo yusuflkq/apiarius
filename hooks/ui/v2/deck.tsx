@@ -74,7 +74,7 @@ function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElemen
   // the permission mode in the line, lit as Claude Code's footer lights it (a state of an earlier build names none)
   const mode = typeof head.mode === 'string' ? head.mode : ''
   const at = mode !== '' ? head.line.indexOf(mode) : -1
-  // three parts in a row, so the mode keeps its own colour and the line cuts at its end: the model and the mode whole, the rest cut to the room left
+  // three parts in a row, so the mode keeps its own colour and the line cuts at its end: the model and the mode whole, the rest cut to the room left; in a pane too narrow even for them, their row cuts them, never drawing under All sessions
   const lineParts =
     at < 0
       ? [
@@ -120,7 +120,7 @@ function header(kit: Kit, state: WebStateV2, actions: DashActions): RenderElemen
         {stopTurnButton(kit, state, actions)}
       </Box>
       <Box flexDirection="row" columnGap={2}>
-        <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row">
+        <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" overflow="hidden">
           {lineParts}
         </Box>
         {sessionsButton(kit, state.sessions, actions)}

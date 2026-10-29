@@ -53,20 +53,24 @@ function surfaceIcon(kit: Kit, row: SessionRowV2): RenderElement | null {
   return <Svg source={surfaceSvg(which, P.muted2, 12)} alt={row.place} width={12} height={12} />
 }
 
+/** Narrower than this, the header's way in says "◆ 1" alone, as the page's header does when narrow. */
+const NEED_WORDS_FROM = 64
+
 /**
  * The header's way in: "All sessions" (hotkey `s`), after "◆ 1 other
- * session needs you" in amber while another session waits on you. Nothing
- * before the registry was read.
+ * session needs you" in amber while another session waits on you ("◆ 1"
+ * where the pane is narrow). Nothing before the registry was read.
  */
 export function sessionsButton(kit: Kit, view: SessionsV2 | undefined, actions: DashActions): RenderElement | null {
   const { Box, Text } = kit
   if (!view) return null
   const waiting = view.others.waiting
+  const words = kit.columns >= NEED_WORDS_FROM ? ` other ${waiting === 1 ? 'session needs' : 'sessions need'} you` : ''
   return (
     <Box key="deck:sessions" flexDirection="row" columnGap={1} flexShrink={0} alignItems="center">
       {waiting > 0 ? (
         <Box flexShrink={0}>
-          <Text color={P.waitText}>{`◆ ${waiting} other ${waiting === 1 ? 'session needs' : 'sessions need'} you`}</Text>
+          <Text color={P.waitText}>{`◆ ${waiting}${words}`}</Text>
         </Box>
       ) : null}
       <Box flexShrink={0}>{keyButton(kit, 'key:s', SESSIONS_KEY, 'All sessions', () => actions.openSessions(), waiting === 0)}</Box>
@@ -116,10 +120,23 @@ const WORD = 15
 const COST = 7
 const AGE = 4
 
-/** One session: its dot; its title (its deck's Open) and "this chat", then where it runs and what it says; its word, spend and age. */
+/** Narrower than these cells a row leaves out its spend, then its state's word (its dot says it), as the page's list does: its title and what it says keep the room. */
+const COST_FROM = 64
+const WORD_FROM = 48
+
+/** How much faster what a session says gives way than where it runs when its line runs short: as on the page, its place and repository are cut only once it has gone. */
+const SAY_SHRINK = 100
+
+/**
+ * One session: its dot; its title (its deck's Open), cut to the room
+ * "this chat" leaves, then where it runs and what it says, each cut before
+ * it reaches the next; its word, spend and age, the spend and then the word
+ * left out where the pane is narrow.
+ */
 function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const open = () => (row.isMe ? actions.closeSessions() : actions.openSession(row.id))
+  // in a column Box beside the tag: the title's line is then no wider than the room the tag leaves, and cuts there
   const title = row.isMe || row.canOpen ? pressText(kit, `session:${row.id}`, [<Text bold color={P.text} wrap="truncate-end">{row.title}</Text>], open) : <Text bold color={P.text} wrap="truncate-end">{row.title}</Text>
   const where = [row.place, row.repo].filter(part => part !== '').join(' · ')
   const icon = surfaceIcon(kit, row)
@@ -129,18 +146,20 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
     </Box>,
     <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
       <Box flexDirection="row" columnGap={1} alignItems="center">
-        <Box flexShrink={1} minWidth={0}>
+        <Box flexDirection="column" flexShrink={1} minWidth={0}>
           {title}
         </Box>
         {row.isMe ? <Box flexShrink={0}>{tag(kit, 'this chat')}</Box> : null}
       </Box>
       <Box flexDirection="row" columnGap={1} alignItems="center">
         {icon ? <Box flexShrink={0}>{icon}</Box> : null}
-        <Box flexShrink={0}>
-          <Text color={P.muted2}>{where}</Text>
+        <Box flexShrink={1} minWidth={0}>
+          <Text color={P.muted2} wrap="truncate-end">
+            {where}
+          </Text>
         </Box>
         {row.say !== '' ? (
-          <Box flexShrink={1} minWidth={0}>
+          <Box flexShrink={SAY_SHRINK} minWidth={0}>
             <Text color={row.need !== null ? P.waitNote : P.muted} wrap="truncate-end">
               {`· ${row.say}`}
             </Text>
@@ -148,12 +167,16 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
         ) : null}
       </Box>
     </Box>,
-    <Box flexShrink={0} width={WORD} justifyContent="flex-end">
-      <Text color={HUE[row.state]}>{row.stateText}</Text>
-    </Box>,
-    <Box flexShrink={0} width={COST} justifyContent="flex-end">
-      <Text color={P.muted2}>{row.cost}</Text>
-    </Box>,
+    kit.columns >= WORD_FROM ? (
+      <Box flexShrink={0} width={WORD} justifyContent="flex-end">
+        <Text color={HUE[row.state]}>{row.stateText}</Text>
+      </Box>
+    ) : null,
+    kit.columns >= COST_FROM ? (
+      <Box flexShrink={0} width={COST} justifyContent="flex-end">
+        <Text color={P.muted2}>{row.cost}</Text>
+      </Box>
+    ) : null,
     <Box flexShrink={0} width={AGE} justifyContent="flex-end">
       <Text color={P.muted2}>{row.age}</Text>
     </Box>,
@@ -163,38 +186,62 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
 /** What a deck viewing another session shows over it: its row (when the list holds it), whether its deck takes answers from here, and why it is not shown yet. */
 export type Viewing = { id: string; row: SessionRowV2 | null; canSteer: boolean; note: string }
 
+/** Narrower than this, the bar's All sessions and Back to this chat go on a line of their own, under "Viewing" and the title. */
+const BAR_LINE_FROM = 64
+
 /**
  * The bar over another session's deck: "Viewing" and its title, where it
- * runs, then what can be done from here (answers and messages go to its own
- * deck, or "Answer it in its window"), with All sessions (`s`) and Back to
- * this chat.
+ * runs (cut first, then the title, where the bar is short), then what can
+ * be done from here (answers and messages go to its own deck, or "Answer it
+ * in its window"), with All sessions (`s`) and Back to this chat, beside
+ * the title or, where the pane is narrow, under it.
  */
 export function viewingBar(kit: Kit, viewing: Viewing, actions: DashActions): RenderElement {
   const { Box, Text, Button } = kit
   const row = viewing.row
   const where = row ? [row.place, row.repo].filter(part => part !== '').join(' · ') : ''
   const steer = viewing.canSteer ? 'Read-only: answers and messages go through its own deck.' : 'Read-only: answer it in its window.'
+  const title = (
+    <Box flexDirection="row" columnGap={2} flexGrow={1} flexShrink={1} minWidth={0} alignItems="center">
+      <Box flexShrink={0}>
+        <Text bold color={P.runText} backgroundColor="#172554">
+          {' Viewing '}
+        </Text>
+      </Box>
+      <Box flexShrink={1} minWidth={0}>
+        <Text bold color={P.text} wrap="truncate-end">
+          {row ? row.title : 'Another session'}
+        </Text>
+      </Box>
+      {where !== '' ? (
+        <Box flexShrink={SAY_SHRINK} minWidth={0}>
+          <Text color={P.muted2} wrap="truncate-end">
+            {where}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
+  const presses = (
+    <Box flexDirection="row" columnGap={2} flexShrink={0} alignItems="center">
+      <Box flexShrink={0}>{keyButton(kit, 'key:s', SESSIONS_KEY, 'All sessions', () => actions.openSessions())}</Box>
+      <Box flexShrink={0}>
+        <Button key="viewing:back" label="Back to this chat" variant="primary" onPress={() => actions.backToThisChat()} />
+      </Box>
+    </Box>
+  )
+  const isOneLine = kit.columns >= BAR_LINE_FROM
   return (
     <Box key="viewing:head" flexDirection="column">
-      <Box flexDirection="row" columnGap={2} alignItems="center">
-        <Box flexShrink={0}>
-          <Text bold color={P.runText} backgroundColor="#172554">
-            {' Viewing '}
-          </Text>
+      {isOneLine ? (
+        <Box flexDirection="row" columnGap={2} alignItems="center">
+          {title}
+          {presses}
         </Box>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text wrap="truncate-end">
-            <Text bold color={P.text}>
-              {row ? row.title : 'Another session'}
-            </Text>
-            {where !== '' ? <Text color={P.muted2}>{`  ${where}`}</Text> : null}
-          </Text>
-        </Box>
-        <Box flexShrink={0}>{keyButton(kit, 'key:s', SESSIONS_KEY, 'All sessions', () => actions.openSessions())}</Box>
-        <Box flexShrink={0}>
-          <Button key="viewing:back" label="Back to this chat" variant="primary" onPress={() => actions.backToThisChat()} />
-        </Box>
-      </Box>
+      ) : (
+        title
+      )}
+      {isOneLine ? null : presses}
       <Text color={P.muted} wrap="wrap">
         {viewing.note !== '' ? viewing.note : steer}
       </Text>

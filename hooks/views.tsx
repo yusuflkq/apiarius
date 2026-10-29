@@ -47,7 +47,8 @@ export function deckView(kit: Kit, model: DeckModel, actions: DeckActions, dash:
 /** Another session's deck, read-only, under its bar ("Viewing <title>", Back to this chat): its own state, lazy files, model and presses. */
 function viewedView(kit: Kit, viewing: NonNullable<DashModel['viewing']>, dash: DashModel): RenderElement {
   const { Box } = kit
-  const bar = viewingBar(kit, viewing.bar, viewing.actions)
+  // why its deck shows nothing yet is said once, where its deck will be; the bar says meanwhile what can be done from here
+  const bar = viewingBar(kit, viewing.state ? viewing.bar : { ...viewing.bar, note: '' }, viewing.actions)
   // the terminal: the deck gets the rows the bar and its gap leave
   const deck = kit.rows !== undefined ? { ...kit, rows: Math.max(1, kit.rows - rowsOf(bar, kit.columns) - 1) } : kit
   return (

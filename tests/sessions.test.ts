@@ -300,6 +300,56 @@ test('the others listed: the header`s "◆ 1 other session needs you" and All se
   await band.unmount()
 })
 
+/** An element as a drawing describes it. */
+type Node = { type?: string; key?: string; props?: Record<string, unknown>; children?: unknown[] }
+
+/** The elements under `el` (itself too) that `test` takes, in document order. */
+function nodesIn(el: unknown, test: (node: Node) => boolean): Node[] {
+  if (!el || typeof el !== 'object') return []
+  const node = el as Node
+  return [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => nodesIn(child, test))]
+}
+
+/** The words a drawn element holds, its strings and its images' alt text, run together. */
+function wordsIn(el: unknown): string {
+  if (typeof el === 'string' || typeof el === 'number') return String(el)
+  if (!el || typeof el !== 'object') return ''
+  const node = el as Node
+  return `${typeof node.props?.alt === 'string' ? node.props.alt : ''}${(node.children ?? []).map(wordsIn).join('')}`
+}
+
+test('All sessions at any width: the title cuts beside "this chat", which never shrinks; where it runs and what it says cut before the row`s right; the spend, then the state`s word, left out where the pane is narrow, and the header`s way in says "◆ 1" there', async ($, on) => {
+  const { clock } = await started($, on)
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    for (const columns of [84, 56, 40, 24]) {
+      const ui = await $.ui.mount(pane(surface, columns))
+      const drawn = await ui.drawn()
+      const [mine] = nodesIn(drawn, node => (node.key ?? node.props?.key) === 'session-row:session-1')
+      // the title's line: a column Box that may shrink to nothing, holding the title's Button, then the tag's Box, which never shrinks
+      const [line] = nodesIn(mine, node => node.type === 'Box' && node.children?.length === 2 && wordsIn(node.children[1]).includes('this chat'))
+      const [title, tagged] = (line?.children ?? []) as Node[]
+      expect(title?.props).toMatchObject({ flexDirection: 'column', flexShrink: 1, minWidth: 0 })
+      expect(nodesIn(title, node => (node.key ?? node.props?.key) === 'session:session-1').length).toBe(1)
+      expect(tagged?.props).toMatchObject({ flexShrink: 0 })
+      // where it runs and what it says: each may shrink, each cut at its end
+      const [other] = nodesIn(drawn, node => (node.key ?? node.props?.key) === `session-row:${OTHER}`)
+      const said = nodesIn(other, node => node.type === 'Text' && wordsIn(node).includes('Needs your OK'))[0]
+      expect(said?.props).toMatchObject({ wrap: 'truncate-end' })
+      expect(nodesIn(other, node => node.type === 'Box' && node.props?.flexShrink === 0 && nodesIn(node, one => one.type === 'Text' && wordsIn(one).includes('Terminal')).length > 0)).toEqual([])
+      // the right of a row: its state's word from 48 cells, its spend from 64, its age always
+      const words = wordsIn(other)
+      expect([words.includes('Waiting on you'), words.includes('$0.50')]).toEqual([columns >= 48, columns >= 64])
+      // the header's way in: its words where they fit, "◆ 1" alone where not
+      const header = wordsIn(nodesIn(drawn, node => (node.key ?? node.props?.key) === 'deck:sessions')[0])
+      expect(header.includes('◆ 1')).toBe(true)
+      expect(header.includes('other session needs you')).toBe(columns >= 64)
+      await ui.unmount()
+    }
+  }
+})
+
 test('a press on another session opens its deck read-only from its folder under "Viewing <title>", asks its deck through its inbox to keep writing it, and Back to this chat leaves it, telling its deck so', async ($, on) => {
   const { clock, w } = await started($, on)
   await $.command.run(deck('sessions'))
@@ -325,6 +375,90 @@ test('a press on another session opens its deck read-only from its folder under 
   expect(await ui.find({ key: 'viewing:head' })).toBeUndefined()
   const last = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile).at(-1)
   expect(last?.viewUntil).toBe(0)
+  await ui.unmount()
+})
+
+/** A world whose `fs.stat` answers from the test's disk: a file the disk lacks is missing, as Claude Code's own stat says. */
+function diskWorld(d: Disk): World {
+  return newWorld({
+    stat: path => {
+      const text = d.files.get(norm(path))
+      return text === undefined ? null : { size: text.length, mtimeMs: NOW + text.length }
+    },
+  })
+}
+
+test('another session`s deck that writes its state only once asked: "Asking its deck for its state…" once, where its deck will be, under a bar that says what can be done from here; then its deck at the next tick', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock } = await started($, on, diskWorld(d), d)
+  const written = d.files.get(`${OTHER_DIR}/state.json`)!
+  d.files.delete(`${OTHER_DIR}/state.json`)
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('terminal'))
+  const desktop = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(3000)
+  for (const one of [ui, desktop]) {
+    await one.redraw()
+    expect(JSON.stringify(await one.drawn()).split('Asking its deck for its state…').length - 1).toBe(1)
+    expect((await one.find({ key: 'viewing:head' }))?.text).toContain('Read-only: answers and messages go through its own deck.')
+    expect(await one.find({ key: 'deck:header' })).toBeUndefined()
+  }
+  // its deck read its inbox and wrote its state: it shows at the next tick
+  d.files.set(`${OTHER_DIR}/state.json`, written)
+  await clock.advance(2500)
+  for (const one of [ui, desktop]) {
+    await one.redraw()
+    expect((await one.find({ key: 'deck:header' }))?.text).toContain('Landing page copy')
+    expect(JSON.stringify(await one.drawn())).not.toContain('Asking its deck')
+  }
+  await ui.unmount()
+  await desktop.unmount()
+})
+
+test('another session`s deck that never answers says so within ANSWER_MS: it wrote no state, or one this deck cannot read; answer it in its window', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock } = await started($, on, diskWorld(d), d)
+  d.files.delete(`${OTHER_DIR}/state.json`)
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(S.ANSWER_MS + 2500)
+  await ui.redraw()
+  let drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('Its deck has not written its state: answer it in its window.')
+  expect(drawn).not.toContain('Asking its deck')
+  // a state an older build wrote, with no v2 in it: written, but not one this deck reads
+  d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, agents: [] }))
+  await clock.advance(2500)
+  await ui.redraw()
+  drawn = JSON.stringify(await ui.drawn())
+  expect(drawn.split('Its deck wrote a state this deck cannot read: answer it in its window.').length - 1).toBe(1)
+  await ui.unmount()
+})
+
+test('with the registry on, ticks that change nothing draw nothing again and write no state again, here or for a deck viewing this one', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, newWorld(), d)
+  await $.command.run(deck(''))
+  const ui = await $.ui.mount(pane('desktop'))
+  await clock.advance(3000)
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('◆ 1 other session needs you')
+  w.invalidates = 0
+  await clock.advance(10_000)
+  expect(w.invalidates).toBe(0)
+  // other-1 views this session: its state is written once, then again only when it says something new
+  const dir = norm(ownEntries(w)[0]!.dir)
+  d.files.set(`${dir}/inbox/${OTHER}.json`, JSON.stringify({ v: 1, from: OTHER, at: NOW, viewUntil: NOW + S.VIEW_MS, cmds: [] }))
+  await clock.advance(3000)
+  const states = () => w.writes.filter(one => norm(one.path) === `${dir}/state.json`).length
+  const first = states()
+  expect(first).toBeGreaterThan(0)
+  w.invalidates = 0
+  await clock.advance(10_000)
+  expect([states(), w.invalidates]).toEqual([first, 0])
   await ui.unmount()
 })
 

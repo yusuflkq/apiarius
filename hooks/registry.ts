@@ -104,7 +104,12 @@ type Viewed = {
   /** When its deck was last asked to keep writing (its inbox). */
   askedAt: number
   isReading: boolean
+  /** When the read under way began: one past `READ_HUNG_MS` is let go, so a read that never ends holds no other back. */
+  readingAt: number
 }
+
+/** A read of the session viewed that has not ended after this long is let go: the next tick reads again. */
+const READ_HUNG_MS = 10_000
 
 const reg = {
   /** The registry folder; '' while it is off (no home known, as in the tests). */
@@ -449,14 +454,11 @@ async function isListed(id: string, now: number): Promise<boolean> {
 export async function registryTick(now: number, isWebOn: boolean): Promise<void> {
   if (reg.dir === '') return
   reg.tickAt = now
-  try {
-    await pollInbox(now)
-    if (reg.isOpen || reg.viewing !== null || isWebOn) await readRegistry(now)
-    for (const [id, until] of reg.looks) if (until <= now) reg.looks.delete(id)
-    if (reg.viewing) await readViewed(now)
-  } catch {
-    // the deck's own tick goes on: the next one reads again
-  }
+  for (const [id, until] of reg.looks) if (until <= now) reg.looks.delete(id)
+  // each read on its own, so none waits on another: a slow inbox or registry never holds the session viewed back
+  const reads = [pollInbox(now), reg.isOpen || reg.viewing !== null || isWebOn ? readRegistry(now) : null, reg.viewing ? readViewed(now) : null]
+  // the deck's own tick goes on whatever one of them met: the next one reads again
+  await Promise.all(reads.map(read => read?.catch(() => undefined)))
 }
 
 // ---------------------------------------------------------------- the list
@@ -572,6 +574,7 @@ export async function openSession(id: string, isSample = false): Promise<void> {
     openedAt: now,
     askedAt: now,
     isReading: false,
+    readingAt: 0,
   }
   reg.isOpen = false
   host.changed()
@@ -603,41 +606,38 @@ async function askView(id: string, dir: string, until: number): Promise<void> {
   }
 }
 
-/** Reads the session viewed again where its state.json moved (its lazy files with it), and asks its deck again every 30 s. */
+/**
+ * Reads the session viewed again where its state.json moved (its lazy files
+ * with it), and asks its deck again every 30 s. While nothing shows, its
+ * note says why: asking, then, past `S.ANSWER_MS`, that its deck wrote no
+ * state or one this deck cannot read, so it is answered in its window.
+ */
 async function readViewed(now: number): Promise<void> {
   const v = reg.viewing
-  if (!v || v.isReading) return
+  if (!v || (v.isReading && now - v.readingAt < READ_HUNG_MS)) return
   v.isReading = true
+  v.readingAt = now
+  let stamp = ''
   try {
     if (!v.isSample && now - v.askedAt >= S.VIEW_AGAIN_MS) {
       v.askedAt = now
       await askView(v.id, v.dir, now + S.VIEW_MS)
     }
-    let stamp = ''
     try {
       const stat = await io().stat(`${v.dir}/state.json`)
       stamp = `${stat.mtimeMs}:${stat.size}`
     } catch {
       stamp = ''
     }
-    if (stamp === '') {
-      const note = now - v.openedAt > 15_000 ? 'Its deck has not written its state: answer it in its window.' : 'Asking its deck for its state…'
-      if (note !== v.note && v.state === null) {
-        v.note = note
-        v.version += 1
-        reg.host?.refresh(now)
-      }
-      return
-    }
-    if (stamp === v.stamp) return
+    if (stamp === '' || stamp === v.stamp) return
     const text = S.stateFileV2Of(await io().read(`${v.dir}/state.json`))
     const built = text === null ? null : (JSON.parse(text) as { now?: unknown }).now
     const at = typeof built === 'number' ? built : now
     // the sample's times move to now, as `/deck demo`'s own; a live state's stay as its deck wrote them
     const state = text === null ? null : W.v2StateFromText(text, v.isSample ? now : at)
     if (!state || reg.viewing !== v) return
-    v.stamp = stamp
     await readLazy(v, state, v.isSample ? now - at : 0)
+    v.stamp = stamp
     v.state = S.viewedStateOf(state, v.canSteer && !v.isSample)
     v.note = ''
     v.version += 1
@@ -645,8 +645,18 @@ async function readViewed(now: number): Promise<void> {
   } catch {
     // half written: the next tick reads it again
   } finally {
-    v.isReading = false
+    if (v.readingAt === now) v.isReading = false
+    if (v.state === null && reg.viewing === v) noteWaiting(v, now, stamp !== '')
   }
+}
+
+/** Why the session viewed shows nothing yet, as its note says it: its deck asked, then (past `S.ANSWER_MS`) that it has not answered, or wrote what this deck cannot read. */
+function noteWaiting(v: Viewed, now: number, isWritten: boolean): void {
+  const note = now - v.openedAt <= S.ANSWER_MS ? 'Asking its deck for its state…' : isWritten ? 'Its deck wrote a state this deck cannot read: answer it in its window.' : 'Its deck has not written its state: answer it in its window.'
+  if (note === v.note) return
+  v.note = note
+  v.version += 1
+  reg.host?.refresh(now)
 }
 
 /** The lazy files `state` names in the folder viewed: each agent's file again (they change), each patch, cut message and git diff once. */

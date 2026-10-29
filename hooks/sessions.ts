@@ -43,6 +43,8 @@ export const GONE_MS = 30 * 60_000
 export const VIEW_MS = 90_000
 /** A viewer asks again this often while it looks. */
 export const VIEW_AGAIN_MS = 30_000
+/** How long a viewer waits for another session's deck to write its state before it says it has not: one answers within a tick or two (2.5 s each). */
+export const ANSWER_MS = 10_000
 /** A command older than this in an inbox is let go unread: it was meant for a moment past. */
 export const COMMAND_MS = 2 * 60_000
 /** The commands an inbox file keeps, newest last. */
@@ -134,8 +136,6 @@ export type SessionsV2 = {
   text: string
   /** The other sessions waiting on you and at work: the band's "◆ 1 other session needs you". */
   others: { waiting: number; working: number }
-  /** When the registry was read. */
-  readAt: number
 }
 
 /** The view and the steering a viewer writes into a session's inbox, `<dir>/inbox/<viewer's id>.json`, whole each time. */
@@ -375,7 +375,7 @@ export function sessionsViewOf(entries: readonly SessionEntry[], me: SessionEntr
   const working = rows.filter(row => row.state === 'working').length
   const text = [`${rows.length} on this machine`, waiting > 0 ? `${waiting} waiting on you` : '', working > 0 ? `${working} working` : ''].filter(part => part !== '').join(' · ')
   const otherRows = rows.filter(row => !row.isMe)
-  return { rows, text, others: { waiting: otherRows.filter(row => row.state === 'waiting').length, working: otherRows.filter(row => row.state === 'working').length }, readAt: now }
+  return { rows, text, others: { waiting: otherRows.filter(row => row.state === 'waiting').length, working: otherRows.filter(row => row.state === 'working').length } }
 }
 
 function rowOf(entry: SessionEntry, isMe: boolean, now: number): SessionRowV2 {
