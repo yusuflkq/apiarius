@@ -1,13 +1,16 @@
 /**
  * Every session on this machine (hooks/sessions.ts, hooks/registry.ts):
- * the registry's files and the list, pure; then the deck's own file written
- * on its start and its heartbeat and gone at session.end, the others' read
- * and listed (the header's "All sessions", `s`, the band's "◆ 1 other
- * session needs you"), another session's deck opened read-only from its
- * folder, and steering through its own deck's inbox only: a command
- * another deck sent runs here as the page's own does, and one for a deck
- * that reads no inbox is refused. The registry folder is the test's
- * (`AGENT_DECK_SESSIONS`), never the person's.
+ * the registry's files and the list, pure (its counts, its faces, a quiet
+ * deck's "Last heard", an order that never moves); then the deck's own file
+ * written on its start and its heartbeat and gone at session.end, the
+ * others' read and listed (the header's switcher and "◆ 1 needs you · 2
+ * sessions", `s`, the band's "◆ 1 other session needs you"), another
+ * session's deck shown in this one's place from its folder (no Viewing bar,
+ * no Back: here's picked again), its controls that act only in its window
+ * saying so where they stand, and steering through its own deck's inbox
+ * only: a command another deck sent runs here as the page's own does, and
+ * one for a deck that reads no inbox is refused. The registry folder is the
+ * test's (`AGENT_DECK_SESSIONS`), never the person's.
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -35,7 +38,7 @@ function sampleState(): W.WebStateV2 {
 
 /** A registry file of another session, live at `now`. */
 function entry(id: string, extra: Partial<S.SessionEntry> = {}): S.SessionEntry {
-  return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `/x/.web/${id}`, inbox: true, ...extra }
+  return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, agents: 0, live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `/x/.web/${id}`, inbox: true, ...extra }
 }
 
 test('the registry folder: AGENT_DECK_SESSIONS, else under CLAUDE_CONFIG_DIR, else ~/.claude; none with no home', () => {
@@ -54,10 +57,16 @@ test('the registry folder: AGENT_DECK_SESSIONS, else under CLAUDE_CONFIG_DIR, el
   expect(S.isStateDirOf('C:/mod/.web/../.web/a1', 'a1')).toBe(false)
 })
 
-test('a session`s file says what its header says: its request`s headline, its state, the first need in a line, the agents at work, what it is doing, its spend', () => {
+test('a session`s file says what its header says: its request`s headline, its state, the first need in a line, its agents at work and in all (counts, never their list), what it is doing, its spend', () => {
   const state = sampleState()
   const one = S.entryOf(state, { surface: 'desktop', terminal: '', repo: 'acme-api', pid: 4242, dir: '/m/.web/s', updatedAt: SAMPLE_NOW - 1000, heartbeatAt: SAMPLE_NOW })
   expect(one).toMatchObject({ v: 1, id: state.session.id, title: state.header.goal?.headline, state: 'waiting', needs: state.needs.length, costUsd: 4.12, pid: 4242, inbox: true, dir: '/m/.web/s', surface: 'desktop', repo: 'acme-api' })
+  // its agents: every row but the Orchestrator's and Claude Code's own loops, counted; none of their ids goes in the file
+  const agents = state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine')
+  expect([one.working, one.agents]).toEqual([agents.filter(row => row.row === 'agent' && (row.status === 'running' || row.status === 'starting')).length, agents.length])
+  expect(agents.some(row => JSON.stringify(one).includes(row.id))).toBe(false)
+  // an older build's file names no total: its agents at work stand for it
+  expect(S.entryFromText(JSON.stringify({ ...one, agents: undefined, working: 2 }))?.agents).toBe(2)
   expect(one.need).toBe('Orchestrator asks: Which store should back the limiter in production?')
   // the times are no part of what it says: a heartbeat alone is no change
   expect(S.entryKeyOf({ ...one, heartbeatAt: 1, updatedAt: 2 })).toBe(S.entryKeyOf(one))
@@ -104,11 +113,11 @@ test('a file whose heartbeat stopped: left out at once; checked against the syst
   expect(S.isLiveEntry(entry('a', { endedAt: now - 5 }), now)).toBe(false)
 })
 
-test('the list: this chat first, then the others the newest started first (rows stay put while they work); the stale and the ended left out; how they stand in a line; the other sessions waiting on you for the band', () => {
+test('the list: here first, then the others the newest started first; the stale and the ended left out; how they stand in a line; the other sessions waiting on you for the band; the machine`s counts', () => {
   const now = SAMPLE_NOW
-  const me = entry('me', { state: 'working', startedAt: now - 60_000 })
+  const me = entry('me', { state: 'working', working: 1, agents: 1, startedAt: now - 60_000 })
   const older = entry('older', { state: 'waiting', need: 'Needs your OK: Bash rm -rf dist', startedAt: now - 3_600_000, updatedAt: now - 540_000, surface: 'terminal', terminal: 'Windows Terminal', repo: 'site' })
-  const newer = entry('newer', { state: 'working', live: 'Orchestrator: Bash gh run view', startedAt: now - 120_000, updatedAt: now - 5_000, surface: 'desktop', inbox: false })
+  const newer = entry('newer', { state: 'working', working: 3, agents: 5, live: '3 agents working · scout: Bash gh run view', startedAt: now - 120_000, updatedAt: now - 5_000, surface: 'desktop', inbox: false })
   const stale = entry('stale', { heartbeatAt: now - S.STALE_MS - 1 })
   const ended = entry('ended', { endedAt: now - 1 })
   const view = S.sessionsViewOf([older, stale, newer, ended, { ...me, state: 'idle' }], me, now)
@@ -119,12 +128,58 @@ test('the list: this chat first, then the others the newest started first (rows 
   ])
   expect(view.text).toBe('3 on this machine · 1 waiting on you · 2 working')
   expect(view.others).toEqual({ waiting: 1, working: 1 })
-  expect(view.rows[2]).toMatchObject({ stateText: 'Waiting on you', place: 'Terminal · Windows Terminal', repo: 'site', need: 'Needs your OK: Bash rm -rf dist', say: 'Needs your OK: Bash rm -rf dist', cost: '≈$0.50', age: '9m', canOpen: true, canSteer: true })
-  // a deck that reads no inbox opens, read-only, and is answered in its window
-  expect(view.rows[1]).toMatchObject({ place: 'Desktop', repo: 'newer', say: 'Orchestrator: Bash gh run view', age: 'now', canOpen: true, canSteer: false })
+  // "This machine": the sessions waiting on you, at work, and their agents at work, here's too
+  expect(view.machine).toEqual({ waiting: 1, working: 2, agents: 4 })
+  expect(S.machineLineOf(view)).toEqual({ need: '◆ 1 needs you', rest: '4 agents working' })
+  expect(S.machineLineOf({ machine: { waiting: 2, working: 1, agents: 0 } })).toEqual({ need: '◆ 2 need you', rest: '1 session working' })
+  expect(S.machineLineOf({ machine: { waiting: 0, working: 0, agents: 0 } })).toEqual({ need: '', rest: 'Nothing at work' })
+  expect(view.rows[2]).toMatchObject({ stateText: 'Waiting on you', place: 'Terminal · Windows Terminal', repo: 'site', where: 'Terminal · Windows Terminal · site', need: 'Needs your OK: Bash rm -rf dist', say: 'Needs your OK: Bash rm -rf dist', cost: '≈$0.50', age: '9m', canOpen: true, canSteer: true, isQuiet: false, heardAt: 0 })
+  // a deck that reads no inbox opens, and is answered in its window
+  expect(view.rows[1]).toMatchObject({ place: 'Desktop', repo: 'newer', where: 'Desktop · newer', say: '3 agents working · scout: Bash gh run view', working: 3, agents: 5, age: 'now', canOpen: true, canSteer: false })
   expect(S.othersLineOf(view)).toBe('1 other session needs you')
   expect(S.othersLineOf({ others: { waiting: 2, working: 0 } })).toBe('2 other sessions need you')
   expect(S.othersLineOf(null)).toBeNull()
+  // the switcher's "◆ 1 needs you": the sessions waiting on you but the one shown
+  expect([S.othersWaitingOf(view, 'me'), S.othersWaitingOf(view, 'older')]).toEqual([1, 0])
+})
+
+test('rows never move with their states: what needs you is counted, not moved up; a new session comes in under here', () => {
+  const now = SAMPLE_NOW
+  const me = entry('me', { startedAt: now - 60_000 })
+  const a = entry('a', { startedAt: now - 3_600_000 })
+  const b = entry('b', { startedAt: now - 1_800_000 })
+  const order = (list: S.SessionEntry[]) => S.sessionsViewOf(list, me, now).rows.map(row => row.id)
+  const first = order([a, b])
+  expect(first).toEqual(['me', 'b', 'a'])
+  expect(order([{ ...a, state: 'waiting', need: 'Orchestrator asks: Which?', updatedAt: now }, { ...b, state: 'working', updatedAt: now }])).toEqual(first)
+  expect(order([a, b, entry('c', { startedAt: now - 30_000 })])).toEqual(['me', 'c', 'b', 'a'])
+})
+
+test('a deck not heard from lately: its row says when it was ("Last heard 2m ago"), not its state, need or faces, and it is counted nowhere; heard again, its row as before; a heartbeat alone changes nothing', () => {
+  const now = SAMPLE_NOW
+  const quiet = entry('q', { state: 'waiting', need: 'Needs your OK: Bash npm publish', working: 2, heartbeatAt: now - 125_000 })
+  const view = S.sessionsViewOf([quiet], entry('me'), now)
+  expect(view.rows[1]).toMatchObject({ isQuiet: true, heardAt: now - 125_000, stateText: '', need: null, say: 'Last heard 2m ago', state: 'waiting' })
+  expect([view.others.waiting, view.machine.waiting, view.machine.agents, view.text]).toEqual([0, 0, 0, '2 on this machine'])
+  expect(S.facesOf(view.rows[1]!)).toEqual({ seeds: [], more: 0 })
+  // the pane words it again as minutes pass, from when it was heard
+  expect(S.sessionsAgedOf(view, now + 120_000).rows[1]?.say).toBe('Last heard 4m ago')
+  // within QUIET_MS it is heard: its own words, and its heartbeat no part of the row
+  const heard = S.sessionsViewOf([{ ...quiet, heartbeatAt: now - S.QUIET_MS }], entry('me'), now).rows[1]
+  expect(heard).toMatchObject({ isQuiet: false, heardAt: 0, stateText: 'Waiting on you', say: 'Needs your OK: Bash npm publish' })
+  expect(JSON.stringify(S.sessionsViewOf([{ ...quiet, heartbeatAt: now - 5_000 }], entry('me'), now))).toBe(JSON.stringify(S.sessionsViewOf([{ ...quiet, heartbeatAt: now - 60_000 }], entry('me'), now)))
+  // here is never quiet: its row is its own state
+  expect(S.sessionsViewOf([], entry('me', { heartbeatAt: now - 600_000 }), now).rows[0]?.isQuiet).toBe(false)
+})
+
+test('a row`s faces while its session works: one an agent at work (the Orchestrator`s alone while none is), three at most, then how many more, each seeded by the session`s id so no two sessions` look alike', () => {
+  const row = (extra: Partial<S.SessionRowV2>) => ({ id: 's-1', state: 'working' as const, working: 0, isQuiet: false, ...extra })
+  expect(S.facesOf(row({}))).toEqual({ seeds: ['s-1'], more: 0 })
+  expect(S.facesOf(row({ working: 2 }))).toEqual({ seeds: ['s-1', 's-1:1'], more: 0 })
+  expect(S.facesOf(row({ working: 5 }))).toEqual({ seeds: ['s-1', 's-1:1', 's-1:2'], more: 2 })
+  expect(S.facesOf(row({ id: 's-2' })).seeds).toEqual(['s-2'])
+  expect(S.facesOf(row({ state: 'idle', working: 3 }))).toEqual({ seeds: [], more: 0 })
+  expect(S.facesOf(row({ state: 'waiting' }))).toEqual({ seeds: [], more: 0 })
 })
 
 test('the spend in the list: /cost`s estimate, "≈$4.12", whole dollars from $100; a fork`s file says it is one, and its row that its spend counts its parent`s', () => {
@@ -172,12 +227,20 @@ test('an inbox: a viewer`s look and its chat or answer commands, each with its i
   expect(S.sessionCmdOf({ cmd: 'chat', agentId: 'main', text: 'hi' }, 'me-1')).toBeNull()
 })
 
-test('another session`s state as a deck shows it: read-only, its questions answerable only where its deck takes answers from another, its own list left out', () => {
+test('another session`s state as a deck shows it: marked `peer` (its window, whether its deck takes answers), its own list left out, its questions answerable only where its deck takes them, every Stop and Cancel offered nowhere here, saying where to stop it', () => {
   const state = { ...sampleState(), sessions: S.sessionsViewOf([], null, SAMPLE_NOW) }
-  const shown = S.viewedStateOf(state, false)
+  const shown = S.peerStateOf(state, { where: 'Terminal · site', canSteer: false })
   expect('sessions' in shown).toBe(false)
+  expect(shown.peer).toEqual({ where: 'Terminal · site', canSteer: false })
   expect(shown.needs.some(need => need.isAnswerable)).toBe(false)
-  expect(S.viewedStateOf(state, true).needs.filter(need => need.isAnswerable).map(need => need.id)).toEqual(state.needs.filter(need => need.isAnswerable).map(need => need.id))
+  expect(S.peerStateOf(state, { where: '', canSteer: true }).needs.filter(need => need.isAnswerable).map(need => need.id)).toEqual(state.needs.filter(need => need.isAnswerable).map(need => need.id))
+  // its stops: none offered here, each saying where (a stop never goes to another session)
+  const stops = [...shown.agents.flatMap(row => (row.row === 'agent' && row.stop ? [row.stop] : [])), ...shown.background.rows.flatMap(row => (row.stop ? [row.stop] : []))]
+  expect(stops.length).toBeGreaterThan(3)
+  expect(stops.every(stop => !stop.can && stop.why === 'Stop it in its window: Terminal · site.')).toBe(true)
+  expect(S.inItsWindow('Answer it', '')).toBe('Answer it in its window.')
+  // its own state is untouched
+  expect(state.background.rows.some(row => row.stop?.can === true)).toBe(true)
   // a state file: the deck's (v2 under `v2`) or the sample's (bare)
   expect(JSON.parse(S.stateFileV2Of(JSON.stringify({ v: 1, now: 1, v2: state })) ?? '{}').v).toBe(2)
   expect(JSON.parse(S.stateFileV2Of(JSON.stringify(state)) ?? '{}').v).toBe(2)
@@ -187,7 +250,8 @@ test('another session`s state as a deck shows it: read-only, its questions answe
 // ---------------------------------------------------------------------------
 // The deck: its file, the others', the pane, the inbox, another session's deck.
 
-type Disk = { files: Map<string, string> }
+/** The test's files; `hang`: the paths whose read never ends, as a disk or an engine that hangs. */
+type Disk = { files: Map<string, string>; hang?: (path: string) => boolean }
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')
 
@@ -200,6 +264,7 @@ function disk(on: On, d: Disk) {
     return { value: names.map(path => ({ name: path.slice(dir.length + 1), kind: 'file' as const, size: (d.files.get(path) ?? '').length, mtimeMs: NOW + (d.files.get(path) ?? '').length, isLink: false })) }
   })
   on('fs.read', ($, e) => {
+    if (d.hang?.(norm(e.path))) return new Promise<never>(() => undefined)
     const text = d.files.get(norm(e.path))
     return text !== undefined ? { value: text } : { deny: 'no such file' }
   })
@@ -332,44 +397,6 @@ test('a session Claude Code began as a fork (its SessionStart says `fork`, just 
   expect('isFork' in (ownEntries(w).at(-1) ?? {})).toBe(false)
 })
 
-test('the others listed: the header`s "◆ 1 other session needs you" and All sessions (hotkey s); s opens the list over the tab, this chat first; b goes back; the band says it too', async ($, on) => {
-  const { clock } = await started($, on)
-  await $.command.run(deck(''))
-  await clock.advance(3000)
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount(pane(surface))
-    const header = await ui.find({ key: 'deck:header' })
-    expect(header?.text).toContain('◆ 1 other session needs you')
-    expect((await ui.find({ key: 'key:s' }))?.props).toMatchObject({ label: 'All sessions', hotkey: 's' })
-    await ui.press({ key: 'key:s' })
-    await clock.advance(500)
-    await ui.redraw()
-    const list = await ui.find({ key: 'sessions' })
-    expect(list?.text).toContain('All sessions')
-    expect(list?.text).toContain('2 on this machine · 1 waiting on you')
-    const rows = (await ui.findAll({ type: 'Button' })).map(one => one.key ?? '').filter(key => key.startsWith('session:'))
-    expect(rows).toEqual(['session:session-1', `session:${OTHER}`])
-    const other = await ui.find({ key: `session-row:${OTHER}` })
-    expect(other?.text).toContain('Landing page copy')
-    expect(other?.text).toContain('Needs your OK: Bash rm -rf dist')
-    expect(other?.text).toContain('Waiting on you')
-    // "this chat": its tag, an image on the desktop, its word on the terminal
-    if (surface === 'terminal') expect((await ui.find({ key: 'session-row:session-1' }))?.text).toContain('this chat')
-    else expect(JSON.stringify(await ui.drawn())).toContain('"alt":"this chat"')
-    // the tabs dim while it shows; b goes back to the tab
-    expect((await ui.find({ key: 'tab:now' }))?.props).toMatchObject({ dimColor: true })
-    await ui.press({ key: 'key:b' })
-    await clock.advance(500)
-    await ui.redraw()
-    expect(await ui.find({ key: 'sessions' })).toBeUndefined()
-    await ui.unmount()
-  }
-  // the band above the prompt counts it
-  const band = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
-  expect(JSON.stringify(await band.drawn())).toContain('1 other session needs you')
-  await band.unmount()
-})
-
 /** An element as a drawing describes it. */
 type Node = { type?: string; key?: string; props?: Record<string, unknown>; children?: unknown[] }
 
@@ -388,17 +415,75 @@ function wordsIn(el: unknown): string {
   return `${typeof node.props?.alt === 'string' ? node.props.alt : ''}${(node.children ?? []).map(wordsIn).join('')}`
 }
 
-test('All sessions at any width: the title cuts beside "this chat", which never shrinks; where it runs and what it says cut before the row`s right; the spend, then the state`s word, left out where the pane is narrow, and the header`s way in says "◆ 1" there', async ($, on) => {
+test('the header`s title is the switcher: "◆ 1 needs you · 2 sessions" at its right with the web`s layers icon, `s` with no key cue on a desktop; a press drops every session over the tabs, here`s first, lit and tagged "here"; pressed again, gone; the band says it too', async ($, on) => {
+  const { clock } = await started($, on)
+  await $.command.run(deck(''))
+  await clock.advance(3000)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    const header = await ui.find({ key: 'deck:header' })
+    expect(header?.text).toContain('◆ 1 needs you')
+    expect(header?.text).toContain('2 sessions')
+    expect((await ui.find({ key: 'sessions:switch' }))?.props).toMatchObject({ label: 'No request yet ▾', plain: true })
+    const drawn = await ui.drawn()
+    if (surface === 'desktop') {
+      // the count is a plain Button with no hotkey beside the layers icon; `s` sits on a Button kept out of sight, so no cue shows
+      const count = await ui.find({ key: 'sessions:count' })
+      expect(count?.props).toMatchObject({ label: '2 sessions', plain: true })
+      expect(count?.props.hotkey).toBeUndefined()
+      const [hidden] = nodesIn(drawn, node => node.type === 'Box' && node.props?.display === 'none')
+      expect(nodesIn(hidden, node => (node.key ?? node.props?.key) === 'key:s' && node.props?.hotkey === 's').length).toBe(1)
+      expect(JSON.stringify(drawn)).toContain('"alt":"Sessions"')
+    } else {
+      // the terminal draws its cue, as each tab's: "s: 2 sessions"
+      expect((await ui.find({ key: 'key:s' }))?.props).toMatchObject({ label: '2 sessions', hotkey: 's' })
+    }
+    // the tabs and `s` are the only keys
+    const keys = (await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined).map(one => one.props.hotkey)
+    expect(keys.sort()).toEqual(['1', '2', '3', '4', '5', '6', 's'])
+    await ui.press({ key: surface === 'desktop' ? 'sessions:switch' : 'key:s' })
+    await clock.advance(500)
+    await ui.redraw()
+    expect((await ui.find({ key: 'sessions:switch' }))?.props.label).toBe('No request yet ▴')
+    const list = await ui.find({ key: 'sessions' })
+    expect(list?.text).toContain('Every')
+    const rows = (await ui.findAll({ type: 'Button' })).map(one => one.key ?? '').filter(key => key.startsWith('session:'))
+    expect(rows).toEqual(['session:session-1', `session:${OTHER}`])
+    const other = await ui.find({ key: `session-row:${OTHER}` })
+    expect(other?.text).toContain('Landing page copy')
+    expect(other?.text).toContain('Needs your OK: Bash rm -rf dist')
+    expect(other?.text).toContain('Waiting on you')
+    // here, quietly tagged, and lit while it shows; no "this chat"
+    if (surface === 'terminal') expect((await ui.find({ key: 'session-row:session-1' }))?.text).toContain('here')
+    else expect(JSON.stringify(await ui.drawn())).toContain('"alt":"here"')
+    expect(JSON.stringify(await ui.drawn())).not.toContain('this chat')
+    expect((await ui.find({ key: 'session-row:session-1' }))?.props.backgroundColor).toBe('#242424')
+    expect((await ui.find({ key: `session-row:${OTHER}` }))?.props.backgroundColor).toBeUndefined()
+    // dropped in place: the tabs stay under it, the tab still lit
+    expect((await ui.find({ key: 'tab:now' }))?.props).toMatchObject({ dimColor: false })
+    await ui.press({ key: 'key:s' })
+    await clock.advance(500)
+    await ui.redraw()
+    expect(await ui.find({ key: 'sessions' })).toBeUndefined()
+    await ui.unmount()
+  }
+  // the band above the prompt counts it
+  const band = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
+  expect(JSON.stringify(await band.drawn())).toContain('1 other session needs you')
+  await band.unmount()
+})
+
+test('the list at any width: the title cuts beside "here", which never shrinks; where it runs and what it says cut before the row`s right; the faces and the spend, then the state`s word, left out where the pane is narrow; the header`s "◆ 1" says its words where they fit and the switcher keeps its ▾', async ($, on) => {
   const { clock } = await started($, on)
   await $.command.run(deck('sessions'))
   await clock.advance(3000)
   for (const surface of ['desktop', 'terminal'] as const) {
-    for (const columns of [84, 56, 40, 24]) {
+    for (const columns of [120, 84, 56, 40, 24]) {
       const ui = await $.ui.mount(pane(surface, columns))
       const drawn = await ui.drawn()
       const [mine] = nodesIn(drawn, node => (node.key ?? node.props?.key) === 'session-row:session-1')
       // the title's line: a column Box that may shrink to nothing, holding the title's Button, then the tag's Box, which never shrinks
-      const [line] = nodesIn(mine, node => node.type === 'Box' && node.children?.length === 2 && wordsIn(node.children[1]).includes('this chat'))
+      const [line] = nodesIn(mine, node => node.type === 'Box' && node.children?.length === 2 && wordsIn(node.children[1]).includes('here'))
       const [title, tagged] = (line?.children ?? []) as Node[]
       expect(title?.props).toMatchObject({ flexDirection: 'column', flexShrink: 1, minWidth: 0 })
       expect(nodesIn(title, node => (node.key ?? node.props?.key) === 'session:session-1').length).toBe(1)
@@ -411,10 +496,11 @@ test('All sessions at any width: the title cuts beside "this chat", which never 
       // the right of a row: its state's word from 48 cells, its spend from 64, its age always
       const words = wordsIn(other)
       expect([words.includes('Waiting on you'), words.includes('≈$0.50')]).toEqual([columns >= 48, columns >= 64])
-      // the header's way in: its words where they fit, "◆ 1" alone where not
+      // the header: "◆ 1 needs you" where its words fit, "◆ 1" alone where not; the switcher's ▾ never cut off
       const header = wordsIn(nodesIn(drawn, node => (node.key ?? node.props?.key) === 'deck:sessions')[0])
       expect(header.includes('◆ 1')).toBe(true)
-      expect(header.includes('other session needs you')).toBe(columns >= 64)
+      expect(header.includes('needs you')).toBe(columns >= 64)
+      expect(String((await ui.find({ key: 'sessions:switch' }))?.props.label).endsWith(' ▴')).toBe(true)
       await ui.unmount()
     }
   }
@@ -447,34 +533,6 @@ test('a fork`s row: its spend with "incl. its parent`s" under its word and its s
   }
 })
 
-test('a press on another session opens its deck read-only from its folder under "Viewing <title>", asks its deck through its inbox to keep writing it, and Back to this chat leaves it, telling its deck so', async ($, on) => {
-  const { clock, w } = await started($, on)
-  await $.command.run(deck('sessions'))
-  await clock.advance(3000)
-  const ui = await $.ui.mount(pane('desktop'))
-  await ui.press({ key: `session:${OTHER}` })
-  await clock.advance(3000)
-  await ui.redraw()
-  const bar = await ui.find({ key: 'viewing:head' })
-  expect(bar?.text).toContain('Viewing')
-  expect(bar?.text).toContain('Landing page copy')
-  expect(bar?.text).toContain('Read-only: answers and messages go through its own deck.')
-  // its own deck: its header and its need, read from its state.json
-  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Landing page copy')
-  expect((await ui.find({ key: 'deck:header' }))?.text).not.toContain('All sessions')
-  const asked = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile)
-  expect(asked.at(-1)).toMatchObject({ v: 1, from: 'session-1', cmds: [] })
-  expect(asked.at(-1)!.viewUntil).toBeGreaterThan(NOW)
-  // back to this chat: its deck told this one looks no more
-  await ui.press({ key: 'viewing:back' })
-  await clock.advance(500)
-  await ui.redraw()
-  expect(await ui.find({ key: 'viewing:head' })).toBeUndefined()
-  const last = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile).at(-1)
-  expect(last?.viewUntil).toBe(0)
-  await ui.unmount()
-})
-
 /** A world whose `fs.stat` answers from the test's disk: a file the disk lacks is missing, as Claude Code's own stat says. */
 function diskWorld(d: Disk): World {
   return newWorld({
@@ -485,7 +543,90 @@ function diskWorld(d: Disk): World {
   })
 }
 
-test('another session`s deck that writes its state only once asked: "Asking its deck for its state…" once, where its deck will be, under a bar that says what can be done from here; then its deck at the next tick', async ($, on) => {
+test('a press on another session shows its deck in this one`s place: no bar, no Back, its header`s title the switcher; its deck asked through its inbox to keep writing it; here picked again shows this deck`s own, its deck told this one looks no more', async ($, on) => {
+  const { clock, w } = await started($, on)
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(3000)
+  await ui.redraw()
+  // its own deck: its header and its need, read from its state.json; the list closed
+  const header = await ui.find({ key: 'deck:header' })
+  expect(header?.text).toContain('Waiting on you')
+  expect((await ui.find({ key: 'sessions:switch' }))?.props.label).toBe('Landing page copy ▾')
+  // the one waiting on you is the one shown: nothing more to say at the right but the count
+  expect(header?.text).not.toContain('needs you')
+  expect(header?.text).toContain('2 sessions')
+  expect(await ui.find({ key: 'sessions' })).toBeUndefined()
+  const drawn = JSON.stringify(await ui.drawn())
+  for (const gone of ['Viewing', 'Back to this chat', 'Read-only', 'this chat', 'viewing:']) expect(drawn).not.toContain(gone)
+  // its permission prompt says where to answer it, at the card
+  expect((await ui.find({ key: 'needs:now' }))?.text).toContain('Answer it in its window: Terminal · other-1.')
+  const asked = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile)
+  expect(asked.at(-1)).toMatchObject({ v: 1, from: 'session-1', cmds: [] })
+  expect(asked.at(-1)!.viewUntil).toBeGreaterThan(NOW)
+  // the list again: its row lit, here's not
+  await ui.press({ key: 'key:s' })
+  await clock.advance(500)
+  await ui.redraw()
+  expect((await ui.find({ key: `session-row:${OTHER}` }))?.props.backgroundColor).toBe('#242424')
+  expect((await ui.find({ key: 'session-row:session-1' }))?.props.backgroundColor).toBeUndefined()
+  // here again: this deck's own, the list closed, its deck told this one looks no more
+  await ui.press({ key: 'session:session-1' })
+  await clock.advance(500)
+  await ui.redraw()
+  expect((await ui.find({ key: 'sessions:switch' }))?.props.label).toBe('No request yet ▾')
+  expect(await ui.find({ key: 'sessions' })).toBeUndefined()
+  const last = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile).at(-1)
+  expect(last?.viewUntil).toBe(0)
+  await ui.unmount()
+})
+
+test('another session`s controls that act only in its window say so where they stand: its permission prompt and notification, Stop turn, its background`s Stop and Cancel, an agent`s Stop on its page; its question answers through its own deck', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, diskWorld(d), d)
+  // other-1's deck: the v2 sample's (a turn running, Stops its permission check allows, questions, a permission prompt, a notification)
+  const own = sampleState()
+  d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, v2: { ...own, now: NOW, session: { ...own.session, id: OTHER } } }))
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(3000)
+  const terminal = await $.ui.mount(pane('terminal'))
+  for (const one of [ui, terminal]) {
+    await one.redraw()
+    const drawn = JSON.stringify(await one.drawn())
+    const keys = (await one.findAll({ type: 'Button' })).map(button => button.key ?? '')
+    // nothing stops another session from here, and each says where it is stopped instead
+    expect(keys.filter(key => key === 'stop:turn' || key.startsWith('bg:stop:') || key.startsWith('card:stop:'))).toEqual([])
+    expect((await one.find({ key: 'deck:header' }))?.text).toContain('Stop the turn in its window')
+    expect((await one.find({ key: 'now:background' }))?.text).toContain('Stop them in its window: Terminal · other-1.')
+    // its permission prompt and Claude Code's notification: answered in its window
+    expect(drawn.split('Answer it in its window: Terminal · other-1.').length - 1).toBe(2)
+    expect(drawn).not.toContain('in Claude Code')
+    // its questions: answerable, through its own deck
+    expect(drawn).toContain('Or answer it in its window: Terminal · other-1.')
+  }
+  const question = own.needs.find(need => need.kind === 'question' && need.questions?.length === 1 && !need.questions[0]?.multiSelect)!
+  await ui.press({ key: `answer:${question.id}:0:0` })
+  await clock.advance(500)
+  const inbox = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile).at(-1)
+  expect(inbox?.cmds.map(one => one.cmd)).toEqual([expect.objectContaining({ cmd: 'answer', callId: question.id })])
+  expect(w.toasts.at(-1)).toBe('Sent to its deck, which passes it to Claude Code: what came of it shows there.')
+  // an agent's page: its Stop says where
+  const builder = own.agents.find(row => row.row === 'agent' && row.stop?.can === true)!
+  await ui.press({ key: `agent:${builder.id}` })
+  await clock.advance(500)
+  await ui.redraw()
+  expect((await ui.find({ key: 'page:stopline' }))?.text).toBe('Stop it in its window: Terminal · other-1.')
+  expect(await ui.find({ key: 'page:stop' })).toBeUndefined()
+  await ui.unmount()
+  await terminal.unmount()
+})
+
+test('another session`s deck that writes its state only once asked: its switcher from its row and "Asking its deck for its state…" once, where its deck will be; then its deck at the next tick', async ($, on) => {
   const d: Disk = { files: new Map() }
   const { clock } = await started($, on, diskWorld(d), d)
   const written = d.files.get(`${OTHER_DIR}/state.json`)!
@@ -499,24 +640,64 @@ test('another session`s deck that writes its state only once asked: "Asking its 
   for (const one of [ui, desktop]) {
     await one.redraw()
     expect(JSON.stringify(await one.drawn()).split('Asking its deck for its state…').length - 1).toBe(1)
-    expect((await one.find({ key: 'viewing:head' }))?.text).toContain('Read-only: answers and messages go through its own deck.')
-    expect(await one.find({ key: 'deck:header' })).toBeUndefined()
+    expect((await one.find({ key: 'sessions:switch' }))?.props.label).toBe('Landing page copy ▾')
+    expect((await one.find({ key: 'deck:header' }))?.text).toContain('Terminal · other-1')
+    expect(await one.find({ key: 'tab:now' })).toBeUndefined()
   }
   // its deck read its inbox and wrote its state: it shows at the next tick
   d.files.set(`${OTHER_DIR}/state.json`, written)
   await clock.advance(2500)
   for (const one of [ui, desktop]) {
     await one.redraw()
-    expect((await one.find({ key: 'deck:header' }))?.text).toContain('Landing page copy')
+    expect((await one.find({ key: 'deck:header' }))?.text).toContain('Waiting on you')
+    expect(await one.find({ key: 'tab:now' })).toBeDefined()
     expect(JSON.stringify(await one.drawn())).not.toContain('Asking its deck')
   }
   await ui.unmount()
   await desktop.unmount()
 })
 
-test('another session`s deck that never answers says so within ANSWER_MS: it wrote no state, or one this deck cannot read; answer it in its window', async ($, on) => {
-  const d: Disk = { files: new Map() }
+test('another session`s deck shows as soon as its state is read: its lazy files (hundreds on a long session) follow it, never before it, so one that never comes holds nothing back', async ($, on) => {
+  const d: Disk = { files: new Map(), hang: path => path.includes('/patches/') }
   const { clock } = await started($, on, diskWorld(d), d)
+  // a long session: 300 edits, whose patches never come back from the disk
+  const site = (JSON.parse(d.files.get(`${OTHER_DIR}/state.json`)!) as { v2: W.WebStateV2 }).v2
+  const edits = Array.from({ length: 300 }, (_, i) => ({ id: `toolu_${i}`, agent: 'main', tool: 'Edit', path: `src/f${i}.ts`, at: NOW - 60_000 + i, added: 1, removed: 1 }))
+  d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, v2: { ...site, changes: { ...site.changes, edits } } }))
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(2500)
+  await ui.redraw()
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Waiting on you')
+  expect(JSON.stringify(await ui.drawn())).not.toContain('Asking its deck')
+  // its agents' files came while the patches hang: the Orchestrator's page reads its own
+  await ui.press({ key: 'agent:main' })
+  await clock.advance(2500)
+  await ui.redraw()
+  expect(JSON.stringify(await ui.drawn())).not.toContain('Asking its deck')
+  await ui.unmount()
+})
+
+test('an inbox whose writer`s registry file was mid-write when it was read is read again a few seconds later, though it did not change: the deck showing this one is not left asking until it writes again 30 s on', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, newWorld(), d)
+  const dir = norm(ownEntries(w)[0]!.dir)
+  d.files.set(`${REG}/late-3.json`, '{"v":1,"id":"late-3","dir":"/late/.web/la')
+  d.files.set(`${dir}/inbox/late-3.json`, JSON.stringify({ v: 1, from: 'late-3', at: NOW, viewUntil: NOW + S.VIEW_MS, cmds: [] }))
+  await clock.advance(3000)
+  const states = () => w.writes.filter(one => norm(one.path) === `${dir}/state.json`).length
+  expect(states()).toBe(0)
+  // its file whole now; its inbox the same file it was
+  listed(d, 'late-3', '/late/.web/late-3')
+  await clock.advance(6000)
+  expect(states()).toBeGreaterThan(0)
+})
+
+test('another session`s deck that never answers says so within ANSWER_MS: it wrote no state, or one this deck cannot read; answer it in its window. Until it shows, its deck is asked again every 5 s', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, diskWorld(d), d)
   d.files.delete(`${OTHER_DIR}/state.json`)
   await $.command.run(deck('sessions'))
   await clock.advance(3000)
@@ -527,6 +708,8 @@ test('another session`s deck that never answers says so within ANSWER_MS: it wro
   let drawn = JSON.stringify(await ui.drawn())
   expect(drawn).toContain('Its deck has not written its state: answer it in its window.')
   expect(drawn).not.toContain('Asking its deck')
+  // asked at the press, then every 5 s: an inbox its deck read too early is read again
+  expect(w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).length).toBeGreaterThanOrEqual(3)
   // a state an older build wrote, with no v2 in it: written, but not one this deck reads
   d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, agents: [] }))
   await clock.advance(2500)
@@ -542,7 +725,7 @@ test('with the registry on, ticks that change nothing draw nothing again and wri
   await $.command.run(deck(''))
   const ui = await $.ui.mount(pane('desktop'))
   await clock.advance(3000)
-  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('◆ 1 other session needs you')
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('◆ 1 needs you')
   w.invalidates = 0
   await clock.advance(10_000)
   expect(w.invalidates).toBe(0)
@@ -608,7 +791,7 @@ test('this session`s inbox: a deck viewing it has its state written (no /deck we
   expect(w.submitted.filter(one => one.text === 'Also run the linter').length).toBe(1)
 })
 
-test('/deck demo lists the sample`s sessions (s) and opens one`s deck from the fixtures, under "Sample data": nothing is sent', async ($, on) => {
+test('/deck demo lists the sample`s sessions (s) and shows one`s deck from the fixtures in its place, under "Sample data": nothing is sent', async ($, on) => {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const own = sampleState()
   const sample = sampleSessions()
@@ -625,7 +808,8 @@ test('/deck demo lists the sample`s sessions (s) and opens one`s deck from the f
   await $.command.run(deck('demo'))
   await clock.advance(1000)
   const ui = await $.ui.mount(pane('desktop'))
-  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('◆ 1 other session needs you')
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('◆ 1 needs you')
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('5 sessions')
   await ui.press({ key: 'key:s' })
   await clock.advance(500)
   await ui.redraw()
@@ -635,14 +819,22 @@ test('/deck demo lists the sample`s sessions (s) and opens one`s deck from the f
   await ui.press({ key: `session:${ci.id}` })
   await clock.advance(500)
   await ui.redraw()
-  const bar = await ui.find({ key: 'viewing:head' })
-  expect(bar?.text).toContain('Fix the flaky CI job')
-  expect(bar?.text).toContain('Sample data')
-  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Fix the flaky CI job')
+  expect((await ui.find({ key: 'demo:head' }))?.text).toContain('Sample data')
+  expect((await ui.find({ key: 'sessions:switch' }))?.props.label).toBe('Fix the flaky CI job ▾')
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Working')
+  // the sample's own again, from the list
+  await ui.press({ key: 'key:s' })
+  await clock.advance(500)
+  await ui.redraw()
+  await ui.press({ key: `session:${sample.me}` })
+  await clock.advance(500)
+  await ui.redraw()
+  const label = String((await ui.find({ key: 'sessions:switch' }))?.props.label)
+  expect([label.startsWith(String(own.header.goal?.headline).slice(0, 12)), label.endsWith(' ▾')]).toEqual([true, true])
   await ui.unmount()
 })
 
-test('another session`s Changes, viewed: its agents` edits open on their patches as read from its folder (its newest open), on the desktop and the terminal; its picks are its own deck`s, refused here', async ($, on) => {
+test('another session`s Changes, shown: its agents` edits open on their patches as read from its folder (its newest open), on the desktop and the terminal; its picks are its own deck`s, refused here', async ($, on) => {
   const d: Disk = { files: new Map() }
   const { clock, w } = await started($, on, diskWorld(d), d)
   // its deck: a chat in Documents, no repository, the Orchestrator's script written in its scratchpad
@@ -664,7 +856,7 @@ test('another session`s Changes, viewed: its agents` edits open on their patches
   const terminal = await $.ui.mount(pane('terminal'))
   for (const one of [ui, terminal]) {
     await one.redraw()
-    expect((await one.find({ key: 'viewing:head' }))?.text).toContain('Landing page copy')
+    expect((await one.find({ key: 'sessions:switch' }))?.props.label).toBe('Landing page copy ▾')
     expect((await one.find({ key: 'changes:repo' }))?.text).toContain('This chat runs in Documents, which isn’t a git repository.')
     expect((await one.find({ key: `edited:${script}` }))?.text).toContain('Write by Orchestrator')
     const diff = (await one.findAll({ type: 'Code' })).find(code => code.props.format === 'diff')
@@ -673,7 +865,7 @@ test('another session`s Changes, viewed: its agents` edits open on their patches
   }
   // a pick there would pin this session's Changes: refused, nothing pinned
   await ui.press({ key: 'changes:pick:C:/Users/sam/Documents/agent-deck' })
-  expect(w.toasts.at(-1)).toBe("Pick a repository: this is another session's deck, shown read-only. Do it in its window.")
+  expect(w.toasts.at(-1)).toBe("Pick a repository: this is another session's deck. Do it in its window: Terminal · other-1.")
   await ui.unmount()
   await terminal.unmount()
 })

@@ -8,6 +8,10 @@
  *   on its page, only where Claude Code's own permission check allows its
  *   TaskStop (the agent row's `stop.can`); where none is offered, its page
  *   says why in one line.
+ * - On another session's deck (its state marked `peer`) nothing is stopped:
+ *   its Stop turn says, quietly where it stands, to stop the turn in its
+ *   window, and its agents' pages say where (their `why`, ../../sessions
+ *   `peerStateOf`).
  *
  * Every press goes through DashActions to the hooks module, which stops only
  * through Claude Code's own channels, asking its check again first; in the
@@ -35,10 +39,17 @@ export function stopMark(kit: Kit, px = 12): RenderElement {
   return <Svg source={source} alt="Stop" width={px} height={px} />
 }
 
-/** Stop turn at the right of the header, while the main loop's turn runs (`header.turn`): the stop mark, then the plain Button keyed `stop:turn`. Null between turns. */
-export function stopTurnButton(kit: Kit, state: Pick<WebStateV2, 'header'>, actions: Pick<DashActions, 'abortTurn'>): RenderElement | null {
-  const { Box, Button } = kit
+/** Stop turn at the right of the header, while the main loop's turn runs (`header.turn`): the stop mark, then the plain Button keyed `stop:turn`; on another session's deck, quietly, where to stop it. Null between turns. */
+export function stopTurnButton(kit: Kit, state: Pick<WebStateV2, 'header' | 'peer'>, actions: Pick<DashActions, 'abortTurn'>): RenderElement | null {
+  const { Box, Text, Button } = kit
   if (!state.header.turn) return null
+  if (state.peer) {
+    return (
+      <Box key="stop:turnbox" flexShrink={0}>
+        <Text color={P.muted2}>Stop the turn in its window</Text>
+      </Box>
+    )
+  }
   return (
     <Box key="stop:turnbox" flexShrink={0} flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>{stopMark(kit)}</Box>

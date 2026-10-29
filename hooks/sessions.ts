@@ -11,13 +11,18 @@
  *   once its process is gone (or long after).
  * - **The list** (`SessionsV2`, the v2 state's `sessions`): each session's
  *   state in a word, its title, where it runs, what it waits on you for or
- *   what it is doing, its spend (/cost's estimate at API list prices, a
- *   fork's counting its parent's) and how long since it changed. This chat
- *   first, then the others, the newest started first, so rows stay put.
- * - **Opening one.** A session's deck shows from its state folder (the
+ *   what it is doing, its agents at work and in all, its spend (/cost's
+ *   estimate at API list prices, a fork's counting its parent's) and how
+ *   long since it changed; one whose deck has not been heard from lately
+ *   says when it was ("Last heard 2m ago"), not a state that may be stale.
+ *   The session the deck belongs to first ("here"), then the others, the
+ *   newest started first, so rows stay put whatever their states do.
+ * - **Showing one.** A session's deck shows from its state folder (the
  *   `state.json` and lazy files `/deck web` writes). A deck writes them only
- *   while it is asked to: another deck viewing it says so in its inbox
- *   (`InboxFile.viewUntil`), as long as it looks.
+ *   while it is asked to: another deck showing it says so in its inbox
+ *   (`InboxFile.viewUntil`), as long as it looks. Its controls that act
+ *   only in its own window (Stop, Stop turn, a permission prompt) say so
+ *   where they stand (`peerStateOf`, `inItsWindow`).
  * - **Steering one.** Answering its question or messaging it goes to its own
  *   deck, which acts through Claude Code's channels as for its own page: the
  *   viewer writes the command into `<dir>/inbox/<its own id>.json`, the
@@ -27,8 +32,9 @@
  *
  * Pure: the hooks module does the reading, writing and timing.
  */
+import type { V2Stop } from './background'
 import * as F from './format'
-import type { V2AgentRow, V2Need, WebStateV2 } from './web'
+import type { V2AgentRow, V2Need, V2Peer, WebStateV2 } from './web'
 
 /** The registry file's version. */
 export const REGISTRY_V = 1
@@ -38,6 +44,8 @@ export const HEARTBEAT_MS = 30_000
 export const ENTRY_WRITE_MS = 2_000
 /** No heartbeat for this long: the session is gone, or hung; it is left out of the list. */
 export const STALE_MS = 3 * 60_000
+/** No heartbeat heard for this long (two missed, and a read's lag): its row says when it was last heard, not a state that may be stale. */
+export const QUIET_MS = 90_000
 /** No heartbeat for this long: cleaned whatever its process says (an id the system gave another). */
 export const GONE_MS = 30 * 60_000
 /** A view request keeps a session's state written this long. */
@@ -77,6 +85,8 @@ export type SessionEntry = {
   needs: number
   /** How many of its agents are at work (the Orchestrator and Claude Code's own loops left out). */
   working: number
+  /** How many agents it shows in all, at work or not (the Orchestrator, Claude Code's own loops and those Clear finished hid left out); 0 from an older build. Counts alone: no deck shares its agents' list. */
+  agents: number
   /** What it is doing, in a line, from its rows' calls in flight ("builder: Bash npm test"), else its latest answer when idle; '' for neither. */
   live: string
   /** Its spend, as /cost reports it (an estimate at API list prices); null while unknown. */
@@ -101,24 +111,28 @@ export type SessionEntry = {
 /** One row of the list: a session as every surface shows it. */
 export type SessionRowV2 = {
   id: string
-  /** This chat: the session whose deck draws the list. */
+  /** Here: the session whose deck draws the list (the page's or the pane's own), tagged "here". */
   isMe: boolean
   /** Its title, else "No request yet". */
   title: string
   state: SessionEntry['state']
-  /** "Working", "Waiting on you", "Idle". */
+  /** "Working", "Waiting on you", "Idle"; '' for a quiet one, whose state may be stale. */
   stateText: string
   surface: SessionSurface
   /** Where it runs, in words: "Desktop", "Terminal · Windows Terminal", "VS Code"; '' when no surface is attached. */
   place: string
   /** Its repository's name, else its folder's. */
   repo: string
+  /** Its window, as a row and a note name it: its place and repository ("Terminal · cd_deck"). */
+  where: string
   cwd: string
-  /** The first thing that needs you there, in a line; null when nothing does. */
+  /** The first thing that needs you there, in a line; null when nothing does, and for a quiet one. */
   need: string | null
-  /** What the row says under its title: the need, else what it is doing (derived from its calls), else ''. */
+  /** What the row says under its title: the need, else what it is doing (derived from its calls), else ''; a quiet one's, when its deck was last heard ("Last heard 2m ago"). */
   say: string
+  /** Its agents at work, and in all (`SessionEntry`'s): "3 agents working". */
   working: number
+  agents: number
   costUsd: number | null
   /** "≈$4.12", whole dollars from $100 ("≈$491"); '' while unknown. */
   cost: string
@@ -128,6 +142,10 @@ export type SessionRowV2 = {
   at: number
   age: string
   startedAt: number
+  /** Its deck has not been heard from for `QUIET_MS`: its row says when it was (`say`, `heardAt`) and no state word, need or face; it is counted nowhere. Never here's. */
+  isQuiet: boolean
+  /** When its deck was last heard (its heartbeat), for a quiet one; 0 for one heard lately, so a heartbeat changes nothing in the list. */
+  heardAt: number
   /** A deck can open it: it names its state folder (where a deck reads, that folder is checked to be one the deck makes, `isStateDirOf`). */
   canOpen: boolean
   /** Its deck takes answers and messages from another deck (its inbox); otherwise answer it in its window. */
@@ -141,6 +159,8 @@ export type SessionsV2 = {
   text: string
   /** The other sessions waiting on you and at work: the band's "◆ 1 other session needs you". */
   others: { waiting: number; working: number }
+  /** Every session heard lately, here's too: how many wait on you and work, and their agents at work ("This machine": "◆ 1 needs you · 3 agents working"). */
+  machine: { waiting: number; working: number; agents: number }
 }
 
 /** The view and the steering a viewer writes into a session's inbox, `<dir>/inbox/<viewer's id>.json`, whole each time. */
@@ -283,6 +303,7 @@ export function entryOf(
     need: need ? needLineOf(need) : null,
     needs: state.needs.length,
     working: state.agents.filter((row): row is V2AgentRow => row.row === 'agent' && isWorkingAgent(row)).length,
+    agents: state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine' && row.isCleared !== true).length,
     live: liveLineOf(state),
     costUsd: state.header.costUsd,
     ...(state.session.isFork === true ? { isFork: true as const } : {}),
@@ -326,6 +347,7 @@ export function entryFromText(text: string): SessionEntry | null {
     need: typeof value.need === 'string' && value.need !== '' ? F.trunc(value.need, 200) : null,
     needs: Math.max(0, num(value.needs)),
     working: Math.max(0, num(value.working)),
+    agents: Math.max(0, num(value.agents), num(value.working)),
     live: str(value.live, 200),
     costUsd: typeof value.costUsd === 'number' && Number.isFinite(value.costUsd) ? value.costUsd : null,
     ...(value.isFork === true ? { isFork: true as const } : {}),
@@ -342,6 +364,11 @@ export function entryFromText(text: string): SessionEntry | null {
 /** Whether an entry is a live session's: not ended, its heartbeat within `STALE_MS`. */
 export function isLiveEntry(entry: SessionEntry, now: number): boolean {
   return entry.endedAt === undefined && now - entry.heartbeatAt <= STALE_MS
+}
+
+/** Whether a live entry's deck has gone quiet: no heartbeat heard for `QUIET_MS`, so what it last said may be stale. */
+export function isQuietEntry(entry: SessionEntry, now: number): boolean {
+  return now - entry.heartbeatAt > QUIET_MS
 }
 
 /**
@@ -371,50 +398,107 @@ function folderOf(path: string): string {
 
 /**
  * The list every surface shows, from the registry's live entries and this
- * chat's own (`me`, always shown, though its file is not read back yet):
- * this chat first, then the others, the newest started first, so rows keep
- * their places while their sessions work.
+ * deck's own (`me`, here, always shown, though its file is not read back
+ * yet): here first, then the others, the newest started first, so rows keep
+ * their places whatever their sessions do (what needs you is counted, not
+ * moved up). A quiet one is counted nowhere.
  */
 export function sessionsViewOf(entries: readonly SessionEntry[], me: SessionEntry | null, now: number): SessionsV2 {
   const live = entries.filter(entry => isLiveEntry(entry, now) && entry.id !== me?.id)
   const others = [...live].sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id))
   const rows = [...(me ? [rowOf(me, true, now)] : []), ...others.map(entry => rowOf(entry, false, now))]
-  const waiting = rows.filter(row => row.state === 'waiting').length
-  const working = rows.filter(row => row.state === 'working').length
+  const heard = rows.filter(row => !row.isQuiet)
+  const waiting = heard.filter(row => row.state === 'waiting').length
+  const working = heard.filter(row => row.state === 'working').length
   const text = [`${rows.length} on this machine`, waiting > 0 ? `${waiting} waiting on you` : '', working > 0 ? `${working} working` : ''].filter(part => part !== '').join(' · ')
-  const otherRows = rows.filter(row => !row.isMe)
-  return { rows, text, others: { waiting: otherRows.filter(row => row.state === 'waiting').length, working: otherRows.filter(row => row.state === 'working').length } }
+  const otherRows = heard.filter(row => !row.isMe)
+  return {
+    rows,
+    text,
+    others: { waiting: otherRows.filter(row => row.state === 'waiting').length, working: otherRows.filter(row => row.state === 'working').length },
+    machine: { waiting, working, agents: heard.reduce((n, row) => n + row.working, 0) },
+  }
 }
 
 function rowOf(entry: SessionEntry, isMe: boolean, now: number): SessionRowV2 {
   const canOpen = entry.dir !== ''
+  const place = placeOf(entry.surface, entry.terminal)
+  const repo = entry.repo !== '' ? entry.repo : folderOf(entry.cwd)
+  // what it last said may be stale: when it was last heard stands in for its state, its need and what it does
+  const isQuiet = !isMe && isQuietEntry(entry, now)
   return {
     id: entry.id,
     isMe,
     title: entry.title !== '' ? entry.title : 'No request yet',
     state: entry.state,
-    stateText: STATE_TEXT[entry.state],
+    stateText: isQuiet ? '' : STATE_TEXT[entry.state],
     surface: entry.surface,
-    place: placeOf(entry.surface, entry.terminal),
-    repo: entry.repo !== '' ? entry.repo : folderOf(entry.cwd),
+    place,
+    repo,
+    where: [place, repo].filter(part => part !== '').join(' · '),
     cwd: entry.cwd,
-    need: entry.need,
-    say: entry.need ?? entry.live,
+    need: isQuiet ? null : entry.need,
+    say: isQuiet ? heardOf(entry.heartbeatAt, now) : (entry.need ?? entry.live),
     working: entry.working,
+    agents: entry.agents,
     costUsd: entry.costUsd,
     cost: costOf(entry.costUsd),
     costNote: entry.isFork === true && entry.costUsd !== null ? 'incl. its parent’s' : '',
     at: entry.updatedAt,
     age: entry.updatedAt > 0 ? F.since(now - entry.updatedAt) : '',
     startedAt: entry.startedAt,
+    isQuiet,
+    heardAt: isQuiet ? entry.heartbeatAt : 0,
     canOpen,
     canSteer: canOpen && entry.inbox,
   }
 }
 
-/** The list's ages worded again at `now` (the pane builds its screens anew; the rows' `at` stays). */
+/** A quiet deck's line: "Last heard 2m ago". */
+export function heardOf(heardAt: number, now: number): string {
+  const ago = F.since(now - heardAt)
+  return ago === 'now' ? 'Last heard just now' : `Last heard ${ago} ago`
+}
+
+/** The list's ages worded again at `now` (the pane builds its screens anew; the rows' `at` and `heardAt` stay). */
 export function sessionsAgedOf(view: SessionsV2, now: number): SessionsV2 {
-  return { ...view, rows: view.rows.map(row => ({ ...row, age: row.at > 0 ? F.since(now - row.at) : '' })) }
+  return { ...view, rows: view.rows.map(row => ({ ...row, age: row.at > 0 ? F.since(now - row.at) : '', ...(row.isQuiet ? { say: heardOf(row.heardAt, now) } : {}) })) }
+}
+
+/** "This machine" in words: "◆ 1 needs you" (amber; '' while none does), then "3 agents working", "1 session working" while only Orchestrators work, else "Nothing at work". */
+export function machineLineOf(view: Pick<SessionsV2, 'machine'>): { need: string; rest: string } {
+  const { waiting, working, agents } = view.machine
+  const need = waiting > 0 ? `◆ ${waiting} ${waiting === 1 ? 'needs' : 'need'} you` : ''
+  const rest = agents > 0 ? `${F.plural(agents, 'agent')} working` : working > 0 ? `${F.plural(working, 'session')} working` : 'Nothing at work'
+  return { need, rest }
+}
+
+/** The sessions other than the one shown (`shownId`) waiting on you, heard lately: the switcher's "◆ 1 needs you" (the one shown says its own). */
+export function othersWaitingOf(view: Pick<SessionsV2, 'rows'>, shownId: string): number {
+  return view.rows.filter(row => row.id !== shownId && !row.isQuiet && row.state === 'waiting').length
+}
+
+/** The faces most a row draws. */
+export const MOST_FACES = 3
+
+/**
+ * The faces a row draws while its session works: one an agent at work (the
+ * Orchestrator's alone while none is), at most three, then how many more;
+ * none while it does not work, or is quiet. Each is seeded by the session's
+ * id (the first by it alone, the next `<id>:1`, `<id>:2`), so no two
+ * sessions' Orchestrators look alike; a deck shares counts, never its
+ * agents' ids, so these are the session's faces, not its agents' own.
+ */
+export function facesOf(row: Pick<SessionRowV2, 'id' | 'state' | 'working' | 'isQuiet'>): { seeds: string[]; more: number } {
+  if (row.state !== 'working' || row.isQuiet) return { seeds: [], more: 0 }
+  const n = Math.max(1, row.working)
+  const seeds = Array.from({ length: Math.min(MOST_FACES, n) }, (_, i) => (i === 0 ? row.id : `${row.id}:${i}`))
+  return { seeds, more: n - seeds.length }
+}
+
+/** A note at a control that acts only in a session's own window: "Answer it in its window: Terminal · site." (`lead` "Answer it", "Stop it"…; `where` its row's, '' when the list does not hold it). */
+export function inItsWindow(lead: string, where: string): string {
+  return `${lead} in its window${where !== '' ? `: ${where}` : ''}.`
 }
 
 /** The band's words for the other sessions waiting on you: "1 other session needs you"; null when none does. */
@@ -469,11 +553,23 @@ export function stateFileV2Of(text: string): string | null {
 }
 
 /**
- * Another session's state as this deck shows it, read-only: its questions
- * answerable only where its deck takes answers from here (`canSteer`), and
- * its own list of sessions left out (this deck's own is shown).
+ * Another session's state as this deck shows it: its own list of sessions
+ * left out (this deck's own is shown), marked `peer` (where its window is,
+ * whether its deck takes answers from here); its questions answerable only
+ * where it does; every Stop and Cancel it offers none here, its `why`
+ * saying where to stop it ("Stop it in its window: Terminal · site."): a
+ * stop never goes to another session. Its permission prompts, notifications
+ * and Stop turn say the same where they stand (`peer`).
  */
-export function viewedStateOf(state: WebStateV2, canSteer: boolean): WebStateV2 {
+export function peerStateOf(state: WebStateV2, peer: V2Peer): WebStateV2 {
   const { sessions: _theirs, ...rest } = state as WebStateV2 & { sessions?: unknown }
-  return { ...rest, needs: canSteer ? rest.needs : rest.needs.map(need => ({ ...need, isAnswerable: false })) }
+  const why = inItsWindow('Stop it', peer.where)
+  const here = (stop: V2Stop): V2Stop => ({ ...stop, can: false, why })
+  return {
+    ...rest,
+    peer,
+    needs: peer.canSteer ? rest.needs : rest.needs.map(need => ({ ...need, isAnswerable: false })),
+    agents: rest.agents.map(row => (row.row === 'agent' && row.stop ? { ...row, stop: here(row.stop) } : row)),
+    ...(rest.background ? { background: { ...rest.background, rows: rest.background.rows.map(row => (row.stop ? { ...row, stop: here(row.stop) } : row)) } } : {}),
+  }
 }

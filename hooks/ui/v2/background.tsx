@@ -11,7 +11,9 @@
  *
  * A press goes through DashActions to the hooks module, which stops only
  * through Claude Code's own channels (TaskStop, CronDelete), asking its
- * check again first; in the sample, nothing is stopped.
+ * check again first; in the sample, nothing is stopped. On another
+ * session's deck (its state marked `peer`) none is offered: one quiet line
+ * under the list says where to stop them.
  *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
@@ -19,6 +21,7 @@ import type { RenderElement } from 'claude-code'
 
 import type { V2BackgroundRow } from '../../background'
 import { clean } from '../../format'
+import { inItsWindow } from '../../sessions'
 import type { WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { listBox, listRow, section } from './dash'
@@ -86,7 +89,7 @@ function statusOf(row: V2BackgroundRow): { text: string; color: string } {
  * that line.
  */
 export function backgroundSection(kit: Kit, state: WebStateV2, actions: DashActions, fold: Fold): RenderElement | null {
-  const { Text } = kit
+  const { Box, Text } = kit
   const background = state.background
   if (!background || background.rows.length === 0) return null
   const right = fold.isOpen && background.text ? <Text color={P.muted2}>{background.text}</Text> : null
@@ -96,7 +99,25 @@ export function backgroundSection(kit: Kit, state: WebStateV2, actions: DashActi
   const more = background.rows.length - shown.length
   const rows = shown.flatMap((row, i) => [i > 0 ? rule(kit) : null, backgroundRow(kit, state, row, actions)])
   if (more > 0) rows.push(rule(kit), listRow(kit, 'bg:more', [<Text color={P.muted2} wrap="truncate-end">{`and ${plural(more, 'more')}: /deck web lists them all`}</Text>]))
-  return section(kit, 'now:background', head, listBox(kit, 'bg:list', rows))
+  // another session's: its Stop and Cancel act only in its own window, so the list says where, once
+  const stops = state.peer ? background.rows.filter(row => row.stop).length : 0
+  const where = state.peer && stops > 0 ? inItsWindow(stops === 1 ? 'Stop it' : 'Stop them', state.peer.where) : ''
+  const list = listBox(kit, 'bg:list', rows)
+  return section(
+    kit,
+    'now:background',
+    head,
+    where !== '' ? (
+      <Box flexDirection="column">
+        {list}
+        <Text key="bg:where" color={P.muted2} wrap="wrap">
+          {where}
+        </Text>
+      </Box>
+    ) : (
+      list
+    ),
+  )
 }
 
 /**
