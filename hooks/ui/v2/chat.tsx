@@ -1116,8 +1116,13 @@ function previewOf(state: WebStateV2, words: string, to: V2AgentRow | undefined)
   if (words.trim() === '') return { text: '', isError: false, candidates: [] }
   const route = routeOf(state, words, to)
   if ('error' in route) return { text: route.error, isError: true, candidates: route.candidates }
-  if (route.agentId === MAIN) return { text: `→ ${route.title}: ${state.header.turn ? 'Claude reads it when it finishes its current turn' : 'your next prompt'}`, isError: false, candidates: [] }
-  return { text: `→ ${route.title} via SendMessage`, isError: false, candidates: [] }
+  return { text: viaText(state, route.agentId, route.title), isError: false, candidates: [] }
+}
+
+/** Where words to agent `id` (titled `title`) go, as a composer says it: "→ builder via SendMessage"; the Orchestrator's, when Claude reads them. */
+export function viaText(state: Pick<WebStateV2, 'header'>, id: string, title: string): string {
+  if (id === MAIN) return `→ ${title}: ${state.header.turn ? 'Claude reads it when it finishes its current turn' : 'your next prompt'}`
+  return `→ ${title} via SendMessage`
 }
 
 /** A preview as one string: typing redraws when it changes. */

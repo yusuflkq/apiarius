@@ -266,6 +266,7 @@ const IC = {
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
   arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
   arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  arrowDown: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   minus: '<path d="M5 12h14"/>',
   maximize: '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/>',
@@ -1037,8 +1038,12 @@ function navigate(tab, drawer = route.drawer) {
 const openAgent = id => navigate(route.tab, { kind: 'agent', id });
 const closeDrawer = () => navigate(route.tab, null);
 const isAgentOpen = id => !!route.drawer && route.drawer.kind === 'agent' && route.drawer.id === id;
+/** The window's width from which a drawer sits beside the page rather than over it (app.css's own breakpoint). */
+const WIDE = 1180;
+/** The window's width, px; a desktop's when it cannot be read. */
+const viewportW = () => (typeof window.innerWidth === 'number' ? window.innerWidth : 1280);
 /** A page wide enough to keep a drawer beside it: there it leaves the page in view, so keys that go to a page keep it open. */
-const isWide = () => typeof window.innerWidth === 'number' && window.innerWidth >= 1180;
+const isWide = () => typeof window.innerWidth === 'number' && window.innerWidth >= WIDE;
 
 // ================================================================== UI state
 // Lives across renders and routes; never reset by a state update.
@@ -1068,7 +1073,15 @@ const ui = {
   toast: null,             // { text, until }
   needAt: -1,              // the need `n` went to last
   stops: new Map(),        // command id -> { key, at }: a Stop, Cancel or Stop turn sent from here, until its ack
+  drawerW: keptDrawerW(),  // the width the reader dragged the agent drawer to, px; null for its default
+  drawerTo: null,          // { id, until }: an element of the drawer to bring into view once drawn (a call, an edit)
 };
+
+/** Brings element `id` of the open drawer into view once it has rendered, and lights it a moment: where a call's "In Edits" and an edit's "In Activity" go. */
+function revealInDrawer(id) {
+  ui.drawerTo = { id, until: Date.now() + 4000 };
+  invalidate();
+}
 
 /** Brings element `id` into view once the page shows route `on` (and the element has rendered: the state may still be on its way). */
 function scrollSoon(id, on = route.key, focus = false) {
@@ -1272,7 +1285,7 @@ function EditBlock(e, scope, showAgent = true) {
     PatchView(e.id, scope));
 }
 
-/** One file's edits, collapsible, each with its patch. */
+/** One file's edits, collapsible, each with its patch; on its agent's drawer (`opts.own`), newest first, each as OwnEdit draws it. */
 function FileGroup(path, edits, opts) {
   const key = `${opts.scope}|${path}`;
   const open = isOpen(key, opts.open);
@@ -1286,7 +1299,9 @@ function FileGroup(path, edits, opts) {
       opts.editors && AvatarStack(opts.editors, 18),
       h('span', { class: 'fgroup-n' }, plural(edits.length, 'edit')),
       DiffStat(add, rem)),
-    open && h('div', { class: 'fgroup-body' }, edits.map(e => EditBlock(e, opts.scope, opts.showAgent))));
+    open && h('div', { class: 'fgroup-body' }, opts.own
+      ? [...edits].reverse().map((e, i) => OwnEdit(e, opts.own, i === 0, edits.length > 1))
+      : edits.map(e => EditBlock(e, opts.scope, opts.showAgent))));
 }
 
 /**
@@ -3397,12 +3412,12 @@ function Outcome(a, x) {
   return h('span', { class: 'outcome' }, msText(x.ms) || 'ok');
 }
 
-/** One tool call, as its file holds it; it opens on all of it: the command, what it says it does, its patch for an edit. */
+/** One tool call, as its file holds it; it opens on all of it: the command, what it says it does, its patch for an edit and the way to it in Edits. */
 function ActRow(a, x, i) {
   const id = x.id || `${x.at}:${x.tool}:${i}`;
   const key = `act|${a.id}|${id}`, open = isOpen(key, false);
   const edit = x.id ? IX.editById.get(x.id) : null;
-  return h('div', { key: id, class: `act${open ? ' open' : ''}${x.ok === false ? ' is-fail' : ''}` },
+  return h('div', { key: id, id: x.id ? actAnchor(a, x.id) : null, class: `act${open ? ' open' : ''}${x.ok === false ? ' is-fail' : ''}` },
     h('button', { type: 'button', class: 'act-head', 'data-nav': 'act', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) },
       icon('chevronRight', 'chev'),
       ToolTag(x.tool),
@@ -3414,6 +3429,7 @@ function ActRow(a, x, i) {
       x.description && x.description !== x.target && h('p', { class: 'act-desc' }, x.description),
       !x.command && x.target && h('p', { class: `act-full${PATHY.has(x.tool) ? ' mono' : ''}` }, x.target),
       edit && PatchView(edit.id, `act:${a.id}`),
+      edit && h('button', { type: 'button', class: 'link-btn', onClick: () => showEdit(a, edit) }, icon('arrowDown'), 'In Edits'),
       h('p', { class: 'act-meta' }, [x.id, x.ms != null ? msText(x.ms) : '', x.ok === true ? 'ok' : x.ok === false ? 'failed' : 'no result yet', x.at ? new Date(x.at).toLocaleTimeString() : ''].filter(Boolean).join(' · '))));
 }
 
@@ -3441,6 +3457,51 @@ function WordRow(a, kind, w) {
     h('div', { class: 'word-body' },
       Folded(key, long, text)),
     h('span', { class: 'act-time', title: w.at ? new Date(w.at).toLocaleString() : '' }, ageOf(w.at)));
+}
+
+/** The ids an agent drawer's calls and edits go by on the page, so each can be brought into view from the other. */
+const actAnchor = (a, id) => `act-${a.fileId}-${id}`;
+const editAnchor = (a, id) => `edit-${a.fileId}-${id}`;
+
+/** A call's "In Edits": the drawer's Edits opened on that edit (its file, its diff), brought into view. */
+function showEdit(a, e) {
+  ui.open.set(`agent:${a.id}|${e.path}`, true);
+  ui.open.set(`edit|${a.id}|${e.id}`, true);
+  revealInDrawer(editAnchor(a, e.id));
+}
+
+/** An edit's "In Activity": the call that made it opened in the drawer's Activity, brought into view. */
+function showCall(a, id) {
+  ui.open.set(`act|${a.id}|${id}`, true);
+  revealInDrawer(actAnchor(a, id));
+}
+
+/**
+ * An agent's own edits, as the pane's page has them: a file a card, the one
+ * edited last first and the only one open at first; in it its edits newest
+ * first, each its tool's chip, when and its lines, "In Activity" where its
+ * file keeps the call that made it, the newest open on its numbered diff and
+ * the rest a press away.
+ */
+function OwnEdits(a, edits, calls) {
+  const lastOf = list => Math.max(...list.map(e => e.at || 0));
+  const files = [...group(edits, e => e.path)].sort((x, y) => lastOf(y[1]) - lastOf(x[1]));
+  return h('div', { class: 'fgroups' }, files.map(([p, list], i) => FileGroup(p, list, { scope: `agent:${a.id}`, open: i === 0, showAgent: false, outside: list.some(e => e.isOutside), own: { a, calls } })));
+}
+
+/** One edit on its agent's drawer: its chip, when, its lines, and at the right the way to its call and, among several, Show diff; its diff while open. */
+function OwnEdit(e, own, isNewest, isOneOfMany) {
+  const key = `edit|${own.a.id}|${e.id}`;
+  const open = isOpen(key, isNewest);
+  return h('div', { key: e.id, id: editAnchor(own.a, e.id), class: `edit edit-own${open ? '' : ' shut'}` },
+    h('div', { class: 'edit-head' },
+      ToolTag(e.tool),
+      h('span', { class: 'edit-time' }, agoText(e.at)),
+      DiffStat(e.added, e.removed),
+      h('span', { class: 'edit-links' },
+        own.calls.has(e.id) && h('button', { type: 'button', class: 'link-btn', onClick: () => showCall(own.a, e.id) }, icon('arrowUp'), 'In Activity'),
+        isOneOfMany && h('button', { type: 'button', class: 'link-btn', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) }, open ? 'Hide diff' : 'Show diff'))),
+    open && PatchView(e.id, `agent:${own.a.id}`));
 }
 
 /** "Calls only · With their words": what an agent's Activity lists, kept for every drawer. */
@@ -3516,7 +3577,7 @@ function AgentDrawer(id) {
       todos.length > 0 && Block('todos', 'Todos', doneOf(todos), h('ul', { class: 'items' }, todos.map((t, i) => Item(`${i}:${t.text}`, t.status, t.text, t.doing)))),
       result && Block('result', a.id === 'main' ? 'Latest answer' : st === 'failed' ? 'Result · failed' : 'Result', a.endedAt ? agoText(a.endedAt) : '', Folded(`result|${a.id}`, result.length > 600 || result.split('\n').length > 10, Markdown(result))),
       ActivityBlock(a, f),
-      edits.length > 0 && Block('edits', 'Edits', plural(byPath.size, 'file'), h('div', { class: 'fgroups' }, [...byPath].map(([p, list], i) => FileGroup(p, list, { scope: `agent:${a.id}`, open: i < 2, showAgent: false, outside: list.some(e => e.isOutside) }))))),
+      edits.length > 0 && Block('edits', 'Edits', plural(byPath.size, 'file'), OwnEdits(a, edits, new Set(file ? file.activity.map(x => x.id) : [])))),
     h('div', { key: 'foot', class: 'drawer-foot' }, Composer(scope)),
   ];
 }
@@ -3524,7 +3585,113 @@ function AgentDrawer(id) {
 function Drawer() {
   const d = route.drawer;
   if (!d || d.kind !== 'agent' || !S || S.empty) return null;
-  return h('aside', { key: `drawer:${d.id}`, class: 'drawer drawer-agent', role: 'dialog', 'aria-label': `Agent: ${nameOf(d.id)}` }, AgentDrawer(d.id));
+  return h('aside', { key: `drawer:${d.id}`, class: 'drawer drawer-agent', role: 'dialog', 'aria-label': `Agent: ${nameOf(d.id)}` }, DrawerGrip(), AgentDrawer(d.id));
+}
+
+// ------------------------------------------------------------- its width
+// The drawer's left edge drags it wider or narrower, its width kept per
+// viewer in this browser (localStorage, each access guarded: the page works
+// without it); a double click goes back to the default; focused, ← and →
+// resize it. Over a narrow window, where the drawer takes the window's width,
+// there is no edge to drag.
+
+/** The drawer's widths, px: the least, the most, its default, an arrow key's step (Shift's), and what it leaves the page beside it and the window's edge over it. */
+const DRAWER_W = { min: 360, max: 1200, def: 520, step: 16, bigStep: 64, page: 420, edge: 24 };
+
+/** The widest the drawer may be in a window `vw` wide: beside the page, leaving the page DRAWER_W.page; over it, the window less its edge. */
+function drawerMaxOf(vw) {
+  const room = vw >= WIDE ? vw - DRAWER_W.page : vw - DRAWER_W.edge;
+  return Math.max(DRAWER_W.min, Math.min(DRAWER_W.max, Math.round(room)));
+}
+
+/** Width `w` as the drawer takes it in a window `vw` wide: whole px, within its bounds; null for no width. */
+function drawerWidthOf(w, vw) {
+  const n = typeof w === 'number' ? w : typeof w === 'string' && w.trim() !== '' ? Number(w) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return Math.round(Math.min(drawerMaxOf(vw), Math.max(DRAWER_W.min, n)));
+}
+
+/** The width this browser keeps for the drawer; null for none (the default), and where its storage is refused. */
+function keptDrawerW() {
+  try {
+    const n = Number(JSON.parse(localStorage.getItem('agent-deck:drawerW')));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps the drawer's width in this browser (null: forgets it); storage refused, it lasts this visit. */
+function keepDrawerW(w) {
+  try {
+    if (w == null) localStorage.removeItem('agent-deck:drawerW');
+    else localStorage.setItem('agent-deck:drawerW', JSON.stringify(w));
+  } catch { /* private mode, or storage off: the width lasts this visit */ }
+}
+
+/** The drawer's width now, px: the one dragged to, else the default, as the window lets it be. */
+const drawerWNow = () => drawerWidthOf(ui.drawerW == null ? DRAWER_W.def : ui.drawerW, viewportW());
+
+/** The root's style: the drawer's width, once dragged. */
+const drawerStyle = () => (ui.drawerW == null ? null : { '--drawer-w': `${drawerWNow()}px` });
+
+/** Sets the drawer's width (null: its default), drawn at once without a render; `keep` keeps it in this browser. */
+function setDrawerW(w, keep) {
+  ui.drawerW = w == null ? null : drawerWidthOf(w, viewportW());
+  const app = typeof document.getElementById === 'function' ? document.getElementById('app') : null;
+  if (app && app.style) {
+    if (ui.drawerW == null) app.style.removeProperty('--drawer-w');
+    else app.style.setProperty('--drawer-w', `${ui.drawerW}px`);
+  }
+  if (keep) keepDrawerW(ui.drawerW);
+}
+
+/** A drag of the drawer's edge: its width follows the pointer (its left edge moves with it) until the button is let go, then is kept. */
+function dragDrawer(e, grip) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const startX = e.clientX, startW = drawerWNow();
+  const root = document.documentElement;
+  try { grip.setPointerCapture(e.pointerId); } catch { /* an old browser: the window's moves still come */ }
+  root.classList.add('is-resizing');
+  const move = ev => setDrawerW(startW + (startX - ev.clientX), false);
+  const done = () => {
+    grip.removeEventListener('pointermove', move);
+    grip.removeEventListener('pointerup', done);
+    grip.removeEventListener('pointercancel', done);
+    root.classList.remove('is-resizing');
+    keepDrawerW(ui.drawerW);
+    renderNow();
+  };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', done);
+  grip.addEventListener('pointercancel', done);
+}
+
+/** The focused edge's keys: ← widens the drawer (its edge moves left), → narrows it, Shift by a bigger step; the page's own keys pass by. */
+function drawerKey(e) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const step = (e.shiftKey ? DRAWER_W.bigStep : DRAWER_W.step) * (e.key === 'ArrowLeft' ? 1 : -1);
+  setDrawerW(drawerWNow() + step, true);
+  e.preventDefault();
+  if (e.stopPropagation) e.stopPropagation();
+  renderNow();
+}
+
+/** A double click on the edge: the default width again, forgotten in this browser. */
+function resetDrawerW() {
+  setDrawerW(null, true);
+  renderNow();
+}
+
+/** The drawer's left edge: a separator to drag, focusable, that says its width. */
+function DrawerGrip() {
+  return h('div', {
+    key: 'grip', class: 'drawer-grip', role: 'separator', tabindex: '0', 'aria-orientation': 'vertical',
+    'aria-label': 'Drawer width', 'aria-valuemin': String(DRAWER_W.min), 'aria-valuemax': String(drawerMaxOf(viewportW())), 'aria-valuenow': String(drawerWNow()),
+    title: 'Drag to resize (← →); double-click for the default width',
+    onPointerDown: dragDrawer, onKeyDown: drawerKey, onDblClick: resetDrawerW,
+  });
 }
 
 // ==================================================================== inspect
@@ -3847,7 +4014,7 @@ function Page() {
 
 function App() {
   const drawer = !!route.drawer && !!S && !S.empty;
-  return h('div', { id: 'app', class: `app deck-${conn.status}${S ? '' : ' no-state'}${drawer ? ' has-drawer' : ''} on-${route.tab}` },
+  return h('div', { id: 'app', class: `app deck-${conn.status}${S ? '' : ' no-state'}${drawer ? ' has-drawer' : ''} on-${route.tab}`, style: drawerStyle() },
     Header(),
     ConnBanner(),
     h('main', { class: 'scroll', ref: el => { scroller = el; } }, Page()),
@@ -4013,6 +4180,15 @@ function afterRender(pin) {
     const el = document.getElementById(ui.focusTo);
     if (el) { el.focus(); if (el.setSelectionRange) { const n = el.value.length; try { el.setSelectionRange(n, n); } catch { /* not text */ } } }
     ui.focusTo = null;
+  }
+  // a call's "In Edits" and an edit's "In Activity" bring the other into view in the drawer, lit a moment
+  if (ui.drawerTo) {
+    const el = document.getElementById(ui.drawerTo.id);
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      if (el.animate) el.animate([{ backgroundColor: 'rgba(59, 130, 246, 0.16)' }, { backgroundColor: 'transparent' }], { duration: 1400, easing: 'ease-out' });
+      ui.drawerTo = null;
+    } else if (Date.now() > ui.drawerTo.until) ui.drawerTo = null;
   }
   // n and "Answer on Dashboard" bring a need's card into view (and the focus to it), once it has rendered; i and h a section of Settings.
   if (ui.scrollTo) {

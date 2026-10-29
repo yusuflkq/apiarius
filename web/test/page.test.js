@@ -79,7 +79,7 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
     location: { search: '?t=test-token', hash },
     window: { addEventListener: noop },
     document: { title: '', querySelector: () => null, getElementById: () => null },
-    localStorage: { getItem: k => (Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v) } },
+    localStorage: { getItem: k => (Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v) }, removeItem: k => { delete storage[k] } },
     requestAnimationFrame: () => 1,
     cancelAnimationFrame: noop,
     setTimeout: () => 1,
@@ -1277,9 +1277,13 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   click(find(acts()[0], 'act-head')[0])
   assert.match(flat(textOf(acts()[0])), /npm test -- rateLimit toolu_01BldB2 · no result yet/)
   click(find(acts()[3], 'act-head')[0])
+  // its patch is fetched as it opens
+  acts()
   await settle()
   assert.ok(find(acts()[3], 'dl-add').length > 0, 'an edit opens on its patch')
-  assert.match(flat(textOf(drawer())), /Edits 3 files src\/ rateLimit\.ts 1 edit \+6 −0/)
+  assert.match(flat(textOf(find(acts()[3], 'act-body')[0])), /In Edits/)
+  // its edits a file a card, the one edited last first
+  assert.match(flat(textOf(drawer())), /Edits 3 files …\/Temp\/ bench\.js 1 edit \+3 −0 Write 11m ago \+3 −0 In Activity/)
   assert.match(flat(textOf(drawer())), /→ builder via SendMessage/)
   // the file is fetched again only when the row changes
   p.load(SAMPLE)
@@ -1316,6 +1320,94 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   // a link to an agent no longer in the session
   p.open('{ kind: "agent", id: "gone" }')
   assert.match(flat(textOf(drawer())), /This agent is not in the session/)
+})
+
+test('the drawer`s Edits, as the pane`s page: a file a card, the one edited last first and the only one open; its edits newest first, the newest on its numbered diff and the rest a press away; an edit`s "In Activity" opens the call that made it, a call`s "In Edits" opens its file on that edit', async () => {
+  const tester = JSON.parse(FILES.agent[TESTER])
+  // tester edits src/rateLimit.ts once more, a minute ago
+  const files = { ...FILES, agent: { ...FILES.agent, [TESTER]: JSON.stringify({ ...tester, edits: [...tester.edits, 'toolu_01TstE2'], activity: [...tester.activity, { id: 'toolu_01TstE2', at: NOW - MIN, tool: 'Edit', target: 'src/rateLimit.ts', ok: true, ms: 200 }] }) }, patch: { ...FILES.patch, toolu_01TstE2: '--- a/src/rateLimit.ts\n+++ b/src/rateLimit.ts\n@@ -1,1 +1,1 @@\n-const a = 1\n+const a = 2\n' } }
+  const p = page({ hash: `#/now/agent/${TESTER}`, files })
+  p.load(sample(s => s.changes.edits.push({ id: 'toolu_01TstE2', agent: TESTER, tool: 'Edit', path: 'src/rateLimit.ts', at: NOW - MIN, added: 1, removed: 1 })))
+  const drawer = () => p.view('Drawer()')
+  drawer()
+  await settle()
+  drawer()
+  await settle()
+  const groups = () => find(drawer(), 'fgroup')
+  assert.deepEqual(groups().map(g => flat(textOf(find(g, 'fgroup-head')[0]))), ['src/ rateLimit.ts 2 edits +2 −2', 'tests/ rateLimit.test.ts 1 edit +4 −0'])
+  assert.deepEqual(groups().map(g => g.p.class.includes('open')), [true, false])
+  // the newest edit open on its numbered diff; the earlier one its head and Show diff
+  const edits = () => find(groups()[0], 'edit-own')
+  assert.deepEqual(edits().map(e => e.p.id), ['edit-c4d7e8f9a0b1263d-toolu_01TstE2', 'edit-c4d7e8f9a0b1263d-toolu_01TstE1'])
+  assert.match(flat(textOf(edits()[0])), /^Edit 1m ago \+1 −1 In Activity Hide diff @@ -1,1 \+1,1 @@ 1 − const a = 1 1 \+ const a = 2$/)
+  assert.equal(find(edits()[1], 'diff').length, 0)
+  click(byText(edits()[1], 'link-btn', 'Show diff'))
+  await settle()
+  drawer()
+  await settle()
+  assert.ok(find(edits()[1], 'dl-add').length > 0, 'Show diff opens an earlier edit on its patch')
+  // In Activity: the call that made it, opened, brought into view
+  click(byText(edits()[1], 'link-btn', 'In Activity'))
+  assert.deepEqual({ ...p.run('ui.drawerTo') }, { id: 'act-c4d7e8f9a0b1263d-toolu_01TstE1', until: p.run('ui.drawerTo.until') })
+  const act = id => find(drawer(), 'act').find(a => a.p.id === `act-c4d7e8f9a0b1263d-${id}`)
+  assert.ok(act('toolu_01TstE1').p.class.includes('open'))
+  // In Edits: a call's edit in a file still shut, its file opened on it
+  click(find(act('toolu_01TstW1'), 'act-head')[0])
+  click(byText(act('toolu_01TstW1'), 'link-btn', 'In Edits'))
+  assert.equal(p.run('ui.drawerTo.id'), 'edit-c4d7e8f9a0b1263d-toolu_01TstW1')
+  assert.deepEqual(groups().map(g => g.p.class.includes('open')), [true, true])
+  drawer()
+  await settle()
+  assert.match(flat(textOf(groups()[1])), /a burst past the limit is refused/)
+})
+
+test('the drawer resizes: its left edge a separator, focusable, saying its width; dragged, ← or →, the width follows within its bounds (the page keeps 420px beside it, a window less its margin over it) and is kept per viewer; a double click resets it; with storage refused it works for the visit', () => {
+  // the bounds: 360 at least; beside the page (from 1180) the page keeps 420; over it, the window less 24; 1200 at most
+  const p = page({ hash: `#/now/agent/${BUILDER}` })
+  p.load(SAMPLE)
+  assert.deepEqual([...p.run('[drawerWidthOf(100, 1280), drawerWidthOf(2000, 1280), drawerWidthOf(2000, 900), drawerWidthOf(600, 1600), drawerWidthOf(5000, 4000), drawerWidthOf("640", 1600), drawerWidthOf("wide", 1280), drawerWidthOf(null, 1280)]')], [360, 860, 876, 600, 1200, 640, null, null])
+  assert.deepEqual([...p.run('[drawerMaxOf(1180), drawerMaxOf(1179), drawerMaxOf(400)]')], [760, 1155, 376])
+  // its edge: the drawer's first child, a separator saying its width (the default, 520)
+  const grip = () => find(p.view('Drawer()'), 'drawer-grip')[0]
+  assert.deepEqual({ role: grip().p.role, tabindex: grip().p.tabindex, orientation: grip().p['aria-orientation'], now: grip().p['aria-valuenow'], min: grip().p['aria-valuemin'] }, { role: 'separator', tabindex: '0', orientation: 'vertical', now: '520', min: '360' })
+  assert.equal(p.view('App()').p.style, null)
+  // ← widens it (its edge moves left), → narrows it, Shift by a bigger step; each kept, and the root's width with it
+  const key = (k, shiftKey = false) => { const e = { key: k, shiftKey, defaultPrevented: false, preventDefault() { this.defaultPrevented = true }, stopPropagation() {} }; grip().p.onKeyDown(e); return e.defaultPrevented }
+  assert.equal(key('ArrowLeft'), true)
+  assert.equal(p.run('ui.drawerW'), 536)
+  assert.equal(p.storage['agent-deck:drawerW'], '536')
+  assert.equal(key('ArrowRight', true), true)
+  assert.equal(p.run('ui.drawerW'), 472)
+  assert.deepEqual({ ...p.view('App()').p.style }, { '--drawer-w': '472px' })
+  assert.equal(grip().p['aria-valuenow'], '472')
+  // any other key is the page's
+  assert.equal(key('j'), false)
+  // a drag: the width follows the pointer, kept when it is let go
+  const on = {}
+  const edge = { setPointerCapture() {}, addEventListener: (type, f) => { on[type] = f }, removeEventListener: type => { delete on[type] } }
+  p.run('document.documentElement = { classList: { add() {}, remove() {} } }')
+  grip().p.onPointerDown({ button: 0, clientX: 800, pointerId: 1, preventDefault() {} }, edge)
+  on.pointermove({ clientX: 600 })
+  assert.equal(p.run('ui.drawerW'), 672)
+  on.pointermove({ clientX: -900 })
+  assert.equal(p.run('ui.drawerW'), 860)
+  on.pointerup({})
+  assert.deepEqual([on.pointermove, p.storage['agent-deck:drawerW']], [undefined, '860'])
+  // a double click: the default again, forgotten
+  grip().p.onDblClick({})
+  assert.deepEqual([p.run('ui.drawerW'), p.storage['agent-deck:drawerW'], p.view('App()').p.style], [null, undefined, null])
+  // a viewer's width comes back on their next visit
+  const again = page({ hash: `#/now/agent/${BUILDER}`, storage: { 'agent-deck:drawerW': '700' } })
+  again.load(SAMPLE)
+  assert.deepEqual({ ...again.view('App()').p.style }, { '--drawer-w': '700px' })
+  // storage refused (a private window): the page draws, and the width lasts the visit
+  const refused = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error('denied') }, has() { throw new Error('denied') }, set() { throw new Error('denied') }, deleteProperty() { throw new Error('denied') } })
+  const visit = page({ hash: `#/now/agent/${BUILDER}`, storage: refused })
+  visit.load(SAMPLE)
+  assert.equal(visit.run('ui.drawerW'), null)
+  const e = { key: 'ArrowLeft', shiftKey: true, preventDefault() {}, stopPropagation() {} }
+  find(visit.view('Drawer()'), 'drawer-grip')[0].p.onKeyDown(e)
+  assert.deepEqual({ ...visit.view('App()').p.style }, { '--drawer-w': '584px' })
 })
 
 test('Inspect (5, #/inspect): Context, Permissions, Loaded and Spend, as the state holds them, each folding to its head and one line; the header keeps no Inspect or Keys button, and no key badge', () => {

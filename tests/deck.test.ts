@@ -180,13 +180,22 @@ test('a subagent shows as a card, its page has its task and the Orchestrator`s p
     expect((await ui.find({ key: 'agent:agent-x1' }))?.props).toMatchObject({ label: 'scout', plain: true })
 
     await ui.press({ key: 'agent:main' })
-    await ui.press({ key: 'page:fold:edits' })
-    expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
-    await ui.press({ key: 'page:fold:edits' })
+    // its Edits open on its newest edit's diff: the engine's on the terminal, numbered rows of the deck's own on a desktop
+    const edit = (await ui.findAll({ type: 'Box' })).find(box => (box.key ?? '').startsWith('edit:'))
+    expect(edit?.text).toContain('const b = 3')
+    if (surface === 'terminal') expect((await ui.find({ type: 'Code' }))?.props.format).toBe('diff')
+    else expect(await ui.find({ type: 'Code' })).toBeUndefined()
     await ui.press({ key: 'key:b' })
 
     await ui.press({ key: 'agent:agent-x1' })
     expect((await ui.find({ key: 'page:task' }))?.text).toContain('Find the bug in src/app.ts')
+    // its own composer at its foot, as the web drawer's: words to scout by SendMessage, no @ needed; the field starts empty again
+    expect((await ui.find({ key: 'page:compose' }))?.text).toContain('→ scout via SendMessage')
+    const own = (await ui.find({ type: 'Input' }))?.key ?? ''
+    expect(own).toMatch(/^page:composer:agent-x1/)
+    await ui.input({ key: own, text: `from the page on ${surface}` })
+    expect((await ui.find({ type: 'Input' }))?.key).not.toBe(own)
+    expect((await ui.find({ type: 'Input' }))?.props.value).toBe('')
     await ui.press({ key: 'page:chatwith' })
     const field = (await ui.find({ type: 'Input' }))?.key ?? ''
     // scout picked in the member list: no @ needed
@@ -197,7 +206,7 @@ test('a subagent shows as a card, its page has its task and the Orchestrator`s p
     await ui.unmount()
   }
 
-  expect(sent.map(one => one.text)).toEqual(['hello from terminal', 'hello from desktop'])
+  expect(sent.map(one => one.text)).toEqual(['from the page on terminal', 'hello from terminal', 'from the page on desktop', 'hello from desktop'])
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it: b was 2.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-x1' })
   const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })

@@ -255,6 +255,20 @@ function exactly(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 }
 
+/**
+ * The edits an agent's page shows, each its block's text (keyed `edit:<id>`):
+ * its head, and while open its diff, the engine's Code block on the terminal,
+ * the deck's numbered rows on a desktop.
+ */
+async function editsShown(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Box' })).filter(box => (box.key ?? '').startsWith('edit:')).map(box => box.text)
+}
+
+/** The Button keys of an agent page's file rows of its edits (`page:edits:<path>`), in the order drawn. */
+async function fileRowsOf(ui: Drawing): Promise<string[]> {
+  return (await ui.findAll({ type: 'Button' })).map(one => one.key ?? '').filter(key => key.startsWith('page:edits:'))
+}
+
 /** Now's agent cards, in the order drawn, by the id each stands for. */
 async function cardsOf(ui: Drawing): Promise<string[]> {
   return (await ui.findAll({ type: 'Box' })).map(box => box.key ?? '').filter(key => key.startsWith('card:') && !key.startsWith('card:open:')).map(key => key.slice('card:'.length))
@@ -396,24 +410,34 @@ test('a live run, replayed: three named agents and a nested helper, their edits,
     await ui.press({ key: 'agent:agent-fixer' })
     expect((await shown(ui, { key: 'page:task' })).text).toContain(FIXER_TASK)
     expect((await shown(ui, { key: 'page:result' })).text).toContain(ANSWERS.fixer)
-    await ui.press({ key: 'page:fold:activity' })
-    expect((await shown(ui, { key: 'page:activity' })).text).toContain('Bash node --test')
-    await ui.press({ key: 'page:fold:activity' })
-    await ui.press({ key: 'page:fold:edits' })
-    const codes = await ui.findAll({ type: 'Code' })
-    expect(codes.map(code => code.props.format)).toEqual(['diff', 'diff'])
-    expect(codes.some(code => code.text.includes(FIX_LINE) && code.props.path === 'src/token.js')).toBe(true)
-    expect(codes.some(code => code.text.includes(TEST_LINE) && code.props.path === 'test/token.test.js')).toBe(true)
-    expect(codes.some(code => code.text.includes(NOTE_LINE))).toBe(false)
-    await ui.press({ key: 'page:fold:edits' })
+    // its Activity and its Edits open, as the web's drawer: its calls newest first, each its tool's chip and its own description
+    const activity = (await shown(ui, { key: 'page:activity' })).text
+    const at = ['Run the unit tests', 'test/token.test.js', 'src/token.js'].map(words => activity.indexOf(words))
+    expect(at.every(one => one >= 0) && [...at].sort((a, b) => a - b).join() === at.join()).toBe(true)
+    // its edits a file a row, the file edited last open on its diff, the other a press away
+    const rows = await fileRowsOf(ui)
+    expect(rows.length).toBe(2)
+    // a line's words, its mark left off: the terminal's block holds it after "+", a desktop's numbered row after its gutter
+    const [fix, added, note] = [FIX_LINE, TEST_LINE, NOTE_LINE].map(line => line.slice(1))
+    const first = await editsShown(ui)
+    expect(first.filter(text => text.includes(fix ?? '') || text.includes(added ?? '')).length).toBe(1)
+    await ui.press({ key: rows[1] ?? '' })
+    const edits = await editsShown(ui)
+    expect(edits.some(text => text.includes(fix ?? ''))).toBe(true)
+    expect(edits.some(text => text.includes(added ?? ''))).toBe(true)
+    expect(edits.some(text => text.includes(note ?? ''))).toBe(false)
+    if (surface === 'terminal') {
+      const codes = await ui.findAll({ type: 'Code' })
+      expect(codes.filter(code => code.props.format === 'diff').map(code => code.props.path).sort()).toEqual(['src/token.js', 'test/token.test.js'])
+    }
+    // as it was, for the next surface
+    await ui.press({ key: rows[1] ?? '' })
     // helper's own diff is the README note
     await ui.press({ key: 'key:b' })
     await ui.press({ key: 'agent:agent-helper' })
-    await ui.press({ key: 'page:fold:edits' })
-    const notes = await ui.findAll({ type: 'Code' })
+    const notes = await editsShown(ui)
     expect(notes.length).toBe(1)
-    expect(notes[0]?.text).toContain(NOTE_LINE)
-    await ui.press({ key: 'page:fold:edits' })
+    expect(notes[0]).toContain(NOTE_LINE.slice(1))
     await ui.press({ key: 'key:b' })
 
     // Chat: the whole conversation in order, as a group chat; the agents' words to each other among it
