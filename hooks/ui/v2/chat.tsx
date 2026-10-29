@@ -44,14 +44,16 @@
  *   the member list's share counted. On the terminal it keeps inside the
  *   rows it may take too (`Kit.rows`): the newest that fit between the
  *   member list and the composer, "N earlier" over them.
- * - The composer: with an agent picked, words go to it by SendMessage, no @
- *   needed ("Message builder…"); with Everyone, words with no @ go to the
- *   Orchestrator and `@name` sends the rest to that agent (`W.recipientOf`).
- *   While words are typed, where they would go ("→ builder via
- *   SendMessage"), or why they cannot; a name several agents answer to
- *   offers them ("Did you mean: …"), each a press that puts its handle in. A
- *   send shows at once, "Sending…" until its ack, and keeps its key once the
- *   state holds it, so nothing flashes.
+ * - The composer: one field and its own Send, growing to three lines as
+ *   words are typed. With an agent picked, words go to it by SendMessage,
+ *   no @ needed ("Message builder…"); with Everyone, words with no @ go to
+ *   the Orchestrator and `@name` sends the rest to that agent
+ *   (`W.recipientOf`). Under it while it is empty, whom they go to ("To the
+ *   Orchestrator · @name for one of its agents"); while words are typed,
+ *   where they would go ("→ builder via SendMessage"), or why they cannot; a
+ *   name several agents answer to offers them ("Did you mean: …"), each a
+ *   press that puts its handle in. A send shows at once, "Sending…" until
+ *   its ack, and keeps its key once the state holds it, so nothing flashes.
  *
  * The terminal draws no image: an avatar is its glyph in its colour
  * (web/avatars.mjs `terminalFace`), the member list one wrapped line of
@@ -74,8 +76,8 @@ import { rowsOf } from './fit'
 import { compactionLine } from './inspect'
 import { AVATAR, icon, quiet, svgOf } from './look'
 import { P, mix, toneOf } from './palette'
-import { chevronOf, face, finishedRow, openFoldsWith } from './parts'
-import { ago, cut, flat, foldText, plural } from './text'
+import { chevronOf, face, finishedRow, openFoldsWith, wrapAdvanceOf } from './parts'
+import { ago, cellsOf, cut, flat, foldText, plural } from './text'
 
 /** The messages the window shows at first, and the more each "Show earlier" adds. */
 const PAGE = 30
@@ -164,6 +166,8 @@ const view = {
   refusal: null as Refusal | null,
   /** The preview the last drawing showed, so typing redraws only when it changes. */
   preview: '',
+  /** The lines the field's words wanted at the last drawing, so typing redraws only when they change. */
+  rows: 1,
   sends: [] as Send[],
   /** The command ids of the sends from here: their messages keep the key their "Sending…" bubble had. */
   own: new Set<string>(),
@@ -329,16 +333,21 @@ export type ChatFollow = { isShown: boolean; end: string; isAtEnd: boolean }
 /**
  * One drawing's step of Chat keeping to its newest message, `follow`
  * updated in place: `end` is what Chat ends with now (`chatEndOf`), null
- * while Chat is not on show (which forgets it all). True when the pane is to
- * go to its end: Chat came into view (you are at its end then), or
- * something new is at its end while you were there.
+ * while Chat is not on show (which forgets it all). Where the pane is to
+ * go: `end` when Chat came into view (you are at its end then), or
+ * something new is at its end while you were there; `start` when Chat
+ * left view while the pane kept to its end, so the screen in its place
+ * shows from its top and keeps to no end of its own (the engine keeps a
+ * window taken to its end there through the draws to come, until a move
+ * takes it off); null to leave the pane where it is.
  */
-export function followStep(follow: ChatFollow, end: string | null): boolean {
+export function followStep(follow: ChatFollow, end: string | null): 'end' | 'start' | null {
   if (end === null) {
+    const wasFollowing = follow.isShown && follow.isAtEnd
     follow.isShown = false
     follow.isAtEnd = false
     follow.end = ''
-    return false
+    return wasFollowing ? 'start' : null
   }
   const isNew = !follow.isShown
   const isGoing = isNew || (end !== follow.end && follow.isAtEnd)
@@ -347,12 +356,24 @@ export function followStep(follow: ChatFollow, end: string | null): boolean {
     follow.isAtEnd = true
   }
   follow.end = end
-  return isGoing
+  return isGoing ? 'end' : null
 }
 
 /** Whether a window `offset` rows down a tree `contentRows` tall, `bodyRows` of it showing, shows the tree's end (a row short counts). */
 export function isAtEndOf(scroll: { offset: number; bodyRows: number; contentRows: number }): boolean {
   return scroll.offset >= scroll.contentRows - scroll.bodyRows - 1
+}
+
+/**
+ * Whether your own move of the pane's window (`ui.scroll`, origin person)
+ * leaves you at Chat's end, from the move as you made it: any move up
+ * leaves the end, however short (you are reading back); a move that lands
+ * at the end, or one down to it, keeps you there. Read before the engine
+ * answers the move, so a new message that lands while it is in flight
+ * cannot take you back down.
+ */
+export function isAtEndAfter(move: { offset: number; by: number; bodyRows: number; contentRows: number }): boolean {
+  return move.by >= 0 && isAtEndOf(move)
 }
 
 /** Whether `next` stacks under `prev`'s name: the same sender (not Claude Code), on the same side, within a few minutes. */
@@ -425,20 +446,29 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
   const picked = isAgentFilter(filter) ? filter : ''
   const ctx: Ctx = { kit, state, files, actions, held: new Map(state.needs.filter(need => need.kind === 'question').map(need => [need.id, need])), picked, openFolds: view2.openFolds }
   const members = memberList(ctx, filter)
-  const compose = composer(ctx, isDemo)
-  const share = sizeOf(members)
-  const roomNodes = ROW_NODES - Math.max(0, share.nodes - LIST_SHARE.nodes)
-  const roomChars = ROW_CHARS - Math.max(0, share.chars - LIST_SHARE.chars)
-  // the terminal: the rows the member list, the composer, the "earlier" line and the gaps leave the messages
-  const roomRows = kit.rows === undefined ? Infinity : kit.rows - rowsOf(members, kit.columns) - rowsOf(compose, kit.columns) - 5
   const entries = entriesOf(state, filter)
-  const want = Math.min(MOST, view.shown.get(filter) ?? PAGE)
   const draw = (i: number, isHead: boolean) => {
     const entry = entries[i] as Entry
     const prev = entries[i - 1]
     const showTo = !isHead && prev !== undefined && prev.row.to !== entry.row.to
     return entryOf(ctx, entry, showTo)
   }
+  // a message's rows on the terminal: its own, its head's line, the gap over it
+  const tallOf = (el: RenderElement, head: RenderElement[] | null) => rowsOf(el, kit.columns) + (head && head.length > 0 ? Math.max(1, rowsOf(head[head.length - 1], Math.max(1, kit.columns - 2))) : 0) + 1
+  let compose = composer(ctx, isDemo)
+  // the terminal: a field that grew takes only the rows the newest message leaves it, so the drawing keeps inside the terminal
+  if (kit.rows !== undefined && view.rows > 1) {
+    const last = entries[entries.length - 1]
+    const newest = last ? tallOf(draw(entries.length - 1, true), headOf(ctx, last)) : 0
+    const spare = kit.rows - rowsOf(members, kit.columns) - rowsOf(composer(ctx, isDemo, 1), kit.columns) - 5 - newest
+    compose = composer(ctx, isDemo, Math.max(1, 1 + spare))
+  }
+  const share = sizeOf(members)
+  const roomNodes = ROW_NODES - Math.max(0, share.nodes - LIST_SHARE.nodes)
+  const roomChars = ROW_CHARS - Math.max(0, share.chars - LIST_SHARE.chars)
+  // the terminal: the rows the member list, the composer, the "earlier" line and the gaps leave the messages
+  const roomRows = kit.rows === undefined ? Infinity : kit.rows - rowsOf(members, kit.columns) - rowsOf(compose, kit.columns) - 5
+  const want = Math.min(MOST, view.shown.get(filter) ?? PAGE)
   // the newest first, while the window and the pane's room for them last
   const drawn: Drawn[] = []
   let nodes = 0
@@ -454,8 +484,7 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
     const head = isHead ? headOf(ctx, entry) : null
     const size = sizeOf([el, head])
     const more = size.nodes + (head ? GROUP_FRAME : 0)
-    // its rows on the terminal: its own, its head's line, the gap over it
-    const tall = roomRows === Infinity ? 0 : rowsOf(el, kit.columns) + (head && head.length > 0 ? Math.max(1, rowsOf(head[head.length - 1], Math.max(1, kit.columns - 2))) : 0) + 1
+    const tall = roomRows === Infinity ? 0 : tallOf(el, head)
     if ((nodes + more > roomNodes || chars + size.chars > roomChars || rows + tall > roomRows) && drawn.length > 0) {
       isFull = true
       isShort = nodes + more <= roomNodes && chars + size.chars <= roomChars
@@ -1096,23 +1125,52 @@ function previewKey(preview: Preview): string {
   return `${preview.text}|${preview.candidates.map(one => one.row.id).join(',')}`
 }
 
+/** Under an empty composer, as the web page's: whom words with no @ go to, and that `@name` sends to another. */
+function hintOf(to: V2AgentRow | undefined): string {
+  return to && to.id !== MAIN ? `To ${to.title} · @name for another agent` : `To the ${ORCHESTRATOR} · @name for one of its agents`
+}
+
+/** The most lines the composer's field grows to as words are typed: a longer text scrolls within it. */
+const FIELD_ROWS = 3
+
+/** The cells beside the field's words: the composer's border and padding, and the field's own Send. */
+const FIELD_CHROME = 12
+
+/** The lines the composer's field takes for `text`: a line each of its own, more where one wraps, FIELD_ROWS at most; one while it is empty. */
+export function fieldRowsOf(kit: Kit, text: string): number {
+  const room = Math.max(8, kit.columns - FIELD_CHROME)
+  const advance = wrapAdvanceOf(kit)
+  const lines = text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(cellsOf(line, advance) / room)), 0)
+  return Math.max(1, Math.min(FIELD_ROWS, lines))
+}
+
 /**
- * The composer: an Input and Send, the words to the agent picked (no @
- * needed), else to the Orchestrator or the agent an `@name` names. Under the
- * field while words are typed, where they would go (or why they cannot, and
- * "Did you mean: …" for a name several agents answer to). A send goes
- * through the deck's own `sendChat` with an ack id and shows at once as your
- * bubble, the pane brought to it; the field starts empty again. In the
- * sample nothing is sent, and the words stay.
+ * The composer: one field with its own Send (the surface's submit control,
+ * as the web page has one field and one Send), the words to the agent
+ * picked (no @ needed), else to the Orchestrator or the agent an `@name`
+ * names. The field grows with the words to FIELD_ROWS lines (`most` on a
+ * short terminal), so they wrap and stay readable. Under it, while it is
+ * empty, whom words go to; while words are typed, where they would go (or
+ * why they cannot, and "Did you mean: …" for a name several agents answer
+ * to). A send takes the words the field holds as it is sent (the
+ * surface's, never the deck's copy of the typing, which a desktop may not
+ * have sent yet), goes through the deck's own `sendChat` with an ack id and
+ * shows at once as your bubble, the pane brought to it; the field starts
+ * empty again. In the sample nothing is sent, and the words stay.
  */
-function composer(ctx: Ctx, isDemo: boolean): RenderElement {
+function composer(ctx: Ctx, isDemo: boolean, most = FIELD_ROWS): RenderElement {
   const { kit, state, actions, picked } = ctx
-  const { Box, Text, Button, Input } = kit
+  const { Box, Text, Input } = kit
   if (!Input) return quiet(kit, 'Message Claude from the Claude Code conversation: this surface has no field to type in.')
   const to = picked ? rowOf(state, picked) : undefined
   const preview: Preview = view.refusal ? { text: view.refusal.error, isError: true, candidates: view.refusal.candidates } : previewOf(state, view.draft, to)
   view.preview = previewKey(preview)
+  // the lines the words want (what typing compares), drawn no taller than `most`
+  view.rows = fieldRowsOf(kit, view.draft)
+  const rows = Math.min(view.rows, most)
   const send = (text: string) => {
+    // the field's words as sent: what the deck kept of the typing may lag behind them
+    view.draft = text
     const route = routeOf(state, text.trim().slice(0, 4000), to)
     if ('error' in route) {
       view.refusal = route
@@ -1137,30 +1195,27 @@ function composer(ctx: Ctx, isDemo: boolean): RenderElement {
   const placeholder = to && to.id !== MAIN ? `Message ${cut(to.title, 48)}…` : to ? `Message the ${ORCHESTRATOR}…` : `Message the ${ORCHESTRATOR}, or @name an agent…`
   // a name several agents answer to: "Did you mean" says it, each a press
   const said = preview.candidates.length > 1 ? '' : preview.text
-  const line = [said, isDemo ? 'Sample data: nothing is sent.' : ''].filter(Boolean).join(' · ')
+  // an empty field says whom words go to; in the sample, that nothing is sent says enough
+  const line = [said || (view.draft.trim() === '' && !isDemo ? hintOf(to) : ''), isDemo ? 'Sample data: nothing is sent.' : ''].filter(Boolean).join(' · ')
   return (
     <Box key="chat:compose" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
-      <Box flexDirection="row" columnGap={1} alignItems="center">
-        <Box flexGrow={1} flexShrink={1}>
-          <Input
-            key={composerKey()}
-            placeholder={placeholder}
-            value={view.draft}
-            submitLabel="send"
-            onInput={text => {
-              view.draft = text
-              view.refusal = null
-              if (previewKey(previewOf(state, text, to)) !== view.preview) actions.redraw()
-            }}
-            onSubmit={send}
-          />
-        </Box>
-        <Box flexShrink={0}>
-          <Button key="chat:send" label="Send" variant="primary" onPress={() => send(view.draft)} />
-        </Box>
-      </Box>
+      <Input
+        key={composerKey()}
+        placeholder={placeholder}
+        value={view.draft}
+        submitLabel="Send"
+        {...(rows > 1 ? { rows } : {})}
+        onInput={text => {
+          view.draft = text
+          view.refusal = null
+          // a redraw while words are typed only for what shows: where they go, the lines the field takes
+          if (previewKey(previewOf(state, text, to)) !== view.preview || fieldRowsOf(kit, text) !== view.rows) actions.redraw()
+        }}
+        onSubmit={send}
+      />
       {line ? (
-        <Text color={preview.isError && said !== '' ? P.waitText : P.muted2} wrap="wrap">
+        // one row on the terminal, whose rows the messages share; a desktop wraps it
+        <Text color={preview.isError && said !== '' ? P.waitText : P.muted2} wrap={kit.surface === 'terminal' ? 'truncate-end' : 'wrap'}>
           {line}
         </Text>
       ) : null}

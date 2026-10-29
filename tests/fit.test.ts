@@ -31,9 +31,10 @@ function terminal(screen: number, bodyColumns = 84) {
 
 type Drawing = {
   press: (target: { key: string }) => Promise<unknown>
+  input: (target: { key: string; text: string; kind?: 'change' | 'submit' }) => Promise<unknown>
   redraw: () => Promise<void>
   drawn: () => Promise<unknown>
-  find: (q: { key: string }) => Promise<{ text: string; props: Record<string, unknown> } | undefined>
+  find: (q: { key: string } | { type: 'Input' }) => Promise<{ key?: string; text: string; props: Record<string, unknown> } | undefined>
   findAll: (q: { type: 'Box' | 'Button' }) => Promise<{ key?: string }[]>
   unmount: () => Promise<void>
 }
@@ -86,6 +87,9 @@ test('rowsOf lays a drawing out as the terminal does, on the safe side: Text wra
   expect(rowsOf(B({ flexDirection: 'column', width: '50%' }, T('x'.repeat(20))), 40)).toBe(1)
   expect(rowsOf({ type: 'Button', props: { label: 'Open' }, children: [] }, 20)).toBe(1)
   expect(rowsOf({ type: 'Markdown', props: { text: 'One\n\nTwo' }, children: [] }, 20)).toBe(3)
+  // a field: one line, or as many as its `rows`
+  expect(rowsOf({ type: 'Input', props: { key: 'f', value: 'x'.repeat(60) } }, 20)).toBe(1)
+  expect(rowsOf({ type: 'Input', props: { key: 'f', rows: 3 } }, 20)).toBe(3)
 })
 
 test('the rows the pane may take on the terminal: its room, never past the terminal less what Claude Code needs beside it; as it opens, a third of the terminal', () => {
@@ -114,7 +118,10 @@ test('/deck asks for an inline pane no taller than the terminal its last drawing
   expect(w.opens.at(-1)).toEqual({ id: 'agent-deck', rows: openRowsFor(45) })
 })
 
-test('on a short terminal the pane keeps inside it: Chat its newest messages that fit, "N earlier" over them; the Dashboard its sections folded from the bottom, needs as lines, cards cut; a folded head makes room for its section', async ($, on) => {
+/** The lines a long draft's field takes on each terminal: what the newest message leaves it, three at most. */
+const GROWN: Record<number, number> = { 30: 1, 45: 3, 60: 3 }
+
+test('on a short terminal the pane keeps inside it: Chat its newest messages that fit, "N earlier" over them, a field that grew only into the room the newest leaves; the Dashboard its sections folded from the bottom, needs as lines, cards cut; a folded head makes room for its section', async ($, on) => {
   const { v2 } = await demo($, on)
   const newest = `msg:${v2.chat[v2.chat.length - 1]!.id}`
   for (const screen of [30, 45, 60]) {
@@ -131,6 +138,14 @@ test('on a short terminal the pane keeps inside it: Chat its newest messages tha
     expect(shown.at(-1)).toBe(newest)
     expect(shown.length).toBeLessThan(v2.chat.length)
     expect((await ui.find({ key: 'chat' }))?.text).toContain(`${v2.chat.length - shown.length} earlier: more than the terminal holds.`)
+    // a long draft: the field grows to show it (three lines, as far as the newest message leaves it room), and Chat makes room for it, still inside the terminal
+    const field = async () => (await ui.find({ type: 'Input' }))?.key ?? ''
+    await ui.input({ key: await field(), text: 'tell the builder what the reviewer found in the limiter, and ask it to run the tests again. '.repeat(3), kind: 'change' })
+    await ui.redraw()
+    expect([screen, Number((await ui.find({ type: 'Input' }))?.props.rows ?? 1)]).toEqual([screen, GROWN[screen]])
+    expect(rowsOf(await ui.drawn(), 83)).toBeLessThanOrEqual(room)
+    expect((await keysOf(ui, 'Box', 'msg:')).at(-1)).toBe(newest)
+    await ui.input({ key: await field(), text: '', kind: 'change' })
     await press(ui, 'tab:now')
     await ui.unmount()
   }

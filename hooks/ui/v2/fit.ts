@@ -2,7 +2,8 @@
  * How tall the terminal lays a drawing out: rows, as Claude Code's terminal
  * lays out the elements the screens build (Box, Text, Button, Markdown,
  * Code, Input), `width` cells across. An estimate on the safe side: a line
- * that may wrap counts as wrapping, a row of parts as tall as its tallest.
+ * that may wrap counts as wrapping, a row of parts as tall as its tallest,
+ * an Input as many lines as its `rows`.
  *
  * The terminal pane must never be taller than the terminal: past it, every
  * redraw leaves stray lines behind. So the screens that grow (Chat's
@@ -108,7 +109,8 @@ export function rowsOf(node: unknown, width: number): number {
   if (type === 'Button') return childrenOf(node).length > 0 ? rowsOfRow(childrenOf(node), width, false, 0) : textRows(textOf(node), width, true)
   if (type === 'Markdown') return textRows(textOf(node), Math.max(1, width - 2), true)
   if (type === 'Code') return textRows(textOf(node), width, false) + 2
-  if (type === 'Input' || type === 'Select') return 1
+  if (type === 'Input') return Math.max(1, num(props.rows))
+  if (type === 'Select') return 1
   if (type === 'Svg') return 1
   if (type === 'Client') return Math.max(1, num(props.height))
   if (typeof props.height === 'number') return props.height
