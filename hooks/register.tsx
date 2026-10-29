@@ -3695,8 +3695,8 @@ export const register: Register = on => {
         if (e.origin.kind === 'task-notification') {
           isChanged = M.noteTaskNotices(data, e.text, now) || isChanged
           isChanged = M.endWorkflows(data, e.text, now) || isChanged
-          // a background task's notification that it ended takes its row down
-          isChanged = B.noteTaskEnds(data, e.text) || isChanged
+          // a background task's notification that it ended takes its row down (the timeline keeps it to now)
+          isChanged = B.noteTaskEnds(data, e.text, now) || isChanged
         }
         // a cron or a wakeup fired: a one-shot one is done, a recurring one's next run unknown
         if (e.origin.kind === 'scheduled-trigger') isChanged = B.noteFired(data, e.text) || isChanged
@@ -3755,8 +3755,8 @@ export const register: Register = on => {
       if (e.text.trim() && isTheirs && !isDecks && !isTyped) M.addPrompt(data, { text: e.text, at: now, ...(prompt?.command ? { command: prompt.command } : {}) })
       // a turn the engine starts with a background task's notification, no prompt.submit before it: Claude Code's row, once
       if (M.isNoticeText(e.text)) M.noteTaskNotices(data, e.text, now)
-      // and a background task it says ended takes its row down
-      if (M.isNoticeText(e.text)) B.noteTaskEnds(data, e.text)
+      // and a background task it says ended takes its row down (the timeline keeps it to now)
+      if (M.isNoticeText(e.text)) B.noteTaskEnds(data, e.text, now)
       // a new turn: no call of the Orchestrator's last one is held on you any more
       M.dropStale(data, M.MAIN, openCalls)
       touched($, now)

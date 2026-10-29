@@ -226,6 +226,15 @@ export type DeckLane = {
    * end never came.
    */
   waits: { kind: 'held' | 'note'; from: number; to?: number; call?: string }[]
+  /**
+   * The background tasks its calls started that ended (their rows left the
+   * Dashboard's Background), oldest first, the newest 50: each as its row
+   * said it (`id`, `title` and `what`, as v2's `background.rows`), from its
+   * call to the moment Claude Code said it ended (its task notification, the
+   * TaskStop that stopped it, the first snapshot that no longer listed it).
+   * Absent before any did.
+   */
+  background?: { id: string; title: string; what: string; from: number; to: number }[]
 }
 
 /**

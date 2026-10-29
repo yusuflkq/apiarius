@@ -24,8 +24,9 @@
  * pages, Changes and Inspect keep them.
  *
  * Its head carries the Chart · Timeline switch (`org:show:chart`,
- * `org:show:timeline`): the Timeline (./timeline) is each agent's lane over the
- * run. The pick stays in the view (`DeckView2.orgView`) through reloads.
+ * `org:show:timeline`): the Timeline (./timeline) is a row an agent beside its
+ * lane over the run. The pick stays in the view (`DeckView2.orgView`) through
+ * reloads.
  *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
@@ -109,7 +110,7 @@ export function orgTab(kit: Kit, whole: WebStateV2, actions: DashActions, org: O
     return (
       <Box key="org:tab" flexDirection="column" gap={1}>
         {sectionHead(kit, 'Timeline', null, switcher)}
-        {timelineView(kit, shownTimelineOf(shows.files?.timeline(whole) ?? null, whole), actions)}
+        {timelineView(kit, shownTimelineOf(shows.files?.timeline(whole) ?? null, whole), whole, actions)}
       </Box>
     )
   }

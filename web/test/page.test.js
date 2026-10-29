@@ -13,12 +13,15 @@ const path = require('node:path')
 const vm = require('node:vm')
 
 const WEB = path.join(__dirname, '..')
-// app.js is a module whose one import is the avatar library: here it runs as a script, the library handed in as AV
+// app.js is a module whose imports are the avatar library and the timeline's layout: here it runs as a script, those handed in as AV and TL
 const AVATARS = require('../avatars.mjs')
+const TIMELINE = require('../timeline.mjs')
 const IMPORT = "import * as AV from './avatars.mjs';"
+const TL_IMPORT = "import * as TL from './timeline.mjs';"
 const MODULE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8')
 assert.ok(MODULE.includes(IMPORT), 'app.js imports the avatar library')
-const SOURCE = MODULE.replace(IMPORT, 'const AV = __avatars;')
+assert.ok(MODULE.includes(TL_IMPORT), 'app.js imports the timeline`s layout')
+const SOURCE = MODULE.replace(IMPORT, 'const AV = __avatars;').replace(TL_IMPORT, 'const TL = __timeline;')
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.json'), 'utf8'))
 const NOW = SAMPLE.now
 const MIN = 60_000
@@ -72,6 +75,7 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
   const context = vm.createContext({
     __deckTest: true,
     __avatars: AVATARS,
+    __timeline: TIMELINE,
     location: { search: '?t=test-token', hash },
     window: { addEventListener: noop },
     document: { title: '', querySelector: () => null, getElementById: () => null },
@@ -618,7 +622,7 @@ test('Org`s chart, by default (and 3): every agent row under the one that starte
   assert.equal(fit(400, 300, 1100, 760, 'open').k, 1)
 })
 
-test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in the tree`s order, each name a link to its drawer; its stretches, calls and outcome; the axis to now; a legend of only what it holds; a hover says what is under the pointer', async () => {
+test('Org`s Timeline, its third view (kept): from /timeline a row an agent (its face, its name a link to its drawer, its status, what it does) beside its lane, the shells under the loop that started them; its calls, waits on you and end on its lane, each with a hover title; messages numbered and listed under it; a legend of only what it holds', async () => {
   const p = page({ hash: '#/org' })
   p.load(SAMPLE)
   click(byText(p.view('OrgPage()'), 'seg-toggle', 'Timeline').c.filter(Boolean)[2])
@@ -629,42 +633,53 @@ test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in 
   const timelines = () => p.calls.filter(one => one.url.startsWith('/timeline')).length
   assert.equal(timelines(), 1)
   const view = p.view('OrgPage()')
-  assert.equal(flat(textOf(find(view, 'org-bar')[0])), '40m · 8 agents · 2 in the background Chart List Timeline')
-  // the lanes, each name a link that opens its agent's drawer over Org
+  assert.equal(flat(textOf(find(view, 'org-bar')[0])), '40m · 8 agents · 2 in the background · 2 messages Chart List Timeline')
+  // a row an agent, each name a link that opens its agent's drawer over Org; each shell under the loop that started it
   assert.deepEqual(find(view, 'tl-name').map(a => flat(textOf(a))), ['Orchestrator', 'researcher', 'builder', 'tester', 'Lint the new files', 'docs', 'scout', 'reviewer'])
   assert.equal(find(view, 'tl-name')[2].p.href, `#/org/agent/${BUILDER}`)
-  // the Orchestrator's three turns with idle between, waits on you, every outcome; the axis from 0m, its now line
-  const svg = find(view, 'tl-svg')[0]
-  assert.equal(find(svg, 'tl-work').length, 11)
-  assert.equal(find(svg, 'tl-idle').length, 3)
-  assert.equal(find(svg, 'tl-wait').length, 4)
-  assert.deepEqual([find(svg, 'tl-done').length, find(svg, 'tl-failed').length, find(svg, 'tl-stopped').length], [3, 1, 1])
-  assert.equal(find(svg, 'tl-you').length, 2)
-  assert.equal(find(svg, 'tl-msg').length, 2)
-  assert.deepEqual(find(view, 'tl-axis').map(t => flat(textOf(t))).slice(0, 2), ['0m', '5m'])
-  assert.equal(find(view, 'tl-now').length, 1)
-  assert.deepEqual(find(view, 'tl-key').map(k => flat(textOf(k))), ['working', 'waiting on you', 'idle', 'done', 'failed', 'stopped', 'you wrote', 'a tool call', 'started by', 'a message'])
-  // a hover: what is under the pointer, from the drawing just made
-  const at = (lane, minutes) => p.run(`(() => { const g = tl.geo; return tlWhat(g.L + ((g.right - g.L) * ${minutes} * 60000) / g.span, g.TOP + ${lane} * g.LANE + g.LANE / 2) })()`)
-  assert.equal(at(3, 24.8)[0], 'Waiting on you: tester')
-  assert.match(at(3, 24.8)[1], / · 1m$/)
-  assert.equal(at(4, 23)[0], 'Failed: Lint the new files')
-  // a call the deck still holds whole says what it was given; an older one its tool
-  assert.equal(at(1, 8.6)[0], 'Read README.md')
-  assert.match(at(1, 8.6)[1], / · 400ms$/)
-  assert.equal(at(1, 5.2)[0], 'Glob')
-  assert.match(at(0, 0)[0], /^You: Add per-user rate limiting/)
-  assert.equal(at(0, 17)[0], 'Working: Orchestrator')
-  assert.equal(at(0, 24)[0], 'Idle: Orchestrator')
-  // the background tasks the deck saw start, under the agents: each its words and a bar from its call to now; a hover says what it is
-  const svgOf = () => find(p.view('OrgPage()'), 'tl-svg')[0]
-  assert.deepEqual(find(svgOf(), 'tl-bg-head').map(t => flat(textOf(t))), ['BACKGROUND'])
-  assert.deepEqual(find(svgOf(), 'tl-bg-name').map(t => flat(textOf(t))), ['Start the dev server', 'CI checks on PR 42'])
-  assert.equal(find(svgOf(), 'tl-bg').length, 2)
-  const onBackground = (k, minutes) => p.run(`(() => { const g = tl.geo; return tlWhat(g.L + ((g.right - g.L) * ${minutes} * 60000) / g.span, g.bgTop + 16 + ${k} * g.LANE + g.LANE / 2) })()`)
-  assert.equal(onBackground(0, 30)[0], 'Shell · npm run dev: Start the dev server')
-  assert.match(onBackground(0, 30)[1], / – now · 18m$/)
-  assert.equal(onBackground(1, 38)[0], 'Monitor: CI checks on PR 42')
+  const rows = find(view, 'tl-left').map(el => flat(textOf(el)))
+  assert.equal(rows.length, 10)
+  assert.match(rows[0], /^Orchestrator waiting Waiting on you: AskUserQuestion/)
+  assert.equal(rows[1], '└ CI checks on PR 42 Monitor')
+  assert.match(rows[2], /^researcher done Done \d+m ago: “Found 14 public routes/)
+  assert.match(rows[3], /^builder waiting Waiting on you: Bash npm test/)
+  assert.equal(rows[4], '└ Start the dev server npm run dev')
+  // its lane beside it: thinking, its calls (a failed one red), its waits on you, its end's cap, your prompts on the Orchestrator's
+  const grid = find(view, 'tl-grid')[0]
+  const lanes = find(grid, 'tl-lane')
+  assert.equal(lanes.length, 10)
+  assert.equal(find(grid, 'tl-think').length, 8)
+  assert.equal(find(grid, 'tl-seg').length > 20, true)
+  assert.equal(find(grid, 'tl-seg-fail').length, 3)
+  assert.equal(find(grid, 'tl-wait').length, 4)
+  assert.deepEqual([find(grid, 'tl-cap-done').length, find(grid, 'tl-cap-failed').length, find(grid, 'tl-cap-stopped').length], [3, 1, 1])
+  assert.equal(find(grid, 'tl-you').length, 2)
+  assert.equal(find(grid, 'tl-bg').length, 2)
+  // a hover title on each: a call (its words while the deck keeps them), a wait, an end, a prompt, a shell
+  const lint = lanes[6]
+  assert.match(flat(textOf(find(lint, 'tl-seg-fail')[0])), /^Bash npx eslint src\/rateLimit\.ts src\/app\.ts · failed · \S+ – \S+ · 2s$/)
+  assert.match(flat(textOf(find(lint, 'tl-cap-failed')[0])), /^Failed: Lint the new files · \S+$/)
+  assert.match(flat(textOf(find(lanes[5], 'tl-wait')[0])), /^Waiting on you · \S+ – \S+ · 1m$/)
+  assert.match(flat(textOf(find(lanes[0], 'tl-you')[0])), /^You: Add per-user rate limiting/)
+  assert.match(flat(textOf(find(lanes[4], 'tl-bg')[0])), /^Shell · npm run dev: Start the dev server · \S+ – now · 18m$/)
+  // the messages: an arrow out of the sender's lane, into the receiver's, a line through the rows between; numbered, listed under the chart
+  assert.equal(find(grid, 'tl-msg').length, 4)
+  assert.equal(find(grid, 'tl-pass').length, 10)
+  assert.deepEqual(find(lanes[3], 'tl-msg-n').map(textOf), ['1'])
+  assert.match(flat(textOf(find(lanes[3], 'tl-msg')[0])), /^1\. builder → reviewer: Limiter ready for review · /)
+  const listed = find(view, 'tl-msg-row').map(el => flat(textOf(el)))
+  assert.equal(listed.length, 2)
+  assert.match(listed[0], /^1 \d\d:\d\d builder → reviewer “Limiter ready for review”$/)
+  assert.match(listed[1], /^2 \d\d:\d\d reviewer → builder “Two questions on the window”$/)
+  // the axis: its times, now at its end; a legend of only what it holds
+  assert.equal(flat(textOf(find(view, 'tl-word').at(-1))), 'now')
+  assert.deepEqual(find(view, 'tl-key').map(k => flat(textOf(k))), ['a tool call (named where it fits)', 'thinking', 'failed', 'waiting on you', 'done', 'stopped', 'idle', 'a message', 'you wrote', 'in the background'])
+  // a press on a lane opens its agent; one on a message opens Chat on its sender
+  click(lanes[2])
+  assert.equal(p.run('route.drawer.id'), RESEARCHER)
+  click(find(view, 'tl-msg-row')[0])
+  assert.deepEqual([p.run('route.tab'), p.run('ui.chatFilter')], ['chat', BUILDER])
+  p.run("navigate('org', null)")
   // read again once per state, not per drawing
   p.view('OrgPage()')
   p.load(SAMPLE)
@@ -676,6 +691,39 @@ test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in 
   // a later page opens on the view picked last
   const again = page({ hash: '#/org', storage: p.storage })
   assert.equal(again.run('ui.orgView'), 'timeline')
+})
+
+test('Org`s Timeline folds every stretch of 20 minutes or more where nobody worked to a break that says how long, so the work gets the width: segments named with their counts where they fit; a shell that ended ends there', async () => {
+  const lane = (id, title, extra) => ({ id, title, parent: id === 'main' ? null : 'main', depth: id === 'main' ? 0 : 1, kind: id === 'main' ? 'orchestrator' : 'agent', isStopped: false, ...extra })
+  const long = {
+    v: 2, now: NOW, startedAt: NOW - 231 * MIN, tools: ['Read', 'Edit', 'Bash'],
+    lanes: [
+      lane('main', 'Orchestrator', { status: 'running', start: 0, end: null, outcome: null, spans: [{ kind: 'work', from: 0, to: 6 * MIN }, { kind: 'work', from: 176 * MIN, to: null }, { kind: 'idle', from: 6 * MIN, to: 176 * MIN }], ticks: [[MIN, 20000, 0, 1]] }),
+      lane(BUILDER, 'builder', { status: 'done', start: 179 * MIN, end: 222 * MIN, outcome: 'done', spans: [{ kind: 'work', from: 179 * MIN, to: 222 * MIN }], ticks: [...Array.from({ length: 10 }, (_, i) => [180 * MIN + i * 70000, 60000, 0, 1]), [200 * MIN, 30000, 2, 0, 'npm test']] }),
+    ],
+    marks: [], messages: [],
+    background: [{ id: 'bash_9', title: 'Start the web dev server', what: 'Shell · node web/dev.js', by: BUILDER, start: 186 * MIN, end: 222 * MIN }],
+  }
+  const p = page({ hash: '#/org', storage: { 'agent-deck:orgView': '"timeline"' }, files: { ...FILES, timeline: JSON.stringify(long) } })
+  p.load(SAMPLE)
+  p.view('OrgPage()')
+  await settle()
+  const view = p.view('OrgPage()')
+  assert.equal(flat(textOf(find(view, 'org-bar')[0])), '3h 51m · 2 agents · 1 in the background Chart List Timeline')
+  assert.equal(flat(textOf(find(view, 'tl-folded')[0])), '⋯ 2h 50m idle, folded')
+  const words = find(view, 'tl-word').map(w => flat(textOf(w)))
+  assert.ok(words.includes('⋯ 2h 50m'), words.join(' | '))
+  assert.equal(words.at(-1), 'now')
+  const lanes = find(find(view, 'tl-grid')[0], 'tl-lane')
+  // the Orchestrator lived across the break: hatched there; builder did not
+  assert.equal(find(lanes[0], 'tl-hatch').length, 1)
+  assert.equal(find(lanes[1], 'tl-hatch').length, 0)
+  assert.match(flat(textOf(find(lanes[0], 'tl-fold')[0])), /^Nobody worked for 2h 50m: folded$/)
+  assert.deepEqual(find(lanes[1], 'tl-seg-word').map(textOf), ['Read ×10'])
+  assert.match(flat(textOf(find(lanes[1], 'tl-seg')[0])), /^Read ×10 · /)
+  // the shell ended before now: its bar ends with its cap there
+  assert.equal(find(lanes[2], 'tl-bg-end').length, 1)
+  assert.match(flat(textOf(find(lanes[2], 'tl-bg')[0])), / – \S+ · 36m$/)
 })
 
 test('the plan: every source Claude used, each as made (the board with owners, the todos, the approved plan as Markdown, a workflow`s phases with no status); none, no section', () => {

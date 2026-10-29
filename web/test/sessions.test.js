@@ -158,7 +158,7 @@ test('POST /cmd passes a chat or an answer naming a session, and view; nothing e
 
 const AVATARS = require('../avatars.mjs')
 const IMPORT = "import * as AV from './avatars.mjs';"
-const SOURCE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8').replace(IMPORT, 'const AV = __avatars;')
+const SOURCE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8').replace(IMPORT, 'const AV = __avatars;').replace("import * as TL from './timeline.mjs';", 'const TL = __timeline;')
 const NOW = SAMPLE.now
 
 /** A page at `hash` (app.js in a vm, no DOM): its fetch answers /cmd, /s/<id>/state with `others[id]`, and every other GET from `files`; calls kept. */
@@ -177,7 +177,7 @@ function page({ hash = '', others = {}, files = {} } = {}) {
   }
   const location = { search: '?t=test-token', hash }
   const context = vm.createContext({
-    __deckTest: true, __avatars: AVATARS, location, window: { addEventListener: noop }, document: { title: '', querySelector: () => null, getElementById: () => null },
+    __deckTest: true, __avatars: AVATARS, __timeline: require('../timeline.mjs'), location, window: { addEventListener: noop }, document: { title: '', querySelector: () => null, getElementById: () => null },
     localStorage: { getItem: () => null, setItem: noop }, requestAnimationFrame: () => 1, cancelAnimationFrame: noop, setTimeout: () => 1, clearTimeout: noop, setInterval: () => 1,
     performance: { now: () => 0 }, fetch, URLSearchParams,
   })

@@ -683,45 +683,88 @@ button.kpi:focus-visible { outline-offset: -2px; }
 /* --------------------------------------------------------- org timeline */
 
 .page-org.view-timeline { height: auto; padding-bottom: 56px; }
-.tl { position: relative; padding: 16px 16px 12px; overflow: hidden; }
+.tl-wrap { display: flex; flex-direction: column; gap: 22px; }
+.tl { position: relative; padding: 14px 16px 12px; overflow: hidden; }
 .tl-loading { min-height: 120px; display: grid; place-items: center; }
-.tl-svg { display: block; overflow: visible; font: 400 12px/1 var(--font); user-select: none; }
-.tl-row { fill: transparent; cursor: pointer; }
-.tl-row:hover, .tl-row.on { fill: var(--hover); }
-.tl-name text { fill: var(--fg-2); font-size: 12.5px; }
-.tl-name:hover text, .tl-name:focus-visible text { fill: var(--fg); text-decoration: underline; }
-.tl-name:focus { outline: none; }
-.tl-grid { stroke: #232323; }
-.tl-axis { fill: var(--muted-2); font: 11px var(--mono); }
-.tl-now { stroke: var(--run-text); stroke-dasharray: 3 3; }
-.tl-now-word { fill: var(--run-text); }
-.tl-work { fill: var(--run); pointer-events: none; }
-.tl-wait { fill: var(--wait); pointer-events: none; }
-.tl-idle { stroke: var(--muted-3); stroke-width: 2; stroke-dasharray: 2 3; pointer-events: none; }
-.tl-tick { stroke: #bfdbfe; stroke-opacity: 0.6; pointer-events: none; }
-.tl-tick-fail { stroke: var(--fail-text); stroke-width: 1.5; pointer-events: none; }
-.tl-done { fill: var(--done); pointer-events: none; }
-.tl-failed { stroke: var(--fail); stroke-width: 2.2; stroke-linecap: round; fill: none; pointer-events: none; }
-.tl-stopped { fill: var(--idle); pointer-events: none; }
-.tl-you { fill: var(--fg); pointer-events: none; }
-.tl-spawn { stroke: var(--muted-2); stroke-dasharray: 1 2; fill: none; pointer-events: none; }
-.tl-msg { stroke: var(--fg-2); stroke-width: 1.4; fill: none; pointer-events: none; }
-.tl-arrowhead { fill: var(--muted); }
-.tl-msg-word { fill: var(--fg-2); font-size: 10.5px; pointer-events: none; }
-.tl-bg-head { fill: var(--muted-2); font-size: 10px; letter-spacing: 0.6px; }
-.tl-bg-name { fill: var(--muted); font: 12px var(--mono); }
+/* a row an agent: its words in the left column, its lane in the right; on a narrow card the words above the lane */
+.tl-grid { display: grid; grid-template-columns: var(--tl-left, 300px) minmax(0, 1fr); column-gap: 20px; align-items: center; }
+.tl.narrow .tl-grid { grid-template-columns: minmax(0, 1fr); }
+.tl-folded { font-size: 12px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-axis { display: block; overflow: visible; font: 11.5px var(--font); user-select: none; }
+.tl-word { fill: var(--muted-2); }
+.tl-word-fold { fill: var(--muted); font-size: 10.5px; }
+.tl-word-now { fill: var(--run-text); }
+.tl-left {
+  display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; height: 48px;
+  padding-left: calc(6px + var(--d, 0) * 14px); border-radius: 6px;
+}
+.tl-left.on { background: var(--hover-2); }
+.tl.narrow .tl-left { height: auto; padding-top: 8px; }
+.tl-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tl-line .avd { flex: none; }
+.tl-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13.5px; font-weight: 600; color: var(--fg);
+}
+.tl-name:hover, .tl-name:focus-visible { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(255, 255, 255, 0.3); }
+.tl-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted-2); padding-left: 30px; }
+.tl-left-bg {
+  flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; height: 26px;
+  padding-left: 36px; font-size: 12.5px; color: var(--muted);
+}
+.tl.narrow .tl-left-bg { padding-top: 0; }
+.tl-corner { flex: none; color: var(--muted-3); }
+.tl-bg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-bg-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--mono); color: var(--muted-2); }
+.tl-lane { display: block; overflow: visible; font: 10.5px var(--font); user-select: none; cursor: pointer; border-radius: 6px; }
+.tl-lane-bg { cursor: default; }
+.tl-lane:hover:not(.tl-lane-bg), .tl-lane.on { background: var(--hover); }
+.tl-gridline { stroke: #232323; }
+.tl-fold { fill: #1d1d1d; }
+.tl-hatch { stroke: #5f5f5f; stroke-width: 1.3; fill: none; pointer-events: none; }
+.tl-nowline { stroke: var(--run-text); stroke-dasharray: 3 3; pointer-events: none; }
+.tl-idle { stroke: var(--muted-3); stroke-width: 2; stroke-dasharray: 2 3; fill: none; pointer-events: none; }
+.tl-think { fill: #1f3b6e; pointer-events: none; }
+.tl-seg { fill: var(--run); }
+.tl-seg:hover { fill: #60a5fa; }
+.tl-seg-fail { fill: var(--fail); }
+.tl-seg-fail:hover { fill: #f87171; }
+.tl-seg-word { fill: #ffffff; font-size: 10.5px; font-weight: 600; pointer-events: none; }
+.tl-wait { fill: var(--wait); }
+.tl-wait:hover { fill: #fbbf24; }
+.tl-you { fill: var(--fg); }
+.tl-cap-done circle { fill: var(--done); }
+.tl-cap-done path { stroke: #052e16; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.tl-cap-failed circle { fill: var(--fail); }
+.tl-cap-failed path { stroke: #450a0a; stroke-width: 1.8; fill: none; stroke-linecap: round; }
+.tl-cap-stopped { fill: var(--idle); }
+.tl-msg-line { stroke: var(--fg-2); stroke-width: 1.4; fill: none; }
+.tl-msg-head { fill: var(--fg-2); }
+.tl-msg-n { fill: var(--fg-2); font-size: 10px; font-weight: 600; }
+.tl-pass { stroke: #5a5a5a; stroke-dasharray: 2 2; pointer-events: none; }
 .tl-bg { fill: #64748b; }
-.tl-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
+.tl-bg-end { fill: var(--idle); }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
 .tl-key { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .tl-sw { flex: none; overflow: visible; }
-.tl-tip {
-  position: absolute; z-index: 5; left: 0; top: 0; max-width: 360px; padding: 7px 10px;
-  border: 1px solid var(--border-strong); border-radius: 7px; background: #1d1d1d; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-  font-size: 12px; line-height: 1.45; color: var(--fg); pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 0.08s;
+/* the messages under the chart: each its number (its arrow's on the lanes), its time, who to whom, its words */
+.tl-msg-row {
+  display: grid; grid-template-columns: 22px 46px auto minmax(0, 1fr); column-gap: 12px; align-items: center; width: 100%;
+  padding: 10px 14px; border: 0; background: none; color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer;
 }
-.tl-tip.on { opacity: 1; visibility: visible; }
-.tl-tip-head { overflow-wrap: anywhere; }
-.tl-tip-sub { font: 11px var(--mono); color: var(--muted); }
+.tl-msg-row:hover { background: var(--hover); }
+.tl-msg-num {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%;
+  background: #262626; font: 600 11px var(--mono); color: var(--fg-2);
+}
+.tl-msg-when { font: 11.5px var(--mono); color: var(--muted-2); }
+.tl-msg-who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; color: var(--muted-2); }
+.tl-msg-who b { max-width: 220px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: var(--fg); }
+.tl-msg-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+@media (max-width: 760px) {
+  .tl-msg-row { grid-template-columns: 22px 46px minmax(0, 1fr); row-gap: 4px; }
+  .tl-msg-words { grid-column: 2 / -1; white-space: normal; }
+}
 
 /* ------------------------------------------------------------- org chart */
 
