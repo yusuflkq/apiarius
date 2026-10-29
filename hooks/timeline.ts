@@ -16,7 +16,10 @@
  *   idle teammate's or the Orchestrator's last;
  * - ticks: tool calls' starts, lengths and outcomes;
  * - marks: your prompts to the Orchestrator; messages between agents (the
- *   chat's SendMessage rows); each lane's outcome (done, failed, stopped).
+ *   chat's SendMessage rows); each lane's outcome (done, failed, stopped);
+ * - background tasks: each from the call that started it, under the loop
+ *   that made that call, to now while its row is on the Dashboard's
+ *   Background, else to the moment Claude Code said it ended.
  * Where the deck does not know when something happened, nothing is drawn.
  *
  * Pure: the same model, state and time build the same timeline.
@@ -65,8 +68,13 @@ export type V2Lane = {
   ticks: V2Tick[]
 }
 
-/** A background task's lane, under the agents (`backgroundLanesOf`): its row's id, title and kind with what Claude Code said of it ("Shell · Start the dev server"), from its call to now. */
-export type V2BackgroundLane = { id: string; title: string; what: string; start: number; end: number | null }
+/**
+ * A background task's lane (`backgroundLanesOf`): its row's id, title and
+ * kind with what Claude Code said of it ("Shell · Start the dev server"),
+ * the loop whose call started it (`main` or an agent's id: drawn under that
+ * lane), from that call to its end; null while it runs.
+ */
+export type V2BackgroundLane = { id: string; title: string; what: string; by: string; start: number; end: number | null }
 
 /** Org's Timeline, every time in ms after `startedAt` (so moving `startedAt` and `now` moves it all). */
 export type V2Timeline = {
@@ -83,7 +91,7 @@ export type V2Timeline = {
   marks: { at: number; id: string; text: string }[]
   /** Messages between two agents drawn (the chat's SendMessage rows): when, who to whom, the row's id, its summary (else its first line). */
   messages: { at: number; from: string; to: string; id: string; title: string }[]
-  /** The background tasks' lanes, under the agents (`backgroundLanesOf`): those the deck saw start; none with nothing in the background. */
+  /** The background tasks' lanes (`backgroundLanesOf`), as they started: those the deck saw start, each under the lane that started it; none with nothing in the background. */
   background: V2BackgroundLane[]
 }
 
@@ -200,17 +208,24 @@ function callsOf(agent: DeckAgent): { at: number; ms: number; tool: string; how:
 }
 
 /**
- * The background tasks' lanes, from the Dashboard's Background (`background.rows`):
- * each task the deck saw its call start (a shell, a monitor, a workflow, a
- * background agent), from that call to now, as a row leaves the list when it
- * ends. A task first seen in Claude Code's snapshot has no known start and
- * gets no lane; the schedules (crons, wakeups) are not lanes.
+ * The background tasks' lanes, as they started: each task the deck saw its
+ * call start (a shell, a monitor, a workflow, a background agent), under the
+ * loop that made that call. One on the Dashboard's Background
+ * (`background.rows`) runs to now; one that ended, as the starter's lane
+ * kept it (`DeckLane.background`, of the loops in `loops`), to the moment
+ * Claude Code said it ended. A task first seen in Claude Code's snapshot
+ * has no known start and gets no lane; the schedules (crons, wakeups) are
+ * not lanes.
  */
-export function backgroundLanesOf(state: WebStateV2): { id: string; title: string; what: string; startedAt: number; endedAt: number | null }[] {
-  const rows = state.background?.rows ?? []
-  return rows
+export function backgroundLanesOf(data: DeckData, state: WebStateV2, loops: readonly string[]): { id: string; title: string; what: string; by: string; startedAt: number; endedAt: number | null }[] {
+  const words = (text: string) => F.trunc(F.oneLine(text), TIMELINE_TEXT)
+  const running = (state.background?.rows ?? [])
     .filter(row => row.kind !== 'cron' && row.kind !== 'wakeup' && row.by !== null && Number.isFinite(row.at) && row.title.trim() !== '')
-    .map(row => ({ id: row.id, title: F.trunc(F.oneLine(row.title), TIMELINE_TEXT), what: F.trunc(F.oneLine(row.what), TIMELINE_TEXT), startedAt: row.at, endedAt: null }))
+    .map(row => ({ id: row.id, title: words(row.title), what: words(row.what), by: row.by as string, startedAt: row.at, endedAt: null as number | null }))
+  const ended = loops.flatMap(id =>
+    (M.agentOf(data, id)?.lane?.background ?? []).filter(one => one.title.trim() !== '').map(one => ({ id: one.id, title: words(one.title), what: words(one.what), by: id, startedAt: one.from, endedAt: one.to as number | null })),
+  )
+  return [...running, ...ended].sort((a, b) => a.startedAt - b.startedAt)
 }
 
 /** The first line of a chat row's words, cut for a mark or a message. */
@@ -223,7 +238,7 @@ function firstLineOf(text: string): string {
  * it at `state.now`) shows it: a lane each agent row shown, in the tree's
  * order, its runs, waits, idle stretches, calls and outcome; your prompts
  * on the Orchestrator's lane; the messages between agents; the background
- * shells once the state carries them.
+ * tasks, each by the lane that started it.
  */
 export function timelineOf(data: DeckData, state: WebStateV2): V2Timeline {
   const now = state.now
@@ -268,7 +283,7 @@ export function timelineOf(data: DeckData, state: WebStateV2): V2Timeline {
   const messages = state.chat
     .filter(row => row.kind === 'message' && row.to !== null && shown.has(row.from) && shown.has(row.to) && row.from !== row.to && !row.isCleared)
     .map(row => ({ at: row.at, from: row.from, to: row.to as string, id: row.id, title: row.title ? F.trunc(F.oneLine(row.title), TIMELINE_TEXT) : firstLineOf(row.text) }))
-  const background = backgroundLanesOf(state)
+  const background = backgroundLanesOf(data, state, [...shown])
   const starts = [...built.map(lane => lane.start), ...background.map(one => one.startedAt), ...marks.map(one => one.at)].filter(Number.isFinite)
   const startedAt = Math.min(now, ...starts)
   const off = (at: number) => at - startedAt
@@ -294,7 +309,7 @@ export function timelineOf(data: DeckData, state: WebStateV2): V2Timeline {
     })),
     marks: marks.map(mark => ({ ...mark, at: off(mark.at) })),
     messages: messages.map(message => ({ ...message, at: off(message.at) })),
-    background: background.map(one => ({ id: one.id, title: one.title, what: one.what, start: off(one.startedAt), end: offOrNull(one.endedAt) })),
+    background: background.map(one => ({ id: one.id, title: one.title, what: one.what, by: one.by, start: off(one.startedAt), end: offOrNull(one.endedAt) })),
   }
 }
 

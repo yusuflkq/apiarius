@@ -15,10 +15,12 @@
  * zoom, the focus and a half-typed message all survive it. Elements keep
  * their identity by key (lists) or by position (fixed structure).
  *
- * Its one import is the deck's avatar library (avatars.mjs), which the mod
- * draws the pane's avatars from too.
+ * Its imports are the deck's avatar library (avatars.mjs) and how Org's
+ * Timeline is laid out (timeline.mjs), which the mod draws the pane's
+ * avatars and Timeline from too.
  */
 import * as AV from './avatars.mjs';
+import * as TL from './timeline.mjs';
 
 // ===================================================================== basics
 
@@ -2046,16 +2048,21 @@ function OrgPage() {
 }
 
 // ------------------------------------------------------------ the timeline
-// Org's Timeline (web/CONTRACT.md, "The timeline"): one lane an agent from
-// its start to its end (or to now), the Orchestrator first, from /timeline
-// (timeline.json, which the mod writes before the state that follows it).
-// Every span, tick and mark is a time Claude Code reported. A hover says what
-// a stretch, a call, a prompt or a message was; a press on a lane opens its
-// agent's drawer.
+// Org's Timeline (web/CONTRACT.md, "The timeline"), from /timeline
+// (timeline.json, which the mod writes before the state that follows it),
+// laid out by timeline.mjs as the Desktop pane and the terminal lay theirs. A
+// row an agent: its face, its name (a link to its drawer), its status, and
+// what it is doing now or did last; its lane beside it, every lane on one
+// axis that folds each stretch of 20 minutes or more where nobody worked.
+// Its calls are segments named where the name fits ("Read ×10"), a failed
+// one red; its waits on you amber; thinking a thin line; its end a cap. The
+// shells a loop started sit under its row. Messages are numbered arrow marks
+// between the lanes, their words listed under the chart. A hover on a
+// segment, a wait, a mark or a cap says what it is; a press on a lane opens
+// its agent's drawer.
 
-const tl = { data: null, status: 'loading', error: '', loadedFor: -1, loading: false, tries: 0, width: 0, box: null, tip: null, geo: null };
+const tl = { data: null, status: 'loading', error: '', loadedFor: -1, loading: false, tries: 0, width: 0, box: null };
 const TL_KINDS = new Set(['work', 'wait', 'idle']);
-const TL_WORD = { work: 'Working', wait: 'Waiting on you', idle: 'Idle' };
 const OUTCOME_WORD = { done: 'Done', failed: 'Failed', stopped: 'Stopped' };
 
 /** The timeline as the page reads it, each part in its own shape: its times stay ms after `startedAt`. */
@@ -2064,7 +2071,7 @@ function timelineFrom(d) {
   const tools = arr(d.tools).map(str);
   const lanes = arr(d.lanes).filter(l => l && typeof l.id === 'string').map(l => ({
     id: l.id, title: str(l.title) || l.id, parent: typeof l.parent === 'string' ? l.parent : null, depth: numOr(l.depth, 0),
-    status: str(l.status), isStopped: l.isStopped === true, start: numOr(l.start, 0), end: numOr(l.end),
+    kind: str(l.kind), status: str(l.status), isStopped: l.isStopped === true, start: numOr(l.start, 0), end: numOr(l.end),
     outcome: OUTCOME_WORD[l.outcome] ? l.outcome : null,
     spans: arr(l.spans).filter(s => s && TL_KINDS.has(s.kind)).map(s => ({ kind: s.kind, from: numOr(s.from, 0), to: numOr(s.to) })),
     ticks: arr(l.ticks).filter(t => Array.isArray(t) && t.length >= 4).map(t => ({ at: numOr(t[0], 0), ms: numOr(t[1], -1), tool: tools[t[2]] || '', how: numOr(t[3], -1), text: str(t[4]) })),
@@ -2073,7 +2080,7 @@ function timelineFrom(d) {
     now: numOr(d.now, 0), startedAt: numOr(d.startedAt, 0), lanes,
     marks: arr(d.marks).filter(m => m && typeof m.at === 'number').map(m => ({ at: m.at, id: str(m.id), text: str(m.text) })),
     messages: arr(d.messages).filter(m => m && typeof m.at === 'number' && typeof m.from === 'string' && typeof m.to === 'string').map(m => ({ at: m.at, from: m.from, to: m.to, id: str(m.id), title: str(m.title) })),
-    background: arr(d.background).filter(b => b && typeof b.start === 'number').map(b => ({ id: str(b.id), title: str(b.title), what: str(b.what), start: b.start, end: numOr(b.end) })),
+    background: arr(d.background).filter(b => b && typeof b.start === 'number').map(b => ({ id: str(b.id), title: str(b.title), what: str(b.what), by: typeof b.by === 'string' ? b.by : null, start: b.start, end: numOr(b.end) })),
   };
 }
 
@@ -2098,28 +2105,137 @@ function timelineNow() {
 
 /** How long the axis runs, ms: from its start to now on the page's own clock (a minute at least). */
 const tlSpanOf = d => Math.max(60000, d.now - d.startedAt, liveNow() - d.startedAt);
-const TL_STEPS = [10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map(s => s * 1000);
-/** A gridline's words, its time after the axis's start (hooks/ui/v2/timeline.tsx `axisLabelOf`): "0m", "10m", "1h 30m"; "30s" under a minute. */
-function tlLabel(ms) {
-  if (ms > 0 && ms < 60000) return `${Math.round(ms / 1000)}s`;
-  const m = Math.round(ms / 60000);
-  if (m < 60) return `${m}m`;
-  const hr = Math.floor(m / 60);
-  return m % 60 ? `${hr}h ${m % 60}m` : `${hr}h`;
-}
-/** "42m · 8 agents · 2 in the background". */
-function timelineSummary(d) {
-  const parts = [tlLabel(tlSpanOf(d)), plural(d.lanes.length, 'agent')];
+/** "3h 51m", "40m"; "<1m" under a minute (timeline.mjs `lengthOf`). */
+const tlLength = ms => (ms < 60000 ? '<1m' : TL.lengthOf(ms));
+/** "3h 51m · 4 agents · 2 in the background · 4 messages". */
+function timelineSummary(d, messages = d.messages.length) {
+  const parts = [tlLength(tlSpanOf(d)), plural(d.lanes.length, 'agent')];
   if (d.background.length) parts.push(`${d.background.length} in the background`);
+  if (messages) parts.push(plural(messages, 'message'));
   return parts.join(' · ');
 }
-/** `s` cut with "…" to `n` characters. */
-const tlCut = (s, n) => (s.length > n ? `${s.slice(0, Math.max(1, n - 1))}…` : s);
+/** "2h 50m idle, folded"; '' with no fold. */
+const foldSummary = folds => (folds.length ? `${TL.lengthOf(folds.reduce((t, f) => t + (f.to - f.from), 0))} idle, folded` : '');
 /** A time of day, to the second. */
 const clockText = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+/** How wide words are at `size` px in the page's face, near enough to fit a segment's name. */
+const tlWidth = (s, size) => Array.from(String(s)).length * size * 0.58;
 
 /** The lanes the page draws: the timeline's, less any Clear finished hid since it was written. */
 const tlLanesOf = d => d.lanes.filter(l => l.id === 'main' || !IX.byId.has(l.id) || !IX.byId.get(l.id).isCleared);
+
+/**
+ * What a row's second line says, what its agent is doing now or did last
+ * (hooks/ui/v2/timeline.tsx `nowLineOf`): waiting on you; how its run ended
+ * and what it handed back; its call in flight ("Bash npm test · running
+ * 2m"); its words since; else its newest call; else what it handed back.
+ */
+function tlNowLine(a, l, d) {
+  const live = a && a.live ? oneLine(`${a.live.tool} ${a.live.text}`) : '';
+  if (l.status === 'waiting') return live ? `Waiting on you: ${live}` : 'Waiting on you';
+  const ended = l.isStopped ? 'Stopped' : OUTCOME_WORD[l.status] || '';
+  if (ended) {
+    const when = agoText(l.end != null ? d.startedAt + l.end : a && a.endedAt);
+    return a && a.result ? `${ended} ${when}: “${firstLine(a.result)}”` : `${ended} ${when}`;
+  }
+  if (a && a.live) { const age = ageOf(a.live.at); return `${live} · ${age === 'now' ? 'now' : `running ${age}`}`; }
+  if (a && a.said) return `“${oneLine(a.said.text)}”`;
+  const last = l.ticks[l.ticks.length - 1];
+  if (last) return `${[last.tool, last.text].filter(Boolean).join(' ')} · ${agoText(d.startedAt + last.at)}`;
+  return a && a.result ? `“${firstLine(a.result)}”` : '';
+}
+
+/** The room a lane's drawing leaves its axis, px: before it, and after it (an end's cap, the now line); a lane's (on a narrow card, under its words), a shell's and the axis's heights. */
+const TL_PAD = { left: 6, right: 14 };
+const TL_H = { lane: 48, narrow: 32, bg: 26, axis: 22 };
+const tlN = v => Math.round(v * 10) / 10;
+/** Whether a lane (or a shell) lived across a fold: it began before it and had not ended when it ended. */
+const tlLived = (start, end, f) => start <= f.from && (end == null || end >= f.to);
+
+/** A row's ground: the gridlines, each fold's break, hatched where the row lived across it. */
+function tlGround(axis, grid, H, lived) {
+  const out = [];
+  if (grid.length) out.push(h('path', { key: 'grid', class: 'tl-gridline', d: grid.map(x => `M${tlN(x)} 0V${H}`).join('') }));
+  axis.folds.forEach((f, i) => {
+    out.push(h('rect', { key: `f${i}`, class: 'tl-fold', x: tlN(f.x0 + 1), y: 0, width: tlN(Math.max(1, f.x1 - f.x0 - 2)), height: H }, h('title', null, `Nobody worked for ${TL.lengthOf(f.to - f.from)}: folded`)));
+    const cx = (f.x0 + f.x1) / 2;
+    if (lived(f)) out.push(h('path', { key: `fh${i}`, class: 'tl-hatch', d: `M${tlN(cx - 5)} ${H / 2 + 6}l4 -12M${tlN(cx + 1)} ${H / 2 + 6}l4 -12` }));
+  });
+  return out;
+}
+
+/** The messages' marks on a row: out of the sender's lane toward the receiver's row (its number beside it), into the receiver's, a dashed line through the rows between; a hover says the message. */
+function tlMarks(d, axis, crossings, messages, H) {
+  const mid = H / 2;
+  return crossings.map((c, i) => {
+    const m = messages[c.n - 1];
+    const tip = h('title', null, `${c.n}. ${nameOf(m.from)} → ${nameOf(m.to)}: ${m.title} · ${clockText(d.startedAt + m.at)}`);
+    const x = tlN(axis.x(c.at));
+    if (c.role === 'pass') return h('path', { key: `m${i}`, class: 'tl-pass', d: `M${x} 0V${H}` });
+    const edge = (c.role === 'from') === c.down ? H : 0;
+    const bar = (c.role === 'from') === c.down ? mid + 8 : mid - 8;
+    const [y1, y2] = c.role === 'from' ? [bar, edge] : [edge, bar];
+    const dir = y2 > y1 ? 1 : -1;
+    return h('g', { key: `m${i}`, class: 'tl-msg' },
+      tip,
+      h('path', { class: 'tl-msg-line', d: `M${x} ${tlN(y1)}V${tlN(y2 - dir * 3)}` }),
+      h('path', { class: 'tl-msg-head', d: `M${x} ${tlN(y2)}l-3.4 ${tlN(-dir * 5)}h6.8z` }),
+      c.role === 'from' && h('text', { class: 'tl-msg-n', x: tlN(axis.x(c.at) + 5), y: tlN(c.down ? H - 3 : 10) }, String(c.n)));
+  });
+}
+
+/** A lane: its ground, idle dotted, thinking a thin bar, its calls as segments (named where the name fits), its waits on you, your prompts, its end's cap, the messages' marks, now; a hover on each says what it is. */
+function TimelineLane(d, l, axis, grid, crossings, messages, w, H) {
+  const mid = H / 2, abs = ms => d.startedAt + ms;
+  const to = at => axis.x(at == null ? axis.span : at);
+  const when = (from, end) => `${clockText(abs(from))} – ${end == null ? 'now' : clockText(abs(end))} · ${dur(Math.max(0, (end == null ? axis.span : end) - from))}`;
+  const bar = (a, b, half) => `M${tlN(a)} ${tlN(mid - half)}h${tlN(Math.max(2, b - a))}v${half * 2}h${tlN(-Math.max(2, b - a))}z`;
+  const out = tlGround(axis, grid, H, f => tlLived(l.start, l.end, f));
+  const idle = l.spans.filter(s => s.kind === 'idle');
+  if (idle.length) out.push(h('path', { key: 'idle', class: 'tl-idle', d: idle.map(s => `M${tlN(axis.x(s.from) + 2)} ${mid}H${tlN(Math.max(axis.x(s.from) + 2, to(s.to) - 2))}`).join('') }));
+  const work = l.spans.filter(s => s.kind === 'work');
+  if (work.length) out.push(h('path', { key: 'think', class: 'tl-think', d: work.map(s => bar(axis.x(s.from), to(s.to), 3)).join('') }));
+  const live = l.spans.some(s => s.kind === 'work' && s.to == null);
+  TL.segmentsOf(l.ticks, axis, { liveTo: live ? axis.span : null, min: 3, join: 2 }).forEach((s, i) => {
+    // a failed call is a thin red mark where it is short: a few among many never paint a lane red
+    const width = s.failed ? Math.max(2, axis.x(s.to) - s.x0) : s.x1 - s.x0 > 4 ? s.x1 - s.x0 - 1 : s.x1 - s.x0;
+    const one = s.count === 1 ? l.ticks.find(t => t.at === s.from && t.tool === s.tool) : null;
+    const what = one && one.text ? `${s.tool} ${one.text}` : TL.toolsText(s);
+    const tip = `${what}${s.failed ? ' · failed' : ''} · ${s.running ? `${clockText(abs(s.from))} – now · running` : s.to > s.from ? when(s.from, s.to) : clockText(abs(s.from))}`;
+    out.push(h('rect', { key: `c${i}`, class: `tl-seg${s.failed ? ' tl-seg-fail' : ''}`, x: tlN(s.x0), y: mid - 7, width: tlN(width), height: 14, rx: 2 }, h('title', null, tip)));
+    const label = TL.segmentLabel(s, width, t => tlWidth(t, 10.5), true, 8);
+    if (label) out.push(h('text', { key: `cw${i}`, class: 'tl-seg-word', x: tlN(s.x0 + width / 2), y: tlN(mid + 3.8), 'text-anchor': 'middle' }, label));
+  });
+  l.spans.forEach((s, i) => {
+    if (s.kind !== 'wait') return;
+    const a = axis.x(s.from), b = to(s.to);
+    out.push(h('rect', { key: `w${i}`, class: 'tl-wait', x: tlN(a), y: mid - 7, width: tlN(Math.max(2, b - a)), height: 14, rx: 2 }, h('title', null, `Waiting on you · ${when(s.from, s.to)}`)));
+  });
+  if (l.id === 'main') d.marks.forEach((m, i) => out.push(h('path', { key: `y${i}`, class: 'tl-you', d: `M${tlN(axis.x(m.at))} ${mid - 13}l4.5 4.5-4.5 4.5-4.5-4.5z` }, h('title', null, `You: ${m.text} · ${clockText(abs(m.at))}`))));
+  if (l.end != null && l.outcome) {
+    const x = tlN(Math.min(axis.room + TL_PAD.right - 8, axis.x(l.end) + 2));
+    const tip = h('title', null, `${OUTCOME_WORD[l.outcome]}: ${l.title} · ${clockText(abs(l.end))}`);
+    if (l.outcome === 'done') out.push(h('g', { key: 'cap', class: 'tl-cap tl-cap-done' }, tip, h('circle', { cx: x, cy: mid, r: 7 }), h('path', { d: `M${tlN(x - 3.2)} ${mid}l2.4 2.4 4.3-4.8` })));
+    else if (l.outcome === 'failed') out.push(h('g', { key: 'cap', class: 'tl-cap tl-cap-failed' }, tip, h('circle', { cx: x, cy: mid, r: 7 }), h('path', { d: `M${tlN(x - 2.8)} ${mid - 2.8}l5.6 5.6m0 -5.6l-5.6 5.6` })));
+    else out.push(h('rect', { key: 'cap', class: 'tl-cap tl-cap-stopped', x: tlN(x - 5), y: mid - 5, width: 10, height: 10, rx: 1.5 }, tip));
+  }
+  out.push(...tlMarks(d, axis, crossings, messages, H));
+  out.push(h('path', { key: 'now', class: 'tl-nowline', d: `M${tlN(axis.room)} 0V${H}` }));
+  return h('svg', { key: `s:${l.id}`, class: `tl-lane${isAgentOpen(l.id) ? ' on' : ''}`, width: w, height: H, viewBox: `0 0 ${w} ${H}`, onClick: () => openAgent(l.id) }, h('g', { transform: `translate(${TL_PAD.left} 0)` }, out));
+}
+
+/** A shell (or another background task): a grey bar from its call to its end (a cap there) or to now; a hover says what it is. */
+function TimelineShell(d, b, axis, grid, crossings, messages, w) {
+  const H = TL_H.bg, mid = H / 2;
+  const out = tlGround(axis, grid, H, f => tlLived(b.start, b.end, f));
+  const a = axis.x(b.start), e = axis.x(b.end == null ? axis.span : b.end);
+  const tip = `${b.what ? `${b.what}: ` : ''}${b.title} · ${clockText(d.startedAt + b.start)} – ${b.end == null ? 'now' : clockText(d.startedAt + b.end)} · ${dur(Math.max(0, (b.end == null ? axis.span : b.end) - b.start))}`;
+  out.push(h('rect', { key: 'bar', class: 'tl-bg', x: tlN(a), y: mid - 3, width: tlN(Math.max(3, e - a)), height: 6, rx: 3 }, h('title', null, tip)));
+  if (b.end != null) out.push(h('rect', { key: 'end', class: 'tl-bg-end', x: tlN(Math.max(a, e - 3)), y: mid - 4, width: 6, height: 8, rx: 1.5 }, h('title', null, tip)));
+  out.push(...tlMarks(d, axis, crossings, messages, H));
+  out.push(h('path', { key: 'now', class: 'tl-nowline', d: `M${tlN(axis.room)} 0V${H}` }));
+  return h('svg', { key: `s:bg:${b.id}`, class: 'tl-lane tl-lane-bg', width: w, height: H, viewBox: `0 0 ${w} ${H}` }, h('g', { transform: `translate(${TL_PAD.left} 0)` }, out));
+}
 
 function TimelineView() {
   const t = timelineNow();
@@ -2129,194 +2245,79 @@ function TimelineView() {
   }
   const d = t.data;
   const lanes = tlLanesOf(d);
-  const W = Math.max(520, Math.round(tl.width || 1000));
-  const L = clamp(Math.round(W * 0.16), 120, 200);
-  const LANE = 30, TOP = 30, right = W - 20;
+  const shown = new Set(lanes.map(l => l.id));
+  const rows = TL.rowsOf(lanes, d.background.filter(b => b.end == null || shown.has(b.by)));
+  const ids = rows.map(r => (r.kind === 'lane' ? r.lane.id : `bg:${r.bg.id}`));
+  const crossings = TL.crossingsOf(ids, d.messages);
+  const messages = TL.numberedOf(ids, d.messages);
   const span = tlSpanOf(d);
-  const X = ms => L + ((right - L) * clamp(ms, 0, span)) / span;
-  const yOf = i => TOP + i * LANE + LANE / 2;
-  const bgTop = TOP + lanes.length * LANE + 10;
-  const bottom = d.background.length ? bgTop + 16 + d.background.length * LANE : TOP + lanes.length * LANE;
-  const H = bottom + 10;
-  tl.geo = { L, right, TOP, LANE, span, lanes, bgTop, d, X, yOf };
-  const index = new Map(lanes.map((l, i) => [l.id, i]));
-  const n = v => Math.round(v * 10) / 10;
-  const out = [];
-  // the axis: gridlines and their words, then now
-  let step = TL_STEPS[TL_STEPS.length - 1];
-  for (const s of TL_STEPS) if ((s / span) * (right - L) >= 64) { step = s; break; }
-  const nowX = X(span);
-  for (let ms = 0; ms <= span; ms += step) {
-    const x = n(X(ms));
-    out.push(h('line', { key: `g${ms}`, class: 'tl-grid', x1: x, x2: x, y1: 20, y2: bottom }));
-    if (nowX - x > 30) out.push(h('text', { key: `gl${ms}`, class: 'tl-axis', x, y: 13, 'text-anchor': 'middle' }, tlLabel(ms)));
-  }
-  out.push(h('line', { key: 'now', class: 'tl-now', x1: n(nowX), x2: n(nowX), y1: 20, y2: bottom }));
-  out.push(h('text', { key: 'nowl', class: 'tl-axis tl-now-word', x: n(nowX), y: 13, 'text-anchor': 'end' }, 'now'));
-  // spawns: from the parent's lane at the child's start
-  lanes.forEach((l, i) => {
-    const at = l.parent != null ? index.get(l.parent) : undefined;
-    if (at === undefined) return;
-    const x = n(X(l.start));
-    const [a, b] = at < i ? [yOf(at) + 6, yOf(i) - 7] : [yOf(at) - 6, yOf(i) + 7];
-    out.push(h('path', { key: `sp:${l.id}`, class: 'tl-spawn', d: `M${x} ${a}V${b}` }));
-  });
-  // each lane: its name (a link to its drawer), its stretches, its calls, its outcome
-  lanes.forEach((l, i) => {
-    const y = yOf(i);
-    const st = l.isStopped ? 'stopped' : l.status;
-    out.push(h('rect', { key: `hit:${l.id}`, class: `tl-row${isAgentOpen(l.id) ? ' on' : ''}`, x: 0, y: y - LANE / 2, width: W, height: LANE }));
-    out.push(h('a', { key: `name:${l.id}`, class: 'tl-name', href: hrefOf('org', { kind: 'agent', id: l.id }), 'aria-label': `${l.title}, ${statusOf(st).label}: open its drawer` },
-      h('text', { x: Math.min(l.depth, 4) * 10, y: y + 4 }, tlCut(l.title, Math.max(8, Math.floor((L - Math.min(l.depth, 4) * 10 - 12) / 6.8))))));
-    for (const s of l.spans) {
-      const a = X(s.from), b = X(s.to == null ? span : s.to);
-      if (s.kind === 'idle') out.push(h('line', { key: `s:${l.id}:${s.kind}:${s.from}`, class: 'tl-idle', x1: n(a), x2: n(b), y1: y, y2: y }));
-      else out.push(h('rect', { key: `s:${l.id}:${s.kind}:${s.from}`, class: `tl-${s.kind}`, x: n(a), y: y - 6, width: n(Math.max(3, b - a)), height: 12, rx: 6 }));
+  const folds = TL.foldsOf(d.lanes, span);
+  // a row's words beside its lane; on a narrow card above it
+  const W = Math.max(320, Math.round(tl.width || 1000));
+  const narrow = W < 640;
+  const left = narrow ? W : clamp(Math.round(W * 0.34), 220, 400);
+  const w = narrow ? W : W - left - 20;
+  const axis = TL.axisOf(span, folds, w - TL_PAD.left - TL_PAD.right, narrow ? 44 : 72);
+  const words = TL.axisWordsOf(axis, d.startedAt, s => tlWidth(s, 11.5), 10);
+  const grid = words.filter(x => x.kind === 'tick').map(x => x.x);
+  const cells = [];
+  rows.forEach((r, i) => {
+    if (r.kind === 'bg') {
+      const b = r.bg;
+      cells.push(h('div', { key: `l:bg:${b.id}`, class: 'tl-left tl-left-bg' },
+        h('span', { class: 'tl-corner' }, '└'), h('span', { class: 'tl-bg-name', title: b.title }, b.title),
+        b.what && h('span', { class: 'tl-bg-what', title: b.what }, b.what.replace(/^[^·]+·\s*/, ''))));
+      cells.push(TimelineShell(d, b, axis, grid, crossings[i], messages, w));
+      return;
     }
-    const ok = [], bad = [];
-    let last = -Infinity;
-    for (const k of l.ticks) {
-      const x = X(k.at);
-      if (k.how === 0) { bad.push(`M${n(x)} ${y - 5}v10`); continue; }
-      if (x - last < 2) continue;
-      ok.push(`M${n(x)} ${y - 4}v8`);
-      last = x;
-    }
-    if (ok.length) out.push(h('path', { key: `t:${l.id}`, class: 'tl-tick', d: ok.join('') }));
-    if (bad.length) out.push(h('path', { key: `tf:${l.id}`, class: 'tl-tick-fail', d: bad.join('') }));
-    if (l.end != null && l.outcome) {
-      const x = X(l.end);
-      if (l.outcome === 'done') out.push(h('circle', { key: `o:${l.id}`, class: 'tl-done', cx: n(x), cy: y, r: 5 }));
-      else if (l.outcome === 'failed') out.push(h('path', { key: `o:${l.id}`, class: 'tl-failed', d: `M${n(x - 4.5)} ${y - 4.5}l9 9M${n(x + 4.5)} ${y - 4.5}l-9 9` }));
-      else out.push(h('rect', { key: `o:${l.id}`, class: 'tl-stopped', x: n(x - 4.5), y: y - 4.5, width: 9, height: 9, rx: 1.5 }));
-    }
+    const l = r.lane, a = IX.byId.get(l.id), st = l.isStopped ? 'stopped' : l.status;
+    const line = tlNowLine(a, l, d);
+    cells.push(h('div', { key: `l:${l.id}`, class: `tl-left${isAgentOpen(l.id) ? ' on' : ''}`, style: { '--d': String(Math.min(3, Math.max(0, l.depth - 1))) } },
+      h('div', { class: 'tl-line' },
+        AvatarDot(a || { id: l.id, title: l.title, kind: l.kind, status: l.status, isStopped: l.isStopped, todos: [] }, 22),
+        h('a', { class: 'tl-name', href: hrefOf('org', { kind: 'agent', id: l.id }), title: l.title, 'aria-label': `${l.title}, ${statusOf(st).label}: open its drawer` }, l.title),
+        Pill(st)),
+      h('div', { class: 'tl-now', title: line }, line ? inline(line) : ' ')));
+    cells.push(TimelineLane(d, l, axis, grid, crossings[i], messages, w, narrow ? TL_H.narrow : TL_H.lane));
   });
-  // your prompts, on the Orchestrator's lane
-  const main = index.get('main');
-  if (main !== undefined) d.marks.forEach(m => out.push(h('path', { key: `m:${m.id}:${m.at}`, class: 'tl-you', d: `M${n(X(m.at))} ${yOf(main) - 10}l5.5 5.5-5.5 5.5-5.5-5.5z` })));
-  // messages between agents: an arrow from the sender's lane to the receiver's; the newest few named where they fit
-  const msgs = d.messages.filter(m => index.has(m.from) && index.has(m.to));
-  const taken = [];
-  msgs.forEach((m, k) => {
-    const a = index.get(m.from), b = index.get(m.to), x = X(m.at), down = b > a;
-    out.push(h('path', { key: `msg:${m.id}`, class: 'tl-msg', d: `M${n(x)} ${yOf(a) + (down ? 7 : -7)}V${yOf(b) + (down ? -9 : 9)}`, 'marker-end': 'url(#tl-arrow)' }));
-    if (msgs.length - k > 3) return;
-    const words = `${lanes[a].title} → ${lanes[b].title}: “${m.title}”`;
-    const w = Math.min(words.length * 5.6, x - L - 6);
-    const ly = yOf(a) + (down ? 18 : -11);
-    if (w < 60 || taken.some(o => Math.abs(o.y - ly) < 12 && o.x0 < x && x - w - 6 < o.x1)) return;
-    taken.push({ x0: x - w - 6, x1: x, y: ly });
-    out.push(h('text', { key: `msgl:${m.id}`, class: 'tl-msg-word', x: n(x - 5), y: ly, 'text-anchor': 'end' }, tlCut(words, Math.floor(w / 5.6))));
-  });
-  // the background shells, under the agents
-  if (d.background.length) {
-    out.push(h('text', { key: 'bg', class: 'tl-bg-head', x: 0, y: bgTop + 4 }, 'BACKGROUND'));
-    d.background.forEach((b, i) => {
-      const y = bgTop + 16 + i * LANE + LANE / 2 - 4;
-      out.push(h('text', { key: `bgn:${b.id}`, class: 'tl-bg-name', x: 0, y: y + 4 }, tlCut(b.title, Math.floor((L - 12) / 6.8))));
-      const a = X(b.start);
-      out.push(h('rect', { key: `bgr:${b.id}`, class: 'tl-bg', x: n(a), y: y - 4, width: n(Math.max(3, X(b.end == null ? span : b.end) - a)), height: 8, rx: 4 }));
-    });
-  }
-  return h('div', { key: 'tl', class: 'card tl', ref: el => { tl.box = el; } },
-    h('svg', {
-      key: 'svg', class: 'tl-svg', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img',
-      'aria-label': `The timeline: ${timelineSummary(d)}. Hover a stretch, a call or a mark to read it; press a lane to open its agent.`,
-      onMouseMove: tlHover, onMouseLeave: tlLeave, onClick: tlPress,
-    },
-    h('defs', { key: 'defs' }, h('marker', { id: 'tl-arrow', viewBox: '0 0 10 10', refX: 8, refY: 5, markerWidth: 6, markerHeight: 6, orient: 'auto-start-reverse' }, h('path', { d: 'M0 0L10 5L0 10z', class: 'tl-arrowhead' }))),
-    out),
-    // its words are written by tlHover only: a vnode child here would fight it
-    h('div', { key: 'tip', class: 'tl-tip', role: 'tooltip', ref: el => { tl.tip = el; } }),
-    TimelineLegend(d, lanes));
+  const folded = foldSummary(axis.folds);
+  return h('div', { key: 'tl-wrap', class: 'tl-wrap' },
+    h('div', { key: 'tl', class: `card tl${narrow ? ' narrow' : ''}`, ref: el => { tl.box = el; }, style: { '--tl-left': `${left}px` } },
+      h('div', { key: 'grid', class: 'tl-grid' },
+        !narrow && h('div', { key: 'corner', class: 'tl-folded' }, folded && `⋯ ${folded}`),
+        h('svg', { key: 'axis', class: 'tl-axis', width: w, height: TL_H.axis, viewBox: `0 0 ${w} ${TL_H.axis}`, role: 'img', 'aria-label': `Time from ${TL.clockOf(d.startedAt)} to now${folded ? `, ${folded}` : ''}` },
+          h('g', { transform: `translate(${TL_PAD.left} 0)` }, words.map(x => h('text', { key: `${x.kind}${x.x}`, class: `tl-word tl-word-${x.kind}`, x: tlN(x.x), y: TL_H.axis - 6, 'text-anchor': x.align }, x.text)))),
+        cells),
+      TimelineLegend(d, lanes, rows, messages, axis)),
+    messages.length > 0 && Section('tl-messages', 'Messages', messages.length, h('span', { class: 'sec-link' }, 'Each number marks its arrow on the lanes · a press opens it in Chat'), () =>
+      h('div', { class: 'card list tl-messages' }, messages.map(m => h('button', {
+        key: m.id || `m${m.n}`, type: 'button', class: 'tl-msg-row', title: 'Open in Chat',
+        onClick: () => { ui.chatFilter = m.from; ui.pinChat = true; navigate('chat', null); },
+      },
+      h('span', { class: 'tl-msg-num' }, String(m.n)),
+      h('span', { class: 'tl-msg-when' }, TL.clockOf(d.startedAt + m.at)),
+      h('span', { class: 'tl-msg-who' }, whoAvatar(m.from, 16), h('b', null, nameOf(m.from)), h('span', { class: 'sep' }, '→'), whoAvatar(m.to, 16), h('b', null, nameOf(m.to))),
+      h('span', { class: 'tl-msg-words' }, `“${m.title}”`))))));
 }
 
-/** What the drawing holds, and only that. */
-function TimelineLegend(d, lanes) {
+/** What the chart holds, and only that. */
+function TimelineLegend(d, lanes, rows, messages, axis) {
   const has = kind => lanes.some(l => l.spans.some(s => s.kind === kind));
-  const sw = (key, ...kids) => h('svg', { class: 'tl-sw', width: 18, height: 12, viewBox: '0 0 18 12', 'aria-hidden': 'true' }, kids);
+  const sw = (...kids) => h('svg', { class: 'tl-sw', width: 18, height: 14, viewBox: '0 0 18 14', 'aria-hidden': 'true' }, kids);
   const items = [
-    has('work') && ['work', 'working', sw('w', h('rect', { class: 'tl-work', x: 1, y: 2, width: 16, height: 8, rx: 4 }))],
-    has('wait') && ['wait', 'waiting on you', sw('a', h('rect', { class: 'tl-wait', x: 1, y: 2, width: 16, height: 8, rx: 4 }))],
-    has('idle') && ['idle', 'idle', sw('i', h('line', { class: 'tl-idle', x1: 1, x2: 17, y1: 6, y2: 6 }))],
-    lanes.some(l => l.outcome === 'done') && ['done', 'done', sw('d', h('circle', { class: 'tl-done', cx: 9, cy: 6, r: 4.5 }))],
-    lanes.some(l => l.outcome === 'failed') && ['failed', 'failed', sw('f', h('path', { class: 'tl-failed', d: 'M5 2l8 8M13 2l-8 8' }))],
-    lanes.some(l => l.outcome === 'stopped') && ['stopped', 'stopped', sw('s', h('rect', { class: 'tl-stopped', x: 5, y: 2, width: 8, height: 8, rx: 1.5 }))],
-    d.marks.length && ['you', 'you wrote', sw('y', h('path', { class: 'tl-you', d: 'M9 0.5l5.5 5.5-5.5 5.5-5.5-5.5z' }))],
-    lanes.some(l => l.ticks.length) && ['tick', 'a tool call', sw('t', h('rect', { class: 'tl-work', x: 1, y: 2, width: 16, height: 8, rx: 4 }), h('path', { class: 'tl-tick', d: 'M9 2.5v7' }))],
-    lanes.some(l => l.parent != null) && ['spawn', 'started by', sw('p', h('path', { class: 'tl-spawn', d: 'M9 0v12' }))],
-    d.messages.length && ['msg', 'a message', sw('m', h('path', { class: 'tl-msg', d: 'M9 0v8', 'marker-end': 'url(#tl-arrow)' }))],
+    lanes.some(l => l.ticks.length) && ['call', 'a tool call (named where it fits)', sw(h('rect', { class: 'tl-seg', x: 1, y: 2, width: 16, height: 10, rx: 2 }))],
+    has('work') && ['think', 'thinking', sw(h('rect', { class: 'tl-think', x: 1, y: 4, width: 16, height: 6, rx: 3 }))],
+    lanes.some(l => l.outcome === 'failed' || l.ticks.some(k => k.how === 0)) && ['fail', 'failed', sw(h('rect', { class: 'tl-seg tl-seg-fail', x: 1, y: 2, width: 16, height: 10, rx: 2 }))],
+    has('wait') && ['wait', 'waiting on you', sw(h('rect', { class: 'tl-wait', x: 1, y: 2, width: 16, height: 10, rx: 2 }))],
+    lanes.some(l => l.outcome === 'done') && ['done', 'done', sw(h('g', { class: 'tl-cap tl-cap-done' }, h('circle', { cx: 9, cy: 7, r: 6 }), h('path', { d: 'M6.3 7l2 2 3.6-4' })))],
+    lanes.some(l => l.outcome === 'stopped') && ['stopped', 'stopped', sw(h('rect', { class: 'tl-cap tl-cap-stopped', x: 4, y: 2, width: 10, height: 10, rx: 1.5 }))],
+    has('idle') && ['idle', 'idle', sw(h('path', { class: 'tl-idle', d: 'M1 7h16' }))],
+    messages.length && ['msg', 'a message', sw(h('path', { class: 'tl-msg-line', d: 'M9 0v9' }), h('path', { class: 'tl-msg-head', d: 'M9 13l-3 -4.5h6z' }))],
+    d.marks.length && lanes.some(l => l.id === 'main') && ['you', 'you wrote', sw(h('path', { class: 'tl-you', d: 'M9 2.5l4.5 4.5-4.5 4.5-4.5-4.5z' }))],
+    rows.some(r => r.kind === 'bg') && ['bg', 'in the background', sw(h('rect', { class: 'tl-bg', x: 1, y: 4, width: 16, height: 6, rx: 3 }))],
+    axis.folds.length && ['fold', 'idle, folded', sw(h('rect', { class: 'tl-fold', x: 2, y: 0, width: 14, height: 14 }), h('path', { class: 'tl-hatch', d: 'M5 12l3 -10M10 12l3 -10' }))],
   ].filter(Boolean);
   return h('div', { key: 'legend', class: 'tl-legend' }, items.map(([key, label, swatch]) => h('span', { key, class: 'tl-key' }, swatch, label)));
-}
-
-/** What sits under the pointer at (x, y) of the drawing: a prompt, a message, a call, an outcome, a stretch or a background task, as lines of words; null for nothing. */
-function tlWhat(x, y) {
-  const g = tl.geo;
-  if (!g) return null;
-  const { L, TOP, LANE, span, lanes, d, X } = g;
-  const abs = ms => d.startedAt + ms;
-  const near = (at, px) => Math.abs(X(at) - x) <= px;
-  // a background task, under the agents: what Claude Code said of it, from its call to now
-  if (d.background.length && y >= g.bgTop + 16) {
-    const b = d.background[Math.floor((y - g.bgTop - 16) / LANE)];
-    if (!b) return null;
-    const end = b.end == null ? span : b.end;
-    return [b.what ? `${b.what}: ${b.title}` : b.title, `${clockText(abs(b.start))} – ${b.end == null ? 'now' : clockText(abs(b.end))} · ${dur(Math.max(0, end - b.start))}`];
-  }
-  const i = Math.floor((y - TOP) / LANE);
-  const l = lanes[i];
-  if (!l) return null;
-  const st = l.isStopped ? 'stopped' : l.status;
-  if (x < L) return [l.title, `${statusOf(st).label[0].toUpperCase()}${statusOf(st).label.slice(1)} · press to open`];
-  if (l.id === 'main') {
-    const m = d.marks.find(one => near(one.at, 6));
-    if (m) return [`You: ${m.text}`, clockText(abs(m.at))];
-  }
-  const msg = d.messages.find(one => near(one.at, 4) && [one.from, one.to].includes(l.id));
-  if (msg) return [`${nameOf(msg.from)} → ${nameOf(msg.to)}: ${msg.title}`, clockText(abs(msg.at))];
-  let tick = null, best = 5;
-  for (const k of l.ticks) { const dx = Math.abs(X(k.at) - x); if (dx <= best) { best = dx; tick = k; } }
-  if (tick) {
-    const how = tick.how === 0 ? `failed after ${msText(tick.ms)}` : tick.ms >= 0 ? msText(tick.ms) : tick.how < 0 && l.end == null ? 'running' : 'its end not seen';
-    return [[tick.tool, tick.text].filter(Boolean).join(' '), `${clockText(abs(tick.at))} · ${how}`];
-  }
-  if (l.end != null && l.outcome && near(l.end, 6)) return [`${OUTCOME_WORD[l.outcome]}: ${l.title}`, clockText(abs(l.end))];
-  const at = ((x - L) / (g.right - L)) * span;
-  const order = { wait: 0, work: 1, idle: 2 };
-  const s = l.spans.filter(one => one.from <= at && (one.to == null ? span : one.to) >= at).sort((a, b) => order[a.kind] - order[b.kind])[0];
-  if (!s) return null;
-  const end = s.to == null ? null : s.to;
-  return [`${TL_WORD[s.kind]}: ${l.title}`, `${clockText(abs(s.from))} – ${end == null ? 'now' : clockText(abs(end))} · ${dur(Math.max(0, (end == null ? span : end) - s.from))}`];
-}
-
-function tlHover(e) {
-  const tip = tl.tip;
-  if (!tip) return;
-  const r = e.currentTarget.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  const lines = tlWhat(x, y);
-  if (!lines) { tip.classList.remove('on'); return; }
-  tip.replaceChildren(...lines.map((text, i) => { const el = document.createElement('div'); el.className = i ? 'tl-tip-sub' : 'tl-tip-head'; el.textContent = text; return el; }));
-  tip.classList.add('on');
-  const box = tl.box ? tl.box.getBoundingClientRect() : r;
-  const left = e.clientX - box.left, top = e.clientY - box.top;
-  const w = tip.offsetWidth || 240;
-  tip.style.left = `${Math.max(8, left + 14 + w > box.width ? left - 14 - w : left + 14)}px`;
-  tip.style.top = `${top + 16}px`;
-}
-
-function tlLeave() {
-  if (tl.tip) tl.tip.classList.remove('on');
-}
-
-/** A press on a lane opens its agent's drawer (its name is a link that does the same). */
-function tlPress(e) {
-  const g = tl.geo;
-  if (!g || e.target.closest('a')) return;
-  const r = e.currentTarget.getBoundingClientRect();
-  const l = g.lanes[Math.floor((e.clientY - r.top - g.TOP) / g.LANE)];
-  if (l) openAgent(l.id);
 }
 
 // ---------------------------------------------------------------- the list
@@ -3736,7 +3737,7 @@ function AvatarSection() {
 const TAB_HELP = [
   ['now', 'What needs you, a card per agent, the session\'s figures, the plan Claude made, the newest tool calls and the files the agents touched.'],
   ['chat', 'The session as a group chat. Pick Everyone or one agent at the top: your words go to the one picked (Everyone: the Orchestrator), or @name another.'],
-  ['org', 'Every agent under the one that started it, as a chart (drag to pan, pinch or + and − to zoom) or as a list; or the Timeline, each agent’s work, waits on you and idle time over the run (hover to read one, press a lane to open it).'],
+  ['org', 'Every agent under the one that started it, as a chart (drag to pan, pinch or + and − to zoom) or as a list; or the Timeline, a row an agent beside its lane over the run: its calls, waits on you and idle time, the stretches where nobody worked folded (hover to read one, press a lane to open it).'],
   ['changes', 'Git\'s uncommitted files, each with git\'s own diff and the agents\' own edits of it; their other edits; the commits; and Review.'],
   ['inspect', 'What fills the context and each compaction, every permission decision and who made it, what is loaded (model, CLAUDE.md, memory, skills, MCP servers, hooks), and the spend per agent.'],
   ['settings', 'This page: how the agents look, and these notes.'],

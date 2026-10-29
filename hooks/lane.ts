@@ -10,17 +10,21 @@
  * - its waits on you: from a call held on you (a question, a permission
  *   prompt) or Claude Code's notification, to the moment the deck's own need
  *   went (the call's end; for a notification, its loop moving on, as
- *   `M.clearNeeds` takes it down).
+ *   `M.clearNeeds` takes it down);
+ * - the background tasks its calls started that ended, as their rows said
+ *   them, to the moment Claude Code said they ended (the Dashboard's
+ *   Background lets a row go then).
  *
  * The model's recorders call these (./model: `beginTool`, `endTool`,
  * `reopen`, `noteSpawn`, `noteMainTurn`, `endMainTurn`, `notePending`,
- * `noteNeeds`), so the hooks module and the recorded sample both keep them.
+ * `noteNeeds`; ./background as a task's row goes), so the hooks module and
+ * the recorded sample both keep them.
  * Pure, and it imports nothing but types, so the model can import it.
  */
 import type { DeckActivity, DeckAgent, DeckData, DeckLane } from '../types'
 
-/** What a lane keeps at most: its calls, its ended runs, its waits, the tools its calls name. */
-export const LANE_CAPS = { calls: 400, runs: 100, waits: 100, tools: 200 } as const
+/** What a lane keeps at most: its calls, its ended runs, its waits, the tools its calls name, its background tasks that ended. */
+export const LANE_CAPS = { calls: 400, runs: 100, waits: 100, tools: 200, background: 50 } as const
 
 /** Agent `agent`'s lane, made on first use. */
 function laneOf(agent: DeckAgent): DeckLane {
@@ -143,7 +147,17 @@ export function noteWait(agent: DeckAgent | undefined, wait: { kind: 'held' | 'n
   capped(lane.waits, LANE_CAPS.waits)
 }
 
-/** A twin row's lane folded into the row that stays (`M.bindAgent`): every call, run and wait of both, oldest first. */
+/** A background task `agent`'s call started ended (./background, as its row goes): kept as its row said it, from its call to `task.to`; the same task once. */
+export function noteBackgroundEnd(agent: DeckAgent | undefined, task: NonNullable<DeckLane['background']>[number]): void {
+  if (!hasLane(agent) || !Number.isFinite(task.from) || !Number.isFinite(task.to) || task.to < task.from) return
+  const lane = laneOf(agent)
+  const ended = (lane.background ??= [])
+  if (ended.some(one => one.id === task.id && one.from === task.from)) return
+  ended.push({ id: task.id, title: task.title, what: task.what, from: task.from, to: task.to })
+  capped(ended, LANE_CAPS.background)
+}
+
+/** A twin row's lane folded into the row that stays (`M.bindAgent`): every call, run, wait and ended background task of both, oldest first. */
 export function mergeLanes(row: DeckAgent, twin: DeckAgent): void {
   const from = twin.lane
   if (!from) return
@@ -168,7 +182,9 @@ export function mergeLanes(row: DeckAgent, twin: DeckAgent): void {
   const waits = [...into.waits, ...from.waits].sort((a, b) => a.from - b.from)
   capped(waits, LANE_CAPS.waits)
   const woke = Math.max(into.woke ?? 0, from.woke ?? 0)
-  row.lane = { t0, tools, calls, runs, waits, ...(woke > 0 ? { woke } : {}) }
+  const background = [...(into.background ?? []), ...(from.background ?? [])].sort((a, b) => a.from - b.from)
+  capped(background, LANE_CAPS.background)
+  row.lane = { t0, tools, calls, runs, waits, ...(woke > 0 ? { woke } : {}), ...(background.length > 0 ? { background } : {}) }
 }
 
 const isTime = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
@@ -192,5 +208,13 @@ export function healLane(agent: DeckAgent): void {
       return (wait.kind === 'held' || wait.kind === 'note') && isTime(wait.from) && (wait.to === undefined || isTime(wait.to)) && (wait.call === undefined || typeof wait.call === 'string')
     })
     .slice(-LANE_CAPS.waits)
-  agent.lane = { t0: loose.t0, tools, calls, runs, waits, ...(isTime(loose.woke) ? { woke: loose.woke } : {}) }
+  const background = (Array.isArray(loose.background) ? loose.background : [])
+    .filter((one): one is NonNullable<DeckLane['background']>[number] => {
+      if (typeof one !== 'object' || one === null) return false
+      const task = one as Record<string, unknown>
+      return typeof task.id === 'string' && typeof task.title === 'string' && typeof task.what === 'string' && isTime(task.from) && isTime(task.to)
+    })
+    .map(one => ({ id: one.id, title: one.title, what: one.what, from: one.from, to: one.to }))
+    .slice(-LANE_CAPS.background)
+  agent.lane = { t0: loose.t0, tools, calls, runs, waits, ...(isTime(loose.woke) ? { woke: loose.woke } : {}), ...(background.length > 0 ? { background } : {}) }
 }

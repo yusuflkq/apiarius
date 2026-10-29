@@ -12,7 +12,9 @@
  *   SubagentStop) add what the deck did not see start and drop what they no
  *   longer list. A row goes, too, when its stop is seen: TaskStop or
  *   CronDelete of it, a task notification that it ended (`noteTaskEnds`), a
- *   one-shot schedule firing (`noteFired`).
+ *   one-shot schedule firing (`noteFired`). A task the deck saw start that
+ *   ended stays on its starter's lane for Org's Timeline (./lane), to the
+ *   moment Claude Code said it ended.
  * - **The verdicts** (`data.verdicts`): what Claude Code's permission check
  *   (`$.tool.check`, no classifier asked) said of each stopping call the deck
  *   could make: TaskStop of a background agent, a teammate or a task,
@@ -30,6 +32,7 @@
  */
 import type { DeckBackground, DeckData, DeckVerdict } from '../types'
 import * as F from './format'
+import * as L from './lane'
 import * as M from './model'
 
 /** The rows the record keeps, and the verdicts: the oldest go past these. */
@@ -90,12 +93,20 @@ function keep(data: DeckData) {
   if (rows.length > MOST_BACKGROUND) rows.splice(0, rows.length - MOST_BACKGROUND)
 }
 
-function drop(data: DeckData, gone: (row: Row) => boolean): boolean {
+/** Lets the rows `gone` picks go. With `endedAt`, they went because Claude Code said they ended then: each task the deck saw start stays on its starter's lane (`keepEnded`). */
+function drop(data: DeckData, gone: (row: Row) => boolean, endedAt?: number): boolean {
   const rows = rowsOf(data)
-  const kept = rows.filter(row => !gone(row))
-  if (kept.length === rows.length) return false
-  data.background = kept
+  const went = rows.filter(gone)
+  if (went.length === 0) return false
+  if (endedAt !== undefined) for (const row of went) keepEnded(data, row, endedAt)
+  data.background = rows.filter(row => !went.includes(row))
   return true
+}
+
+/** A task whose call the deck saw start ended at `at`: its starter's lane keeps it as its row said it, from that call to `at`, for Org's Timeline. */
+function keepEnded(data: DeckData, row: Row, at: number): void {
+  if (isSchedule(row) || row.call === '' || row.by === '') return
+  L.noteBackgroundEnd(M.agentOf(data, row.by), { id: bgIdOf(row.id), ...shownOf(row), from: row.at, to: Math.max(row.at, at) })
 }
 
 /**
@@ -222,7 +233,7 @@ export function noteEnd(data: DeckData, call: Ended): boolean {
   const own = rowsOf(data).find(row => row.call === call.toolUseId && call.toolUseId !== '')
   if (call.tool === 'TaskStop') {
     const id = str(call.input.task_id) || str(call.input.shell_id)
-    return call.ok && id !== '' && drop(data, row => !isSchedule(row) && row.isBound && row.id === id)
+    return call.ok && id !== '' && drop(data, row => !isSchedule(row) && row.isBound && row.id === id, call.at)
   }
   if (call.tool === 'CronDelete') {
     const id = str(call.input.id)
@@ -342,7 +353,7 @@ export function noteSnapshot(data: DeckData, snap: Snapshot): boolean {
       rowsOf(data).push({ id, isBound: true, kind, type, status: str(task.status), title: words.title, note: words.note, prompt: '', schedule: '', recurring: false, by: '', call: '', at: snap.at, seenAt: snap.at })
       isChanged = true
     }
-    isChanged = drop(data, row => !isSchedule(row) && row.isBound && !listed.has(row.id) && row.at <= before) || isChanged
+    isChanged = drop(data, row => !isSchedule(row) && row.isBound && !listed.has(row.id) && row.at <= before, snap.at) || isChanged
   }
   if (Array.isArray(snap.crons)) {
     const listed = new Set<string>()
@@ -385,11 +396,11 @@ export function noteSnapshot(data: DeckData, snap: Snapshot): boolean {
 /** A task notification's status that says its task ended. */
 const ENDED = /^(completed|complete|done|failed|killed|stopped|cancell?ed|timed[ _-]?out|errored|error|exited)$/i
 
-/** The task notifications in `text` (`M.taskNoticesOf`) that say a task ended: its row goes. Answers whether the record changed. */
-export function noteTaskEnds(data: DeckData, text: string): boolean {
+/** The task notifications in `text` (`M.taskNoticesOf`) that say a task ended, as they came at `at`: its row goes. Answers whether the record changed. */
+export function noteTaskEnds(data: DeckData, text: string, at?: number): boolean {
   const ended = new Set(M.taskNoticesOf(text).flatMap(notice => (notice.taskId && ENDED.test(notice.status ?? '') ? [notice.taskId] : [])))
   if (ended.size === 0) return false
-  return drop(data, row => !isSchedule(row) && row.isBound && ended.has(row.id))
+  return drop(data, row => !isSchedule(row) && row.isBound && ended.has(row.id), at)
 }
 
 /**
@@ -603,6 +614,12 @@ function wordsOf(row: Row): { title: string; note: string } {
   return { title: named, note: row.kind === 'cron' ? row.note || row.schedule : row.note }
 }
 
+/** A row as Background shows it: its title (`wordsOf`), and its kind in a word with what else Claude Code said of it ("Shell · npm run dev"). */
+function shownOf(row: Row): { title: string; what: string } {
+  const words = wordsOf(row)
+  return { title: words.title, what: [KIND_WORD[row.kind], words.note].filter(Boolean).join(' · ') }
+}
+
 /** "in 20m", "in 3h", "in 2d"; "in <1m" under a minute. */
 function untilOf(ms: number): string {
   const m = Math.floor(ms / 60_000)
@@ -642,7 +659,7 @@ export function backgroundOf(data: DeckData, rows: readonly { row: string; id: s
   const schedules = shown.filter(isSchedule).sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity) || a.at - b.at)
   const out = [...tasks, ...schedules].map((row): V2BackgroundRow => {
     const tool: StopTool = isSchedule(row) ? 'CronDelete' : 'TaskStop'
-    const words = wordsOf(row)
+    const shown = shownOf(row)
     const stop: V2Stop | null = row.isBound
       ? stopOf(data, tool, row.id)
       : row.kind === 'wakeup'
@@ -651,8 +668,8 @@ export function backgroundOf(data: DeckData, rows: readonly { row: string; id: s
     return {
       id: bgIdOf(row.id),
       kind: row.kind,
-      what: [KIND_WORD[row.kind], words.note].filter(Boolean).join(' · '),
-      title: words.title,
+      what: shown.what,
+      title: shown.title,
       status: isSchedule(row) ? 'scheduled' : row.status || 'running',
       by: row.by === '' ? null : row.by,
       byName: row.by === '' ? '' : (names.get(row.by) ?? (row.by === M.MAIN ? M.ORCHESTRATOR : '')),

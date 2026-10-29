@@ -210,8 +210,8 @@ test('421 on a Host other than 127.0.0.1:<port> or localhost:<port>', async () =
   assert.equal((await request(main.port, { headers: { ...auth, Host: `localhost:${main.port}` } })).status, 200)
 })
 
-test('serves the page files with their types (the avatar library app.js imports a script too), or 404 while one is missing', async () => {
-  const types = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/avatars.mjs': ['avatars.mjs', 'text/javascript'] }
+test('serves the page files with their types (the avatar library and the timeline`s layout app.js imports scripts too), or 404 while one is missing', async () => {
+  const types = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/avatars.mjs': ['avatars.mjs', 'text/javascript'], '/timeline.mjs': ['timeline.mjs', 'text/javascript'] }
   for (const [target, [file, type]] of Object.entries(types)) {
     const res = await request(main.port, { path: target, headers: { 'X-Deck-Token': TOKEN } })
     if (!fs.existsSync(path.join(__dirname, '..', file))) { assert.equal(res.status, 404, target); continue }
