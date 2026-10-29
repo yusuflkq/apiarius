@@ -1118,6 +1118,7 @@ export function healData(value: DeckData, now: number): DeckData {
   data.files = healFiles(value.files)
   data.workflows = healWorkflows(value.workflows)
   if (value.isNewGoalNext !== true) delete data.isNewGoalNext
+  if (value.isFork !== true) delete data.isFork
   if (typeof value.mainTurnId !== 'string' || value.mainTurnId === '') delete data.mainTurnId
   if (data.mainTurnId === undefined || typeof value.mainTurnAt !== 'number' || !Number.isFinite(value.mainTurnAt)) delete data.mainTurnAt
   for (const agent of data.agents) {

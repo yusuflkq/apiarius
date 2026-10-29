@@ -20,7 +20,7 @@
     "contextPercent": 18,
     "costUsd": 0.64,
     "mode": "",
-    "line": "opus-5.5 · context 18% · $0.64",
+    "line": "opus-5.5 · context 18% · ≈$0.64",
     "turn": null
   },
   "needs": [],
@@ -133,7 +133,7 @@
       "context": "18%",
       "permissions": "",
       "loaded": "",
-      "spend": "$0.64"
+      "spend": "≈$0.64"
     },
     "context": null,
     "compactions": [],

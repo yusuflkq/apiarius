@@ -632,6 +632,12 @@ export type DeckData = {
   verdicts?: Record<string, DeckVerdict>
   /** Inspect's records (hooks/inspect.ts): permission decisions, compactions, the context and what is loaded; absent until the first. */
   inspect?: DeckInspect
+  /**
+   * The session began as a fork of another (Claude Code's SessionStart said
+   * `fork`): its /cost total starts at that one's. The engine does not say
+   * which session it was. Absent for any other start.
+   */
+  isFork?: true
 }
 
 /**

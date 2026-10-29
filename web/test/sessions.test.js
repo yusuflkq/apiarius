@@ -212,7 +212,7 @@ const byClass = (v, cls) => findAll(v, one => !!one.p && typeof one.p.class === 
 /** The live state as the mod writes it: the sample, with every session on its machine. */
 const LIVE = { ...SAMPLE, sessions: SESSIONS.view }
 
-test('#/sessions: this chat first, then each session its row: its dot, its title, where it runs, its need in amber or what it does, its word, spend and age; a press opens its deck (this chat`s: the Dashboard)', () => {
+test('#/sessions: this chat first, then each session its row: its dot, its title, where it runs, its need in amber or what it does, its word, spend (an estimate, a fork`s counting its parent`s) and age; a press opens its deck (this chat`s: the Dashboard)', () => {
   const p = page({ hash: '#/sessions' })
   p.load(LIVE)
   const v = p.run('Page()')
@@ -223,10 +223,15 @@ test('#/sessions: this chat first, then each session its row: its dot, its title
   assert.match(flat(textOf(rows[0])), /this chat/)
   const site = rows.find(row => flat(textOf(row)).includes('Landing page copy'))
   assert.equal(site.p.href, `#/s/${SITE.id}/now`)
-  assert.equal(flat(textOf(site)), 'Landing page copy Terminal · site · Needs your OK: Bash rm -rf dist Waiting on you $0.22 9m')
+  assert.equal(flat(textOf(site)), 'Landing page copy Terminal · site · Needs your OK: Bash rm -rf dist Waiting on you ≈$0.22 9m')
   assert.equal(byClass(site, 'sess-say')[0].p.class, 'sess-say is-need')
   const notes = rows.find(row => flat(textOf(row)).includes('Notes sync'))
-  assert.match(flat(textOf(notes)), /Desktop · notes · Finished: “Synced 14 notebooks.” Idle \$0\.31 2h$/)
+  assert.match(flat(textOf(notes)), /Desktop · notes · Finished: “Synced 14 notebooks.” Idle ≈\$0\.31 2h$/)
+  // a fork's spend began at the session it was forked from: "incl. its parent's" under it, as the mod words it
+  const faces = rows.find(row => flat(textOf(row)).includes('Agent Deck terminal faces'))
+  assert.match(faces.p.class, /\bis-fork\b/)
+  assert.match(flat(textOf(faces)), /Working ≈\$1\.80 now incl\. its parent’s$/)
+  assert.deepEqual([site, notes].map(row => byClass(row, 'sess-cost-note').length), [0, 0])
   // the header's way in: All sessions, after how many others wait on you
   assert.equal(p.text('SessionsLink()'), '◆ 1 other session needs you All sessions')
 })

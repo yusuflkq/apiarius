@@ -382,15 +382,15 @@ test('the header: one word for the session, your latest request in your words, t
     contextPercent: 41.4,
     costUsd: 4.123,
     mode: '',
-    line: 'opus-5.5 · context 41% · $4.12',
+    line: 'opus-5.5 · context 41% · ≈$4.12',
     turn: { id: 'turn-9', at: NOW - 500_000 },
   })
   expect(state.inspect).toMatchObject({ contextPercent: 41.4, costUsd: 4.123 })
   // the permission mode a classic hook named goes in the line after the model (the default one, as Claude Code's footer, left unsaid)
   I.noteMode(data, { permission_mode: 'auto' })
-  expect(W.deckStateOf(data, emptyGit(), { startedAt: NOW - 600_000, contextPercent: 41.4, costUsd: 4.123, limits: [] }, NOW, 's', '/repo').header).toMatchObject({ mode: 'auto mode', line: 'opus-5.5 · auto mode · context 41% · $4.12' })
+  expect(W.deckStateOf(data, emptyGit(), { startedAt: NOW - 600_000, contextPercent: 41.4, costUsd: 4.123, limits: [] }, NOW, 's', '/repo').header).toMatchObject({ mode: 'auto mode', line: 'opus-5.5 · auto mode · context 41% · ≈$4.12' })
   I.noteMode(data, { permission_mode: 'default' })
-  expect(W.deckStateOf(data, emptyGit(), { startedAt: NOW - 600_000, contextPercent: 41.4, costUsd: 4.123, limits: [] }, NOW, 's', '/repo').header).toMatchObject({ mode: '', line: 'opus-5.5 · context 41% · $4.12' })
+  expect(W.deckStateOf(data, emptyGit(), { startedAt: NOW - 600_000, contextPercent: 41.4, costUsd: 4.123, limits: [] }, NOW, 's', '/repo').header).toMatchObject({ mode: '', line: 'opus-5.5 · context 41% · ≈$4.12' })
 
   // a later word of yours from the deck is your latest request; the turn ends, the session is idle
   M.addMessage(data, { from: M.YOU, to: M.MAIN, kind: 'chat', text: 'Also exempt /health', at: NOW - 60_000 })

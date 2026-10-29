@@ -563,7 +563,7 @@ export type V2Header = {
   costUsd: number | null
   /** The main loop's permission mode in words ("auto mode"), as Claude Code's footer says it; '' for the default mode and while no hook has named it (hooks/inspect.ts). */
   mode: string
-  /** "opus-5.5 · auto mode · context 41% · $4.12", each part left out while unknown. */
+  /** "opus-5.5 · auto mode · context 41% · ≈$4.12", each part left out while unknown. */
   line: string
   /** The main loop's running turn, the one `abortTurn` ends (`$.turn.abort`), and when it started (null when the deck did not see it start); null between turns. */
   turn: { id: string; at: number | null } | null
@@ -832,7 +832,8 @@ export type WebStateV2 = {
   v: 2
   /** When it was built, ms since the epoch. */
   now: number
-  session: { id: string; cwd: string; startedAt: number }
+  /** `isFork`: it began as a fork of another session (Claude Code's SessionStart said so), its spend counting that one's; the engine does not say which. */
+  session: { id: string; cwd: string; startedAt: number; isFork?: true }
   /** The style the deck draws agents' avatars in (web/avatars.mjs): the person's setting, robots by default. */
   avatarStyle: AV.AvatarStyle
   header: V2Header
@@ -1393,10 +1394,10 @@ function figuresOf(data: DeckData, rows: readonly V2Row[], plan: V2Plan | null, 
   }
 }
 
-/** The header's line: "opus-5.5 · auto mode · context 41% · $4.12", each part left out while unknown. */
+/** The header's line: "opus-5.5 · auto mode · context 41% · ≈$4.12" (the spend /cost's estimate at API list prices), each part left out while unknown. */
 function headerLineOf(model: string, usage: UsageInfo | null, mode = ''): string {
   const percent = usage?.contextPercent
-  const parts = [model, mode, percent !== undefined ? `context ${Math.round(percent)}%` : '', usage?.costUsd !== undefined ? F.money(usage.costUsd) : '']
+  const parts = [model, mode, percent !== undefined ? `context ${Math.round(percent)}%` : '', usage?.costUsd !== undefined ? `≈${F.money(usage.costUsd)}` : '']
   return parts.filter(part => part !== '').join(' · ')
 }
 
@@ -1442,7 +1443,7 @@ export function deckStateOf(
   return clearedStateOf({
     v: 2,
     now,
-    session: { id: sessionId, cwd, startedAt: data.startedAt },
+    session: { id: sessionId, cwd, startedAt: data.startedAt, ...(data.isFork === true ? { isFork: true as const } : {}) },
     avatarStyle: AV.styleOf(avatarStyle),
     header: {
       state,

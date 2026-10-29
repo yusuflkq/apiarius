@@ -626,7 +626,7 @@ export type V2InspectMore = {
   /** The main loop's permission mode as the engine names it (`auto`), and in words ("auto mode"); '' until a hook named it. */
   mode: string
   modeText: string
-  /** Each section's one line while it is folded: "41% · compacted once", "23 decisions · 2 denied", "2 instruction files · 23 skills", "$4.12 · 2.3M tokens"; '' for a section with nothing. */
+  /** Each section's one line while it is folded: "41% · compacted once", "23 decisions · 2 denied", "2 instruction files · 23 skills", "≈$4.12 · 2.3M tokens"; '' for a section with nothing. */
   summary: { context: string; permissions: string; loaded: string; spend: string }
   context: V2Context | null
   /** Oldest first. */

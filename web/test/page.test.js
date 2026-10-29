@@ -178,10 +178,10 @@ test('reads the live state (v1 with v2 under its key) and the bare sample alike;
 test('the header: the state in one word, your latest request in your words, and model · mode · context · cost, the mode lit; the goal opens on its whole text', async () => {
   const p = page()
   p.load(SAMPLE)
-  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · auto mode · context 41% · \\$4\\.12 Stop turn Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Inspect Settings`))
+  assert.match(p.text('Header()'), new RegExp(`^Waiting on you Also exempt /health and /metrics from the limiter\\. 4m opus-5\\.5 · auto mode · context 41% · ≈\\$4\\.12 Stop turn Dashboard 4 Chat Org Changes ${SAMPLE.changes.files.length} Inspect Settings`))
   // the permission mode, lit as Claude Code's footer lights it; the whole line on hover
   assert.deepEqual(find(p.view('Header()'), 'hd-mode').map(one => flat(textOf(one))), ['auto mode', 'auto mode'])
-  assert.equal(find(p.view('Header()'), 'hd-line')[0].p.title, 'opus-5.5 · auto mode · context 41% · $4.12')
+  assert.equal(find(p.view('Header()'), 'hd-line')[0].p.title, 'opus-5.5 · auto mode · context 41% · ≈$4.12')
   click(find(p.view('Header()'), 'goal')[0])
   assert.match(p.text('Header()'), /Your latest request · 4m ago Also exempt \/health and \/metrics from the limiter\./)
   // a goal the state cut short: its whole text from /message/<messageId>, fetched once
@@ -401,14 +401,14 @@ test('past twelve at work, the cards keep the Orchestrator, every one waiting on
 
 const FIGURES = { running: 2, waiting: 1, done: 3, failed: 1, stopped: 1, plan: { done: 1, total: 3 }, costUsd: 4.12, tokens: 2305400, contextPercent: 41, minutes: 40, needs: 4 }
 
-test('the figures, as the state counts them: the agents in each state, the plan`s items done (only with a plan), the spend, what waits on you; each opens what it counts', () => {
+test('the figures, as the state counts them: the agents in each state, the plan`s items done (only with a plan), the spend (an estimate at API prices), what waits on you; each opens what it counts', () => {
   const p = page()
   p.load(sample(s => { s.figures = FIGURES }))
   const tiles = () => find(p.view('FiguresStrip()'), 'kpi')
   assert.deepEqual(tiles().map(k => flat(textOf(k))), [
     '2 Agents running 1 waiting · 3 done · 1 failed · 1 stopped',
     '1/3 Plan done 2 to go',
-    '$4.12 Session spend 2.3M tokens · 40 min · context 41%',
+    '≈$4.12 Spend at API prices 2.3M tokens · 40 min · context 41%',
     '4 Waiting on you Orchestrator asks: Which store should back the limiter in production?',
   ])
   assert.equal(p.view('FiguresStrip()').p.style['--n'], '4')
@@ -421,8 +421,8 @@ test('the figures, as the state counts them: the agents in each state, the plan`
   assert.equal(p.run('route.tab'), 'org')
   // no plan: no Plan tile; nothing waiting: it says so and goes nowhere; nothing known of the spend: a dash
   p.load(sample(s => { s.figures = { ...FIGURES, plan: null, needs: 0, costUsd: null, tokens: null, minutes: null, contextPercent: null }; s.needs = [] }))
-  assert.deepEqual(find(p.view('FiguresStrip()'), 'kpi-label').map(textOf), ['Agents running', 'Session spend', 'Waiting on you'])
-  assert.equal(flat(textOf(tiles()[1])), '— Session spend —')
+  assert.deepEqual(find(p.view('FiguresStrip()'), 'kpi-label').map(textOf), ['Agents running', 'Spend at API prices', 'Waiting on you'])
+  assert.equal(flat(textOf(tiles()[1])), '— Spend at API prices —')
   assert.equal(flat(textOf(tiles()[2])), '0 Waiting on you Nothing waits on you')
   assert.equal(tiles()[2].t, 'div')
   // a mod that writes no figures: no strip
@@ -530,7 +530,7 @@ test('the sample`s own figures, activity and files, as the mod`s builder writes 
   assert.deepEqual(find(p.view('FiguresStrip()'), 'kpi').map(k => flat(textOf(k))), [
     '0 Agents running 2 waiting · 3 done · 1 failed · 1 stopped',
     '1/3 Plan done 2 to go',
-    '$4.12 Session spend 2.3M tokens · 40 min · context 41%',
+    '≈$4.12 Spend at API prices 2.3M tokens · 40 min · context 41%',
     '4 Waiting on you Orchestrator asks: Which store should back the limiter in production?',
   ])
   const feed = find(p.view('ActivitySection()'), 'ra-row')
@@ -1261,15 +1261,15 @@ test('Inspect (5, #/inspect): Context, Permissions, Loaded and Spend, as the sta
   // every skill's name on demand
   click(find(p.view('LoadedSection()'), 'btn-xs')[0])
   assert.match(p.text('LoadedSection()'), /code-review · run · simplify · security-review/)
-  // Spend: the context, the spend, the tokens and the agents; then each agent's tokens, requests, tool calls and failures
+  // Spend: the context, the spend at API prices, the tokens and the agents; what the spend is, once; then each agent's tokens, requests, tool calls and failures
   const ins = p.text('InspectSection()')
-  assert.match(ins, /^Spend This session Context 41% Spend \$4\.12 Tokens 2\.3M Agents 8 Tokens by agent Agent Model In Out Cache Total Req Tools Err/)
+  assert.match(ins, /^Spend This session Context 41% At API prices ≈\$4\.12 Tokens 2\.3M Agents 8 Claude Code’s \/cost estimate at API list prices, not a bill on a subscription; it drops earlier runs that didn’t close normally \(a crash, a kill or a shutdown\)\. Tokens by agent Agent Model In Out Cache Total Req Tools Err/)
   assert.match(ins, /Orchestrator opus-5\.5 182k 21\.3k 1\.2M 1\.4M 31 10 0 researcher haiku-4\.5 41k 2\.1k 88k 131k 6 18 0/)
   assert.match(ins, /Lint the new files haiku-4\.5 9k 600 12k 21\.6k 2 1 1/)
   assert.equal(find(p.view('InspectSection()'), 'bar-fill')[0].p.style.width, '41%')
   // folded: each section its head and its one line
   for (const id of ['ins-context', 'ins-permissions', 'ins-loaded', 'ins-spend']) p.run(`setShut("${id}", true)`)
-  assert.equal(p.text('Page()'), 'Context 41% · compacted 2 times Permissions 7 7 decisions · 1 waiting on you · 1 denied · 1 blocked Loaded 3 instruction files · 4 memory files · 23 skills · 2 MCP servers · 2 hooks Spend $4.12 · 2.3M tokens')
+  assert.equal(p.text('Page()'), 'Context 41% · compacted 2 times Permissions 7 7 decisions · 1 waiting on you · 1 denied · 1 blocked Loaded 3 instruction files · 4 memory files · 23 skills · 2 MCP servers · 2 hooks Spend ≈$4.12 · 2.3M tokens')
   // an old link to Inspect over a tab, and #/inspect, open Inspect; #/help opens Settings
   for (const [hash, tab] of [['#/chat/inspect', 'inspect'], ['#/inspect', 'inspect'], ['#/help', 'settings']]) {
     const old = page({ hash })

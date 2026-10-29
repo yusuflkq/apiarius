@@ -119,12 +119,30 @@ test('the list: this chat first, then the others the newest started first (rows 
   ])
   expect(view.text).toBe('3 on this machine · 1 waiting on you · 2 working')
   expect(view.others).toEqual({ waiting: 1, working: 1 })
-  expect(view.rows[2]).toMatchObject({ stateText: 'Waiting on you', place: 'Terminal · Windows Terminal', repo: 'site', need: 'Needs your OK: Bash rm -rf dist', say: 'Needs your OK: Bash rm -rf dist', cost: '$0.50', age: '9m', canOpen: true, canSteer: true })
+  expect(view.rows[2]).toMatchObject({ stateText: 'Waiting on you', place: 'Terminal · Windows Terminal', repo: 'site', need: 'Needs your OK: Bash rm -rf dist', say: 'Needs your OK: Bash rm -rf dist', cost: '≈$0.50', age: '9m', canOpen: true, canSteer: true })
   // a deck that reads no inbox opens, read-only, and is answered in its window
   expect(view.rows[1]).toMatchObject({ place: 'Desktop', repo: 'newer', say: 'Orchestrator: Bash gh run view', age: 'now', canOpen: true, canSteer: false })
   expect(S.othersLineOf(view)).toBe('1 other session needs you')
   expect(S.othersLineOf({ others: { waiting: 2, working: 0 } })).toBe('2 other sessions need you')
   expect(S.othersLineOf(null)).toBeNull()
+})
+
+test('the spend in the list: /cost`s estimate, "≈$4.12", whole dollars from $100; a fork`s file says it is one, and its row that its spend counts its parent`s', () => {
+  const now = SAMPLE_NOW
+  const state = sampleState()
+  const facts = { surface: 'desktop' as const, terminal: '', repo: 'acme-api', pid: 4242, dir: '/m/.web/s', updatedAt: now - 1000, heartbeatAt: now }
+  const fork = S.entryOf({ ...state, session: { ...state.session, isFork: true } }, facts)
+  expect(fork.isFork).toBe(true)
+  expect('isFork' in S.entryOf(state, facts)).toBe(false)
+  // read back from its file as written; anything but true says nothing of it
+  expect(S.entryFromText(JSON.stringify(fork))?.isFork).toBe(true)
+  expect('isFork' in (S.entryFromText(JSON.stringify({ ...fork, isFork: 'yes' })) ?? {})).toBe(false)
+  const view = S.sessionsViewOf([entry('big', { costUsd: 491.37, isFork: true }), entry('small', { costUsd: 4.123 }), entry('unknown', { costUsd: null, isFork: true })], null, now)
+  expect(view.rows.map(row => [row.id, row.cost, row.costNote])).toEqual([
+    ['big', '≈$491', 'incl. its parent’s'],
+    ['small', '≈$4.12', ''],
+    ['unknown', '', ''],
+  ])
 })
 
 test('the band counts the other sessions waiting on you: "◆ 1 other session needs you", after this one`s own parts', () => {
@@ -262,6 +280,58 @@ test('the deck writes its own file at its start (its state folder, its process, 
   expect(ownEntries(w).length).toBe(count)
 })
 
+test('the spend keeps live with the deck shut: a measurement that says the cost moved reads /cost again (nothing polls), and this deck`s file says it within 2 s', async ($, on) => {
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  const { clock, w } = await started($, on)
+  expect(ownEntries(w).at(-1)?.costUsd).toBe(1.25)
+  // no pane and no web deck: nothing reads /cost again on its own, the heartbeat writing what was read
+  w.costUsd = 7.5
+  await clock.advance(S.HEARTBEAT_MS + 1000)
+  expect(ownEntries(w).at(-1)?.costUsd).toBe(1.25)
+  // a measurement whose cost stayed reads nothing
+  const measured = { context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [] }
+  await $.session.measure({ ...measured, cost: { usd: 1.25 }, changed: ['rateLimits'] })
+  await clock.advance(S.ENTRY_WRITE_MS + 500)
+  expect(ownEntries(w).at(-1)?.costUsd).toBe(1.25)
+  // Claude Code measured the turn and its cost grew: read again, the file says it
+  await $.session.measure({ ...measured, cost: { usd: 7.5 }, changed: ['context', 'cost'] })
+  await clock.advance(S.ENTRY_WRITE_MS + 500)
+  expect(ownEntries(w).at(-1)?.costUsd).toBe(7.5)
+  // and this chat's row in the list
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('terminal'))
+  expect((await ui.find({ key: 'session-row:session-1' }))?.text).toContain('≈$7.50')
+  await ui.unmount()
+})
+
+test('a session Claude Code began as a fork (its SessionStart says `fork`, just before session.start) says so in its file and its row, its spend "incl. its parent`s"; a reload keeps it; a /clear starts a session that is none', async ($, on) => {
+  on('classic.SessionStart', () => ({}))
+  const { clock, w } = await started($, on, newWorld(), { files: new Map() }, async one => {
+    await one.classic.SessionStart({ source: 'fork' })
+    await one.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  })
+  expect(ownEntries(w).at(-1)).toMatchObject({ costUsd: 1.25, isFork: true })
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    const mine = (await ui.find({ key: 'session-row:session-1' }))?.text ?? ''
+    expect(mine).toContain('≈$1.25')
+    expect(mine).toContain('incl. its parent’s')
+    expect((await ui.find({ key: `session-row:${OTHER}` }))?.text).not.toContain('parent')
+    await ui.unmount()
+  }
+  // a reload hears no SessionStart: its snapshot keeps the fork
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await clock.advance(S.HEARTBEAT_MS)
+  expect(ownEntries(w).at(-1)?.isFork).toBe(true)
+  // a /clear: a new conversation, no fork's
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.advance(S.ENTRY_WRITE_MS + 500)
+  expect('isFork' in (ownEntries(w).at(-1) ?? {})).toBe(false)
+})
+
 test('the others listed: the header`s "◆ 1 other session needs you" and All sessions (hotkey s); s opens the list over the tab, this chat first; b goes back; the band says it too', async ($, on) => {
   const { clock } = await started($, on)
   await $.command.run(deck(''))
@@ -340,11 +410,38 @@ test('All sessions at any width: the title cuts beside "this chat", which never 
       expect(nodesIn(other, node => node.type === 'Box' && node.props?.flexShrink === 0 && nodesIn(node, one => one.type === 'Text' && wordsIn(one).includes('Terminal')).length > 0)).toEqual([])
       // the right of a row: its state's word from 48 cells, its spend from 64, its age always
       const words = wordsIn(other)
-      expect([words.includes('Waiting on you'), words.includes('$0.50')]).toEqual([columns >= 48, columns >= 64])
+      expect([words.includes('Waiting on you'), words.includes('≈$0.50')]).toEqual([columns >= 48, columns >= 64])
       // the header's way in: its words where they fit, "◆ 1" alone where not
       const header = wordsIn(nodesIn(drawn, node => (node.key ?? node.props?.key) === 'deck:sessions')[0])
       expect(header.includes('◆ 1')).toBe(true)
       expect(header.includes('other session needs you')).toBe(columns >= 64)
+      await ui.unmount()
+    }
+  }
+})
+
+test('a fork`s row: its spend with "incl. its parent`s" under its word and its spend, ending where the spend does; both left out where the pane is narrow', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  listed(d, 'fork-3', '/fork/.web/fork-3', { state: 'idle', need: null, costUsd: 491.37, isFork: true })
+  const { clock } = await started($, on, newWorld(), d)
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    for (const columns of [84, 56]) {
+      const ui = await $.ui.mount(pane(surface, columns))
+      const drawn = await ui.drawn()
+      const [row] = nodesIn(drawn, node => (node.key ?? node.props?.key) === 'session-row:fork-3')
+      const words = wordsIn(row)
+      expect([words.includes('≈$491'), words.includes('incl. its parent’s')]).toEqual([columns >= 64, columns >= 64])
+      // under the word and the spend: a column at the row's right, the note's line clear of the age's cells
+      const [right] = nodesIn(row, node => (node.key ?? node.props?.key) === 'session-cost:fork-3')
+      if (columns >= 64) {
+        expect(right?.props).toMatchObject({ flexDirection: 'column', alignItems: 'flex-end', flexShrink: 0 })
+        expect(nodesIn(right, node => node.type === 'Box' && node.props?.paddingRight === 5 && wordsIn(node) === 'incl. its parent’s').length).toBe(1)
+      } else {
+        expect(right).toBeUndefined()
+      }
+      expect(wordsIn(nodesIn(drawn, node => (node.key ?? node.props?.key) === `session-row:${OTHER}`)[0])).not.toContain('parent')
       await ui.unmount()
     }
   }

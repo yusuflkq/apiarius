@@ -216,14 +216,14 @@ test('the context as /context breaks it down, and what is loaded: the instructio
   expect(loaded.hooks).toEqual([{ event: 'PreToolUse', matcher: 'Edit|Write', command: 'node guard.js', source: 'project', sourceText: 'project' }])
   expect(loaded.hookEvents).toEqual([{ event: 'PreToolUse', decided: 1, blocked: 1 }])
   expect(ins.summary.loaded).toBe('3 instruction files · 1 memory file · 3 skills · 1 MCP server · 1 hook')
-  expect(ins.summary.spend).toBe('$4.12')
+  expect(ins.summary.spend).toBe('≈$4.12')
 })
 
 test('a snapshot of an earlier build holds no Inspect: its state reads as nothing heard, every section empty, and the first record makes it whole', () => {
   const data = M.emptyData(NOW)
   const ins = inspectOf(data)
   expect([ins.mode, ins.modeText, ins.context, ins.compactions, ins.permissions.total, ins.loaded]).toEqual(['', '', null, [], 0, null])
-  expect(ins.summary).toEqual({ context: '41%', permissions: '', loaded: '', spend: '$4.12' })
+  expect(ins.summary).toEqual({ context: '41%', permissions: '', loaded: '', spend: '≈$4.12' })
   data.inspect = { mode: 7 } as unknown as typeof data.inspect
   expect(I.inspectOf(data).decisions).toEqual([])
   I.noteMode(data, { permission_mode: 'auto' })
@@ -269,7 +269,7 @@ test('through the hooks: the session`s start reads what is loaded and /context`s
   await $.classic.UserPromptSubmit({ prompt: 'go on', permission_mode: 'auto', effort: { level: 'high' } } as never)
   await clock.advance(400)
   state = v2Of(w)
-  expect(state.header).toMatchObject({ mode: 'auto mode', line: 'test · auto mode · context 12% · $1.25' })
+  expect(state.header).toMatchObject({ mode: 'auto mode', line: 'test · auto mode · context 12% · ≈$1.25' })
 
   // a force-push: the engine puts it to the mode's decider, auto mode refuses it, the call ends refused
   const input = { command: 'git push --force origin main', description: 'Push it' }
@@ -489,12 +489,36 @@ test('Recent activity marks a call auto mode denied "⊘ denied" and one your ho
   }
 })
 
+test('Spend says once what the spend is: /cost`s estimate at API list prices, no bill on a subscription, without earlier runs that did not close normally; a fork`s includes its parent`s; nothing said while it is unknown', async ($, on) => {
+  const NOTE = 'Claude Code’s /cost estimate at API list prices, not a bill on a subscription; it drops earlier runs that didn’t close normally (a crash, a kill or a shutdown).'
+  await demo($, on, state => ({ ...state, session: { ...state.session, isFork: true } }))
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await press(ui, 'tab:inspect')
+    await press(ui, 'fold:inspect:spend')
+    expect((await ui.find({ key: 'inspect:tile:spend' }))?.text).toBe('≈$4.12At API prices')
+    expect((await ui.find({ key: 'inspect:spend' }))?.text).toContain(`${NOTE} As a fork, it includes its parent session’s.`)
+    await press(ui, 'fold:inspect:spend')
+    await ui.unmount()
+  }
+})
+
+test('Spend says nothing of the spend while Claude Code has not reported it', async ($, on) => {
+  await demo($, on, state => ({ ...state, inspect: { ...state.inspect, costUsd: null } }))
+  const ui = await $.ui.mount(pane('terminal'))
+  await press(ui, 'tab:inspect')
+  await press(ui, 'fold:inspect:spend')
+  expect((await ui.find({ key: 'inspect:tile:spend' }))?.text).toBe('—At API prices')
+  expect((await ui.find({ key: 'inspect:spend' }))?.text).not.toContain('/cost estimate')
+  await ui.unmount()
+})
+
 test('a state an earlier build wrote (another session viewed, a recorded sample) holds none of Inspect`s fields: the header draws its line, Inspect its Spend alone, Chat and Recent activity as before', async ($, on) => {
   const older = (state: W.WebStateV2): W.WebStateV2 => {
     const { mode: _mode, ...header } = state.header
     return {
       ...state,
-      header: { ...header, line: 'opus-5.5 · context 41% · $4.12' } as W.WebStateV2['header'],
+      header: { ...header, line: 'opus-5.5 · context 41% · ≈$4.12' } as W.WebStateV2['header'],
       inspect: { contextPercent: state.inspect.contextPercent, costUsd: state.inspect.costUsd, agents: state.inspect.agents } as W.WebStateV2['inspect'],
       activity: state.activity.map(({ refused: _refused, ...one }) => one),
       chat: state.chat.filter(one => one.kind !== 'compaction'),
@@ -503,11 +527,11 @@ test('a state an earlier build wrote (another session viewed, a recorded sample)
   await demo($, on, older)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
-    expect((await ui.find({ key: 'deck:header' }))?.text).toContain('opus-5.5 · context 41% · $4.12')
+    expect((await ui.find({ key: 'deck:header' }))?.text).toContain('opus-5.5 · context 41% · ≈$4.12')
     await press(ui, 'tab:inspect')
     expect((await ui.findAll({ type: 'Button' })).map(one => one.key ?? '').filter(key => key.startsWith('fold:inspect:'))).toEqual(['fold:inspect:spend'])
     await press(ui, 'fold:inspect:spend')
-    expect((await ui.find({ key: 'inspect:tile:spend' }))?.text).toContain('$4.12')
+    expect((await ui.find({ key: 'inspect:tile:spend' }))?.text).toContain('≈$4.12')
     await press(ui, 'fold:inspect:spend')
     await press(ui, 'tab:chat')
     expect(await ui.find({ key: 'chat' })).toBeDefined()
