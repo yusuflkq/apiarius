@@ -543,6 +543,35 @@ function diskWorld(d: Disk): World {
   })
 }
 
+test('the list`s rows: a working session`s faces (one image, seeded by its id) where the pane is wide, none on the terminal, whose words count them; a deck not heard from lately says when it was, its dot hollow, no state word, and goes quiet within a tick of its heartbeat stopping', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  listed(d, 'busy-4', '/busy/.web/busy-4', { title: 'Busy one', state: 'working', need: null, working: 2, agents: 3, live: '2 agents working · scout: Bash npm test' })
+  listed(d, 'hush-5', '/hush/.web/hush-5', { title: 'Hushed one', state: 'working', need: null, working: 1, agents: 1, heartbeatAt: NOW })
+  const { clock } = await started($, on, newWorld(), d)
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(pane(surface, 120))
+    const drawn = await ui.drawn()
+    const [busy] = nodesIn(drawn, node => (node.key ?? node.props?.key) === 'session-row:busy-4')
+    expect(nodesIn(busy, node => node.type === 'Svg' && node.props?.alt === '2 at work').length).toBe(surface === 'desktop' ? 1 : 0)
+    expect(wordsIn(busy)).toContain('2 agents working')
+    await ui.unmount()
+  }
+  // its heartbeat stops: past QUIET_MS its row says when it was last heard; its file is read again while the list shows
+  await clock.advance(S.QUIET_MS)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(pane(surface, 120))
+    const [hush] = nodesIn(await ui.drawn(), node => (node.key ?? node.props?.key) === 'session-row:hush-5')
+    const words = wordsIn(hush)
+    expect(words).toContain('Last heard 1m ago')
+    expect(words).toContain('○')
+    expect(words).not.toContain('Working')
+    expect(nodesIn(hush, node => node.type === 'Svg' && String(node.props?.alt).endsWith('at work')).length).toBe(0)
+    await ui.unmount()
+  }
+})
+
 test('a press on another session shows its deck in this one`s place: no bar, no Back, its header`s title the switcher; its deck asked through its inbox to keep writing it; here picked again shows this deck`s own, its deck told this one looks no more', async ($, on) => {
   const { clock, w } = await started($, on)
   await $.command.run(deck('sessions'))

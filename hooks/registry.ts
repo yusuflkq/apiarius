@@ -314,7 +314,8 @@ async function readRegistry(now: number): Promise<void> {
   }
   reg.entries = next
   reg.readAt = now
-  const key = [...next.values()].map(entry => `${entry.id}:${S.isLiveEntry(entry, now)}:${S.entryKeyOf(entry)}:${entry.updatedAt}`).join('\n')
+  // what the list says of each: a deck going quiet (or heard again) changes it, its heartbeat alone does not
+  const key = [...next.values()].map(entry => `${entry.id}:${S.isLiveEntry(entry, now)}:${S.isQuietEntry(entry, now)}:${S.entryKeyOf(entry)}:${entry.updatedAt}`).join('\n')
   if (key !== reg.entriesKey) {
     reg.entriesKey = key
     reg.gen += 1
@@ -638,11 +639,11 @@ async function askView(id: string, dir: string, until: number): Promise<void> {
  * Reads the session shown again where its state.json moved and shows it at
  * once; its lazy files follow (`readLazy`), never before: a long session's
  * state names hundreds of them, and reading them first held its deck back
- * for many seconds ("Asking its deck for its state…" while its state was
- * there). Asks its deck again every 30 s, and every 5 s until its state
- * first shows. While nothing shows, its note says why: asking, then, past
- * `S.ANSWER_MS`, that its deck wrote no state or one this deck cannot read,
- * so it is answered in its window.
+ * as long as those reads took through the engine ("Asking its deck for its
+ * state…" while its state was there). Asks its deck again every 30 s, and
+ * every 5 s until its state first shows. While nothing shows, its note says
+ * why: asking, then, past `S.ANSWER_MS`, that its deck wrote no state or one
+ * this deck cannot read, so it is answered in its window.
  */
 async function readViewed(now: number): Promise<void> {
   const v = reg.viewing
