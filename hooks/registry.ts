@@ -1,7 +1,7 @@
 /**
  * Every session on this machine, live (./sessions is the pure half): this
  * deck's file in the registry, the others' read, the inbox other decks
- * write into, and another session's deck shown read-only.
+ * write into, and another session's deck shown in this one's place.
  *
  * - **Its own file.** Written within 2 s of a change of what it shows, and
  *   on a heartbeat every 30 s; on `session.end` (but a `/clear` or a resume,
@@ -11,16 +11,20 @@
  *   heartbeat stopped is checked against the system (is its process
  *   there?) and removed once it is not, or long after.
  * - **Its inbox** (`<state folder>/inbox/<viewer>.json`), read on every tick:
- *   while a deck views this session, this one writes its state folder as
+ *   while a deck shows this session, this one writes its state folder as
  *   for `/deck web` (`isViewed`); a `chat` or an `answer` in it runs as the
  *   page's own would (the host's `steer`), through Claude Code's channels,
  *   its ack in this session's state. Only a session the registry lists may
- *   write one.
- * - **Viewing another** (`openSession`): its `state.json` and lazy files
- *   read from its folder while its deck shows here, read again when they
- *   change; its deck asked to keep writing them (its inbox) every 30 s.
- *   An answer or a message to it goes into its inbox, where its own deck
- *   takes it; a deck that reads no inbox is answered in its own window.
+ *   write one; a file whose writer it could not find listed is read again
+ *   a few seconds later, not only when it changes.
+ * - **Showing another** (`openSession`): its `state.json` read from its
+ *   folder while its deck shows here, read again when it changes, and shown
+ *   at once; its lazy files read after it shows, never before (a long
+ *   session's state names hundreds). Its deck is asked to keep writing them
+ *   (its inbox): every 30 s, and every 5 s until its state first shows. An
+ *   answer or a message to it goes into its inbox, where its own deck takes
+ *   it; a deck that reads no inbox is answered in its own window. Its own
+ *   session picked again (`showHere`) shows this deck's own once more.
  *
  * The deck's hooks module hands in what it alone holds (`RegistryHost`:
  * its state, and every engine call, since each `$` call lives there) and
@@ -89,9 +93,14 @@ type Viewed = {
   /** Its state.json's size and time when last read: read again only when they move. */
   stamp: string
   agents: Record<string, W.V2AgentFile>
+  /** Each agent file as read, by the row it was read for: read again only once that row changed. */
+  agentRows: Map<string, string>
   patches: Record<string, string>
   messages: Record<string, string>
   gitDiffs: Record<string, string>
+  /** Its lazy files are being read (after its state shows); read again once that pass ends when a newer state came meanwhile. */
+  isLazy: boolean
+  isLazyAgain: boolean
   /** Why nothing shows yet; '' once it does. */
   note: string
   /** Its own agent page, file and commit open (this session's stay as they were). */
@@ -110,6 +119,12 @@ type Viewed = {
 
 /** A read of the session viewed that has not ended after this long is let go: the next tick reads again. */
 const READ_HUNG_MS = 10_000
+
+/** Until the session viewed first shows, its deck is asked again this often (an inbox it read before this deck was listed is read again). */
+const ASK_WAITING_MS = 5_000
+
+/** An inbox file whose writer was not found listed is read again after this long, though it did not change: its registry file may have been mid-write. */
+const INBOX_RETRY_MS = 5_000
 
 const reg = {
   /** The registry folder; '' while it is off (no home known, as in the tests). */
@@ -141,7 +156,8 @@ const reg = {
   /** The decks viewing this session, until when, and the tick's time they are judged at. */
   viewers: new Map<string, number>(),
   tickAt: 0,
-  inboxSeen: new Map<string, number>(),
+  /** Each inbox file as last read: its time, and whether its writer was listed then (one that was not is read again after `INBOX_RETRY_MS`). */
+  inboxSeen: new Map<string, { mtimeMs: number; at: number; isListed: boolean }>(),
   handled: new Set<string>(),
   /** Another session's deck shown here. */
   viewing: null as Viewed | null,
@@ -298,7 +314,8 @@ async function readRegistry(now: number): Promise<void> {
   }
   reg.entries = next
   reg.readAt = now
-  const key = [...next.values()].map(entry => `${entry.id}:${S.isLiveEntry(entry, now)}:${S.entryKeyOf(entry)}:${entry.updatedAt}`).join('\n')
+  // what the list says of each: a deck going quiet (or heard again) changes it, its heartbeat alone does not
+  const key = [...next.values()].map(entry => `${entry.id}:${S.isLiveEntry(entry, now)}:${S.isQuietEntry(entry, now)}:${S.entryKeyOf(entry)}:${entry.updatedAt}`).join('\n')
   if (key !== reg.entriesKey) {
     reg.entriesKey = key
     reg.gen += 1
@@ -370,9 +387,9 @@ export async function endRegistry(reason: string): Promise<void> {
       // another deck's clean finds it silent
     }
   }
-  const viewed = reg.viewing
+  const shown = reg.viewing
   reg.viewing = null
-  if (viewed && !viewed.isSample) await askView(viewed.id, viewed.dir, 0)
+  if (shown && !shown.isSample) await askView(shown.id, shown.dir, 0)
   if (path !== '') await removeFiles([path])
 }
 
@@ -389,10 +406,12 @@ export function isShared(): boolean {
 
 /**
  * Reads this session's inbox: each viewer's file whose time moved, from a
- * session the registry lists. Its view keeps this session's state folder
- * written (`share` when a first one comes); each `chat` or `answer` not
- * acted on yet, given within `COMMAND_MS`, runs as the page's own would
- * (`steer`). An inbox file long silent is removed.
+ * session the registry lists (one whose writer was not found listed again
+ * after `INBOX_RETRY_MS`: its registry file may have been mid-write, and
+ * the viewer writes again only every 30 s). Its view keeps this session's
+ * state folder written (`share` when a first one comes); each `chat` or
+ * `answer` not acted on yet, given within `COMMAND_MS`, runs as the page's
+ * own would (`steer`). An inbox file long silent is removed.
  */
 async function pollInbox(now: number): Promise<void> {
   const host = reg.host
@@ -410,15 +429,17 @@ async function pollInbox(now: number): Promise<void> {
   for (const one of listed) {
     if (one.kind !== 'file' || !one.name.endsWith('.json')) continue
     if (now - one.mtimeMs > S.GONE_MS) silent.push(`${dir}/inbox/${one.name}`)
-    if (reg.inboxSeen.get(one.name) === one.mtimeMs) continue
+    const seen = reg.inboxSeen.get(one.name)
+    if (seen && seen.mtimeMs === one.mtimeMs && (seen.isListed || now - seen.at < INBOX_RETRY_MS)) continue
     let file: S.InboxFile | null = null
     try {
       file = S.inboxFromText(await io().read(`${dir}/inbox/${one.name}`))
     } catch {
       continue
     }
-    reg.inboxSeen.set(one.name, one.mtimeMs)
-    if (!file || `${file.from}.json` !== one.name || !(await isListed(file.from, now))) continue
+    const isOk = file !== null && `${file.from}.json` === one.name && (await isListed(file.from, now))
+    reg.inboxSeen.set(one.name, { mtimeMs: one.mtimeMs, at: now, isListed: isOk })
+    if (!file || !isOk) continue
     reg.viewers.set(file.from, Math.min(file.viewUntil, now + S.VIEW_MS))
     for (const said of file.cmds) {
       const id = typeof said.cmd.id === 'string' ? said.cmd.id : ''
@@ -449,13 +470,13 @@ async function isListed(id: string, now: number): Promise<boolean> {
 /**
  * The deck's tick: this session's inbox read; while the list, another
  * session's deck or the web page shows (`isWebOn`), the others' files read
- * again, and the session viewed read again where it changed.
+ * again, and the session shown read again where it changed.
  */
 export async function registryTick(now: number, isWebOn: boolean): Promise<void> {
   if (reg.dir === '') return
   reg.tickAt = now
   for (const [id, until] of reg.looks) if (until <= now) reg.looks.delete(id)
-  // each read on its own, so none waits on another: a slow inbox or registry never holds the session viewed back
+  // each read on its own, so none waits on another: a slow inbox or registry never holds the session shown back
   const reads = [pollInbox(now), reg.isOpen || reg.viewing !== null || isWebOn ? readRegistry(now) : null, reg.viewing ? readViewed(now) : null]
   // the deck's own tick goes on whatever one of them met: the next one reads again
   await Promise.all(reads.map(read => read?.catch(() => undefined)))
@@ -463,7 +484,7 @@ export async function registryTick(now: number, isWebOn: boolean): Promise<void>
 
 // ---------------------------------------------------------------- the list
 
-/** What the screens draw of the sessions: the list, this deck's own row first (made from `state` now), its ages worded at `now`; the sample's with `state` null; null while the registry is off or no sample is read. */
+/** What the screens draw of the sessions: the list, this deck's own row first ("here", made from `state` now), its ages worded at `now`; the sample's with `state` null; null while the registry is off or no sample is read. */
 export function sessionsFor(state: W.WebStateV2 | null, now: number): S.SessionsV2 | null {
   if (state === null) {
     const sample = reg.sample
@@ -484,25 +505,25 @@ export function listKey(): string {
   return `${reg.gen}|${reg.sample !== null}`
 }
 
-/** What the list and the session viewed show, as one key: equal keys draw the same. */
+/** What the list and the session shown show, as one key: equal keys draw the same. */
 export function registryKey(): string {
   const v = reg.viewing
   return [reg.gen, reg.isOpen, v ? `${v.id}:${v.version}:${v.page}:${v.file}:${v.commit}` : '', reg.sample !== null].join('|')
 }
 
-/** The list shows over the tab. */
+/** The list shows, dropped over the tabs. */
 export function isListOpen(): boolean {
   return reg.isOpen
 }
 
-/** `s`: the list opened over the tab (read afresh), or closed when it shows. */
+/** `s`, the header's title or its count of sessions: the list dropped over the tabs (read afresh), or closed when it shows. */
 export function toggleList(): void {
   reg.isOpen = !reg.isOpen
   reg.host?.changed()
   if (reg.isOpen && reg.host && reg.dir !== '') void (async () => readRegistry(await io().now()))().catch(() => undefined)
 }
 
-/** The list closed, for the tab (or the session viewed) it was opened over. */
+/** The list closed, for the deck it was dropped over. */
 export function closeList(): void {
   if (!reg.isOpen) return
   reg.isOpen = false
@@ -525,7 +546,7 @@ export async function readSample(root: string, now: number): Promise<void> {
   reg.host?.changed()
 }
 
-/** The sample's sessions let go, with the session viewed in it. */
+/** The sample's sessions let go, with the session shown in it. */
 export function leaveSample(): void {
   reg.sample = null
   if (reg.viewing?.isSample) reg.viewing = null
@@ -534,15 +555,20 @@ export function leaveSample(): void {
 // ------------------------------------------------- another session's deck
 
 /**
- * Opens session `id`'s deck read-only: from its state folder (the sample's
- * from the mod's fixtures), its deck asked through its inbox to write it
- * while it shows. The list closes.
+ * Shows session `id`'s deck in this one's place: from its state folder (the
+ * sample's from the mod's fixtures), its deck asked through its inbox to
+ * write it while it shows. The list closes. The session this deck belongs
+ * to (the sample's own, in the sample) shows this deck's own again.
  */
 export async function openSession(id: string, isSample = false): Promise<void> {
   const host = reg.host
   if (!host) return
-  const now = await io().now()
   const sample = isSample ? reg.sample : null
+  if (id === (sample ? sample.me : host.sessionId())) {
+    showHere()
+    return
+  }
+  const now = await io().now()
   const entry = sample ? sample.entries.find(one => one.id === id) : reg.entries.get(id)
   if (!entry || entry.dir === '') {
     host.toast('Its deck names no folder to read: open it in its window.')
@@ -553,8 +579,8 @@ export async function openSession(id: string, isSample = false): Promise<void> {
     host.toast('Its deck names a folder Agent Deck does not read: open it in its window.')
     return
   }
-  const viewed = reg.viewing
-  if (viewed && !viewed.isSample && viewed.id !== id) void askView(viewed.id, viewed.dir, reg.looks.get(viewed.id) ?? 0)
+  const shown = reg.viewing
+  if (shown && !shown.isSample && shown.id !== id) void askView(shown.id, shown.dir, reg.looks.get(shown.id) ?? 0)
   reg.viewing = {
     id,
     dir,
@@ -563,9 +589,12 @@ export async function openSession(id: string, isSample = false): Promise<void> {
     state: null,
     stamp: '',
     agents: {},
+    agentRows: new Map(),
     patches: {},
     messages: {},
     gitDiffs: {},
+    isLazy: false,
+    isLazyAgain: false,
     note: 'Reading its deck…',
     page: '',
     file: '',
@@ -582,12 +611,12 @@ export async function openSession(id: string, isSample = false): Promise<void> {
   await readViewed(now)
 }
 
-/** Back to this chat: off the session viewed (its deck told this one looks no more) and the list. */
-export function backToThisChat(): void {
-  const viewed = reg.viewing
+/** Here again: this deck's own session shown, off the one shown in its place (its deck told this one looks no more), the list closed. */
+export function showHere(): void {
+  const shown = reg.viewing
   reg.viewing = null
   reg.isOpen = false
-  if (viewed && !viewed.isSample) void askView(viewed.id, viewed.dir, reg.looks.get(viewed.id) ?? 0)
+  if (shown && !shown.isSample) void askView(shown.id, shown.dir, reg.looks.get(shown.id) ?? 0)
   reg.host?.changed()
 }
 
@@ -607,10 +636,14 @@ async function askView(id: string, dir: string, until: number): Promise<void> {
 }
 
 /**
- * Reads the session viewed again where its state.json moved (its lazy files
- * with it), and asks its deck again every 30 s. While nothing shows, its
- * note says why: asking, then, past `S.ANSWER_MS`, that its deck wrote no
- * state or one this deck cannot read, so it is answered in its window.
+ * Reads the session shown again where its state.json moved and shows it at
+ * once; its lazy files follow (`readLazy`), never before: a long session's
+ * state names hundreds of them, and reading them first held its deck back
+ * as long as those reads took through the engine ("Asking its deck for its
+ * state…" while its state was there). Asks its deck again every 30 s, and
+ * every 5 s until its state first shows. While nothing shows, its note says
+ * why: asking, then, past `S.ANSWER_MS`, that its deck wrote no state or one
+ * this deck cannot read, so it is answered in its window.
  */
 async function readViewed(now: number): Promise<void> {
   const v = reg.viewing
@@ -619,7 +652,7 @@ async function readViewed(now: number): Promise<void> {
   v.readingAt = now
   let stamp = ''
   try {
-    if (!v.isSample && now - v.askedAt >= S.VIEW_AGAIN_MS) {
+    if (!v.isSample && now - v.askedAt >= (v.state === null ? ASK_WAITING_MS : S.VIEW_AGAIN_MS)) {
       v.askedAt = now
       await askView(v.id, v.dir, now + S.VIEW_MS)
     }
@@ -636,12 +669,13 @@ async function readViewed(now: number): Promise<void> {
     // the sample's times move to now, as `/deck demo`'s own; a live state's stay as its deck wrote them
     const state = text === null ? null : W.v2StateFromText(text, v.isSample ? now : at)
     if (!state || reg.viewing !== v) return
-    await readLazy(v, state, v.isSample ? now - at : 0)
     v.stamp = stamp
-    v.state = S.viewedStateOf(state, v.canSteer && !v.isSample)
+    v.state = state
     v.note = ''
     v.version += 1
     reg.host?.refresh(now)
+    // its lazy files once it shows: an agent's page, a patch or a cut message says it is not read yet until then
+    readLazySoon(v, v.isSample ? now - at : 0)
   } catch {
     // half written: the next tick reads it again
   } finally {
@@ -659,51 +693,84 @@ function noteWaiting(v: Viewed, now: number, isWritten: boolean): void {
   reg.host?.refresh(now)
 }
 
-/** The lazy files `state` names in the folder viewed: each agent's file again (they change), each patch, cut message and git diff once. */
-async function readLazy(v: Viewed, state: W.WebStateV2, by: number): Promise<void> {
+/** Reads the lazy files of the session shown, one pass at a time (a pass asked for meanwhile runs after it, on the newest state); what it read shows when it ends. */
+function readLazySoon(v: Viewed, by: number): void {
+  if (v.isLazy) {
+    v.isLazyAgain = true
+    return
+  }
+  v.isLazy = true
+  void (async () => {
+    try {
+      do {
+        v.isLazyAgain = false
+        const state = v.state
+        if (!state || reg.viewing !== v) return
+        if ((await readLazy(v, state, by)) && reg.viewing === v) {
+          v.version += 1
+          reg.host?.refresh(await io().now())
+        }
+      } while (v.isLazyAgain)
+    } catch {
+      // the next state read reads them again
+    } finally {
+      v.isLazy = false
+    }
+  })()
+}
+
+/** The lazy files `state` names in the folder shown: each agent's file whose row changed since it was read, each patch, cut message and git diff once. Answers whether any was read. */
+async function readLazy(v: Viewed, state: W.WebStateV2, by: number): Promise<boolean> {
   const isSafe = (id: string) => /^[A-Za-z0-9_-]{1,128}$/.test(id)
+  let isRead = false
   const read = async (path: string, keep: (text: string) => void) => {
     try {
       keep((await io().read(path)).replace(/\r\n/g, '\n'))
+      isRead = true
     } catch {
-      // not written (yet): its screen says so
+      // not written (yet): its screen says so, and the next pass reads it
     }
   }
-  const agents: Record<string, W.V2AgentFile> = {}
+  const rows = state.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && isSafe(row.fileId))
+  const agents: Record<string, W.V2AgentFile> = Object.fromEntries(Object.entries(v.agents).filter(([fileId]) => rows.some(row => row.fileId === fileId)))
   await Promise.all([
-    ...state.agents.flatMap(row =>
-      row.row === 'agent' && isSafe(row.fileId)
-        ? [
-            read(`${v.dir}/agents/${row.fileId}.json`, text => {
-              agents[row.fileId] = W.v2TimesMoved(JSON.parse(text) as W.V2AgentFile, by)
-            }),
-          ]
-        : [],
-    ),
+    ...rows
+      .filter(row => !Object.hasOwn(agents, row.fileId) || v.agentRows.get(row.fileId) !== JSON.stringify(row))
+      .map(row =>
+        read(`${v.dir}/agents/${row.fileId}.json`, text => {
+          agents[row.fileId] = W.v2TimesMoved(JSON.parse(text) as W.V2AgentFile, by)
+          v.agentRows.set(row.fileId, JSON.stringify(row))
+        }),
+      ),
     ...state.changes.edits.filter(edit => isSafe(edit.id) && !Object.hasOwn(v.patches, edit.id)).map(edit => read(`${v.dir}/patches/${edit.id}.diff`, text => (v.patches[edit.id] = text))),
     ...state.chat.filter(row => row.isCut && isSafe(row.id) && !Object.hasOwn(v.messages, row.id)).map(row => read(`${v.dir}/messages/${row.id}.md`, text => (v.messages[row.id] = text.trimEnd()))),
     ...state.changes.files.flatMap(file => (file.diffId !== null && isSafe(file.diffId) && !Object.hasOwn(v.gitDiffs, file.diffId) ? [file.diffId] : [])).map(id => read(`${v.dir}/gitdiffs/${id}.diff`, text => (v.gitDiffs[id] = text))),
   ])
   v.agents = agents
+  return isRead
 }
 
 /**
- * The session viewed, as the pane draws it in place of this one's: its bar,
- * its state, its lazy files, its model (its own page, file and commit; no
- * git of this session's, no web line, no band) and its presses (its agent
- * page; an answer or a message to its deck; nothing else of this deck's).
- * Null while none is viewed, or the list shows over it.
+ * The session shown in this deck's place, as the pane draws it: its row in
+ * the list (null when the list holds it no more), why its deck shows
+ * nothing yet ('' once it does), its state marked as another session's
+ * (`S.peerStateOf`: where its window is, Stop offered nowhere here) with
+ * this deck's own list of sessions, its lazy files, its model (its own
+ * page, file and commit; no git of this session's, no web line, no band;
+ * the list dropped as this deck's) and its presses (its agent page; an
+ * answer or a message to its deck; nothing else of this deck's). Null while
+ * this deck's own session shows.
  */
 export function viewingFor(model: DeckModel, actions: DashActions): DashModel['viewing'] {
   const v = reg.viewing
-  if (!v || reg.isOpen) return null
+  if (!v) return null
   const list = v.isSample ? sessionsFor(null, model.now) : reg.host ? sessionsFor(reg.host.stateOf(model.now), model.now) : null
   const row = list?.rows.find(one => one.id === v.id) ?? null
   const changed = () => {
     v.version += 1
     reg.host?.changed()
   }
-  const refuse = (what: string) => reg.host?.toast(`${what}: this is another session's deck, shown read-only. Do it in its window.`)
+  const refuse = (what: string) => reg.host?.toast(`${what}: this is another session's deck. Do it in its window${row ? `: ${row.where}` : ''}.`)
   const viewedActions: DashActions = {
     ...actions,
     openAgent: id => {
@@ -731,16 +798,20 @@ export function viewingFor(model: DeckModel, actions: DashActions): DashModel['v
     showCleared: () => refuse('Show cleared'),
     loadMessage: (id, onRead) => onRead(Object.hasOwn(v.messages, id) ? (v.messages[id] ?? null) : null),
   }
+  const peer = { where: row?.where ?? '', canSteer: v.canSteer && !v.isSample }
   return {
-    bar: { id: v.id, row, canSteer: v.canSteer && !v.isSample, note: v.state ? (v.isSample ? 'Sample data: a recorded session. Nothing here reaches Claude.' : '') : v.note },
-    state: v.state,
+    id: v.id,
+    row,
+    note: v.state ? '' : v.note,
+    state: v.state ? { ...S.peerStateOf(v.state, peer), ...(list ? { sessions: list } : {}) } : null,
+    list,
     files: W.v2FilesFrom({ agents: v.agents, patches: v.patches, messages: v.messages, gitDiffs: v.gitDiffs }),
-    model: { ...model, view: { ...model.view, page: v.page, file: v.file, commit: v.commit }, fileDiff: null, commit: null, band: null, isSessionsOpen: false },
+    model: { ...model, view: { ...model.view, page: v.page, file: v.file, commit: v.commit }, fileDiff: null, commit: null, band: null },
     actions: viewedActions,
   }
 }
 
-/** An answer or a message from the pane to the session viewed: into its inbox, where its own deck takes it; refused where its deck reads none, or in the sample. */
+/** An answer or a message from the pane to the session shown: into its inbox, where its own deck takes it; refused where its deck reads none, or in the sample. */
 async function steerViewed(v: Viewed, cmd: Record<string, unknown>): Promise<void> {
   if (v.isSample) {
     reg.host?.toast('Sample data: nothing is sent.')

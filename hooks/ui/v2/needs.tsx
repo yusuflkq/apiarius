@@ -14,6 +14,10 @@
  *   call says it does, and "Answer it in Claude Code".
  * - Claude Code's notification: its title and its words, verbatim.
  *
+ * Another session's (the state marked `peer`) says where instead: "Answer
+ * it in its window: Terminal · site." (../../sessions `inItsWindow`); its
+ * questions answer through its own deck only where that takes answers.
+ *
  * Each card's title is a plain Button keyed `need:<id>` (W.needKeyOf, the
  * row `j`, `k` and `n` move the focus to) that opens the asking agent's page.
  *
@@ -23,6 +27,7 @@
 import type { RenderElement } from 'claude-code'
 
 import { clean } from '../../format'
+import { inItsWindow } from '../../sessions'
 import { needKeyOf, type V2Need, type WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import * as A from './answers'
@@ -60,9 +65,18 @@ export function needsSection(kit: Kit, state: WebStateV2, list: readonly V2Need[
     <Box key={`needs:${where}`} flexDirection="column" gap={1}>
       {sectionHead(kit, 'Needs you', list.length)}
       {list.slice(0, most).map(need => card(kit, state, need, actions))}
-      {rest.length > 0 ? moreLines(kit, shown, actions, rest.length - shown.length) : null}
+      {rest.length > 0 ? moreLines(kit, shown, actions, rest.length - shown.length, state.peer ? 'its window' : 'Claude Code') : null}
     </Box>
   )
+}
+
+/** Where a card says its need is answered: in Claude Code, or, on another session's deck (`peer`), in its window, named. */
+type Notes = { answer: string; orAnswer: string }
+
+function notesOf(state: Pick<WebStateV2, 'peer'>): Notes {
+  const peer = state.peer
+  if (!peer) return { answer: 'Answer it in Claude Code.', orAnswer: 'Or answer it in Claude Code.' }
+  return { answer: inItsWindow('Answer it', peer.where), orAnswer: inItsWindow('Or answer it', peer.where) }
 }
 
 /** What a need's title says: who asks, who needs your OK and for which tool, or the notification's own title, else its type in words ("Permission prompt"; one the deck does not know as sent). */
@@ -85,6 +99,7 @@ function card(kit: Kit, state: WebStateV2, need: V2Need, actions: DashActions): 
   const { Box, Text, Button } = kit
   const answered = A.sentOf(need.id, state.now)
   const title = needTitle(need)
+  const notes = notesOf(state)
   return (
     <Box key={`needs:${need.id}`} flexDirection="column" borderStyle="round" borderColor={EDGE} paddingX={1}>
       <Box flexDirection="row" columnGap={1}>
@@ -105,7 +120,7 @@ function card(kit: Kit, state: WebStateV2, need: V2Need, actions: DashActions): 
         </Box>
       </Box>
       <Box flexDirection="column" paddingLeft={2}>
-        {answered ? answeredLine(kit, answered.words) : need.kind === 'question' ? questionBody(kit, need, actions, state.now) : need.kind === 'permission' ? permissionBody(kit, need) : notificationBody(kit, need)}
+        {answered ? answeredLine(kit, answered.words) : need.kind === 'question' ? questionBody(kit, need, actions, state.now, notes) : need.kind === 'permission' ? permissionBody(kit, need, notes) : notificationBody(kit, need, notes)}
       </Box>
     </Box>
   )
@@ -124,14 +139,14 @@ function answeredLine(kit: Kit, words: string): RenderElement {
 /** How a question's card answers: from here (at a press, or with Submit), or not at all (read-only). */
 type Mode = { canAnswer: boolean; isInstant: boolean }
 
-function questionBody(kit: Kit, need: V2Need, actions: DashActions, now: number): RenderElement {
+function questionBody(kit: Kit, need: V2Need, actions: DashActions, now: number, notes: Notes): RenderElement {
   const { Box } = kit
   const qs = need.questions ?? []
   const mode: Mode = { canAnswer: need.isAnswerable, isInstant: need.isAnswerable && A.isInstant(need) }
   return (
     <Box flexDirection="column" gap={1}>
       {qs.map((q, qi) => questionBlock(kit, need, qi, mode, actions, now))}
-      {questionFoot(kit, need, mode, actions, now)}
+      {questionFoot(kit, need, mode, actions, now, notes)}
     </Box>
   )
 }
@@ -259,10 +274,10 @@ function otherField(kit: Kit, need: V2Need, qi: number, mode: Mode, actions: Das
 }
 
 /** Under the questions: Submit and where else to answer; for a read-only question, where to answer it. */
-function questionFoot(kit: Kit, need: V2Need, mode: Mode, actions: DashActions, now: number): RenderElement {
+function questionFoot(kit: Kit, need: V2Need, mode: Mode, actions: DashActions, now: number, notes: Notes): RenderElement {
   const { Box, Text, Button } = kit
-  if (!mode.canAnswer) return <Text color={NOTE}>Answer it in Claude Code.</Text>
-  if (mode.isInstant) return <Text color={NOTE}>Or answer it in Claude Code.</Text>
+  if (!mode.canAnswer) return <Text color={NOTE} wrap="wrap">{notes.answer}</Text>
+  if (mode.isInstant) return <Text color={NOTE} wrap="wrap">{notes.orAnswer}</Text>
   const qs = need.questions ?? []
   const pick = A.pickOf(need)
   const submit = () => {
@@ -282,7 +297,7 @@ function questionFoot(kit: Kit, need: V2Need, mode: Mode, actions: DashActions, 
       </Box>
       <Box flexGrow={1} flexShrink={1}>
         <Text color={pick.note ? P.waitText : NOTE} wrap="wrap">
-          {pick.note || 'Or answer it in Claude Code.'}
+          {pick.note || notes.orAnswer}
         </Text>
       </Box>
     </Box>
@@ -290,7 +305,7 @@ function questionFoot(kit: Kit, need: V2Need, mode: Mode, actions: DashActions, 
 }
 
 /** A permission prompt: its exact command (or path), what the call says it does, and where to answer. */
-function permissionBody(kit: Kit, need: V2Need): RenderElement {
+function permissionBody(kit: Kit, need: V2Need, notes: Notes): RenderElement {
   const { Box, Text, Code } = kit
   const what = need.command ?? need.path ?? ''
   return (
@@ -311,26 +326,30 @@ function permissionBody(kit: Kit, need: V2Need): RenderElement {
           {clean(need.text)}
         </Text>
       ) : null}
-      <Text color={NOTE}>Answer it in Claude Code.</Text>
+      <Text color={NOTE} wrap="wrap">
+        {notes.answer}
+      </Text>
     </Box>
   )
 }
 
 /** Claude Code's notification: its words as sent, and where to answer. */
-function notificationBody(kit: Kit, need: V2Need): RenderElement {
+function notificationBody(kit: Kit, need: V2Need, notes: Notes): RenderElement {
   const { Box, Text } = kit
   return (
     <Box flexDirection="column">
       <Text color={P.fg2} wrap="wrap">
         {clean(need.text)}
       </Text>
-      <Text color={NOTE}>Answer it in Claude Code.</Text>
+      <Text color={NOTE} wrap="wrap">
+        {notes.answer}
+      </Text>
     </Box>
   )
 }
 
-/** Past the cards: a line a need, its title and words as one Button (keyed as its card's would be) and its age. */
-function moreLines(kit: Kit, rest: readonly V2Need[], actions: DashActions, past = 0): RenderElement {
+/** Past the cards: a line a need, its title and words as one Button (keyed as its card's would be) and its age; past those, where to answer them (`inWhere`, Claude Code or its window). */
+function moreLines(kit: Kit, rest: readonly V2Need[], actions: DashActions, past = 0, inWhere = 'Claude Code'): RenderElement {
   const { Box, Text, Button } = kit
   return (
     <Box key="needs:more" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
@@ -353,7 +372,7 @@ function moreLines(kit: Kit, rest: readonly V2Need[], actions: DashActions, past
           </Box>
         )
       })}
-      {past > 0 ? <Text color={P.muted2}>{rest.length > 0 ? `and ${past} more: answer ${past === 1 ? 'it' : 'them'} in Claude Code, or make the pane taller` : `Answer ${past === 1 ? 'it' : 'them'} in Claude Code, or make the pane taller`}</Text> : null}
+      {past > 0 ? <Text color={P.muted2}>{rest.length > 0 ? `and ${past} more: answer ${past === 1 ? 'it' : 'them'} in ${inWhere}, or make the pane taller` : `Answer ${past === 1 ? 'it' : 'them'} in ${inWhere}, or make the pane taller`}</Text> : null}
     </Box>
   )
 }

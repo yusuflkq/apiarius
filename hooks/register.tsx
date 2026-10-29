@@ -2449,7 +2449,7 @@ function actionsFor($: EngineInterface): DeckActions {
     loadMessage: (id, onRead) => void readMessage($, id, onRead),
     reveal: (key, block) => scrollTo($, key, block),
     exitDemo: () => {
-      SR.backToThisChat()
+      SR.showHere()
       leaveDemo()
       view.page = ''
       changed($)
@@ -2506,14 +2506,13 @@ function actionsFor($: EngineInterface): DeckActions {
       void sendChat($, agentId, text, W.cmdIdOf({ id: ackId }))
     },
     review: text => fillReview($, text),
-    // every session on this machine (./registry): the list over the tab (`s`), another session's deck read-only, and back
+    // every session on this machine (./registry): the list dropped over the tabs (`s`), and any session's deck shown in this one's place (here's again: this deck's own)
     openSessions: () => SR.toggleList(),
     closeSessions: () => SR.closeList(),
     openSession: id => void SR.openSession(id, view.isDemo),
-    backToThisChat: () => SR.backToThisChat(),
     // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
     open: tab => {
-      SR.backToThisChat()
+      SR.showHere()
       leaveDemo()
       view.v2 = M.view2With(view.v2, { tab: M.v2TabOf(tab), isInspectOpen: false })
       view.page = ''
@@ -3359,7 +3358,7 @@ export const register: Register = on => {
     }
     // an Org chart Client that failed is tried again whenever /deck opens
     orgDown.clear()
-    // every session on this machine, listed over the tab
+    // every session on this machine, dropped over the tabs
     if (arg === 'sessions' || arg === 'all') {
       if (!SR.isListOpen()) SR.toggleList()
       const isShown = await openPane($)

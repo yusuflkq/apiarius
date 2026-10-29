@@ -869,9 +869,14 @@ export type WebStateV2 = {
   acks: WebAck[]
   /** The agents "Clear finished" hid (their rows `isCleared`), how many, and when it was pressed last; 0 and null when none are. "Show N cleared" brings them back. */
   cleared: { count: number; at: number | null }
-  /** Every session on this machine (./sessions, "All sessions"), this chat first; absent until the registry was read (and in another session's state as a deck shows it). */
+  /** Every session on this machine (./sessions, "All sessions"), here's first; absent until the registry was read (and in another session's state as it wrote it: a deck showing it puts its own list there). */
   sessions?: SessionsV2
+  /** Set only on another session's state as a deck shows it (./sessions `peerStateOf`): where its window is, and whether its deck takes answers and messages from here. Its controls that act only there say so where they stand. */
+  peer?: V2Peer
 }
+
+/** Another session shown in a deck: its window ("Terminal · site", its row's `where`; '' when the list does not hold it), and whether its deck takes answers and messages from another (its inbox). */
+export type V2Peer = { where: string; canSteer: boolean }
 
 /** An agent's own file, `agents/<id>.json`, read when its page opens: its words whole and its calls. */
 export type V2AgentFile = {

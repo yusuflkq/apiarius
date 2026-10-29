@@ -787,7 +787,7 @@ async function command(body) {
   // another session's deck: an answer or a message goes to its own deck, which acts on it as on its own page's; nothing else goes from here
   if (route.session && body.cmd !== 'view') {
     const row = sessionRow(route.session);
-    if (body.cmd !== 'chat' && body.cmd !== 'answer') throw new Error('Read-only here: this is another session\'s deck. Do that in its window.');
+    if (body.cmd !== 'chat' && body.cmd !== 'answer') throw new Error(`This is another session's deck. ${inItsWindow('Do that', row ? row.where : '')}`);
     if (!row || !row.canSteer) throw new Error('Answer it in its window: its deck takes no answers or messages from another.');
     body = { ...body, session: route.session };
   }
@@ -1468,7 +1468,7 @@ function QuestionForm(n) {
   return h('div', { class: 'qform' },
     h('div', { class: `qform-qs${qs.length > 1 ? ' several' : ''}` }, qs.map((q, qi) => QuestionBlock(n, q, qi, c, mode))),
     h('div', { class: 'qform-foot' },
-      st ? StatusNote(st) : h('span', { class: 'need-where' }, readOnly ? 'Answer it in Claude Code.' : 'Or answer it in Claude Code.'),
+      st ? StatusNote(st) : h('span', { class: 'need-where' }, readOnly ? whereNote('Answer it', 'Answer it in Claude Code.') : whereNote('Or answer it', 'Or answer it in Claude Code.')),
       !readOnly && !instant && h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: !ready || locked, onClick: submit }, qs.length > 1 ? 'Submit answers' : 'Submit')));
 }
 
@@ -1479,13 +1479,13 @@ function PermissionBody(n) {
       ? h('pre', { class: 'permit-cmd' }, h('code', null, n.command))
       : n.path ? h('p', { class: 'permit-path' }, icon('file', 'fic'), PathText(n.path, 'grow')) : null,
     n.text && n.text !== n.command && n.text !== n.path && n.text !== n.tool && h('p', { class: 'permit-desc' }, n.text),
-    h('p', { class: 'need-where' }, 'Answer in Claude Code.'));
+    h('p', { class: 'need-where' }, whereNote('Answer it', 'Answer in Claude Code.')));
 }
 
 function NoteBody(n) {
   return h('div', { class: 'permit' },
     h('p', { class: 'note-text' }, n.text),
-    h('p', { class: 'need-where' }, 'Answer in Claude Code.'));
+    h('p', { class: 'need-where' }, whereNote('Answer it', 'Answer in Claude Code.')));
 }
 
 const NEED_ICON = { question: 'help', permission: 'shield', notification: 'bell' };
@@ -1612,24 +1612,27 @@ function Tab(id, label) {
     n > 0 && h('span', { class: `tab-n${id === 'now' ? ' is-need' : ''}`, title: id === 'now' ? plural(n, 'thing needs you', 'things need you') : plural(n, 'uncommitted file') }, String(n)));
 }
 
+/** The header of the session shown, here's or another's alike (the rail says which): its state, your latest request, its line, the rail's button, and Stop turn (another's: where to stop it). */
 function Header() {
   const has = S && !S.empty;
   const hd = has ? S.header : null;
+  // another session's deck before its state is read: its row says what it can
+  const pending = !S && route.session ? PendingHead(sessionRow(route.session)) : null;
   return h('header', { class: 'hd' },
     h('div', { class: 'hd-top' },
-      h('span', { class: 'brand-mark', title: 'Agent Deck', 'aria-hidden': 'true' }),
-      hd ? StateWord() : h('span', { class: 'state is-idle' }, Dot('idle'), S ? 'Idle' : 'Connecting'),
-      hd ? GoalButton() : h('span', { class: 'goal goal-none' }),
+      // the brand sits on the rail while it is beside the page
+      !(isRailShown() && isRailDocked()) && h('span', { key: 'brand', class: 'brand-mark', title: 'Agent Deck', 'aria-hidden': 'true' }),
+      hd ? StateWord() : pending ? pending[0] : h('span', { class: 'state is-idle' }, Dot('idle'), S ? 'Idle' : 'Connecting'),
+      hd ? GoalButton() : pending ? pending[1] : h('span', { class: 'goal goal-none' }),
       hd && hd.line ? HeaderLine(hd, 'hd-line-top') : null,
-      SessionsLink(),
-      hd && hd.turn ? StopTurn() : null),
+      RailToggle(),
+      hd && hd.turn ? (S.peer ? PeerStopTurn() : StopTurn()) : null),
     GoalPanel(),
     h('nav', { class: 'hd-tabs', 'aria-label': 'Pages' },
       TABS.map(([id, label]) => Tab(id, label)),
       h('span', { class: 'hd-tabs-end' },
         hd && hd.line ? HeaderLine(hd, 'hd-line-tabs') : null,
-        ConnPill())),
-    ViewingBar());
+        ConnPill())));
 }
 
 /** The header's line, "opus-5.5 · auto mode · context 41% · $4.12": its permission mode lit as Claude Code's footer lights it (bypass permissions in red). */
@@ -1918,8 +1921,12 @@ function BgRow(x) {
 function BackgroundSection() {
   const bg = S.background;
   if (!bg || !bg.rows.length) return null;
-  return Section('background', 'Background', bg.rows.length, bg.text ? h('span', { class: 'sec-note' }, bg.text) : null, () =>
-    h('div', { class: 'card list bg-list' }, bg.rows.map(BgRow)));
+  // another session's: its Stop and Cancel act only in its own window, so the list says where, once
+  const stops = S.peer ? bg.rows.filter(x => x.stop).length : 0;
+  return Section('background', 'Background', bg.rows.length, bg.text ? h('span', { class: 'sec-note' }, bg.text) : null, () => [
+    h('div', { key: 'list', class: 'card list bg-list' }, bg.rows.map(BgRow)),
+    stops > 0 && h('p', { key: 'where', class: 'peer-note bg-where' }, inItsWindow(stops === 1 ? 'Stop it' : 'Stop them', S.peer.where)),
+  ]);
 }
 
 // ----------------------------------------------------------------- figures
@@ -2912,7 +2919,7 @@ function Bubble(e, showTo) {
       open ? 'Show less' : 'Show more', icon('chevronDown', open ? 'flip' : '')),
     held && (held.isAnswerable
       ? h('button', { type: 'button', class: 'more more-start b-answer', onClick: () => goToNeed(held) }, 'Answer on Dashboard', icon('arrowRight'))
-      : h('p', { class: 'b-held' }, 'Answer it in Claude Code.'))),
+      : h('p', { class: 'b-held' }, whereNote('Answer it', 'Answer it in Claude Code.')))),
   m.isDelivered === false && !m.ackId && h('p', { class: 'b-note' }, StatusNote({ tone: 'fail', icon: 'x', text: 'Not delivered' })),
   note && h('p', { class: 'b-note' }, StatusNote(note)));
 }
@@ -3915,7 +3922,7 @@ const KEYS = [
   ['j  k', 'Move the focus down, up'],
   ['Enter', 'Open the focused row: an agent, a fold, a need, a file'],
   ['b', 'Back: close the agent'],
-  ['s', 'All sessions: every Claude Code session on this machine'],
+  ['s', 'The sessions on this machine: the rail at the left (opened where the page is narrow), ↑ ↓ to pick one, Esc back to the page'],
   ['n', 'The next thing that needs you'],
   ['m', 'Message: the composer (in an agent\'s drawer, that agent)'],
   ['i', 'Inspect (again: back)'],
@@ -4002,8 +4009,8 @@ function Welcome() {
 
 function Page() {
   // every session on this machine, and another session's deck while it is read
-  if (route.tab === 'sessions') return SessionsPage();
-  if (route.session && !S) return ViewingWait();
+  if (route.tab === 'sessions') return MachinePage();
+  if (route.session && !S) return PeerWait();
   if (!S) return conn.status === 'denied' || conn.fails >= 2 ? Unreachable() : Loading();
   // Settings holds with nothing yet too: the avatar style and the help are the deck's own
   if (route.tab === 'settings') return SettingsPage();
@@ -4014,7 +4021,10 @@ function Page() {
 
 function App() {
   const drawer = !!route.drawer && !!S && !S.empty;
-  return h('div', { id: 'app', class: `app deck-${conn.status}${S ? '' : ' no-state'}${drawer ? ' has-drawer' : ''} on-${route.tab}`, style: drawerStyle() },
+  // the rail of sessions beside the page where it is wide, over it where it is narrow
+  const docked = isRailShown() && isRailDocked();
+  return h('div', { id: 'app', class: `app deck-${conn.status}${S ? '' : ' no-state'}${drawer ? ' has-drawer' : ''}${docked ? ' has-rail' : ''} on-${route.tab}`, style: drawerStyle() },
+    Rail(),
     Header(),
     ConnBanner(),
     h('main', { class: 'scroll', ref: el => { scroller = el; } }, Page()),
@@ -4103,8 +4113,8 @@ function moveFocus(dir) {
 
 /** What a key does (false: nothing, and it goes on to the browser). */
 function keyAction(key) {
-  // s: every session on this machine, or back from the list
-  if (key === 's') { toggleSessions(); return true; }
+  // s: the rail of every session on this machine, or back to the page from it
+  if (key === 's') return focusRail();
   if (!S) return false;
   // nothing yet: the tabs and Settings' keys, the rest have nothing to act on
   if (S.empty && !/^[1-6ih?]$/.test(key)) return false;
@@ -4217,12 +4227,18 @@ function afterRender(pin) {
 
 // ============================================================== all sessions
 // Every Claude Code session on this machine whose Agent Deck runs (the mod's
-// `sessions`, hooks/sessions.ts): #/sessions lists them, this chat first; a
-// press opens one's deck read-only at #/s/<id>/<tab>, under "Viewing <title>",
-// read from its folder (/s/<id>/state and its lazy files) every 1.5 s while
-// it shows, its own deck asked to keep writing them (`view`, every 30 s). An
-// answer or a message goes to its own deck, which acts on it through Claude
-// Code as on its own page's; where its deck takes none, "Answer it in its window".
+// `sessions`, hooks/sessions.ts), as peers of one deck: the rail at the
+// page's left lists them, here's first, in an order their states never move
+// (what needs you is counted, not moved up), "This machine" over them
+// (#/sessions: all of them in a list, what needs you counted). A press shows
+// that session's deck in this one's place, #/s/<id>/<tab>, read from its
+// folder (/s/<id>/state and its lazy files) every 1.5 s while it shows, its
+// own deck asked to keep writing them (`view`, every 30 s). There is no mode
+// for another's deck: its header is its own, and a control that acts only
+// in its window says so where it stands ("Answer it in its window: Terminal
+// · site."). An answer or a message goes to its own deck, which acts on it
+// through Claude Code as on its own page's; where its deck takes none,
+// "Answer it in its window".
 
 /** The session whose deck shows (null: this one's), its state as read, why none shows, and its poll. */
 const VIEW = { id: null, S: null, error: '', timer: 0, asked: 0, openedAt: 0, seq: 0 };
@@ -4237,22 +4253,82 @@ function sessionsOf(x) {
   if (!x) return null;
   const rows = arr(x.rows).filter(r => r && typeof r.id === 'string' && r.id).map(r => {
     const state = STATE_TEXT[r.state] ? r.state : 'idle';
+    const isQuiet = r.isQuiet === true;
     return {
-      id: r.id, isMe: r.isMe === true, title: str(r.title) || 'No request yet', state, stateText: str(r.stateText) || STATE_TEXT[state],
-      surface: str(r.surface), place: str(r.place), repo: str(r.repo), cwd: str(r.cwd),
-      need: typeof r.need === 'string' && r.need ? r.need : null, say: str(r.say), working: numOr(r.working, 0),
+      id: r.id, isMe: r.isMe === true, title: str(r.title) || 'No request yet', state, stateText: isQuiet ? '' : str(r.stateText) || STATE_TEXT[state],
+      surface: str(r.surface), place: str(r.place), repo: str(r.repo), where: str(r.where) || [str(r.place), str(r.repo)].filter(Boolean).join(' · '), cwd: str(r.cwd),
+      need: !isQuiet && typeof r.need === 'string' && r.need ? r.need : null, needs: isQuiet ? 0 : numOr(r.needs, 0), say: str(r.say),
+      working: numOr(r.working, 0), agents: numOr(r.agents, 0),
       costUsd: numOr(r.costUsd), cost: str(r.cost), costNote: str(r.costNote), at: numOr(r.at, 0), startedAt: numOr(r.startedAt, 0),
-      canOpen: r.canOpen === true, canSteer: r.canSteer === true,
+      isQuiet, heardAt: numOr(r.heardAt, 0), canOpen: r.canOpen === true, canSteer: r.canSteer === true,
     };
   });
   const others = obj(x.others) || {};
-  return { rows, text: str(x.text), others: { waiting: numOr(others.waiting, 0), working: numOr(others.working, 0) } };
+  const machine = obj(x.machine) || {};
+  const heard = rows.filter(r => !r.isQuiet);
+  return {
+    rows, text: str(x.text), others: { waiting: numOr(others.waiting, 0), working: numOr(others.working, 0) },
+    // an earlier mod's list counts no machine: counted here from its rows
+    machine: {
+      waiting: numOr(machine.waiting, heard.filter(r => r.state === 'waiting').length),
+      working: numOr(machine.working, heard.filter(r => r.state === 'working').length),
+      agents: numOr(machine.agents, heard.reduce((n, r) => n + r.working, 0)),
+    },
+  };
 }
 
 const sessionsNow = () => (HOME && HOME.sessions) || null;
 const sessionRow = id => { const list = sessionsNow(); return (list && list.rows.find(r => r.id === id)) || null; };
+/** The session whose deck shows: the one picked, else here. */
+const shownId = () => route.session || (HOME && HOME.session.id) || '';
 
-/** The index of the session viewed, this deck's own acks with its (a send refused here is acked here). */
+/** A note at a control that acts only in a session's own window, as the mod words it (hooks/sessions.ts `inItsWindow`). */
+const inItsWindow = (lead, where) => `${lead} in its window${where ? `: ${where}` : ''}.`;
+/** What a control of the deck shown says of where to act: `own` on this session's deck, its window on another's. */
+const whereNote = (lead, own) => (S && S.peer ? inItsWindow(lead, S.peer.where) : own);
+
+/** A quiet deck's line on the page's clock: "Last heard 2m ago". */
+function heardText(at) {
+  const t = since(liveNow() - at);
+  return t === 'now' ? 'Last heard just now' : `Last heard ${t} ago`;
+}
+/** What a row says under its title: its need, what it does, or (quiet) when its deck was last heard. */
+const sayOf = r => (r.isQuiet && r.heardAt ? heardText(r.heardAt) : r.say);
+
+/** "This machine" in words (hooks/sessions.ts `machineLineOf`): "◆ 1 needs you" (or ''), then "3 agents working", "1 session working" or "Nothing at work". */
+function machineLine(list) {
+  const { waiting, working, agents } = list.machine;
+  return {
+    need: waiting > 0 ? `◆ ${waiting} ${waiting === 1 ? 'needs' : 'need'} you` : '',
+    rest: agents > 0 ? `${plural(agents, 'agent')} working` : working > 0 ? `${plural(working, 'session')} working` : 'Nothing at work',
+  };
+}
+
+/** A row's faces while its session works (hooks/sessions.ts `facesOf`): one an agent at work (the Orchestrator's alone while none is), three at most, each seeded by the session's id. */
+function facesOf(r) {
+  if (r.state !== 'working' || r.isQuiet) return { seeds: [], more: 0 };
+  const n = Math.max(1, r.working);
+  const seeds = Array.from({ length: Math.min(3, n) }, (_, i) => (i === 0 ? r.id : `${r.id}:${i}`));
+  return { seeds, more: n - seeds.length };
+}
+
+function Faces16(r) {
+  const f = facesOf(r);
+  if (!f.seeds.length) return null;
+  const svg = AV.avatarStackSvg(styleNow(), f.seeds.map(id => ({ id, name: r.title, role: '', status: 'running' })), { size: 16, ground: '#0b0b0b' });
+  return h('span', { key: 'faces', class: 'sess-faces', title: r.agents > r.working ? `${r.working} of ${plural(r.agents, 'agent')} working` : `${plural(Math.max(1, r.working), 'agent')} working` },
+    h('img', { class: 'sess-faces-img', alt: '', draggable: 'false', src: urlOf(svg) }),
+    f.more > 0 && h('span', { class: 'sess-faces-more' }, `+${f.more}`));
+}
+
+/** Where a row goes: here's deck (#/<tab>), another's in its place (#/s/<id>/<tab>), the tab shown kept; null for a deck that names no folder. */
+function rowHref(r) {
+  const tab = route.tab === 'sessions' ? 'now' : route.tab;
+  if (r.isMe) return hrefOf(tab, null, null);
+  return r.canOpen ? hrefOf(tab, null, r.id) : null;
+}
+
+/** The index of the session shown, this deck's own acks with its (a send refused here is acked here). */
 function indexViewed() {
   IX = buildIndex(S);
   if (HOME) for (const k of HOME.acks) if (!IX.acks.has(k.id)) IX.acks.set(k.id, k);
@@ -4277,7 +4353,7 @@ function switchView(id) {
   pollView(VIEW.seq);
 }
 
-/** Reads the session viewed again, and asks its deck to keep writing it every 30 s; then again in 1.5 s, while it shows. */
+/** Reads the session shown again, and asks its deck to keep writing it every 30 s; then again in 1.5 s, while it shows. */
 async function pollView(seq) {
   if (seq !== VIEW.seq || !VIEW.id) return;
   const id = VIEW.id;
@@ -4301,93 +4377,212 @@ async function pollView(seq) {
   VIEW.timer = setTimeout(() => pollView(seq), VIEW_POLL);
 }
 
-/** The session viewed's state, as this page shows it: read-only, its questions answerable only where its deck takes answers from here. */
+/**
+ * Another session's state as this page shows it (hooks/sessions.ts
+ * `peerStateOf`): marked `peer` (its window, whether its deck takes answers
+ * from here), its questions answerable only where it does, every Stop and
+ * Cancel offered nowhere here, saying where to stop it instead.
+ */
+function peerOf(s, row) {
+  const peer = { where: row ? row.where : '', canSteer: !!row && row.canSteer };
+  const why = inItsWindow('Stop it', peer.where);
+  const here = x => (x.stop ? { ...x, stop: { ...x.stop, can: false, why } } : x);
+  return {
+    ...s, peer, sessions: null,
+    needs: peer.canSteer ? s.needs : s.needs.map(n => ({ ...n, isAnswerable: false })),
+    agents: s.agents.map(here),
+    background: { ...s.background, rows: s.background.rows.map(here) },
+  };
+}
+
+/** The session shown's state, as this page shows it: another session's (`peerOf`), its questions answerable only where its deck takes answers from here. */
 function applyViewed(v2) {
   if (VIEW.S && numOr(v2.now, 0) < VIEW.S.now) return;
-  const s = normalize(v2);
-  s.sessions = null;
-  const row = sessionRow(VIEW.id);
-  if (!row || !row.canSteer) s.needs = s.needs.map(n => ({ ...n, isAnswerable: false }));
+  const s = peerOf(normalize(v2), sessionRow(VIEW.id));
   VIEW.S = s;
   S = s;
   indexViewed();
   noteResolved();
 }
 
-/** s: the list of sessions, or back to where it was opened from. */
-function toggleSessions() {
-  if (route.tab !== 'sessions') { ui.beforeSessions = location.hash || '#/now'; location.hash = '#/sessions'; setRoute(parseRoute()); renderNow(); return; }
-  location.hash = ui.beforeSessions && ui.beforeSessions !== '#/sessions' ? ui.beforeSessions : '#/now';
-  setRoute(parseRoute());
+// ---------------------------------------------------------------- the rail
+// At the page's left where the page is wide (and you have not hidden it),
+// over the page from the header's button where it is narrow. `s` moves the
+// focus to it (opening it where it is shut), ↑ ↓ pick the next entry, Esc
+// gives the page the focus back.
+
+/** Narrower than this, the rail opens over the page instead of beside it. */
+const RAIL_DOCK = 960;
+const rail = { hidden: store.get('railHidden', false) === true, open: false };
+const isRailDocked = () => typeof window.innerWidth === 'number' && window.innerWidth >= RAIL_DOCK;
+/** Whether the rail shows: beside the page unless you hid it, over it while you opened it. */
+const isRailShown = () => !!sessionsNow() && (isRailDocked() ? !rail.hidden : rail.open);
+
+/** The header's button: shows or hides the rail (opens it over a narrow page). */
+function toggleRail() {
+  if (isRailDocked()) { rail.hidden = !rail.hidden; store.set('railHidden', rail.hidden); } else rail.open = !rail.open;
   renderNow();
 }
 
-/** The header's way to the list: "All sessions", after "◆ 1 other session needs you" while another waits on you. */
-function SessionsLink() {
-  const list = sessionsNow();
-  if (!list) return null;
-  const n = list.others.waiting;
-  return h('a', { key: 'sessions', class: `hd-sessions${route.tab === 'sessions' ? ' on' : ''}`, href: '#/sessions', title: list.text },
-    n > 0 && h('span', { class: 'hd-sessions-need' }, `◆ ${n}`, h('span', { class: 'hd-sessions-words' }, ` other ${n === 1 ? 'session needs' : 'sessions need'} you`)),
-    h('span', { class: 'hd-sessions-label' }, icon('layers'), h('span', { class: 'hd-sessions-word' }, 'All sessions')));
+/** `s`: the focus on the rail's entry shown (the rail opened first where it is shut); pressed there, back to the page. */
+function focusRail() {
+  if (!sessionsNow()) return false;
+  const active = typeof document.activeElement === 'object' && document.activeElement;
+  if (active && active.closest && active.closest('.rail')) { leaveRail(); return true; }
+  if (!isRailShown()) { if (isRailDocked()) { rail.hidden = false; store.set('railHidden', false); } else rail.open = true; }
+  ui.focusTo = route.tab === 'sessions' ? 'rail-machine' : `rail-${shownId()}`;
+  renderNow();
+  return true;
 }
 
-/** Over another session's deck: "Viewing" and its title, where it runs, what goes from here, All sessions and Back to this chat. */
-function ViewingBar() {
-  if (!route.session) return null;
-  const row = sessionRow(route.session);
-  const where = row ? [row.place, row.repo].filter(Boolean).join(' · ') : '';
-  const note = VIEW.error || (row && row.canSteer ? 'Read-only: answers and messages go through its own deck.' : 'Read-only: answer it in its window.');
-  return h('div', { key: 'viewbar', class: 'viewbar' },
-    h('span', { class: 'viewbar-tag' }, 'Viewing'),
-    h('span', { class: 'viewbar-title' }, row ? row.title : 'Another session'),
-    where && h('span', { class: 'viewbar-where' }, where),
-    h('span', { class: 'viewbar-note' }, note),
-    h('span', { class: 'viewbar-end' },
-      h('a', { class: 'viewbar-link', href: '#/sessions' }, 'All sessions'),
-      h('a', { class: 'btn btn-sm btn-primary', href: '#/now' }, 'Back to this chat')));
+/** The focus back to the page; a rail over the page shuts. */
+function leaveRail() {
+  const active = document.activeElement;
+  if (active && active.blur) active.blur();
+  if (!isRailDocked() && rail.open) { rail.open = false; renderNow(); }
+}
+
+/** ↑ ↓ in the rail: the entry before or after the one focused, picked (its deck shown), the focus kept on it. */
+function railStep(dir) {
+  const items = [...document.querySelectorAll('.rail [data-rail]')];
+  if (!items.length) return;
+  const at = items.indexOf(document.activeElement && document.activeElement.closest ? document.activeElement.closest('[data-rail]') : null);
+  const next = items[clamp((at < 0 ? items.findIndex(el => el.classList.contains('on')) : at) + dir, 0, items.length - 1)];
+  if (!next) return;
+  next.focus();
+  const href = next.getAttribute('href');
+  if (href && location.hash !== href) location.hash = href;
+}
+
+function onRailKey(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); stop(e); railStep(e.key === 'ArrowDown' ? 1 : -1); }
+  else if (e.key === 'Escape') { e.preventDefault(); stop(e); leaveRail(); }
+}
+
+/** A press on an entry of a rail over the page shuts it, the deck picked in view. */
+const railPicked = () => { if (!isRailDocked()) rail.open = false; };
+
+/** The rail: the brand, "This machine" (what needs you, the agents at work), then each session, here's first; how to move in it. Null while it is shut, or no list is known. */
+function Rail() {
+  const list = sessionsNow();
+  if (!list || !isRailShown()) return null;
+  const docked = isRailDocked();
+  const onMachine = route.tab === 'sessions';
+  const m = machineLine(list);
+  return [
+    !docked && h('div', { key: 'rail-scrim', class: 'rail-scrim', onClick: () => { rail.open = false; renderNow(); } }),
+    h('aside', { key: 'rail', class: `rail${docked ? '' : ' is-over'}`, 'aria-label': 'Sessions', onKeyDown: onRailKey },
+      h('div', { class: 'rail-hd' },
+        h('span', { class: 'brand-mark', 'aria-hidden': 'true' }),
+        h('span', { class: 'rail-brand' }, 'Agent Deck')),
+      h('nav', { class: 'rail-body' },
+        h('a', { key: 'machine', id: 'rail-machine', class: `rail-machine${onMachine ? ' on' : ''}`, href: '#/sessions', 'data-rail': '', 'aria-current': onMachine ? 'page' : null, onClick: railPicked },
+          icon('layers'),
+          h('span', { class: 'rail-machine-name' }, 'This machine'),
+          h('span', { class: 'rail-machine-sub' }, m.need && h('b', { key: 'need' }, m.need), m.need && ' · ', m.rest)),
+        h('div', { key: 'head', class: 'rail-head' }, 'Sessions', h('span', { class: 'sec-count' }, String(list.rows.length))),
+        list.rows.map(r => RailRow(r, !onMachine && r.id === shownId()))),
+      h('p', { class: 'rail-foot' }, 'Every Claude Code session on this machine whose deck runs. ', h('kbd', null, 's'), ' moves here; ', h('kbd', null, '↑'), h('kbd', null, '↓'), ' pick.')),
+  ];
+}
+
+/** One session in the rail: its dot (hollow while quiet), its title and "here", its surface's icon and where it runs, what it needs (amber) or does, or when it was last heard; at the right its needs' count, its faces while it works, its spend. The one shown lit. */
+function RailRow(r, on) {
+  const href = rowHref(r);
+  const say = sayOf(r);
+  const kids = [
+    r.isQuiet ? h('span', { key: 'dot', class: 'dot dot-quiet', 'aria-hidden': 'true' }) : Dot(STATE_HUE[r.state], r.state === 'working'),
+    h('span', { key: 'main', class: 'rail-main' },
+      h('span', { class: 'rail-line' },
+        h('span', { class: 'rail-name' }, r.title),
+        r.isMe && h('span', { class: 'tag rail-here', title: 'The session this page belongs to' }, 'here')),
+      h('span', { class: 'rail-sub' },
+        r.surface && icon(r.surface === 'terminal' ? 'squareTerminal' : 'laptop'),
+        h('span', { class: 'rail-where' }, r.where)),
+      say && h('span', { class: `rail-say${r.need ? ' is-need' : ''}${r.isQuiet ? ' is-quiet' : ''}` }, say)),
+    h('span', { key: 'end', class: 'rail-end' },
+      r.needs > 0 && h('span', { class: 'tab-n is-need', title: plural(r.needs, 'thing needs you', 'things need you') }, String(r.needs)),
+      Faces16(r),
+      r.cost && h('span', { class: 'rail-cost' }, r.cost)),
+  ];
+  const cls = `rail-row${on ? ' on' : ''}${r.isQuiet ? ' is-quiet' : ''}`;
+  return href
+    ? h('a', { key: r.id, id: `rail-${r.id}`, class: cls, href, 'data-rail': '', title: r.cwd, 'aria-current': on ? 'page' : null, onClick: railPicked }, kids)
+    : h('div', { key: r.id, id: `rail-${r.id}`, class: cls, title: r.cwd }, kids);
+}
+
+/** The header's way to the rail: shows or hides it, the web's layers icon; while it is hidden, "◆ 1" in amber when a session but the one shown waits on you. */
+function RailToggle() {
+  const list = sessionsNow();
+  if (!list) return null;
+  const shown = isRailShown();
+  const n = shown ? 0 : list.rows.filter(r => r.id !== shownId() && !r.isQuiet && r.state === 'waiting').length;
+  return h('button', {
+    key: 'sessions', type: 'button', class: `hd-sessions${shown ? ' on' : ''}`, 'aria-pressed': shown ? 'true' : 'false',
+    title: `${shown ? 'Hide' : 'Show'} the sessions on this machine (s): ${list.text}`, onClick: toggleRail,
+  },
+  n > 0 && h('span', { class: 'hd-sessions-need' }, `◆ ${n}`, h('span', { class: 'hd-sessions-words' }, ` ${n === 1 ? 'needs' : 'need'} you`)),
+  h('span', { class: 'hd-sessions-label' }, icon('layers'), h('span', { class: 'hd-sessions-word' }, 'Sessions')));
+}
+
+/** Stop turn on another session's deck: where to stop it, quietly where the button would be. */
+function PeerStopTurn() {
+  return h('span', { key: 'stopturn', class: 'peer-note hd-peer-stop', title: inItsWindow('Stop the turn', S.peer.where) }, 'Stop the turn in its window');
+}
+
+/** The header's lead on another session's deck before its state is read: its row's state and title. */
+function PendingHead(row) {
+  const state = row && !row.isQuiet ? row.state : 'idle';
+  return [
+    h('span', { key: 'state', class: `state is-${state}`, role: 'status' }, Dot(STATE_HUE[state], false), row ? row.stateText || sayOf(row) : 'Reading'),
+    h('span', { key: 'goal', class: 'goal goal-none' }, h('span', { class: 'goal-text' }, row ? row.title : 'Another session')),
+  ];
 }
 
 /** Another session's deck before its state is read: why nothing shows yet. */
-function ViewingWait() {
+function PeerWait() {
   return h('div', { key: 'viewwait', class: 'page' },
-    h('div', { class: 'card' }, Empty('layers', VIEW.error ? 'Nothing to show yet' : 'Reading its deck…', VIEW.error || 'Its deck writes its state while another deck looks; it shows here within seconds.')));
+    h('div', { class: 'card' }, Empty('layers', VIEW.error ? 'Nothing to show yet' : 'Reading its deck…', VIEW.error || 'Its deck writes its state while another deck shows it; it shows here within seconds.')));
 }
 
-/** #/sessions: every session on this machine, this chat first, a row each; a press opens its deck (this chat's: the Dashboard). */
-function SessionsPage() {
+/** #/sessions, "This machine": every session in a list, here's first, a row each, what needs you counted; a press shows its deck. */
+function MachinePage() {
   const list = sessionsNow();
+  const m = list && machineLine(list);
   return h('div', { key: 'sessions', class: 'page page-sessions' },
     h('div', { key: 'top', class: 'sess-top' },
-      h('h1', { class: 'sess-title' }, 'All sessions'),
-      list && h('span', { class: 'sess-sum' }, list.text)),
+      h('h1', { class: 'sess-title' }, 'This machine'),
+      list && h('span', { class: 'sess-sum' }, m.need && h('b', { key: 'need', class: 'sess-need' }, m.need), m.need && ' · ', `${plural(list.rows.length, 'session')} · ${m.rest}`)),
     !list
       ? h('div', { key: 'none', class: 'card' }, Empty('layers', 'No sessions listed', HOME && !HOME.empty ? 'This deck lists the sessions on this machine once it has read them.' : 'Waiting for this session\'s deck.'))
       : h('div', { key: 'list', class: 'card list sess-list' }, list.rows.map(SessionRow)),
     list && h('p', { key: 'note', class: 'sess-note' }, list.rows.length > 1
-      ? 'Every Claude Code session here whose Agent Deck runs, Desktop and terminal alike. A press opens its deck: its Dashboard, Chat and Changes, read-only.'
+      ? 'Every Claude Code session here whose Agent Deck runs, Desktop and terminal alike. A press shows its deck: its Dashboard, Chat and Changes. Answers and messages go through its own deck; the rest is done in its window.'
       : 'No other session here runs Agent Deck now. Each one that does shows here, Desktop and terminal alike.'));
 }
 
-/** One session: its state's dot; its title and "this chat"; where it runs and what it waits on you for (amber) or is doing; its word, spend and age, a fork's "incl. its parent's" under its word and spend. */
+/** One session: its state's dot; its title and "here"; where it runs and what it waits on you for (amber), is doing, or when it was last heard; its faces while it works, its word, spend and age, a fork's "incl. its parent's" under its word and spend. */
 function SessionRow(r) {
-  const href = r.isMe ? '#/now' : r.canOpen ? `#/s/${encodeURIComponent(r.id)}/now` : null;
+  const href = rowHref(r);
+  const say = sayOf(r);
   const kids = [
-    Dot(STATE_HUE[r.state], r.state === 'working'),
+    r.isQuiet ? h('span', { key: 'dot', class: 'dot dot-quiet', 'aria-hidden': 'true' }) : Dot(STATE_HUE[r.state], r.state === 'working'),
     h('span', { class: 'sess-main' },
       h('span', { class: 'sess-line' },
         h('span', { class: 'sess-name' }, r.title),
-        r.isMe && h('span', { class: 'tag tag-wait' }, 'this chat')),
+        r.isMe && h('span', { class: 'tag sess-here' }, 'here')),
       h('span', { class: 'sess-sub' },
         r.surface && icon(r.surface === 'terminal' ? 'squareTerminal' : 'laptop', 'sess-ic'),
-        h('span', { class: 'sess-where' }, [r.place, r.repo].filter(Boolean).join(' · ')),
-        r.say && h('span', { class: `sess-say${r.need ? ' is-need' : ''}` }, `· ${r.say}`))),
+        h('span', { class: 'sess-where' }, r.where),
+        say && h('span', { class: `sess-say${r.need ? ' is-need' : ''}${r.isQuiet ? ' is-quiet' : ''}` }, `· ${say}`))),
+    h('span', { class: 'sess-face' }, Faces16(r)),
     h('span', { class: `sess-state is-${r.state}` }, r.stateText),
     h('span', { class: 'sess-cost' }, r.cost),
     h('span', { class: 'sess-age' }, ageOf(r.at)),
     r.costNote && h('span', { class: 'sess-cost-note' }, r.costNote),
   ];
-  const cls = `sess-row${r.isMe ? ' is-me' : ''}${r.costNote ? ' is-fork' : ''}`;
+  const cls = `sess-row${r.isMe ? ' is-me' : ''}${r.costNote ? ' is-fork' : ''}${r.isQuiet ? ' is-quiet' : ''}`;
   return href
     ? h('a', { key: r.id, class: cls, href, 'data-nav': '', title: r.cwd }, kids)
     : h('div', { key: r.id, class: cls, title: r.cwd }, kids);
