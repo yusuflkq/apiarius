@@ -176,7 +176,7 @@ test('the avatar style is the person`s own: read from the store`s prefs as a ses
   await ui.unmount()
 })
 
-test('Settings` avatar style: the ten, each its name beside a face drawn in it, the one drawn marked; a press draws that one, kept as /deck avatars keeps one', async ($, on) => {
+test('Settings` avatar style: the ten, each its name beside the page`s three sample agents drawn in it (done, at work, waiting on you, each with its dot), the one drawn marked; a press draws that one, kept as /deck avatars keeps one', async ($, on) => {
   const kept = new Map<string, unknown>()
   await demo($, on, sampleState(), kept)
   for (const surface of ['desktop', 'terminal'] as const) {
@@ -190,10 +190,17 @@ test('Settings` avatar style: the ten, each its name beside a face drawn in it, 
     expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'mood' })
     expect((await ui.find({ key: 'avatars:mood' }))?.props.dimColor).toBe(false)
     expect((await ui.find({ key: 'avatars:robot' }))?.props.dimColor).toBe(true)
+    // the page's three (web/app.js WELCOME), as its Settings draws them: the same library call, the same seeds, their status dots
+    const three = [
+      { id: 'bob', name: 'bob', role: '', status: 'done' },
+      { id: 'helper', name: 'helper', role: '', status: 'running' },
+      { id: 'deck-1', name: 'deck', role: '', status: 'waiting' },
+    ]
     if (surface === 'desktop') {
-      // each style's face: the Orchestrator at work, drawn in it, still
-      const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith(': the Orchestrator drawn in it'))
-      expect(faces.map(svg => svg.props.source)).toEqual(AV.STYLE_IDS.map(id => AV.avatarSvg(id, { id: 'main', name: 'Orchestrator', role: 'main', status: 'running' }, { size: 24, dot: false, ground: P.ground })))
+      // each style's three, drawn in it, still, each with its dot
+      const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => / drawn in it$/.test(String(svg.props.alt)))
+      expect(faces.map(svg => svg.props.source)).toEqual(AV.STYLE_IDS.flatMap(id => three.map(one => AV.avatarSvg(id, one, { size: 24, dot: true, ground: P.ground }))))
+      expect(faces.slice(0, 3).map(svg => svg.props.alt)).toEqual(['Robots: bob drawn in it', 'Robots: helper drawn in it', 'Robots: deck drawn in it'])
       expect(faces.every(svg => svg.props.isInteractive === undefined)).toBe(true)
       // the one drawn is ringed and ticked
       expect((await ui.find({ key: 'avatars:chip:mood' }))?.text).toContain('✓')
@@ -202,6 +209,9 @@ test('Settings` avatar style: the ten, each its name beside a face drawn in it, 
       expect(await ui.findAll({ type: 'Svg' })).toEqual([])
       expect((await ui.find({ key: 'avatars:chip:mood' }))?.text).toContain('◉')
       expect((await ui.find({ key: 'avatars:chip:robot' }))?.text).toContain('○')
+      // the three where they fit: each one character and its status's mark
+      const marks = three.map(one => AV.terminalFace(one, 'robot'))
+      expect((await ui.find({ key: 'avatars:chip:robot' }))?.text).toContain(marks.map(face => `${face.glyph}${face.mark}`).join(''))
     }
     await press(ui, 'avatars:robot')
     expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'robot' })

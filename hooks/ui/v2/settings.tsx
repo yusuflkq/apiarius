@@ -2,8 +2,9 @@
  * Settings (key 6): the deck's own choices, top to bottom (the session's
  * depth, Inspect, is a tab of its own: ./inspect):
  *
- * - Avatar style: the ten styles of web/avatars.mjs, each its name beside a
- *   small face drawn in it (the Orchestrator at work; one character on the
+ * - Avatar style: the ten styles of web/avatars.mjs, each its name beside
+ *   the page's three sample agents drawn in it (one done, one at work, one
+ *   waiting on you, each with its status dot; one character each on the
  *   terminal), the one drawn marked; a press draws every agent in it from
  *   now on, in every session and on the web page (`setAvatarStyle`, as
  *   `/deck avatars`);
@@ -16,7 +17,6 @@
 import type { RenderElement } from 'claude-code'
 
 import * as AV from '../../../web/avatars.mjs'
-import { MAIN } from '../../model'
 import type { WebStateV2 } from '../../web'
 import type { DashActions, DeckModel, Kit, WebPane } from '../types'
 import { isAiry } from './dash'
@@ -49,26 +49,39 @@ function section(kit: Kit, key: string, head: RenderElement, body: readonly (Ren
 
 // The avatars' style.
 
-/** Who each style's face draws: the Orchestrator at work. */
-const SAMPLE: Face = { id: MAIN, title: 'Orchestrator', kind: 'orchestrator', status: 'running', isStopped: false }
+/** Who each style's preview draws, as the page's (web/app.js `WELCOME`, seeded by the same ids): one done, one at work, one waiting on you. */
+const SAMPLES: readonly Face[] = [
+  { id: 'bob', title: 'bob', kind: 'agent', status: 'done', isStopped: false, todos: [] },
+  { id: 'helper', title: 'helper', kind: 'agent', status: 'running', isStopped: false, todos: [] },
+  { id: 'deck-1', title: 'deck', kind: 'agent', status: 'waiting', isStopped: false, todos: [] },
+]
 
-/** A style's face in the picker, in px. */
+/** The one the terminal draws where the three do not fit: the one at work. */
+const AT_WORK = SAMPLES[1] as Face
+
+/** A sample's face in the picker, in px. */
 const PICK_FACE = 24
+
+/** The cells a chip asks for, about: where Svg draws, its three faces, its name and its tick; on the terminal, its mark, its faces and its name. */
+const CHIP_CELLS = 28
+const TERMINAL_CHIP_CELLS = 22
 
 /** The colour that marks the style drawn: its ring and its tick. */
 const PICKED = P.runText
 
 /**
- * The avatars' style: the ten, in rows of as many as fit (about 22 cells
- * each), the one drawn marked. Where Svg draws, each a bordered chip, its
- * face drawn in its style beside its name, the one drawn ringed and ticked;
- * on the terminal, each a radio line (◉ the one drawn, ○ the rest) with its
- * one-character face. Each name is a plain Button keyed `avatars:<style>`.
+ * The avatars' style: the ten, in rows of as many as fit (about 28 cells
+ * each where Svg draws, 22 on the terminal), the one drawn marked. Where Svg
+ * draws, each a bordered chip, the three samples drawn in its style beside
+ * its name, the one drawn ringed and ticked; on the terminal, each a radio
+ * line (◉ the one drawn, ○ the rest) with the three's one-character faces
+ * and marks where they fit, else the one at work. Each name is a plain
+ * Button keyed `avatars:<style>`.
  */
 function avatarsSection(kit: Kit, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const style = avatarStyleOf(kit)
-  const perRow = Math.max(1, Math.min(5, Math.floor((kit.columns + 1) / 22)))
+  const perRow = Math.max(1, Math.min(5, Math.floor((kit.columns + 1) / (svgOf(kit) ? CHIP_CELLS : TERMINAL_CHIP_CELLS))))
   const width = widthFor(kit.columns, perRow)
   const rows: (typeof AV.STYLES)[number][][] = []
   AV.STYLES.forEach((one, i) => {
@@ -85,26 +98,49 @@ function avatarsSection(kit: Kit, actions: DashActions): RenderElement {
   ])
 }
 
-/** One style in the picker: its face and its name, marked when it is the one drawn. */
+/**
+ * One of the samples drawn in style `id` with its status dot, by the same
+ * library call as the page's: an image where Svg draws; on the terminal its
+ * one-character face and its status's mark.
+ */
+function sampleFace(kit: Kit, id: AV.AvatarStyle, name: string, one: Face): RenderElement {
+  const { Text } = kit
+  const Svg = svgOf(kit)
+  const agent = avatarAgentOf(one)
+  if (Svg) return <Svg source={AV.avatarSvg(id, agent, { size: PICK_FACE, dot: true, ground: P.ground })} alt={`${name}: ${one.title} drawn in it`} width={PICK_FACE} height={PICK_FACE} />
+  const face = AV.terminalFace(agent, id)
+  return (
+    <Text>
+      {terminalCell(kit, face)}
+      <Text color={face.markColor}>{face.mark}</Text>
+    </Text>
+  )
+}
+
+/** One style in the picker: the samples drawn in it and its name, marked when it is the one drawn. */
 function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, width: number, actions: DashActions): RenderElement {
   const { Box, Button, Text } = kit
   const Svg = svgOf(kit)
   const pick = () => actions.setAvatarStyle(id)
   const label = <Button key={`avatars:${id}`} label={name} plain dimColor={!isOn} onPress={pick} />
   if (!Svg) {
+    // its mark, the three (a face and a mark each, a cell apart), its name: or the one at work alone where they do not fit
+    const three = SAMPLES.length * (AV.terminalCells(id) + 1) + SAMPLES.length - 1
+    const isThree = width >= 3 + three + Array.from(name).length
     return (
       <Box key={`avatars:chip:${id}`} flexDirection="row" columnGap={1} width={width}>
         <Box flexShrink={0}>
           <Text color={isOn ? PICKED : P.muted2}>{isOn ? '◉' : '○'}</Text>
         </Box>
-        <Box flexShrink={0}>{terminalCell(kit, AV.terminalFace(avatarAgentOf(SAMPLE), id))}</Box>
+        <Box flexShrink={0} flexDirection="row" columnGap={1}>
+          {isThree ? SAMPLES.map(one => sampleFace(kit, id, name, one)) : terminalCell(kit, AV.terminalFace(avatarAgentOf(AT_WORK), id))}
+        </Box>
         <Box flexShrink={1} minWidth={0}>
           {label}
         </Box>
       </Box>
     )
   }
-  const source = AV.avatarSvg(id, { id: SAMPLE.id, name: SAMPLE.title, role: 'main', status: SAMPLE.status }, { size: PICK_FACE, dot: false, ground: P.ground })
   return (
     <Box
       key={`avatars:chip:${id}`}
@@ -118,8 +154,8 @@ function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, wi
       paddingX={1}
       paddingY={0}
     >
-      <Box flexShrink={0}>
-        <Svg source={source} alt={`${name}: the Orchestrator drawn in it`} width={PICK_FACE} height={PICK_FACE} />
+      <Box flexShrink={0} flexDirection="row">
+        {SAMPLES.map(one => sampleFace(kit, id, name, one))}
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         {label}
