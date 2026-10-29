@@ -935,16 +935,20 @@ export const V2_CAPS = { chat: 200, text: 600, edits: 300, commits: 20, acks: 50
 const STATE_TEXT: Readonly<Record<V2Header['state'], string>> = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' }
 
 
-/** The loops that are rows of the tree: the Orchestrator, its agents (a Workflow's and Claude Code's own among them) and teammates; never you or a peer of earlier builds. */
+/** The loops that are rows of the tree: the Orchestrator, its agents (a Workflow's among them) and teammates; never Claude Code's own loops (`M.isEngineLoop`), you or a peer of earlier builds. */
 function isTreeAgent(agent: DeckAgent): boolean {
-  return agent.kind === 'main' || agent.kind === 'agent' || agent.kind === 'teammate'
+  return (agent.kind === 'main' || agent.kind === 'agent' || agent.kind === 'teammate') && !M.isEngineLoop(agent)
+}
+
+/** Whether a message is from, to or about a loop of Claude Code's own (`M.isEngineLoop`): no chat row. */
+function isEngineLoopWords(data: DeckData, message: DeckMessage): boolean {
+  return [message.from, message.to, message.agent ?? ''].some(id => id !== '' && M.isEngineLoopId(data, id))
 }
 
 /** The kind of loop a row is. */
 function rowKindOf(agent: DeckAgent): V2AgentRow['kind'] {
   if (agent.kind === 'main') return 'orchestrator'
   if (agent.origin === 'workflow') return 'workflow'
-  if (agent.origin === 'engine') return 'engine'
   return agent.kind === 'teammate' ? 'teammate' : 'agent'
 }
 
@@ -1444,7 +1448,7 @@ export function deckStateOf(
   const needs = needsListOf(data, now, answerable)
   const needsBy = new Map<string, number>()
   for (const need of needs) needsBy.set(need.agent, (needsBy.get(need.agent) ?? 0) + 1)
-  const isWorking = main?.status === 'running' || data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && M.isLive(agent.status))
+  const isWorking = main?.status === 'running' || data.agents.some(agent => (agent.kind === 'agent' || agent.kind === 'teammate') && !M.isEngineLoop(agent) && M.isLive(agent.status))
   const state: V2Header['state'] = needs.length > 0 ? 'waiting' : isWorking ? 'working' : 'idle'
   const model = shortModel(main?.model)
   const turnId = data.mainTurnId
@@ -1482,6 +1486,7 @@ export function deckStateOf(
     plan,
     // oldest first by when each was said: a word recorded late (a result, a choice) still sits where it was said
     chat: data.messages
+      .filter(message => !isEngineLoopWords(data, message))
       .slice(-V2_CAPS.chat)
       .map(message => chatRowOf(data, message))
       .sort((a, b) => a.at - b.at),

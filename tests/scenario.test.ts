@@ -296,7 +296,8 @@ function nodesUnder(el: { children?: unknown[] }): Node[] {
  * sender (the name its head presses, `chat:from:<key>`; you, for yours at
  * the right) and recipient (the name "to" presses, `chat:to:<key>`; none to
  * you, nor for yours to the Orchestrator), the line over a message stacked
- * under it naming another.
+ * under it naming another; a hand-off's line names both ("▸ Orchestrator →
+ * scout: …", `chat:handoff:<id>`).
  */
 function routesOf(boxes: readonly FoundElement[]): string[] {
   const routes: string[] = []
@@ -306,6 +307,11 @@ function routesOf(boxes: readonly FoundElement[]): string[] {
     const nodes = nodesUnder(box)
     const keyOf = (node: Node) => String(node.key ?? node.props?.key ?? '')
     const label = (key: string) => String(nodes.find(node => keyOf(node) === key)?.props?.label ?? '')
+    const handoffs = nodes.filter(node => keyOf(node).startsWith('chat:handoff:'))
+    if (handoffs.length > 0) {
+      for (const one of handoffs) routes.push(String(one.props?.label ?? '').replace(/^[▸▾] /, '').replace(/: [\s\S]*$/, ''))
+      continue
+    }
     const messages = nodes.filter(node => node.type === 'Box' && /^(msg|send):/.test(keyOf(node)))
     const isMine = messages[0]?.props?.alignItems === 'flex-end'
     const first = group.slice('grp:'.length)

@@ -1126,6 +1126,10 @@ export function healData(value: DeckData, now: number): DeckData {
     delete agent.label
     delete agent.scope
   }
+  // an Agent call that started no agent, which an earlier build kept as a stopped one, goes: no agent ran
+  data.agents = data.agents.filter(agent => !(isPlaceholder(agent) && agent.status === 'killed'))
+  // a loop of Claude Code's own an earlier build kept as an agent (a prompt suggestion's, its guess a result to the Orchestrator) goes once it ended
+  for (const agent of data.agents.filter(one => isEngineLoop(one) && isEnded(one.status))) forgetLoop(data, agent.id)
   for (const agent of data.agents) fixLabel(data, agent)
   return data
 }
@@ -2035,6 +2039,73 @@ export function isShownAgent(agent: DeckAgent): boolean {
   return (agent.kind === 'agent' || agent.kind === 'teammate') && !isFolded(agent)
 }
 
+/**
+ * A loop no Agent call, spawn, `$.agent.list()` or SubagentStart named, which
+ * `seeLoop` took for the engine's own: one of Claude Code's forks (a prompt
+ * suggestion, a compaction, a memory extraction), which it runs with no
+ * agent's task and lists nowhere. No surface shows one; a loop that turns
+ * out an agent (its spawn, the list) shows from then on.
+ */
+export function isEngineLoop(agent: DeckAgent): boolean {
+  return agent.origin === 'engine' && (agent.kind === 'agent' || agent.kind === 'teammate')
+}
+
+/** Whether `id` names a loop of Claude Code's own (`isEngineLoop`). */
+export function isEngineLoopId(data: DeckData, id: string): boolean {
+  const agent = agentOf(data, id)
+  return agent !== undefined && isEngineLoop(agent)
+}
+
+/** Whether a loop of Claude Code's own is at work: the list is read until it ends, in case it is an agent the deck has not placed. */
+export function hasLiveEngineLoops(data: DeckData): boolean {
+  return data.agents.some(agent => isEngineLoop(agent) && isLive(agent.status))
+}
+
+/**
+ * Claude Code started a subagent's run (classic SubagentStart, which the
+ * Agent tool's runs alone raise, a forked skill's among them, each with its
+ * type): a loop the deck took for the engine's own is that agent, and a row
+ * the deck saw end runs again. Whether it changed.
+ */
+export function noteSubagentStart(data: DeckData, id: string, type: string, at: number): boolean {
+  const agent = agentOf(data, id)
+  if (!agent) return false
+  const isPlaced = isEngineLoop(agent) && type.trim() !== ''
+  if (isPlaced) agent.origin = 'agent'
+  return reopen(agent, at) || isPlaced
+}
+
+/**
+ * Forgets a loop of Claude Code's own (`isEngineLoop`) that ended: its row,
+ * what Chat holds from it, to it or about it (a prompt suggestion's guess at
+ * your next prompt reads as its result to the Orchestrator), and its edits
+ * (a memory fork's writes). A loop it started goes under its parent.
+ * Whether there was one.
+ */
+export function forgetLoop(data: DeckData, id: string): boolean {
+  const agent = agentOf(data, id)
+  if (!agent || !isEngineLoop(agent)) return false
+  data.agents = data.agents.filter(one => one !== agent)
+  for (const one of data.agents) if (one.parentId === id) one.parentId = agent.parentId ?? MAIN
+  data.messages = data.messages.filter(message => message.from !== id && message.to !== id && message.agent !== id)
+  data.edits = data.edits.filter(edit => edit.agent !== id)
+  for (const [key, file] of Object.entries(data.files)) {
+    const its = file.editors.filter(one => one.agent === id)
+    if (its.length === 0) continue
+    file.editors = file.editors.filter(one => one.agent !== id)
+    if (file.editors.length === 0) {
+      delete data.files[key]
+      continue
+    }
+    for (const one of its) {
+      file.added -= one.added
+      file.removed -= one.removed
+    }
+    file.lastAt = Math.max(...file.editors.map(one => one.lastAt))
+  }
+  return true
+}
+
 /** Whether an agent has no name of its own: none given, or the one `ensureAgent` made up. */
 export function isNameless(agent: DeckAgent): boolean {
   return agent.name.trim() === '' || isMadeUpName(agent)
@@ -2561,10 +2632,11 @@ export type AgentCallEnd = {
 
 /**
  * Settles the row an Agent call made once the call returns: bound to the
- * agent its result names when no spawn bound it; ended (stopped) when no
- * agent started, and idle when it runs in a cloud session, neither with a
- * word the agent never said; a foreground agent's report recorded and its
- * row ended.
+ * agent its result names when no spawn bound it; gone when no agent started
+ * (the call was refused, or failed before one did: there is no agent, only
+ * its caller's failed call), and idle when it runs in a cloud session, with
+ * no word the agent never said; a foreground agent's report recorded and
+ * its row ended. Undefined when no row stands.
  */
 export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: DeckAgent; from?: string } | undefined {
   const row = data.agents.find(agent => agent.toolUseId === end.toolUseId)
@@ -2576,9 +2648,8 @@ export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: Dec
       bindAgent(data, row, end.agentId)
       if (row.status === 'starting') row.status = 'running'
     } else if (!end.isStarted) {
-      row.status = 'killed'
-      row.endedAt = end.at
-      return { agent: row }
+      data.agents = data.agents.filter(agent => agent !== row)
+      return undefined
     } else if (end.isRemote) {
       row.status = 'idle'
       row.endedAt = end.at

@@ -121,7 +121,7 @@ test('/deck asks for an inline pane no taller than the terminal its last drawing
 /** The lines a long draft's field takes on each terminal: what the newest message leaves it, three at most. */
 const GROWN: Record<number, number> = { 30: 1, 45: 3, 60: 3 }
 
-test('on a short terminal the pane keeps inside it: Chat its newest messages that fit, "N earlier" over them, a field that grew only into the room the newest leaves; the Dashboard its sections folded from the bottom, needs as lines, cards cut; a folded head makes room for its section', async ($, on) => {
+test('on a short terminal the pane keeps inside it: Chat its newest messages that fit, "▲ N earlier" over them (a press the page before, "▼ N newer" beside it back to the newest), a field that grew only into the room the newest leaves; the Dashboard its sections folded from the bottom, needs as lines, cards cut; a folded head makes room for its section', async ($, on) => {
   const { v2 } = await demo($, on)
   const newest = `msg:${v2.chat[v2.chat.length - 1]!.id}`
   for (const screen of [30, 45, 60]) {
@@ -137,7 +137,18 @@ test('on a short terminal the pane keeps inside it: Chat its newest messages tha
     const shown = await keysOf(ui, 'Box', 'msg:')
     expect(shown.at(-1)).toBe(newest)
     expect(shown.length).toBeLessThan(v2.chat.length)
-    expect((await ui.find({ key: 'chat' }))?.text).toContain(`${v2.chat.length - shown.length} earlier: more than the terminal holds.`)
+    const earlier = v2.chat.length - shown.length
+    expect((await ui.find({ key: 'chat:earlier' }))?.props.label).toBe(`▲ ${earlier} earlier`)
+    expect(await ui.find({ key: 'chat:newest' })).toBeUndefined()
+    // a press: the page before, ending at the message over the oldest shown, "▼ N newer" beside it, still inside the terminal
+    await press(ui, 'chat:earlier')
+    expect((await keysOf(ui, 'Box', 'msg:')).at(-1)).toBe(`msg:${v2.chat[earlier - 1]!.id}`)
+    expect((await ui.find({ key: 'chat:newest' }))?.props.label).toBe(`▼ ${shown.length} newer`)
+    expect(rowsOf(await ui.drawn(), 83)).toBeLessThanOrEqual(room)
+    // and that one's press: the newest again
+    await press(ui, 'chat:newest')
+    expect(await keysOf(ui, 'Box', 'msg:')).toEqual(shown)
+    expect(await ui.find({ key: 'chat:newest' })).toBeUndefined()
     // a long draft: the field grows to show it (three lines, as far as the newest message leaves it room), and Chat makes room for it, still inside the terminal
     const field = async () => (await ui.find({ type: 'Input' }))?.key ?? ''
     await ui.input({ key: await field(), text: 'tell the builder what the reviewer found in the limiter, and ask it to run the tests again. '.repeat(3), kind: 'change' })

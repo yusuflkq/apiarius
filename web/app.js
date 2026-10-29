@@ -2779,8 +2779,8 @@ function Members(f) {
     open ? behind.map(a => MemberButton(a, f === a.id)) : null);
 }
 
-/** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone, what you stopped, and a compaction) in the middle. */
-const sideOf = m => (m.kind === 'command' || m.kind === 'stop' || m.kind === 'compaction' || m.from === 'engine' ? 'notice' : m.from === 'you' ? 'mine' : 'theirs');
+/** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone, what you stopped, and a compaction) in the middle, a hand-off a line of its own. */
+const sideOf = m => (m.kind === 'command' || m.kind === 'stop' || m.kind === 'compaction' || m.from === 'engine' ? 'notice' : m.kind === 'spawn' ? 'handoff' : m.from === 'you' ? 'mine' : 'theirs');
 
 /** A send from here not in the chat yet (or refused): drawn as the row it becomes, so it turns into it in place. */
 const pendingRow = o => ({ id: o.id, at: o.at, from: 'you', to: o.agentId, who: `You → ${o.title}`, kind: 'chat', title: '', text: o.text, ackId: o.id });
@@ -2838,14 +2838,16 @@ function headTo(e) {
 const timeTitle = at => (at ? new Date(at).toLocaleString() : '');
 
 /**
- * A group: Claude Code's notice alone in the middle; yours at the right,
- * "You" over them; others' at the left, the sender's avatar beside its name
- * and the messages under the name. A message to another recipient than the
- * one before it says so over it.
+ * A group: Claude Code's notice alone in the middle; one sender's hand-offs
+ * a line each, one under the other; yours at the right, "You" over them;
+ * others' at the left, the sender's avatar beside its name and the messages
+ * under the name. A message to another recipient than the one before it says
+ * so over it.
  */
 function ChatGroup(list) {
   const e = list[0], m = e.m;
   if (e.side === 'notice') return Notice(e);
+  if (e.side === 'handoff') return h('div', { key: `g:${e.key}`, class: 'cgroup handoffs' }, list.map(Handoff));
   const to = headTo(e);
   const head = [
     h('span', { key: 'name', class: 'cg-name' }, e.side === 'mine' ? 'You' : Party(m.from, 0)),
@@ -2937,6 +2939,26 @@ function Notice(e) {
     h('span', { class: 'notice-text' }, words),
     about && h('span', { class: 'notice-about' }, Party(about, 14)),
     h('span', { class: 'notice-time' }, ageOf(m.at)));
+}
+
+/**
+ * A hand-off (a spawn row: the task an agent was started with), one line:
+ * "▸ Orchestrator → scout: Find the off-by-one in …" and when, its words
+ * cut to the line, each name opening its drawer; a press on the chevron or
+ * the words opens them under it, in a bubble as any message's (folded when
+ * long), and folds them again.
+ */
+function Handoff(e) {
+  const m = e.m;
+  const key = `handoff|${m.id}`, open = isOpen(key, false);
+  const flip = () => { ui.holdChat = true; toggle(key); };
+  return h('div', { key: e.key, class: `handoff${open ? ' open' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
+    h('div', { class: 'handoff-line' },
+      h('button', { type: 'button', class: 'handoff-fold', 'aria-expanded': open ? 'true' : 'false', 'aria-label': open ? 'Hide the task' : 'The task it was given', onClick: flip }, icon('chevronRight', 'chev')),
+      h('span', { class: 'handoff-who' }, h('span', { class: 'handoff-from' }, Party(m.from, 0)), h('span', { class: 'handoff-arrow' }, '→'), Party(m.to, 14)),
+      open ? h('span', { class: 'handoff-gist' }) : h('button', { type: 'button', class: 'handoff-gist', onClick: flip }, oneLine(m.text)),
+      h('span', { class: 'handoff-time' }, ageOf(m.at))),
+    open && h('div', { class: 'handoff-words' }, Bubble(e, false)));
 }
 
 /**

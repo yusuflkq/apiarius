@@ -20,8 +20,9 @@ export type DeckKind = 'you' | 'main' | 'agent' | 'teammate' | 'peer'
 /**
  * Where a loop came from: an Agent call (`agent`), a teammate's spawn
  * (`teammate`), a workflow script's `agent()` (`workflow`), or the engine's
- * own housekeeping (`engine`: compaction, memory, any loop seen with no spawn).
- * The last two fold into one dim row instead of showing as the Orchestrator's children.
+ * own housekeeping (`engine`: a prompt suggestion, a compaction, memory, any
+ * loop seen with no spawn that neither the list nor SubagentStart names).
+ * A workflow's agents fold into one dim row; the engine's own show nowhere.
  */
 export type DeckOrigin = 'agent' | 'teammate' | 'workflow' | 'engine'
 
