@@ -1091,11 +1091,18 @@ export function healData(value: DeckData, now: number): DeckData {
   data.agents = Array.isArray(value.agents) ? value.agents.filter(isRecord).map(agent => healAgent({ ...newAgent(agent.id, agent.kind, agent.name, now), ...agent })) : base.agents
   if (!agentOf(data, YOU)) data.agents.unshift(base.agents[0] as DeckAgent)
   if (!agentOf(data, MAIN)) data.agents.splice(1, 0, base.agents[1] as DeckAgent)
-  // a prompt of yours that an earlier build kept and that holds none of your words (a local command's echo) goes
-  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage).filter(message => !isYourPrompt(message) || message.text !== '') : []
+  // a prompt of yours that an earlier build kept and that holds none of your words (a local command's echo) goes, and so does an idle prompt it kept (titled by its type)
+  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage).filter(message => (!isYourPrompt(message) || message.text !== '') && !(message.kind === 'notification' && message.title === IDLE_KIND)) : []
   data.pending = healPending(value.pending)
   data.acks = healAcks(value.acks)
   data.needs = healNeeds(value.needs)
+  // an idle prompt an earlier build kept as a need waits on no one
+  const main = agentOf(data, MAIN)
+  if (main?.needs?.kind === IDLE_KIND) {
+    const newest = data.needs[data.needs.length - 1]
+    if (newest) main.needs = shownNeedsOf(newest)
+    else delete main.needs
+  }
   const approved = value.approved as unknown
   if (isRecord(approved) && typeof approved.text === 'string' && approved.text.trim() !== '' && num(approved.at) !== undefined) {
     data.approved = { text: trunc(approved.text, LIMITS.planChars), at: approved.at as number, by: typeof approved.by === 'string' ? approved.by : MAIN }
@@ -1333,7 +1340,7 @@ function healNeeds(value: unknown): DeckNeeds[] {
   if (!Array.isArray(value)) return []
   return value
     .filter(isRecord)
-    .filter(one => typeof one.text === 'string' && typeof one.kind === 'string' && num(one.at) !== undefined)
+    .filter(one => typeof one.text === 'string' && typeof one.kind === 'string' && one.kind !== IDLE_KIND && num(one.at) !== undefined)
     .map(one => {
       const healed: DeckNeeds = { text: one.text as string, kind: one.kind as string, at: one.at as number }
       for (const field of ['agent', 'call', 'title'] as const) if (typeof one[field] === 'string') healed[field] = one[field] as string
@@ -1495,14 +1502,23 @@ export function noteTodo(data: DeckData, agent: DeckAgent, tool: string, input: 
 
 // Waiting on you: the engine's notifications that ask something of the person.
 
-const NEEDS_KINDS: readonly string[] = ['permission_prompt', 'idle_prompt', 'elicitation_dialog']
-const NOT_NEEDS_KINDS: readonly string[] = ['auth_success', 'elicitation_complete', 'elicitation_response']
+const NEEDS_KINDS: readonly string[] = ['permission_prompt', 'elicitation_dialog']
+/** Claude Code saying its turn ended and it is idle ("Claude is waiting for your input"): no question, whatever its words, so no need and no chat row. */
+const IDLE_KIND = 'idle_prompt'
+const NOT_NEEDS_KINDS: readonly string[] = [IDLE_KIND, 'auth_success', 'elicitation_complete', 'elicitation_response']
 
-/** Whether a notification asks something of the person: a permission prompt, an MCP server's question, Claude waiting for input. */
+/** Whether a notification asks something of the person: a permission prompt, an MCP server's question; never an idle prompt. */
 export function isNeedsYou(kind: string, message: string): boolean {
   if (NEEDS_KINDS.includes(kind)) return true
   if (NOT_NEEDS_KINDS.includes(kind)) return false
   return /permission|waiting for your|needs your|your (input|approval|answer)/i.test(message)
+}
+
+const NOTE_TYPE_WORDS: Readonly<Record<string, string>> = { permission_prompt: 'Permission prompt', elicitation_dialog: 'MCP input' }
+
+/** A notification's type in words, for a card's title: "Permission prompt", "MCP input"; one the deck does not know as Claude Code sent it. */
+export function noteTypeTextOf(kind: string): string {
+  return NOTE_TYPE_WORDS[kind] ?? kind
 }
 
 /**
@@ -1511,7 +1527,6 @@ export function isNeedsYou(kind: string, message: string): boolean {
  * for a server's question; within `agentId`'s loop when one is named.
  */
 function waitingCallOf(data: DeckData, kind: string, message: string, agentId: string | undefined): { agent: string; call: string } | undefined {
-  if (kind === 'idle_prompt') return undefined
   const named = /permission to use (.+)$/i.exec(message.trim())?.[1]?.trim().toLowerCase()
   const fits = (tool: string): boolean => {
     const lower = tool.toLowerCase()
@@ -1598,9 +1613,11 @@ export function clearNeeds(data: DeckData, move: NeedsMove): boolean {
  * row from Claude Code to you, its words and its title (else its type)
  * verbatim, about the loop it fired in (the same words of the same type
  * within 30 s are one row); and, when it asks something of the person
- * (`isNeedsYou`), a need (`noteNeeds`). Answers whether anything changed.
+ * (`isNeedsYou`), a need (`noteNeeds`). An idle prompt is neither: Claude
+ * Code only says its turn ended. Answers whether anything changed.
  */
 export function noteNotification(data: DeckData, note: { type: string; message: string; title?: string; agent?: string; at: number }): boolean {
+  if (note.type === IDLE_KIND) return false
   const text = note.message.trim()
   const title = trunc(oneLine(note.title?.trim() || note.type), 120)
   const agent = note.agent !== undefined && note.agent !== '' ? note.agent : undefined
@@ -1777,15 +1794,11 @@ export function waitLineOf(phrase: string): string {
   return phrase === '' ? '' : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}`
 }
 
-/**
- * Whether the engine waits on the person for agent `id`: a call of its is
- * held on them, or the needs-you note names it; with `isIdleCounted` false,
- * a note that only says Claude is idle (an idle prompt) does not count.
- */
-export function waitsOnYou(data: DeckData, id: string, isIdleCounted = true): boolean {
+/** Whether the engine waits on the person for agent `id`: a call of its is held on them, or the needs-you note names it. */
+export function waitsOnYou(data: DeckData, id: string): boolean {
   if (data.pending.some(item => item.agentId === id)) return true
   const needs = agentOf(data, MAIN)?.needs
-  return needs !== undefined && (needs.agent ?? MAIN) === id && (isIdleCounted || needs.kind !== 'idle_prompt')
+  return needs !== undefined && (needs.agent ?? MAIN) === id
 }
 
 /**
@@ -3846,7 +3859,7 @@ export function needsOf(data: DeckData, git: GitFacts, now?: number): DeckNeedsL
     return { tone: 'attention', kind: 'blocked', text: `${agent ? labelOf(agent) : ORCHESTRATOR} ${pendingPhraseOf(held)}`, agentId: agent ? held.agentId : MAIN }
   }
   const needs = main?.needs
-  if (needs && needs.kind !== 'idle_prompt') {
+  if (needs) {
     const id = needs.agent ?? MAIN
     const agent = agentOf(data, id)
     return { tone: 'attention', kind: 'blocked', text: `${agent ? labelOf(agent) : ORCHESTRATOR} ${waitingOnOf(data, needs)}`, agentId: agent ? id : MAIN }
@@ -3912,7 +3925,7 @@ function summaryWith(data: DeckData, git: GitFacts, now: number | undefined, pla
     else if (agent.status === 'completed') done += 1
     else if (agent.status === 'failed') failed += 1
   }
-  if (waitsOnYou(data, MAIN, false)) waiting += 1
+  if (waitsOnYou(data, MAIN)) waiting += 1
 
   let files: number
   let added: number

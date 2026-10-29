@@ -444,6 +444,8 @@ function needOf(n) {
     id: n.id, kind, agent: str(n.agent) || 'main', agentName: str(n.agentName), at: numOr(n.at, 0), age: str(n.age), text: str(n.text),
     questions, isAnswerable: n.isAnswerable === true && kind === 'question' && questions.length > 0,
     tool: str(n.tool), command: str(n.command), path: str(n.path), description: str(n.description), type: str(n.type), title: str(n.title),
+    // its type in words ("Permission prompt", "MCP input"); an earlier build's state has none: its type as sent
+    typeText: str(n.typeText) || str(n.type),
   };
 }
 
@@ -1496,7 +1498,7 @@ function NeedCard(n, first = true) {
     icon(NEED_ICON[n.kind], 'need-ic'),
     h('p', { class: 'need-title' }, title, !open && h('span', { key: 'gist', class: `need-gist${n.kind === 'permission' && (n.command || n.path) ? ' mono' : ''}` }, needGist(n))),
     n.kind === 'permission' && n.tool && ToolTag(n.tool),
-    n.kind === 'notification' && n.type && open && h('span', { class: 'need-type' }, n.type),
+    n.kind === 'notification' && n.typeText && open && h('span', { class: 'need-type' }, n.typeText),
     h('span', { class: 'need-age', title: n.at ? new Date(n.at).toLocaleString() : '' }, ageOf(n.at) || n.age),
     h('button', { type: 'button', class: 'need-flip', 'aria-expanded': open ? 'true' : 'false', 'aria-label': open ? 'Fold' : 'Open', onClick: e => { stop(e); flip(); } }, icon('chevronDown', open ? 'flip' : ''))),
   open && h('div', { class: 'need-body' }, n.kind === 'question' ? QuestionForm(n) : n.kind === 'permission' ? PermissionBody(n) : NoteBody(n)));

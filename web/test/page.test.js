@@ -230,7 +230,12 @@ test('Needs: oldest first, each with its age; the first open, the rest one line 
   assert.match(flat(textOf(cards()[1])), /^builder needs permission Bash 2m npm test -- rateLimit Run the limiter tests Answer in Claude Code\.$/)
   assert.equal(find(cards()[1], 'permit-cmd').length, 1)
   click(find(cards()[3], 'need-head')[0])
-  assert.match(flat(textOf(cards()[3])), /^github elicitation_dialog 1m The github MCP server is asking for your input Answer in Claude Code\.$/)
+  // its type in plain words beside its title ("MCP input", not elicitation_dialog)
+  assert.match(flat(textOf(cards()[3])), /^github MCP input 1m The github MCP server is asking for your input Answer in Claude Code\.$/)
+  // a state of an earlier build, with no words for the type: the type as sent
+  p.load(sample(s => delete s.needs[3].typeText))
+  assert.match(flat(textOf(cards()[3])), /^github elicitation_dialog 1m /)
+  p.load(sample())
   // a path where there is no command
   p.load(sample(s => Object.assign(s.needs[1], { tool: 'Edit', command: undefined, path: 'src/app.ts', text: 'src/app.ts' })))
   assert.match(flat(textOf(cards()[1])), /src\/ app\.ts Answer in Claude Code\.$/)

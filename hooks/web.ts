@@ -598,9 +598,11 @@ export type V2Need = {
   path?: string
   /** A permission's own words for what it does, else what it is aimed at. */
   description?: string
-  /** A notification's own type (`permission_prompt`, `idle_prompt`, one the deck does not know) and title, verbatim. */
+  /** A notification's own type (`permission_prompt`, `elicitation_dialog`, one the deck does not know) and title, verbatim. */
   type?: string
   title?: string
+  /** A notification's type in words, what its card's title says with no title of its own: "Permission prompt", "MCP input"; one the deck does not know as sent. */
+  typeText?: string
 }
 
 /** One agent in the tree of who started whom. */
@@ -1236,6 +1238,7 @@ export function needsListOf(data: DeckData, now: number, answerable: ReadonlySet
       isAnswerable: false,
       type: note.kind,
       ...(note.title ? { title: note.title } : {}),
+      typeText: M.noteTypeTextOf(note.kind),
     })
   }
   return [...held, ...notes].sort((a, b) => a.at - b.at)

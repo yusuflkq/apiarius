@@ -65,14 +65,14 @@ export function needsSection(kit: Kit, state: WebStateV2, list: readonly V2Need[
   )
 }
 
-/** What a need's title says: who asks, who needs your OK and for which tool, or the notification's own title. */
+/** What a need's title says: who asks, who needs your OK and for which tool, or the notification's own title, else its type in words ("Permission prompt"; one the deck does not know as sent). */
 export function needTitle(need: V2Need): string {
   if (need.kind === 'question') {
     const n = need.questions?.length ?? 0
     return n > 1 ? `${need.agentName} asks ${n} questions` : `${need.agentName} asks you`
   }
   if (need.kind === 'permission') return `${need.agentName} needs your OK${need.tool ? ` · ${need.tool}` : ''}`
-  return need.title || need.type || 'Claude Code'
+  return need.title || need.typeText || need.type || 'Claude Code'
 }
 
 function markOf(kit: Kit, need: V2Need): RenderElement {

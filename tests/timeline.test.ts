@@ -86,8 +86,11 @@ test('a run that ended is kept when the agent runs again (a message woke it, a t
   M.dropPending(data, 'toolu_b1')
   M.endTool(helper, 'toolu_b1', true, NOW + 8 * MIN)
   expect(helper.lane?.waits[0]?.to).toBe(NOW + 8 * MIN)
+  // Claude Code saying a loop is idle is no wait
+  M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', agent: helper.id, at: NOW + 8.5 * MIN })
+  expect(helper.lane?.waits).toHaveLength(1)
   // Claude Code's notification about no call in particular ends when the loop moves on (its next call), as the deck's need does
-  M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', agent: helper.id, at: NOW + 9 * MIN })
+  M.noteNotification(data, { type: 'elicitation_dialog', message: 'The github MCP server is asking for your input', agent: helper.id, at: NOW + 9 * MIN })
   expect(helper.lane?.waits.at(-1)).toEqual({ kind: 'note', from: NOW + 9 * MIN })
   call(data, helper, 'toolu_h2', NOW + 10 * MIN, 100)
   expect(helper.lane?.waits.at(-1)?.to).toBe(NOW + 10 * MIN)
@@ -98,7 +101,7 @@ test('the Orchestrator`s turns: each kept as it ends; one whose end never came r
   const main = M.agentOf(data, M.MAIN)!
   M.noteMainTurn(data, 't1', NOW)
   M.endMainTurn(data, 't1', NOW + 2 * MIN)
-  M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', at: NOW + 3 * MIN })
+  M.noteNotification(data, { type: 'elicitation_dialog', message: 'The github MCP server is asking for your input', at: NOW + 3 * MIN })
   M.noteMainTurn(data, 't2', NOW + 5 * MIN)
   expect(main.lane?.waits).toEqual([{ kind: 'note', from: NOW + 3 * MIN, to: NOW + 5 * MIN }])
   call(data, main, 'toolu_m1', NOW + 6 * MIN, 1000)

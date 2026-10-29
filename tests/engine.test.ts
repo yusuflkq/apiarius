@@ -384,7 +384,7 @@ test('an agent`s SendMessage that wakes a finished agent comes to it in an envel
   ])
 })
 
-test('Claude Code`s notifications are rows from Claude Code to you, as it sent them (a type the deck does not know too); those that ask something are needs, each taken down when what it waits on moves', async ($, on) => {
+test('Claude Code`s notifications are rows from Claude Code to you, as it sent them (a type the deck does not know too); those that ask something are needs, each taken down when what it waits on moves; an idle prompt is neither', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []
   world(on, saved)
@@ -400,19 +400,17 @@ test('Claude Code`s notifications are rows from Claude Code to you, as it sent t
   await $.classic.Notification({ message: 'Your build of the skill finished', notification_type: 'skill_build' })
   await clock.advance(2000)
   let data = lastOf(saved)
+  // Claude Code saying its turn ended (an idle prompt) is no row: nothing in it asks or tells anything new
   expect(rowsOf(data).filter(one => one[2] === 'notification')).toEqual([
     ['engine', 'you', 'notification', 'Permission needed', 'Claude needs your permission to use Bash'],
-    ['engine', 'you', 'notification', 'idle_prompt', 'Claude is waiting for your input'],
     ['engine', 'you', 'notification', 'skill_build', 'Your build of the skill finished'],
   ])
   expect(data.messages.find(one => one.kind === 'notification')?.agent).toBe('agent-scout')
-  // the two that ask are needs, in their own words; the third asks nothing
-  expect(data.needs.map(one => [one.kind, one.agent ?? 'main', one.text])).toEqual([
-    ['permission_prompt', 'agent-scout', 'Claude needs your permission to use Bash'],
-    ['idle_prompt', 'main', 'Claude is waiting for your input'],
-  ])
+  // the one that asks is a need, in its own words; the idle prompt and the third ask nothing
+  expect(data.needs.map(one => [one.kind, one.agent ?? 'main', one.text])).toEqual([['permission_prompt', 'agent-scout', 'Claude needs your permission to use Bash']])
+  expect(mainIn(data).needs?.kind).toBe('permission_prompt')
 
-  // your next turn answers Claude's wait, not scout's permission prompt
+  // your next turn leaves scout's permission prompt as it was
   await $.prompt.submit(typed('Go on'))
   await $.turn.start({ text: 'Go on', turnId: 't2' })
   await clock.advance(2000)

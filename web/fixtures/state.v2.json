@@ -112,7 +112,8 @@
       "text": "The github MCP server is asking for your input",
       "isAnswerable": false,
       "type": "elicitation_dialog",
-      "title": "github"
+      "title": "github",
+      "typeText": "MCP input"
     }
   ],
   "agents": [

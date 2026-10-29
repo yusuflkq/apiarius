@@ -145,14 +145,16 @@ test('needs come only from Claude Code: its questions, its permission prompts an
   expect(state.header).toMatchObject({ state: 'working', stateText: 'Working' })
   expect(state.chat.map(row => [row.kind, row.who, row.title, row.text])).toEqual([['notification', 'Claude Code → you', 'skill_build', 'Your skill finished building']])
 
-  // the three sources: a question held on the Orchestrator, a permission prompt on fixer's call, Claude idle for your input
+  // the three sources: a question held on the Orchestrator, a permission prompt on fixer's call, an MCP server asking for your input
   const question = { question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'Redis', description: 'Shared' }, { label: 'Memory', description: 'Per process' }] }
   M.notePending(data, { id: 'toolu_q', agentId: M.MAIN, kind: 'question', tool: 'AskUserQuestion', at: NOW - 180_000, questions: [question] })
   M.beginTool(data, fixer, M.activityOf('toolu_p', 'Bash', { command: 'npm test -- --watch=false', description: 'Run the tests' }, '/repo', NOW - 120_000))
   M.notePending(data, M.permissionOf({ id: 'toolu_p', tool: 'Bash', input: { command: 'npm test -- --watch=false', description: 'Run the tests' }, agentId: fixer.id, at: NOW - 120_000 }, '/repo'))
   // Claude Code's own notification of that prompt is the same need, not a second
   M.noteNotification(data, { type: 'permission_prompt', message: 'Claude needs your permission to use Bash', agent: fixer.id, at: NOW - 110_000 })
-  M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', title: 'Waiting', at: NOW - 30_000 })
+  M.noteNotification(data, { type: 'elicitation_dialog', message: 'The github MCP server is asking for your input', at: NOW - 30_000 })
+  // Claude Code saying it is idle, waiting for your input, asks nothing: no need, no chat row
+  expect(M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', title: 'Waiting', at: NOW - 20_000 })).toBe(false)
   state = stateOf(data, { answerable: ['toolu_q'] })
   expect(state.needs).toEqual([
     {
@@ -167,8 +169,9 @@ test('needs come only from Claude Code: its questions, its permission prompts an
       isAnswerable: true,
     },
     { id: 'toolu_p', kind: 'permission', agent: fixer.id, agentName: 'fixer', at: NOW - 120_000, age: '2m', text: 'Run the tests', isAnswerable: false, tool: 'Bash', command: 'npm test -- --watch=false', description: 'Run the tests' },
-    { id: W.webIdOf(`note_${NOW - 30_000}_idle_prompt_main`), kind: 'notification', agent: M.MAIN, agentName: 'Orchestrator', at: NOW - 30_000, age: 'now', text: 'Claude is waiting for your input', isAnswerable: false, type: 'idle_prompt', title: 'Waiting' },
+    { id: W.webIdOf(`note_${NOW - 30_000}_elicitation_dialog_main`), kind: 'notification', agent: M.MAIN, agentName: 'Orchestrator', at: NOW - 30_000, age: 'now', text: 'The github MCP server is asking for your input', isAnswerable: false, type: 'elicitation_dialog', typeText: 'MCP input' },
   ])
+  expect(state.chat.filter(row => row.kind === 'notification').map(row => row.title)).toEqual(['permission_prompt', 'elicitation_dialog', 'skill_build'])
   // a question whose race this mod instance does not hold (after a reload) is not answerable from the deck
   expect(stateOf(data).needs[0]?.isAnswerable).toBe(false)
   expect(state.header).toMatchObject({ state: 'waiting', stateText: 'Waiting on you' })
@@ -177,10 +180,38 @@ test('needs come only from Claude Code: its questions, its permission prompts an
 
   // a call let go is no need any more
   M.dropPending(data, 'toolu_q')
-  expect(stateOf(data).needs.map(need => need.id)).toEqual(['toolu_p', W.webIdOf(`note_${NOW - 30_000}_idle_prompt_main`)])
-  // a notification type the deck does not know, that asks: verbatim, its type as sent
+  expect(stateOf(data).needs.map(need => need.id)).toEqual(['toolu_p', W.webIdOf(`note_${NOW - 30_000}_elicitation_dialog_main`)])
+  // a notification type the deck does not know, that asks: verbatim, its type as sent, in words too
   M.noteNotification(data, { type: 'mcp_oauth', message: 'The github server needs your approval', at: NOW - 5000 })
-  expect(stateOf(data).needs.pop()).toMatchObject({ kind: 'notification', type: 'mcp_oauth', text: 'The github server needs your approval' })
+  expect(stateOf(data).needs.pop()).toMatchObject({ kind: 'notification', type: 'mcp_oauth', typeText: 'mcp_oauth', text: 'The github server needs your approval' })
+  expect([M.noteTypeTextOf('permission_prompt'), M.noteTypeTextOf('elicitation_dialog'), M.noteTypeTextOf('something_new')]).toEqual(['Permission prompt', 'MCP input', 'something_new'])
+})
+
+test('an idle prompt is Claude Code saying its turn ended: no need, no band count, no chat row, and the header says Idle; one an earlier build kept as a need is healed away', () => {
+  const data = M.emptyData(NOW - 600_000)
+  M.noteGoal(data, 'goal', { text: 'Fix the flaky test', origin: 'composer', at: NOW - 600_000 })
+  M.noteMainTurn(data, 't1', NOW - 500_000)
+  M.endMainTurn(data, 't1', NOW - 60_000)
+  expect(M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', at: NOW - 30_000 })).toBe(false)
+  const state = stateOf(data)
+  expect(state.needs).toEqual([])
+  expect(state.header).toMatchObject({ state: 'idle', stateText: 'Idle' })
+  expect(state.figures.needs).toBe(0)
+  expect(W.bandOf(state)).toBeNull()
+  expect(state.chat.some(row => row.kind === 'notification')).toBe(false)
+  // a snapshot an earlier build kept: its idle need and its chat row go, a real need stays
+  const kept = M.copyOf(data)
+  const idle = { kind: 'idle_prompt', text: 'Claude is waiting for your input', at: NOW - 30_000 }
+  kept.needs = [idle]
+  M.agentOf(kept, M.MAIN)!.needs = { ...idle }
+  M.addMessage(kept, { from: M.ENGINE, to: M.YOU, kind: 'notification', text: 'Claude is waiting for your input', at: NOW - 30_000, title: 'idle_prompt' })
+  const healed = M.healData(kept, NOW)
+  expect([healed.needs, M.agentOf(healed, M.MAIN)?.needs, healed.messages.filter(one => one.kind === 'notification')]).toEqual([[], undefined, []])
+  expect(stateOf(healed).header.state).toBe('idle')
+  const asks = M.copyOf(kept)
+  asks.needs = [{ kind: 'elicitation_dialog', text: 'The github MCP server is asking for your input', at: NOW - 40_000 }, idle]
+  expect(M.healData(asks, NOW).needs.map(one => one.kind)).toEqual(['elicitation_dialog'])
+  expect(M.agentOf(M.healData(asks, NOW), M.MAIN)?.needs?.kind).toBe('elicitation_dialog')
 })
 
 // ---------------------------------------------------------------------------
@@ -301,7 +332,7 @@ test('chat rows read as sentences: who to whom, agent to agent titled by its sum
   say('other-session', M.MAIN, 'message', 'Status from the other session', NOW - 240_000)
   say(M.YOU, 'agent-builder', 'chat', 'Keep it optional', NOW - 200_000, { isDelivered: true, ackId: 'c-1' })
   say('agent-builder', '', 'chat', 'Will do', NOW - 190_000)
-  say(M.ENGINE, M.YOU, 'notification', 'Claude is waiting for your input', NOW - 100_000, { title: 'idle_prompt' })
+  say(M.ENGINE, M.YOU, 'notification', 'The github MCP server is asking for your input', NOW - 100_000, { title: 'github' })
   say(M.ENGINE, M.MAIN, 'task', 'Agent "Map the routes" completed', NOW - 90_000, { title: 'completed', agent: 'agent-scout' })
   say(M.MAIN, M.YOU, 'question', 'Which store?', NOW - 80_000, { callId: 'toolu_q:1' })
   // recorded late, said early: it sits where it was said
@@ -317,7 +348,7 @@ test('chat rows read as sentences: who to whom, agent to agent titled by its sum
     ['other-session → Orchestrator', 'other-session', M.MAIN, 'message', ''],
     ['You → builder', M.YOU, 'agent-builder', 'chat', ''],
     ['builder', 'agent-builder', null, 'chat', ''],
-    ['Claude Code → you', M.ENGINE, M.YOU, 'notification', 'idle_prompt'],
+    ['Claude Code → you', M.ENGINE, M.YOU, 'notification', 'github'],
     ['Claude Code → Orchestrator', M.ENGINE, M.MAIN, 'task', 'completed'],
     ['Orchestrator → you', M.MAIN, M.YOU, 'question', ''],
   ])

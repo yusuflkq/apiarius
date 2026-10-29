@@ -743,8 +743,9 @@ test('the needs-you line: a prompt blocked on you, then a failure, then a file t
   expect(M.needsOf(data, git)).toEqual({ tone: 'alert', kind: 'failed', text: 'reviewer failed: Tests still fail in token.test.js', agentId: 'n-reviewer' })
   Object.assign(reviewer, { status: 'completed' })
   expect(M.needsOf(data, git)).toMatchObject({ tone: 'attention', kind: 'shared', text: 'fixer and tester both edit src/token.js' })
-  // waiting for your input is no block
-  M.noteNeeds(data, { kind: 'idle_prompt', text: 'Claude is waiting for your input', at: NOW })
+  // Claude Code saying it is idle, waiting for your input, is no block
+  expect(M.noteNotification(data, { type: 'idle_prompt', message: 'Claude is waiting for your input', at: NOW })).toBe(false)
+  expect(data.needs).toEqual([])
   expect(M.needsOf(data, git).kind).toBe('shared')
   for (const agent of [fixer, tester]) Object.assign(agent, { status: 'completed', endedAt: NOW })
   expect(M.needsOf(data, git)).toEqual({ tone: 'done', kind: 'review', text: 'All done · 1 file to review' })

@@ -347,7 +347,7 @@ test('no redraw while nothing changes: idle ticks raise no ui.invalidate, a tool
   expect(invalidates).toBe(1)
 })
 
-test('waiting on you: a permission prompt marks the Orchestrator until the call it holds ends; Claude idle for input until the next turn', async ($, on) => {
+test('waiting on you: a permission prompt marks the Orchestrator until the call it holds ends; Claude Code saying it is idle for input is no wait', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []
   world(on, clock, { saved, bashMs: 6_000 })
@@ -372,15 +372,14 @@ test('waiting on you: a permission prompt marks the Orchestrator until the call 
   await clock.advance(2000)
   expect(mainOf(saved).needs).toBeUndefined()
 
-  // idle for input: no call holds it, the next turn takes it down; a sign-in notice asks nothing
+  // idle for input: Claude Code says its turn ended, which asks nothing; nor does a sign-in notice
   await $.turn.complete({ turnId: 't1', answer: 'Cleaned.', durationMs: 1000, isAborted: false, reason: 'answer' })
   await $.classic.Notification({ message: 'Claude is waiting for your input', notification_type: 'idle_prompt' })
   await clock.advance(2000)
-  expect(mainOf(saved).needs).toMatchObject({ kind: 'idle_prompt', text: 'Claude is waiting for your input' })
-  expect(M.bannerOf(lastOf(saved).data, emptyGit(), NOW).tone).toBe('attention')
-  await $.turn.start({ text: 'thanks, next', turnId: 't2' })
-  await clock.advance(2000)
   expect(mainOf(saved).needs).toBeUndefined()
+  expect(M.statusOf(mainOf(saved), lastOf(saved).data)).toBe('idle')
+  expect(M.bannerOf(lastOf(saved).data, emptyGit(), NOW).tone).not.toBe('attention')
+  expect(M.isNeedsYou('idle_prompt', 'Claude is waiting for your input')).toBe(false)
 
   await $.classic.Notification({ message: 'Signed in', notification_type: 'auth_success' })
   await clock.advance(2000)
