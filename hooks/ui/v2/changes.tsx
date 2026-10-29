@@ -1,11 +1,19 @@
 /**
- * Changes: git's uncommitted files (the v2 state's `changes`), each a plain
- * Button keyed `file:<path>` (W.fileKeyOf) that opens git's own diff of it
- * (`selectFile`, the hooks module reading it), with each agent's own edit
- * patches of that file beside it, from 140 cells side by side. Git's hunks
- * are never tagged by agent: that would be invented. Then the edits agents
- * made outside the repository, the commits (a press opens one, `selectCommit`),
- * and Review, which puts a prompt for Claude in the prompt box (`review`).
+ * Changes: git's uncommitted files (the v2 state's `changes`), each a row
+ * that opens, its chevron and its path a plain Button keyed `file:<path>`
+ * (W.fileKeyOf) that opens git's own diff of it (`selectFile`, the hooks
+ * module reading it), with each agent's own edit patches of that file beside
+ * it, from 140 cells side by side, and the faces of the agents who made
+ * them. Git's hunks are never tagged by agent: that would be invented. Then
+ * the edits agents made outside the repository, a row a file as the web
+ * page's, the commits (a press opens one, `selectCommit`), and Review, which
+ * puts a prompt for Claude in the prompt box (`review`).
+ *
+ * With no repository to show it says where the chat runs and that Changes
+ * follows the repository an agent edits in, offers the repositories directly
+ * inside the chat's directory (`selectRepo` pins one), and lists every edit
+ * the agents made, the newest file open. Pinned, a quiet Follow the work
+ * lets it follow the work again.
  *
  * Pure: Kit, the state, its lazy files, the deck model (the diff and the
  * commit read) and DashActions come from the hooks module.
@@ -13,26 +21,44 @@
 import type { RenderElement } from 'claude-code'
 
 import { filePatchesOf, hunksOf } from '../../diff'
-import { clean } from '../../format'
+import { baseName, clean } from '../../format'
 import { fileKeyOf, type V2Changes, type V2Files, type WebStateV2 } from '../../web'
 import type { DashActions, DeckModel, Kit } from '../types'
-import { delta, diffBlocks, editBlock, editorsOf, titleOf, type Budget } from './diffs'
-import { advanceOf, quiet, sectionHead } from './look'
+import { rowOf } from './dashModel'
+import { delta, diffBlocks, editBlock, editorIdsOf, editorsOf, titleOf, type Budget } from './diffs'
+import { advanceOf, icon, quiet, sectionHead, svgOf } from './look'
 import { P } from './palette'
-import { ago, cutCells, plural } from './text'
+import { cellsForPx, chevronOf, faces, facesCells, plainSlack } from './parts'
+import { ago, cellsOf, cutCells, plural } from './text'
 
 /** The diff characters one drawing of Changes spends at most, every open file and commit together. */
 const DIFF_CHARS = 36_000
 /** The files the list draws at most, so the pane's drawing keeps inside its bounds. */
 const MOST_FILES = 60
+/** The files the agents' edits list draws at most. */
+const MOST_EDITED = 20
 /** The width from which git's diff and the agents' edits stand side by side. */
 const BESIDE = 140
-/** The edits outside the repository opened, by id, while the module lives. */
-const outsideOpen = new Set<string>()
+/** The faces a row shows at most, each one's size in px, and a chevron's. */
+const MOST_FACES = 3
+const FACE = 16
+const CHEVRON = 14
+
+/**
+ * The agents' edits of each file opened or shut, by path, while the module
+ * lives: as last pressed (or opened from the Dashboard's Files); one never
+ * pressed is shut, but for the newest of the Agent edits list the first
+ * time it is drawn, as the web page fixes a fold the first time it is seen.
+ */
+const editsOpen = new Map<string, boolean>()
 
 type File = V2Changes['files'][number]
+type Edit = V2Changes['edits'][number]
 
-/** Changes: the repository's line and Review, its files, the edits outside it, its commits. */
+/** One file the agents edited: its edits (oldest first, as the state lists them), who made them in the order of their first, their lines and the last. */
+export type EditGroup = { path: string; edits: Edit[]; agents: string[]; added: number; removed: number; lastAt: number }
+
+/** Changes: the repository's line and Review (or where the chat runs, and the repositories to pick from), its files, the edits outside it, its commits. */
 export function changesTab(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean): RenderElement {
   const { Box } = kit
   const budget: Budget = { chars: DIFF_CHARS }
@@ -41,8 +67,9 @@ export function changesTab(kit: Kit, state: WebStateV2, files: V2Files, model: D
   return (
     <Box key="changes" flexDirection="column" gap={1}>
       {repoLine(kit, state, actions, isDemo)}
+      {changes.repo ? null : picksList(kit, state, actions)}
       {changes.repo ? filesList(kit, state, files, model, actions, isDemo, budget) : editsOnly(kit, state, files, budget, actions)}
-      {changes.repo && outside.length > 0 ? outsideList(kit, state, files, outside, budget, actions) : null}
+      {changes.repo && outside.length > 0 ? editsList(kit, state, files, outside, budget, actions, 'Outside the repository', false) : null}
       {changes.repo ? commitsList(kit, state, model, actions, isDemo, budget) : null}
     </Box>
   )
@@ -52,12 +79,49 @@ function reviewText(root: string): string {
   return `Review my uncommitted changes in ${root} (git -C "${root}" status, then git -C "${root}" diff HEAD and any new files) and point out bugs or risky edits before I commit.`
 }
 
-/** The repository on one line ("acme-api ⎇ feat/rate-limit ↑1 · 5 files +16 −2"), and Review at its right. */
+/**
+ * What Changes says with no repository to show: where the chat runs and that
+ * it is in none, and what Changes follows; a pin git cannot read; or, from an
+ * earlier build's state (no `where`), as it said it then.
+ */
+export function noRepoText(changes: Pick<V2Changes, 'where' | 'edits'>): string {
+  const where = changes.where
+  const hasEdits = changes.edits.length > 0
+  if (where && where.pinned !== '') return `Changes is pinned to ${baseName(where.pinned.replace(/[\\/]+$/, ''))}, which git can’t read now.`
+  if (where && where.isRepo === null) return 'Looking for a git repository…'
+  if (where && where.isRepo === false) {
+    const tail = hasEdits ? '; the edits agents made outside one are below, exact.' : '.'
+    return `This chat runs in ${where.name || where.cwd}, which isn’t a git repository. Changes follows the repository an agent edits in${tail}`
+  }
+  return hasEdits ? 'No git repository here: the edits agents made are below, exact.' : 'No git repository here.'
+}
+
+/** Follow the work: a quiet plain Button that lets go of the pin, so Changes follows the repository an agent edits in again. */
+function followButton(kit: Kit, actions: DashActions): RenderElement {
+  const { Box, Button } = kit
+  return (
+    <Box flexShrink={0}>
+      <Button key="changes:follow" label="Follow the work" plain dimColor onPress={() => actions.selectRepo('')} />
+    </Box>
+  )
+}
+
+/** The repository on one line ("acme-api ⎇ feat/rate-limit ↑1 · pinned · 5 files +16 −2"), and at its right Follow the work while it is pinned, and Review. */
 function repoLine(kit: Kit, state: WebStateV2, actions: DashActions, isDemo: boolean): RenderElement {
   const { Box, Text, Button } = kit
-  const { repo, files } = state.changes
+  const { repo, files, where } = state.changes
+  const isPinned = where !== undefined && where.pinned !== ''
   if (!repo) {
-    return <Text color={P.muted2}>{state.changes.edits.length > 0 ? 'No git repository here: the edits agents made are below, exact.' : 'No git repository here.'}</Text>
+    return (
+      <Box key="changes:repo" flexDirection="row" columnGap={2}>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text color={P.muted2} wrap="wrap">
+            {noRepoText(state.changes)}
+          </Text>
+        </Box>
+        {isPinned ? followButton(kit, actions) : null}
+      </Box>
+    )
   }
   const added = files.reduce((sum, file) => sum + file.added, 0)
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
@@ -73,16 +137,66 @@ function repoLine(kit: Kit, state: WebStateV2, actions: DashActions, isDemo: boo
           </Text>
           <Text color={P.muted}>{` ⎇ ${branch}`}</Text>
           {repo.ahead > 0 || repo.behind > 0 ? <Text color={P.muted2}>{` ↑${repo.ahead} ↓${repo.behind}`}</Text> : null}
+          {isPinned ? <Text color={P.muted2}>{' · pinned'}</Text> : null}
           <Text color={P.muted2}>{files.length > 0 ? ` · ${plural(files.length, 'file')} ` : ` · clean at ${repo.head.slice(0, 7)}`}</Text>
           {files.length > 0 ? counts : null}
         </Text>
       </Box>
+      {isPinned ? followButton(kit, actions) : null}
       {canReview ? (
         <Box flexShrink={0}>
           <Button key="changes:review" label="Review" plain onPress={() => actions.review(reviewText(repo.root))} />
         </Box>
       ) : null}
     </Box>
+  )
+}
+
+/**
+ * While the chat's directory is in no repository and none is pinned: the
+ * repositories directly inside it, the one changed last first, each its
+ * branch mark and its name, a plain Button keyed `changes:pick:<root>` that
+ * pins Changes to it. Nothing where there are none.
+ */
+function picksList(kit: Kit, state: WebStateV2, actions: DashActions): RenderElement | null {
+  const { Box, Text, Button } = kit
+  const where = state.changes.where
+  if (!where || where.isRepo !== false || where.pinned !== '' || where.picks.length === 0) return null
+  const room = Math.max(8, kit.columns - 4)
+  return (
+    <Box key="changes:picks" flexDirection="column">
+      {sectionHead(kit, `Repositories in ${where.name || where.cwd}`, where.picks.length)}
+      <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+        {where.picks.map(pick => (
+          <Box key={`pick:${pick.root}`} flexDirection="row" columnGap={1} flexShrink={0}>
+            <Text color={P.muted2}>⎇</Text>
+            <Button key={`changes:pick:${pick.root}`} label={cutCells(pick.name, room, advanceOf(kit))} plain onPress={() => actions.selectRepo(pick.root)} />
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+/** A row's chevron: an icon where Svg draws, else ▸ shut and ▾ open, dim. */
+function chevron(kit: Kit, isOpen: boolean): RenderElement {
+  const { Text } = kit
+  return svgOf(kit) ? icon(kit, isOpen ? 'chevronDown' : 'chevronRight', P.muted2, '', CHEVRON) : <Text color={P.muted2}>{chevronOf(isOpen)}</Text>
+}
+
+/** The cells `chevron` takes. */
+function chevronCells(kit: Kit): number {
+  return svgOf(kit) ? cellsForPx(CHEVRON) : 1
+}
+
+/** The faces of the agents `ids` names, as the Dashboard's Files draws them; one the state does not hold is grey. */
+function facesOf(kit: Kit, state: WebStateV2, ids: readonly string[]): RenderElement {
+  return faces(
+    kit,
+    ids.map(id => rowOf(state, id) ?? null),
+    FACE,
+    ids.map(id => titleOf(state, id)),
+    MOST_FACES,
   )
 }
 
@@ -108,19 +222,23 @@ function filesList(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel
   )
 }
 
-/** A file's row: git's code, its path (the Button), `+a −r`, and the agents whose own edits touched it. */
+/** A file's row, as the web page's: its chevron, git's code, its path (the Button), the faces of the agents whose own edits touched it, `+a −r`, and their names. */
 function fileRow(kit: Kit, state: WebStateV2, file: File, isOpen: boolean, actions: DashActions): RenderElement {
   const { Box, Text, Button } = kit
   const by = editorsOf(state, file.edits)
-  const path = cutCells(file.path, Math.max(16, kit.columns - 24 - (by ? Math.min(24, by.length + 2) : 0)), advanceOf(kit))
+  const ids = editorIdsOf(state, file.edits)
+  const shown = ids.length > 0 ? facesCells(kit, ids.length, FACE, MOST_FACES) + 1 : 0
+  const path = cutCells(file.path, Math.max(16, kit.columns - 26 - chevronCells(kit) - shown - (by ? Math.min(24, by.length + 2) : 0)), advanceOf(kit))
   return (
-    <Box key={`filerow:${file.path}`} flexDirection="row" columnGap={1}>
+    <Box key={`filerow:${file.path}`} flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexShrink={0}>{chevron(kit, isOpen)}</Box>
       <Box flexShrink={0} width={1}>
         <Text color={P.muted2}>{file.code}</Text>
       </Box>
       <Box flexShrink={1} minWidth={0}>
-        <Button key={fileKeyOf(file.path)} label={path} plain dimColor={!isOpen} onPress={() => actions.selectFile(file.path)} />
+        <Button key={fileKeyOf(file.path)} label={path} plain onPress={() => actions.selectFile(file.path)} />
       </Box>
+      {ids.length > 0 ? <Box flexShrink={0}>{facesOf(kit, state, ids)}</Box> : null}
       <Box flexShrink={0}>{delta(kit, file.added, file.removed) ?? <Text> </Text>}</Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         <Text color={P.muted2} wrap="truncate-end">
@@ -180,46 +298,105 @@ function fileDetail(kit: Kit, state: WebStateV2, files: V2Files, model: DeckMode
   )
 }
 
-/** Outside a repository: the files agents edited, each a row that opens its edits. */
+/** Outside a repository: the files agents edited, each a row that opens its edits, the newest open the first time. */
 function editsOnly(kit: Kit, state: WebStateV2, files: V2Files, budget: Budget, actions: DashActions): RenderElement {
   if (state.changes.edits.length === 0) return quiet(kit, 'No edits by agents yet: the files they change show here.')
-  return outsideList(kit, state, files, state.changes.edits, budget, actions, 'Edited')
+  return editsList(kit, state, files, state.changes.edits, budget, actions, 'Agent edits', true)
 }
 
-/** Edits outside the repository (or with none), newest first: a row each, open to its patch. */
-function outsideList(kit: Kit, state: WebStateV2, files: V2Files, edits: V2Changes['edits'], budget: Budget, actions: DashActions, title = 'Outside the repository'): RenderElement {
-  const { Box, Text, Button } = kit
-  const list = [...edits].reverse().slice(0, 20)
+/** The agents' edits by file, the file edited last first; each file's edits as the state lists them, oldest first. */
+export function editGroupsOf(edits: readonly Edit[]): EditGroup[] {
+  const groups = new Map<string, EditGroup>()
+  for (const edit of edits) {
+    const group = groups.get(edit.path) ?? { path: edit.path, edits: [], agents: [], added: 0, removed: 0, lastAt: 0 }
+    group.edits.push(edit)
+    if (!group.agents.includes(edit.agent)) group.agents.push(edit.agent)
+    group.added += edit.added
+    group.removed += edit.removed
+    group.lastAt = Math.max(group.lastAt, edit.at)
+    groups.set(edit.path, group)
+  }
+  return [...groups.values()].sort((a, b) => b.lastAt - a.lastAt)
+}
+
+/** The Button key of a file's row of the agents' edits: `edits:` and its path. */
+export function editsKeyOf(path: string): string {
+  return `edits:${path}`
+}
+
+/** Opens the agents' edits of file `path` in Changes, as a press on its row does (the Dashboard's Files, for a file git does not list). */
+export function openEditsOf(path: string): void {
+  editsOpen.set(path, true)
+}
+
+/**
+ * The agents' edits outside the repository (or, with none, every one), a
+ * row a file as the web page's: its chevron, its path (a plain Button keyed
+ * `edits:<path>` that opens or shuts it), the faces of who edited it, "2
+ * edits", `+a −r` and when, then, open, each edit's tool, agent and time and
+ * its exact patch. With `opensNewest`, the newest file is open the first time
+ * the list is drawn.
+ */
+function editsList(kit: Kit, state: WebStateV2, files: V2Files, edits: readonly Edit[], budget: Budget, actions: DashActions, title: string, opensNewest: boolean): RenderElement {
+  const { Box } = kit
+  const groups = editGroupsOf(edits)
+  const list = groups.slice(0, MOST_EDITED)
+  // a fold's default is fixed the first time it is drawn, so live updates never flip it
+  const isFirst = opensNewest && list.every(group => !editsOpen.has(group.path))
+  list.forEach((group, i) => {
+    if (!editsOpen.has(group.path)) editsOpen.set(group.path, isFirst && i === 0)
+  })
   return (
     <Box key="changes:outside" flexDirection="column">
-      {sectionHead(kit, title, edits.length)}
-      {list.map(edit => {
-        const isOpen = outsideOpen.has(edit.id)
+      {sectionHead(kit, title, groups.length)}
+      {list.map(group => {
+        const isOpen = editsOpen.get(group.path) === true
         const toggle = () => {
-          if (isOpen) outsideOpen.delete(edit.id)
-          else outsideOpen.add(edit.id)
+          editsOpen.set(group.path, !isOpen)
           actions.redraw()
         }
-        const path = cutCells(edit.path, Math.max(16, kit.columns - 30), advanceOf(kit))
         return (
-          <Box key={`outside:${edit.id}`} flexDirection="column">
-            <Box flexDirection="row" columnGap={1}>
-              <Box flexShrink={1} minWidth={0}>
-                <Button key={`edits:${edit.id}`} label={path} plain dimColor={!isOpen} onPress={toggle} />
-              </Box>
-              <Box flexShrink={0}>{delta(kit, edit.added, edit.removed) ?? <Text> </Text>}</Box>
-              <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Text color={P.muted2} wrap="truncate-end">{`${titleOf(state, edit.agent)} · ${ago(edit.at, state.now)}`}</Text>
-              </Box>
-            </Box>
+          <Box key={`edited:${group.path}`} flexDirection="column">
+            {editsRow(kit, state, group, isOpen, toggle)}
             {isOpen ? (
-              <Box paddingLeft={2} marginBottom={1}>
-                {editBlock(kit, state, files, edit, budget)}
+              <Box flexDirection="column" gap={1} paddingLeft={2} marginBottom={1}>
+                {group.edits.map(edit => editBlock(kit, state, files, edit, budget))}
               </Box>
             ) : null}
           </Box>
         )
       })}
+      {groups.length > MOST_EDITED ? quiet(kit, `${plural(groups.length - MOST_EDITED, 'more file')}: more than the pane holds; /deck web lists them all.`) : null}
+    </Box>
+  )
+}
+
+/** One file of the agents' edits, as the web page's row: chevron, path (the Button), faces, "n edits", `+a −r`, and when it was edited last. */
+function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: boolean, toggle: () => void): RenderElement {
+  const { Box, Text, Button } = kit
+  const adv = advanceOf(kit)
+  const count = plural(group.edits.length, 'edit')
+  const when = ago(group.lastAt, state.now)
+  const lines = `${group.added > 0 ? `+${group.added}` : ''}${group.added > 0 && group.removed > 0 ? ' ' : ''}${group.removed > 0 ? `−${group.removed}` : ''}`
+  // the path's room: the row less the chevron, the Button's chrome, the faces, the count, the lines, the age and the gaps
+  const taken = chevronCells(kit) + plainSlack(kit) + facesCells(kit, group.agents.length, FACE, MOST_FACES) + cellsOf(count, adv) + cellsOf(lines, adv) + cellsOf(when, adv) + 6
+  const path = cutCells(group.path, Math.max(16, kit.columns - taken), adv)
+  return (
+    <Box key={`editrow:${group.path}`} flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexShrink={0}>{chevron(kit, isOpen)}</Box>
+      <Box flexShrink={1} minWidth={0}>
+        <Button key={editsKeyOf(group.path)} label={path} plain onPress={toggle} />
+      </Box>
+      <Box flexShrink={0}>{facesOf(kit, state, group.agents)}</Box>
+      <Box flexShrink={0}>
+        <Text color={P.muted2}>{count}</Text>
+      </Box>
+      <Box flexShrink={0}>{delta(kit, group.added, group.removed) ?? <Text> </Text>}</Box>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        <Text color={P.muted2} wrap="truncate-end">
+          {when}
+        </Text>
+      </Box>
     </Box>
   )
 }

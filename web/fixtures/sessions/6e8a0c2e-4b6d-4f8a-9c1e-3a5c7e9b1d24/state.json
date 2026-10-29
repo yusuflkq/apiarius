@@ -119,6 +119,13 @@
   ],
   "changes": {
     "repo": null,
+    "where": {
+      "cwd": "C:\\Users\\sam\\code\\site",
+      "name": "site",
+      "isRepo": true,
+      "pinned": "",
+      "picks": []
+    },
     "files": [],
     "edits": [],
     "commits": []

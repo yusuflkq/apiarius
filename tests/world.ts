@@ -52,8 +52,10 @@ export type World = {
   verdict: 'allow' | 'ask' | 'deny'
   /** A settings hook decides the permission dialog itself: none shows. */
   isDecided: boolean
-  /** What git prints for a command, in a repository the test stands up; left out, there is no repository. */
-  git?: (argv: readonly string[]) => { exitCode: number; stdout: string }
+  /** What git prints for a command run in `cwd`, in a repository the test stands up; left out, there is no repository. */
+  git?: (argv: readonly string[], cwd?: string) => { exitCode: number; stdout: string }
+  /** What `fs.list` lists in a directory, when the test lays one out (null: there is none); left out, the testing kit's own. */
+  list?: (path: string) => { name: string; kind: 'file' | 'dir' | 'other' }[] | null
   /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
   files?: Readonly<Record<string, string>>
   /** What `fs.stat` says of a path, when the test says (null: there is none); left out, every path is a file of 12 bytes, as old as NOW. */
@@ -146,7 +148,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     e.argv[0] === 'node'
       ? { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
       : w.git && e.argv[0] === 'git'
-        ? { value: { ...w.git(e.argv), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+        ? { value: { ...w.git(e.argv, e.init?.cwd ?? ''), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
         : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } },
   )
   const files = w.files
@@ -154,6 +156,13 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     on('fs.read', ($, e) => {
       const text = files[e.path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')]
       return text !== undefined ? { value: text } : { deny: 'no such file' }
+    })
+  }
+  const list = w.list
+  if (list) {
+    on('fs.list', ($, e) => {
+      const entries = list(e.path)
+      return entries ? { value: entries.map(one => ({ ...one, size: 0, mtimeMs: 0, isLink: false })) } : { deny: 'no such folder' }
     })
   }
   on('fs.exists', () => ({ value: false }))

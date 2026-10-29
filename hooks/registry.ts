@@ -725,6 +725,8 @@ export function viewingFor(model: DeckModel, actions: DashActions): DashModel['v
     answer: (callId, answers) => void steerViewed(v, { cmd: 'answer', callId, answers }),
     sendChat: (agentId, text) => void steerViewed(v, { cmd: 'chat', agentId, text }),
     review: () => refuse('Review'),
+    // its Changes' picks and Follow the work are its own deck's: pinning here would pin this session's
+    selectRepo: () => refuse('Pick a repository'),
     clearFinished: () => refuse('Clear finished'),
     showCleared: () => refuse('Show cleared'),
     loadMessage: (id, onRead) => onRead(Object.hasOwn(v.messages, id) ? (v.messages[id] ?? null) : null),

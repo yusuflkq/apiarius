@@ -1,11 +1,13 @@
 /**
  * Repositories: which git repository each directory agents edit in belongs
  * to, and the one the deck follows: the one the person pinned, else the one
- * an agent edited last, else the session's own.
+ * an agent edited last, else the session's own. While the session's own
+ * directory is in none, the repositories directly inside it, for a pick.
  *
  * Pure: the hooks module probes each new directory once (`git rev-parse
- * --show-toplevel` run there) and keeps the one live book. A path with a
- * drive letter compares as Windows compares it: either slash, any case.
+ * --show-toplevel` run there), looks once into a session's directory that is
+ * in no repository (each child's `.git`), and keeps the one live book. A path
+ * with a drive letter compares as Windows compares it: either slash, any case.
  */
 import { baseName } from './format'
 import type { GitRepo } from './git'
@@ -26,16 +28,25 @@ export type RepoBook = {
   outside: Map<string, { dir: string; at: number }>
   /** Each repository found, by key: its root as git prints it and the last edit in it (0 for none). */
   repos: Map<string, { root: string; lastEditAt: number }>
+  /** The repositories directly inside a session's directory that is in none (`settleNearby`); null until looked for. */
+  nearby: Nearby | null
 }
 
 /** One directory to run `git rev-parse --show-toplevel` in, and why. */
 export type Probe = { kind: 'cwd' | 'pin' | 'dir'; dir: string }
 
+/** What one look into `dir` found: each child holding a `.git`, the one changed last first. */
+export type Nearby = { dir: string; repos: { root: string; name: string; changedAt: number }[] }
+
+/** The repositories a look into the session's directory keeps, at most; and the children it looks at, at most. */
+export const MOST_NEARBY = 8
+export const MOST_LOOKED = 200
+
 const DRIVE = /^[a-zA-Z]:(\/|$)/
 const BARE_DRIVE = /^[a-zA-Z]:$/
 
 export function emptyBook(cwd = ''): RepoBook {
-  return { cwd, cwdRoot: null, pinned: '', dirs: new Map(), pending: new Map(), outside: new Map(), repos: new Map() }
+  return { cwd, cwdRoot: null, pinned: '', dirs: new Map(), pending: new Map(), outside: new Map(), repos: new Map(), nearby: null }
 }
 
 /** Forward slashes and no trailing slash, a root kept whole (`/`, `C:/`). */
@@ -191,6 +202,34 @@ export function repoList(book: RepoBook): GitRepo[] {
   return [...book.repos.entries()]
     .map(([key, repo]) => ({ root: repo.root, name: baseName(repo.root), lastEditAt: repo.lastEditAt, isCwd: key === cwdKey }))
     .sort((a, b) => b.lastEditAt - a.lastEditAt || Number(b.isCwd) - Number(a.isCwd) || a.name.localeCompare(b.name))
+}
+
+/** Whether the session's directory is to be looked into for repositories: it was probed and is in none, and it has not been looked into yet. */
+export function needsNearby(book: RepoBook): boolean {
+  return book.cwdRoot === '' && book.cwd !== '' && (book.nearby === null || keyOf(book.nearby.dir) !== keyOf(book.cwd))
+}
+
+/** The children of a directory worth looking into for a `.git`: directories by their names, none hidden and no `node_modules`, at most `most`. */
+export function childDirsOf(entries: readonly { name: string; kind: string }[], most = MOST_LOOKED): string[] {
+  return entries
+    .filter(entry => entry.kind === 'dir' && !entry.name.startsWith('.') && entry.name !== 'node_modules')
+    .map(entry => entry.name)
+    .slice(0, most)
+}
+
+/** Keeps what a look into `dir` found (each child with a `.git` and when that last changed): the one changed last first, then by name, at most `MOST_NEARBY`. */
+export function settleNearby(book: RepoBook, dir: string, found: readonly { name: string; changedAt: number }[]): void {
+  const repos = [...found]
+    .sort((a, b) => b.changedAt - a.changedAt || a.name.localeCompare(b.name))
+    .slice(0, MOST_NEARBY)
+    .map(one => ({ root: childOf(dir, one.name), name: one.name, changedAt: one.changedAt }))
+  book.nearby = { dir: cleanPath(dir), repos }
+}
+
+/** The repositories directly inside the session's directory, for a pick: only while it is in none, from the look into it; [] otherwise. */
+export function nearbyOf(book: RepoBook): { root: string; name: string }[] {
+  if (book.cwdRoot !== '' || book.nearby === null || keyOf(book.nearby.dir) !== keyOf(book.cwd)) return []
+  return book.nearby.repos.map(one => ({ root: one.root, name: one.name }))
 }
 
 /** A display path made against `from` (or absolute) shown against `to`: relative inside it, absolute elsewhere. */

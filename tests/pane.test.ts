@@ -253,7 +253,8 @@ test('Changes: git`s files as Buttons keyed file:<path>, one opened with the age
     expect((await ui.findAll({ type: 'Code' })).some(code => code.props.format === 'diff' && String(code.props.source).includes('rateLimit'))).toBe(true)
     // the sample sends no review prompt: Review is this session's
     expect(await ui.find({ key: 'changes:review' })).toBeUndefined()
-    expect(await keysOf(ui, 'edits:')).toEqual(['edits:toolu_01BldW2'])
+    // the edits outside the repository: a row a file, keyed by its path, shut until pressed
+    expect(await keysOf(ui, 'edits:')).toEqual(v2.changes.edits.filter(edit => edit.isOutside).map(edit => `edits:${edit.path}`))
     expect(await keysOf(ui, 'commit:')).toEqual([`commit:${v2.changes.commits[0]?.hash}`])
     await press(ui, 'file:src/app.ts')
     await press(ui, 'tab:now')

@@ -129,6 +129,10 @@ export type GitState = {
   repos: GitRepo[]
   /** The root the person pinned the deck to; '' while it follows the work. */
   pinned: string
+  /** Whether the session's own directory is in a repository; null until git was asked. */
+  isCwdRepo: boolean | null
+  /** While the session's directory is in none: the repositories directly inside it (each child's `.git`), the one changed last first, at most 8; [] otherwise. */
+  nearby: { root: string; name: string }[]
 }
 
 export function emptyGit(): GitState {
@@ -149,6 +153,8 @@ export function emptyGit(): GitState {
     checkedAt: 0,
     repos: [],
     pinned: '',
+    isCwdRepo: null,
+    nearby: [],
   }
 }
 

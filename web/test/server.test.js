@@ -452,6 +452,23 @@ test('POST /cmd passes avatarStyle on in exactly its shape: a style`s id, lowerc
   assert.deepEqual(main.lines.slice(count), ['{"cmd":"avatarStyle","id":"a-1","style":"critter"}', '{"cmd":"avatarStyle","style":"robot"}'])
 })
 
+test('POST /cmd passes selectRepo on in exactly its shape: a root on one line ("" follows the work), with the page`s id', async () => {
+  const count = main.lines.length
+  const good = [{ cmd: 'selectRepo', id: 'rp-1', root: 'C:/Users/sam/Documents/agent-deck' }, { root: '', cmd: 'selectRepo' }]
+  for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const bad = [
+    { cmd: 'selectRepo' },
+    { cmd: 'selectRepo', root: 7 },
+    { cmd: 'selectRepo', root: 'C:/a\nC:/b' },
+    { cmd: 'selectRepo', root: 'x'.repeat(1001) },
+    { cmd: 'selectRepo', root: '/repo', agentId: 'main' },
+    { cmd: 'selectRepo', id: 'bad id', root: '/repo' },
+  ]
+  for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
+  await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"selectRepo","id":"rp-1","root":"C:/Users/sam/Documents/agent-deck"}', '{"cmd":"selectRepo","root":""}'])
+})
+
 test('POST /cmd: every command may carry the page`s id, which is printed with it; a bad id is refused', async () => {
   const count = main.lines.length
   const sent = [

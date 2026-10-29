@@ -541,6 +541,7 @@ export function v2Session(): V2Session {
   const git: GitState = {
     ...emptyGit(),
     isRepo: true,
+    isCwdRepo: true,
     root: ROOT,
     branch: 'feat/rate-limit',
     head: '9c1e4b7a2f58d03e6b1c47f9a2d8e5b0c3f6a914',

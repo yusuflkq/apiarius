@@ -27,7 +27,12 @@ const DISK: Record<string, { branch: string; status: string; numstat: string }> 
   '/repo': { branch: 'main', status: ' M src/app.ts\0?? notes.txt\0', numstat: '1\t1\tsrc/app.ts\0' },
   '/other': { branch: 'dev', status: ' M lib/x.ts\0', numstat: '3\t0\tlib/x.ts\0' },
   'C:/Users/Me/proj': { branch: 'trunk', status: ' M src/app.ts\0', numstat: '1\t1\tsrc/app.ts\0' },
+  'C:/Users/Me/Documents/agent-deck': { branch: 'main', status: ' M hooks/repos.ts\0', numstat: '2\t1\thooks/repos.ts\0' },
+  'C:/Users/Me/Documents/site': { branch: 'main', status: ' M index.html\0', numstat: '1\t1\tindex.html\0' },
 }
+
+/** A session's directory as the test lays it out: its children by name (a dot in one names a file), and the `.git` of each that holds one, with when it last changed. */
+type Folder = { dir: string; children: string[]; gits: Record<string, number> }
 
 /** Paths compare as the disk they name does: any case under a drive letter. */
 function isSame(a: string, b: string): boolean {
@@ -57,8 +62,8 @@ function gitAt(argv: readonly string[], cwd: string): { exitCode: number; stdout
 
 type Run = { line: string; cwd: string }
 
-/** Answers every engine call the deck makes, git by argv and working directory, each run noted in `runs`. */
-function world(on: On, runs: Run[]) {
+/** Answers every engine call the deck makes, git by argv and working directory, each run noted in `runs`; `folder` the one directory listed (each listing noted in `lists`), the `.git` of its repositories the only ones there. */
+function world(on: On, runs: Run[], folder?: Folder, lists: string[] = []) {
   mock.store(on)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
@@ -78,7 +83,19 @@ function world(on: On, runs: Run[]) {
     runs.push({ line: e.argv.join(' '), cwd })
     return { value: { ...gitAt(e.argv, cwd), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }))
+  on('fs.stat', ($, e) => {
+    const path = e.path.replace(/\\/g, '/')
+    if (!path.endsWith('/.git')) return { value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }
+    const parts = path.split('/').slice(0, -1)
+    const name = parts.pop() ?? ''
+    const at = folder && isSame(parts.join('/'), folder.dir) && Object.hasOwn(folder.gits, name) ? folder.gits[name] : undefined
+    return at !== undefined ? { value: { kind: 'dir', size: 0, mtimeMs: at, isLink: false } } : { deny: 'no such file' }
+  })
+  on('fs.list', ($, e) => {
+    lists.push(e.path)
+    if (!folder || !isSame(e.path.replace(/\\/g, '/'), folder.dir)) return { deny: 'no such folder' }
+    return { value: folder.children.map(name => ({ name, kind: /\.\w+$/.test(name) && !name.startsWith('.') ? ('file' as const) : ('dir' as const), size: 0, mtimeMs: 0, isLink: false })) }
+  })
   on('fs.read', () => ({ value: 'hello\nworld\n' }))
   on('turn.complete', () => ({ text: '' }))
   on('tool.call', ($, e) => {
@@ -184,6 +201,119 @@ test('Windows spellings: a backslashed path in any case finds the root git print
 
   expect(runs.filter(isProbe).map(run => run.cwd)).toEqual(['C:\\Users\\Me\\Documents', 'C:/Users/Me/proj/src'])
   expect(runs.filter(run => !isProbe(run) && run.cwd !== 'C:/Users/Me/proj')).toEqual([])
+})
+
+/** The picks Changes offers, by their Buttons' keys in the order drawn. */
+async function picksOf(ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: string }[]> }): Promise<string[]> {
+  return (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith('changes:pick:'))
+}
+
+test('a chat in a directory that is no repository says so, naming it, and offers the repositories directly inside it (looked for once, no git run, the one changed last first, at most 8); a pick pins Changes there, Follow the work lets go, and an agent`s edit is followed', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const runs: Run[] = []
+  const lists: string[] = []
+  const repos = ['agent-deck', 'site', ...Array.from({ length: 8 }, (_, i) => `old${i}`)]
+  const folder: Folder = {
+    dir: 'C:/Users/Me/Documents',
+    children: ['notes', ...repos, '.config', 'node_modules', 'todo.md'],
+    // a hidden folder and node_modules are not looked into, whatever they hold
+    gits: { ...Object.fromEntries(repos.map((name, i) => [name, NOW - (i + 1) * 60_000])), '.config': NOW, node_modules: NOW },
+  }
+  world(on, runs, folder, lists)
+
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\Me\\Documents' })
+  await $.command.run(deck('changes'))
+  await clock.advance(1000)
+
+  const offered = ['agent-deck', 'site', 'old0', 'old1', 'old2', 'old3', 'old4', 'old5'].map(name => `changes:pick:C:/Users/Me/Documents/${name}`)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(pane(surface))
+    expect((await ui.find({ key: 'changes:repo' }))?.text).toBe('This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in.')
+    expect((await ui.find({ key: 'changes:picks' }))?.text).toContain('REPOSITORIES IN DOCUMENTS')
+    expect(await picksOf(ui)).toEqual(offered)
+    expect((await ui.find({ key: offered[0]! }))?.props.label).toBe('agent-deck')
+    expect(await ui.find({ key: 'changes:follow' })).toBeUndefined()
+    await ui.unmount()
+  }
+  // looked for once, by a listing and a stat a child: git runs in none of them
+  await clock.advance(120_000)
+  expect(lists).toEqual(['C:\\Users\\Me\\Documents'])
+  expect(runs.filter(run => run.cwd !== 'C:\\Users\\Me\\Documents')).toEqual([])
+
+  // a pick: the usual git view of it, pinned, with a quiet way back
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: offered[0]! })
+  await clock.advance(1000)
+  await ui.redraw()
+  const line = (await ui.find({ key: 'changes:repo' }))?.text ?? ''
+  expect(line).toContain('agent-deck ⎇ main')
+  expect(line).toContain('· pinned ·')
+  expect(await ui.find({ key: 'file:hooks/repos.ts' })).toBeDefined()
+  expect((await ui.find({ key: 'changes:follow' }))?.props).toMatchObject({ label: 'Follow the work', plain: true, dimColor: true })
+  expect(await picksOf(ui)).toEqual([])
+  expect(runs.some(run => run.cwd === 'C:/Users/Me/Documents/agent-deck' && run.line.includes('status --porcelain'))).toBe(true)
+
+  // Follow the work: the pin let go, the picks again
+  await ui.press({ key: 'changes:follow' })
+  await clock.advance(1000)
+  await ui.redraw()
+  expect((await ui.find({ key: 'changes:repo' }))?.text).toContain('This chat runs in Documents')
+  expect(await picksOf(ui)).toEqual(offered)
+
+  // an agent edits in one of them: Changes follows it, no pin to let go
+  await $.tool.call(edit('C:\\Users\\Me\\Documents\\site\\index.html'))
+  await clock.advance(1000)
+  await ui.redraw()
+  expect((await ui.find({ key: 'changes:repo' }))?.text).toContain('site ⎇ main')
+  expect((await ui.find({ key: 'changes:repo' }))?.text).not.toContain('pinned')
+  expect(await ui.find({ key: 'changes:follow' })).toBeUndefined()
+  expect(await ui.find({ key: 'file:index.html' })).toBeDefined()
+  await ui.unmount()
+  expect(lists).toEqual(['C:\\Users\\Me\\Documents'])
+})
+
+test('repos: a session`s directory in no repository is looked into once for the repositories directly inside it, the one changed last first, at most 8; one in a repository offers none', async () => {
+  const book = R.emptyBook('C:\\Users\\Me\\Documents')
+  // not probed yet: nothing to look for
+  expect(R.needsNearby(book)).toBe(false)
+  R.settle(book, R.probesOf(book)[0]!, null)
+  expect(R.needsNearby(book)).toBe(true)
+  expect(R.nearbyOf(book)).toEqual([])
+
+  // only directories, none hidden, no node_modules
+  const entries = [
+    { name: 'agent-deck', kind: 'dir' },
+    { name: '.git', kind: 'dir' },
+    { name: 'node_modules', kind: 'dir' },
+    { name: 'todo.md', kind: 'file' },
+    { name: 'link', kind: 'other' },
+    { name: 'site', kind: 'dir' },
+  ]
+  expect(R.childDirsOf(entries)).toEqual(['agent-deck', 'site'])
+  expect(R.childDirsOf(Array.from({ length: 300 }, (_, i) => ({ name: `d${i}`, kind: 'dir' })))).toHaveLength(R.MOST_LOOKED)
+
+  const found = [{ name: 'site', changedAt: 5 }, { name: 'agent-deck', changedAt: 9 }, ...Array.from({ length: 9 }, (_, i) => ({ name: `z${i}`, changedAt: 1 }))]
+  R.settleNearby(book, book.cwd, found)
+  expect(R.needsNearby(book)).toBe(false)
+  expect(R.nearbyOf(book)).toHaveLength(R.MOST_NEARBY)
+  expect(R.nearbyOf(book).slice(0, 4)).toEqual([
+    { root: 'C:/Users/Me/Documents/agent-deck', name: 'agent-deck' },
+    { root: 'C:/Users/Me/Documents/site', name: 'site' },
+    { root: 'C:/Users/Me/Documents/z0', name: 'z0' },
+    { root: 'C:/Users/Me/Documents/z1', name: 'z1' },
+  ])
+
+  // another directory is looked into anew; one inside a repository offers none
+  R.setCwd(book, 'C:/Users/Me/Documents/agent-deck')
+  expect(R.nearbyOf(book)).toEqual([])
+  R.settle(book, R.probesOf(book)[0]!, 'C:/Users/Me/Documents/agent-deck')
+  expect(R.needsNearby(book)).toBe(false)
+  expect(R.nearbyOf(book)).toEqual([])
+  // the same directory spelled another way needs no second look
+  R.setCwd(book, 'c:\\users\\me\\documents')
+  R.settle(book, R.probesOf(book)[0]!, null)
+  expect(R.needsNearby(book)).toBe(false)
+  expect(R.nearbyOf(book)).toHaveLength(R.MOST_NEARBY)
 })
 
 test('repos: paths compare as Windows spells them, git output is cut to its line', async () => {

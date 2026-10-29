@@ -132,9 +132,9 @@ test('v2`s background: tasks oldest first, then schedules soonest first, each it
   const session = v2Session()
   const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
   expect(state.background.rows.map(row => [row.id, row.kind, row.what, row.title, row.status, row.byName, row.when])).toEqual([
-    ['bash_7', 'shell', 'Shell · Start the dev server', 'npm run dev', 'running', 'builder', '18m'],
+    ['bash_7', 'shell', 'Shell · npm run dev', 'Start the dev server', 'running', 'builder', '18m'],
     ['mon_2', 'monitor', 'Monitor', 'CI checks on PR 42', 'running', 'Orchestrator', '3m'],
-    ['bash_3', 'shell', 'Shell · Watch the limiter tests', 'npx vitest --watch', 'running', '', ''],
+    ['bash_3', 'shell', 'Shell · npx vitest --watch', 'Watch the limiter tests', 'running', '', ''],
     ['wake_9c2', 'wakeup', 'Wakeup', 'Check the deploy finished', 'scheduled', 'Orchestrator', 'in 18m'],
     ['cron_4e1', 'cron', 'Cron · Every weekday at 9:00', "Summarise yesterday's PRs", 'scheduled', 'Orchestrator', 'in 11h'],
   ])
@@ -221,7 +221,7 @@ test('through the hooks: a shell in the background shows the moment its call sta
   await work($)
   const running = $.tool.call(bash({ command: 'npm run dev', description: 'Start the dev server', run_in_background: true, tool_use_id: 'toolu_dev', agentId: 'agent-x1' }))
   await clock.advance(400)
-  expect(v2Of(w).background.rows).toMatchObject([{ id: 'toolu_dev', kind: 'shell', title: 'npm run dev', by: 'agent-x1', byName: 'scout', status: 'running', stop: null }])
+  expect(v2Of(w).background.rows).toMatchObject([{ id: 'toolu_dev', kind: 'shell', title: 'Start the dev server', what: 'Shell · npm run dev', by: 'agent-x1', byName: 'scout', status: 'running', stop: null }])
   heldOf(w, 'Bash').settle({ result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bash_7' } as never })
   await running
   await clock.advance(400)
@@ -365,7 +365,7 @@ test('the pane: Background under the agents, a row each (its kind, title, what i
     const section = (await ui.find({ key: 'now:background' }))?.text ?? ''
     expect(section).toContain('2 shells · 1 monitor · 2 scheduled')
     const dev = (await ui.find({ key: 'bg:bash_7' }))?.text ?? ''
-    for (const word of ['npm run dev', 'Shell · Start the dev server', 'started by', 'builder', '◐ running', '18m']) expect(dev).toContain(word)
+    for (const word of ['Start the dev server', 'Shell · npm run dev', 'started by', 'builder', '◐ running', '18m']) expect(dev).toContain(word)
     expect((await ui.find({ key: 'bg:cron_4e1' }))?.text).toContain('Cron · Every weekday')
     expect((await ui.find({ key: 'bg:cron_4e1' }))?.text).toContain('in 11h')
     // Stop and Cancel where Claude Code allows them; none on the watcher it would ask you about
@@ -442,4 +442,43 @@ test('between turns no Stop turn; Chat draws what you stopped as a line of its o
     expect(line?.text).toMatch(/^You stopped builder · (now|\d+[mh])$/)
     await ui.unmount()
   }
+})
+
+test('a background shell is titled by its own description, else by its command from the real command on: leading environment assignments and changes of directory cut, for Background, the Timeline and "You stopped"', () => {
+  expect(B.realCommandOf('L="C:/Users/developer/AppData/Local/Temp/log.txt"; node web/server.js > "$L" 2>&1')).toBe('node web/server.js > "$L" 2>&1')
+  expect(B.realCommandOf('L="C:/Users/me/x y.txt" node a.js')).toBe('node a.js')
+  expect(B.realCommandOf('cd "C:/Users/me/agent-deck" && npm run dev')).toBe('npm run dev')
+  expect(B.realCommandOf("FOO=bar BAZ='q u' npm test -- --watch")).toBe('npm test -- --watch')
+  expect(B.realCommandOf('export NODE_ENV=production && cd api; node x.js')).toBe('node x.js')
+  expect(B.realCommandOf('$env:DEBUG = "1"; npm run dev')).toBe('npm run dev')
+  expect(B.realCommandOf('Set-Location C:\\work; node .\\dev.js')).toBe('node .\\dev.js')
+  expect(B.realCommandOf('PATH=$PATH:/opt/bin make')).toBe('make')
+  expect(B.realCommandOf('L="C:/a/b.log"\nnode web/dev.js > "$L"')).toBe('node web/dev.js > "$L"')
+  // a value that runs a command, or nothing after the lead: the command as given
+  expect(B.realCommandOf('x=$(hostname) && echo $x')).toBe('x=$(hostname) && echo $x')
+  expect(B.realCommandOf('FOO=bar')).toBe('FOO=bar')
+  expect(B.realCommandOf('cd repo')).toBe('cd repo')
+
+  const data = M.emptyData(NOW)
+  B.noteStart(data, call('t1', 'Bash', { command: 'L="C:/Users/developer/Temp/log.txt"; node web/server.js > "$L"', run_in_background: true }, M.MAIN))
+  B.noteStart(data, call('t2', 'PowerShell', { command: 'cd C:\\work; npm run dev', description: 'Start the dev server', run_in_background: true }, M.MAIN))
+  B.noteStart(data, call('t3', 'Bash', { command: 'npx vitest --watch', run_in_background: true }, M.MAIN))
+  const rows = B.backgroundOf(data, [], NOW).rows
+  expect(rows.map(row => [row.title, row.what])).toEqual([
+    ['node web/server.js > "$L"', 'Shell'],
+    ['Start the dev server', 'Shell · npm run dev'],
+    ['npx vitest --watch', 'Shell'],
+  ])
+  // the record keeps Claude Code's words as given
+  expect(B.rowsOf(data).map(row => [row.title, row.note])).toEqual([
+    ['L="C:/Users/developer/Temp/log.txt"; node web/server.js > "$L"', ''],
+    ['cd C:\\work; npm run dev', 'Start the dev server'],
+    ['npx vitest --watch', ''],
+  ])
+  expect(B.rowNameOf(B.rowsOf(data)[0]!)).toBe('node web/server.js > "$L"')
+  expect(B.rowNameOf(B.rowsOf(data)[1]!)).toBe('Start the dev server')
+  // a snapshot's shell the same way: its description, its command after the kind
+  const seen = M.emptyData(NOW)
+  B.noteSnapshot(seen, { tasks: [{ id: 'bash_5', type: 'shell', status: 'running', description: '', command: 'FOO=1 cd x && npm start' }], crons: [], at: NOW, agents: new Set() })
+  expect(B.backgroundOf(seen, [], NOW).rows.map(row => [row.title, row.what])).toEqual([['npm start', 'Shell']])
 })

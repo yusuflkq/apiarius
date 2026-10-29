@@ -641,3 +641,39 @@ test('/deck demo lists the sample`s sessions (s) and opens one`s deck from the f
   expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Fix the flaky CI job')
   await ui.unmount()
 })
+
+test('another session`s Changes, viewed: its agents` edits open on their patches as read from its folder (its newest open), on the desktop and the terminal; its picks are its own deck`s, refused here', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, diskWorld(d), d)
+  // its deck: a chat in Documents, no repository, the Orchestrator's script written in its scratchpad
+  const site = (JSON.parse(d.files.get(`${OTHER_DIR}/state.json`)!) as { v2: W.WebStateV2 }).v2
+  const script = 'C:/Users/sam/AppData/Local/Temp/scratchpad/sample.js'
+  const edit = { id: 'toolu_01ScrW1', agent: 'main', tool: 'Write', path: script, at: NOW - 60_000, added: 2, removed: 0 }
+  const where = { cwd: 'C:\\Users\\sam\\Documents', name: 'Documents', isRepo: false, pinned: '', picks: [{ name: 'agent-deck', root: 'C:/Users/sam/Documents/agent-deck' }] }
+  const state: W.WebStateV2 = { ...site, changes: { repo: null, where, files: [], edits: [edit], commits: [] } }
+  d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, v2: state }))
+  d.files.set(`${OTHER_DIR}/patches/toolu_01ScrW1.diff`, '@@ -0,0 +1,2 @@\n+const sample = 1\n+console.log(sample)\n')
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(3000)
+  await ui.redraw()
+  await ui.press({ key: 'tab:changes' })
+  await clock.advance(500)
+  const terminal = await $.ui.mount(pane('terminal'))
+  for (const one of [ui, terminal]) {
+    await one.redraw()
+    expect((await one.find({ key: 'viewing:head' }))?.text).toContain('Landing page copy')
+    expect((await one.find({ key: 'changes:repo' }))?.text).toContain('This chat runs in Documents, which isn’t a git repository.')
+    expect((await one.find({ key: `edited:${script}` }))?.text).toContain('Write by Orchestrator')
+    const diff = (await one.findAll({ type: 'Code' })).find(code => code.props.format === 'diff')
+    expect(String(diff?.props.source)).toContain('+const sample = 1')
+    expect(JSON.stringify(await one.drawn())).not.toContain('Its patch is not on disk.')
+  }
+  // a pick there would pin this session's Changes: refused, nothing pinned
+  await ui.press({ key: 'changes:pick:C:/Users/sam/Documents/agent-deck' })
+  expect(w.toasts.at(-1)).toBe("Pick a repository: this is another session's deck, shown read-only. Do it in its window.")
+  await ui.unmount()
+  await terminal.unmount()
+})

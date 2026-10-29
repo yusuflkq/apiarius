@@ -517,9 +517,14 @@ const chatOf = m => ({ ...m, at: numOr(m.at, 0), from: str(m.from), to: typeof m
 
 function changesOf(c) {
   c = obj(c) || {};
-  const repo = obj(c.repo);
+  const repo = obj(c.repo), where = obj(c.where);
   return {
     repo: repo ? { name: str(repo.name), root: str(repo.root), branch: str(repo.branch), ahead: numOr(repo.ahead, 0), behind: numOr(repo.behind, 0), head: str(repo.head) } : null,
+    // where the chat runs and how the repository shown is picked; an older mod's state has none
+    where: where ? {
+      cwd: str(where.cwd), name: str(where.name), isRepo: typeof where.isRepo === 'boolean' ? where.isRepo : null, pinned: str(where.pinned),
+      picks: arr(where.picks).filter(p => p && typeof p.root === 'string' && p.root).slice(0, 8).map(p => ({ name: str(p.name) || p.root, root: p.root })),
+    } : null,
     files: arr(c.files).filter(f => f && typeof f.path === 'string').map(f => ({ path: f.path, code: str(f.code), added: numOr(f.added, 0), removed: numOr(f.removed, 0), edits: arr(f.edits).filter(x => typeof x === 'string'), diffId: typeof f.diffId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(f.diffId) ? f.diffId : null })),
     edits: arr(c.edits).filter(e => e && typeof e.id === 'string' && typeof e.path === 'string').map(e => ({ id: e.id, agent: str(e.agent), tool: str(e.tool), path: e.path, at: numOr(e.at, 0), added: numOr(e.added, 0), removed: numOr(e.removed, 0), isOutside: e.isOutside === true })),
     commits: arr(c.commits).filter(x => x && typeof x.hash === 'string').map(x => ({ ...x, short: str(x.short) || x.hash.slice(0, 7), subject: str(x.subject), author: str(x.author), at: numOr(x.at, 0), added: numOr(x.added, 0), removed: numOr(x.removed, 0), files: numOr(x.files, 0), agent: typeof x.agent === 'string' && x.agent ? x.agent : null })),
@@ -1880,7 +1885,8 @@ function BgRow(x) {
     icon(BG_ICON[x.kind] || 'circle', 'bg-ic'),
     h('span', { class: 'bg-main' },
       h('span', { class: 'bg-top' },
-        h('span', { class: `bg-title${x.kind === 'shell' ? ' mono' : ''}`, title: x.title }, x.title),
+        // a shell goes by its own description, its command after its kind; with none, by its command, in code's face
+        h('span', { class: `bg-title${x.kind === 'shell' && !x.what.includes(' · ') ? ' mono' : ''}`, title: x.title }, x.title),
         x.what && h('span', { class: 'bg-what', title: [x.what, x.schedule].filter(Boolean).join(' · ') }, x.what)),
       x.by && h('span', { class: 'bg-by' }, 'started by ', NameLink(x.by, 14))),
     BgStatus(x),
@@ -3276,14 +3282,47 @@ function CommitRow(c) {
     h('span', { class: 'commit-time' }, ageOf(c.at)));
 }
 
+/**
+ * What Changes says with no repository to show, as the pane says it: where
+ * the chat runs, that it is in none, and that Changes follows the repository
+ * an agent edits in; a pin git cannot read; an older mod's state, as it said it.
+ */
+function noRepoText(ch) {
+  const w = ch.where;
+  if (w && w.pinned) return `Changes is pinned to ${w.pinned.replace(/[\\/]+$/, '').split(/[\\/]/).pop()}, which git can’t read now.`;
+  if (w && w.isRepo === null) return 'Looking for a git repository…';
+  if (w && w.isRepo === false) return `This chat runs in ${w.name || w.cwd}, which isn’t a git repository. Changes follows the repository an agent edits in${ch.edits.length ? '; the edits agents made outside one are below, exact.' : '.'}`;
+  return w ? (ch.edits.length ? 'No git repository here: the edits agents made are below, exact.' : 'No git repository here.') : 'The session is not in a git repository; the agents\' own edits are below.';
+}
+
+/** Changes shows the repository at `root`, pinned (a pick); '' follows the work again. The next state shows it; a refusal is a toast. */
+async function selectRepo(root) {
+  try {
+    await command({ cmd: 'selectRepo', id: newCmdId('rp'), root });
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/** While the chat's folder is in no repository and none is pinned: the repositories directly inside it, the one changed last first, each a press that pins Changes to it. */
+function PicksSection(w) {
+  return Section('picks', `Repositories in ${w.name || w.cwd}`, w.picks.length, null, () => h('div', { class: 'chg-picks' },
+    w.picks.map(p => h('button', { key: p.root, type: 'button', class: 'btn btn-sm chg-pick', title: p.root, onClick: () => selectRepo(p.root) }, icon('branch'), h('span', null, p.name)))));
+}
+
 function ChangesPage() {
-  const ch = S.changes, repo = ch.repo, files = ch.files;
+  const ch = S.changes, repo = ch.repo, files = ch.files, where = ch.where;
   const add = total(files, f => f.added), rem = total(files, f => f.removed);
-  // the agents' edits git does not list (committed since, undone, or outside the repository); with no repository, all of them
-  const other = [...IX.editsByPath.keys()].filter(p => !repo || !IX.gitPaths.has(p));
+  const isPinned = !!(where && where.pinned);
+  // the agents' edits git does not list (committed since, undone, or outside the repository); with no repository, all of them; the one edited last first
+  const lastAt = p => Math.max(...IX.editsByPath.get(p).map(e => e.at));
+  const other = [...IX.editsByPath.keys()].filter(p => !repo || !IX.gitPaths.has(p)).sort((a, b) => lastAt(b) - lastAt(a));
   const isOut = p => (IX.editsByPath.get(p) || []).some(e => e.isOutside);
   const own = other.filter(p => !isOut(p)), outside = other.filter(isOut);
-  const fileGroup = p => FileGroup(p, IX.editsByPath.get(p), { scope: 'other', open: false, showAgent: true, editors: [...new Set(IX.editsByPath.get(p).map(e => e.agent))], outside: isOut(p) });
+  // with no repository the newest is open the first time the list is seen, as the pane's; a fold's default is fixed then
+  const isFresh = !repo && !own.some(p => ui.open.has(`other|${p}`));
+  const fileGroup = p => FileGroup(p, IX.editsByPath.get(p), { scope: 'other', open: isFresh && p === own[0], showAgent: true, editors: [...new Set(IX.editsByPath.get(p).map(e => e.agent))], outside: isOut(p) });
+  const follow = isPinned && h('button', { key: 'follow', type: 'button', class: 'btn btn-xs chg-follow', title: 'Let go of the pin: Changes follows the repository an agent edits in', onClick: () => selectRepo('') }, 'Follow the work');
   return h('div', { key: 'changes', class: 'page page-changes' },
     h('div', { class: 'chg-top' },
       h('div', { class: 'chg-sum' },
@@ -3291,9 +3330,13 @@ function ChangesPage() {
         repo
           ? h('p', { class: 'chg-repo' }, icon('branch'), h('span', null, repo.branch || 'detached'),
             repo.ahead ? h('span', null, `↑${repo.ahead}`) : null, repo.behind ? h('span', null, `↓${repo.behind}`) : null,
-            h('span', { class: 'sep' }, '·'), h('span', null, repo.head.slice(0, 7)), h('span', { class: 'sep' }, '·'), h('span', null, repo.name))
-          : h('p', { class: 'chg-repo' }, 'The session is not in a git repository; the agents\' own edits are below.')),
-      files.length > 0 && ReviewButton('changes', `Review the uncommitted changes (${plural(files.length, 'file')}, +${add} −${rem}) and tell me what to fix before I commit.`)),
+            h('span', { class: 'sep' }, '·'), h('span', null, repo.head.slice(0, 7)), h('span', { class: 'sep' }, '·'), h('span', null, repo.name),
+            isPinned ? [h('span', { key: 'sep', class: 'sep' }, '·'), h('span', { key: 'pinned', class: 'chg-pinned' }, 'pinned')] : null)
+          : h('p', { class: 'chg-where' }, noRepoText(ch))),
+      (follow || files.length > 0) && h('div', { class: 'chg-acts' },
+        follow,
+        files.length > 0 && ReviewButton('changes', `Review the uncommitted changes (${plural(files.length, 'file')}, +${add} −${rem}) and tell me what to fix before I commit.`))),
+    !repo && where && where.isRepo === false && !isPinned && where.picks.length > 0 && PicksSection(where),
     repo && Section('uncommitted', 'Uncommitted', files.length || null, null, () => (files.length
       ? h('div', { class: 'card list chgs' }, files.map(GitFileRow))
       : h('div', { class: 'card' }, Empty('check', 'Working tree clean', 'Nothing to commit.')))),

@@ -744,8 +744,20 @@ export type V2Plan = {
   workflows: { id: string; name: string; phases: string[]; startedAt: number; endedAt: number | null }[]
 }
 
+/**
+ * Where the session runs, and how Changes picks the repository it shows:
+ * its directory and that directory's name, whether git found it in one
+ * (null until asked), the root you pinned ('' while Changes follows the
+ * work), and, while it is in none, the repositories directly inside it to
+ * pick from (each child holding a `.git`, the one changed last first, at
+ * most 8).
+ */
+export type V2Where = { cwd: string; name: string; isRepo: boolean | null; pinned: string; picks: { name: string; root: string }[] }
+
 export type V2Changes = {
   repo: WebState['repo']
+  /** Where the session runs and how the repository shown is picked; absent from an earlier build's state. */
+  where?: V2Where
   /**
    * Git's uncommitted files; `edits` the ids of the agents' own edits of that
    * path (patches at /patch/<id>). `diffId` names git's own diff of the file
@@ -1470,6 +1482,7 @@ export function deckStateOf(
       .sort((a, b) => a.at - b.at),
     changes: {
       repo: isRepo ? { name: F.baseName(root.replace(/[\\/]+$/, '')), root, branch: git.branch, ahead: git.ahead, behind: git.behind, head: git.head } : null,
+      where: { cwd, name: F.baseName(cwd.replace(/[\\/]+$/, '')), isRepo: git.isCwdRepo ?? null, pinned: git.pinned, picks: (git.nearby ?? []).slice(0, 8).map(pick => ({ name: pick.name, root: pick.root })) },
       files: isRepo
         ? git.files.map(file => ({
             path: file.path,
@@ -1922,6 +1935,8 @@ export type WebRoute =
   | { kind: 'clearFinished' }
   /** "Show N cleared": the agents "Clear finished" hid shown again. */
   | { kind: 'showCleared' }
+  /** Changes shows the repository at `root` (a pick, or one the deck found agents editing in), pinned; '' follows the work again. */
+  | { kind: 'selectRepo'; root: string }
   | { kind: 'ping' }
 
 /** The most a line may grow without a newline before it is dropped: past any command the server passes (16 KB). */
@@ -1961,6 +1976,9 @@ export function parseLine(line: string): ServerLine | null {
 
 /** The agents a message from the page may go to: the Orchestrator, subagents and teammates. */
 const CHATTY: readonly DeckAgent['kind'][] = ['main', 'agent', 'teammate']
+
+/** The longest root a `selectRepo` names. */
+const MOST_ROOT = 1000
 
 /** The most questions one AskUserQuestion call asks, and the longest question or answer an answer carries. */
 const MOST_QUESTIONS = 4
@@ -2025,6 +2043,8 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
   if (cmd.cmd === 'avatarStyle') return AV.isStyle(cmd.style) ? { kind: 'avatarStyle', style: cmd.style } : null
   if (cmd.cmd === 'clearFinished') return { kind: 'clearFinished' }
   if (cmd.cmd === 'showCleared') return { kind: 'showCleared' }
+  // which repositories Changes offers is the hooks module's to tell
+  if (cmd.cmd === 'selectRepo') return typeof cmd.root === 'string' && cmd.root.length <= MOST_ROOT ? { kind: 'selectRepo', root: cmd.root.trim() } : null
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '' || text.length > MOST_TEXT) return null
   if (cmd.cmd === 'review') return { kind: 'review', text }
@@ -2061,6 +2081,7 @@ export function refusalOf(cmd: unknown, data: DeckData): string {
   if (cmd.cmd === 'abortTurn') return data.mainTurnId === undefined ? 'No turn is running' : 'That turn has ended'
   if (cmd.cmd === 'stopBackground') return 'Nothing runs in the background by that name: it may have ended'
   if (cmd.cmd === 'avatarStyle') return `Not an avatar style the deck knows: ${F.trunc(F.oneLine(String(cmd.style ?? '')), 40)}`
+  if (cmd.cmd === 'selectRepo') return 'Not a repository Changes offers here'
   if (cmd.cmd !== 'chat' && cmd.cmd !== 'review') return `Not a command the deck knows: ${F.trunc(F.oneLine(cmd.cmd), 40)}`
   const text = typeof cmd.text === 'string' ? cmd.text.trim() : ''
   if (text === '') return 'Nothing to send'

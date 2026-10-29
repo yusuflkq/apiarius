@@ -517,9 +517,9 @@ export type V2BackgroundRow = {
   /** `[A-Za-z0-9_-]`: the `stopBackground` command's `bgId`. */
   id: string
   kind: DeckBackground['kind']
-  /** Its kind in a word, then what else Claude Code said of it: "Shell · Start the dev server", "Monitor · github", "Cron · Every weekday at 9:00", "Wakeup". */
+  /** Its kind in a word, then what else Claude Code said of it: "Shell · npm run dev" (a shell titled by its description), "Monitor · github", "Cron · Every weekday at 9:00", "Wakeup". */
   what: string
-  /** A shell's command, a monitor's or an agent's description, a workflow's name, a schedule's prompt (a wakeup's reason): its first line, as given. */
+  /** A shell's own description, else its command from the real command on (`realCommandOf`); a monitor's or an agent's description, a workflow's name, a schedule's prompt (a wakeup's reason): its first line, as given. */
   title: string
   /** A task's status as Claude Code's snapshot says it (`running`, `pending`), "running" before one does; a schedule's "scheduled". */
   status: string
@@ -561,6 +561,48 @@ export function bgIdOf(id: string): string {
 
 const KIND_WORD: Readonly<Record<Kind, string>> = { shell: 'Shell', monitor: 'Monitor', workflow: 'Workflow', agent: 'Agent', other: 'Task', cron: 'Cron', wakeup: 'Wakeup' }
 
+/** A leading assignment to the environment: `NAME=value`, its value quoted or a word with no `(` or backtick in it (no command runs in it), `export ` before it. */
+const ASSIGN = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|()`'"]*)(?=\s|;|&&|$)\s*/
+/** PowerShell's: `$env:NAME = value`. */
+const PS_ASSIGN = /^\$env:[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"(?:[^"`]|`.)*"|'[^']*'|[^\s;&|()`'"]+)\s*/i
+/** A leading change of directory and what joins it to the command after it: `cd repo &&`, `cd /d C:\repo &&`, `Set-Location repo;`, `pushd repo &&`. */
+const CHDIR = /^(?:cd|chdir|pushd|Set-Location|sl)\s+(?:\/d\s+)?(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*/i
+/** What joins one command to the next, left leading once the one before it is cut. */
+const JOIN = /^(?:&&|;)\s*/
+
+/**
+ * A shell command from its real command on: the environment assignments and
+ * changes of directory that lead it cut (`L="C:/…/log.txt" node x.js` reads
+ * `node x.js`, `cd repo && npm test` reads `npm test`); the command as given
+ * when nothing would be left.
+ */
+export function realCommandOf(command: string): string {
+  let rest = command.trimStart()
+  for (let i = 0; i < 20; i++) {
+    const lead = CHDIR.exec(rest) ?? PS_ASSIGN.exec(rest) ?? ASSIGN.exec(rest) ?? JOIN.exec(rest)
+    if (!lead || lead[0] === '') break
+    rest = rest.slice(lead[0].length)
+  }
+  return rest.trim() === '' ? command : rest
+}
+
+/**
+ * A row's title and the words after its kind: a shell by its own description
+ * (the call's, or its snapshot's), its command from the real command on after
+ * the kind, or by that command alone where it has none; a cron's schedule in
+ * words, else its expression; any other's note as given. A row with no words
+ * of its own goes by its prompt, else its id.
+ */
+function wordsOf(row: Row): { title: string; note: string } {
+  const named = F.firstLine(row.title) || F.firstLine(row.prompt) || row.id
+  if (row.kind === 'shell') {
+    const command = F.firstLine(realCommandOf(row.title))
+    const description = F.firstLine(row.note)
+    return description ? { title: description, note: command } : { title: command || named, note: '' }
+  }
+  return { title: named, note: row.kind === 'cron' ? row.note || row.schedule : row.note }
+}
+
 /** "in 20m", "in 3h", "in 2d"; "in <1m" under a minute. */
 function untilOf(ms: number): string {
   const m = Math.floor(ms / 60_000)
@@ -600,7 +642,7 @@ export function backgroundOf(data: DeckData, rows: readonly { row: string; id: s
   const schedules = shown.filter(isSchedule).sort((a, b) => (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity) || a.at - b.at)
   const out = [...tasks, ...schedules].map((row): V2BackgroundRow => {
     const tool: StopTool = isSchedule(row) ? 'CronDelete' : 'TaskStop'
-    const note = row.kind === 'cron' ? row.note || row.schedule : row.note
+    const words = wordsOf(row)
     const stop: V2Stop | null = row.isBound
       ? stopOf(data, tool, row.id)
       : row.kind === 'wakeup'
@@ -609,8 +651,8 @@ export function backgroundOf(data: DeckData, rows: readonly { row: string; id: s
     return {
       id: bgIdOf(row.id),
       kind: row.kind,
-      what: [KIND_WORD[row.kind], note].filter(Boolean).join(' · '),
-      title: F.firstLine(row.title) || F.firstLine(row.prompt) || row.id,
+      what: [KIND_WORD[row.kind], words.note].filter(Boolean).join(' · '),
+      title: words.title,
       status: isSchedule(row) ? 'scheduled' : row.status || 'running',
       by: row.by === '' ? null : row.by,
       byName: row.by === '' ? '' : (names.get(row.by) ?? (row.by === M.MAIN ? M.ORCHESTRATOR : '')),
@@ -641,9 +683,9 @@ export function stopCallOfRow(row: Row): StopCall {
   return stopCallOf(isSchedule(row) ? 'CronDelete' : 'TaskStop', row.id)
 }
 
-/** What "You stopped …" names for a background row: its title, cut after a word at 60. */
+/** What "You stopped …" names for a background row: its title as Background shows it (`wordsOf`), cut after a word at 60. */
 export function rowNameOf(row: Row): string {
-  return M.cutAtWord(F.firstLine(row.title) || F.firstLine(row.prompt) || row.id, 60)
+  return M.cutAtWord(wordsOf(row).title, 60)
 }
 
 /** One of the band's background parts: the tasks ("◐ 3 in the background"), the schedules ("◷ 2 scheduled"). */

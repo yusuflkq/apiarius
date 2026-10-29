@@ -208,6 +208,13 @@
   ],
   "changes": {
     "repo": null,
+    "where": {
+      "cwd": "C:\\Users\\sam\\code\\agent-deck",
+      "name": "agent-deck",
+      "isRepo": true,
+      "pinned": "",
+      "picks": []
+    },
     "files": [],
     "edits": [],
     "commits": []

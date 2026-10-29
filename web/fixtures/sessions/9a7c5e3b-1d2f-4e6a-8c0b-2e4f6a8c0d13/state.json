@@ -99,6 +99,13 @@
   ],
   "changes": {
     "repo": null,
+    "where": {
+      "cwd": "C:\\Users\\sam\\notes",
+      "name": "notes",
+      "isRepo": false,
+      "pinned": "",
+      "picks": []
+    },
     "files": [],
     "edits": [],
     "commits": []

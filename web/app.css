@@ -957,6 +957,12 @@ span.cg-av { cursor: default; }
 .chg-count .diffstat { font-size: 13px; font-weight: 400; }
 .chg-repo { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font: 12px var(--mono); color: var(--muted-2); }
 .chg-repo .ic { width: 13px; height: 13px; }
+.chg-pinned { color: var(--fg-2); }
+/* no repository shown: where the chat runs, in a sentence; the repositories inside it, each a press that pins Changes there */
+.chg-where { max-width: 72ch; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.chg-acts { display: flex; align-items: center; gap: 8px; flex: none; }
+.chg-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.chg-pick .ic { color: var(--muted-2); }
 .chgs { overflow: hidden; }
 .chg { --ring-bg: var(--card); min-width: 0; }
 .fgroups { display: flex; flex-direction: column; gap: 10px; }

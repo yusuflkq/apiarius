@@ -204,7 +204,7 @@ test('the sample`s timeline: a lane an agent in the tree`s order, the Orchestrat
   // the background tasks the deck saw start, from their call to now: builder's dev server, the Orchestrator's CI monitor; never the
   // test watcher first seen in Claude Code's snapshot (when it started is not known), the wakeup or the cron
   expect(timeline.background).toEqual([
-    { id: 'bash_7', title: 'npm run dev', what: 'Shell · Start the dev server', start: ago(18) - ago(40), end: null },
+    { id: 'bash_7', title: 'Start the dev server', what: 'Shell · npm run dev', start: ago(18) - ago(40), end: null },
     { id: 'mon_2', title: 'CI checks on PR 42', what: 'Monitor', start: ago(3.5) - ago(40), end: null },
   ])
   expect(timelineSummaryOf(timeline)).toBe('40m · 8 agents · 2 in the background')
@@ -415,7 +415,7 @@ test('Org`s head has the Chart · Timeline switch; the Timeline on the desktop i
   expect(svg?.props.isInteractive).toBeUndefined()
   expect((await ui.findAll({ type: 'Text' })).some(one => one.text === '40m · 8 agents · 2 in the background')).toBe(true)
   // the background tasks under the agents, each its own lane
-  for (const words of ['>BACKGROUND<', '>npm run dev<', 'CI checks']) expect(String(svg?.props.source)).toContain(words)
+  for (const words of ['>BACKGROUND<', '>Start the dev', 'CI checks']) expect(String(svg?.props.source)).toContain(words)
   // each name under it opens its page
   const names = (await ui.findAll({ type: 'Button' })).filter(one => (one.key ?? '').startsWith('agent:')).map(one => one.props.label)
   expect(names).toEqual(['Orchestrator', 'researcher', 'builder', 'tester', 'Lint the new files', 'docs', 'scout', 'reviewer'])
@@ -473,7 +473,7 @@ test('the terminal`s Timeline: text lanes fitted to its columns under a time axi
       expect(bg.text.endsWith('━')).toBe(true)
       expect(Array.from(bg.text).length).toBeLessThanOrEqual(cells + Math.min(18, Math.max(8, Math.floor((columns - 1) * 0.24))))
     }
-    expect((await ui.find({ key: 'tl:bg:bash_7' }))?.text.startsWith('npm run dev')).toBe(true)
+    expect((await ui.find({ key: 'tl:bg:bash_7' }))?.text.startsWith('Start the dev')).toBe(true)
     await press(ui, W.agentKeyOf(IDS.tester))
     expect((await ui.find({ key: 'page:head' }))?.text).toContain('tester')
     await press(ui, 'key:b')

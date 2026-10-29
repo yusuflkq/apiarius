@@ -53,12 +53,16 @@ export function titleOf(state: Pick<WebStateV2, 'agents'>, id: string): string {
   return row?.title ?? id
 }
 
+/** The agents whose own edits (`ids`) touched a file, by their ids in tree order, each once. */
+export function editorIdsOf(state: Pick<WebStateV2, 'agents' | 'changes'>, ids: readonly string[]): string[] {
+  const by = new Set(state.changes.edits.filter(edit => ids.includes(edit.id)).map(edit => edit.agent))
+  return state.agents.filter((row): row is V2AgentRow => row.row === 'agent' && by.has(row.id)).map(row => row.id)
+}
+
 /** The agents whose own edits touched a file, by their titles in tree order, each once: "builder, tester". */
 export function editorsOf(state: Pick<WebStateV2, 'agents' | 'changes'>, ids: readonly string[]): string {
-  const by = new Set(state.changes.edits.filter(edit => ids.includes(edit.id)).map(edit => edit.agent))
-  return state.agents
-    .filter((row): row is V2AgentRow => row.row === 'agent' && by.has(row.id))
-    .map(row => row.title)
+  return editorIdsOf(state, ids)
+    .map(id => titleOf(state, id))
     .join(', ')
 }
 

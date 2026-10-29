@@ -260,6 +260,15 @@ function play(cmd) {
       state.cleared = { count: 0, at: null }
       ack(cmd.id, true, 'delivered', `Showing ${n} cleared ${n === 1 ? 'agent' : 'agents'} again`)
     })
+  } else if (cmd.cmd === 'selectRepo') {
+    // as the mod: a pick Changes offers pinned, '' following the work again (the sample's repository stays the one shown)
+    later(200, () => {
+      const where = state.changes.where
+      const pick = where && where.picks.find(one => one.root === cmd.root)
+      if (cmd.root && !pick) return ack(cmd.id, false, 'failed', 'Not a repository Changes offers here')
+      if (where) where.pinned = pick ? pick.root : ''
+      ack(cmd.id, true, 'delivered', pick ? `Changes shows ${pick.name}` : 'Changes follows the work again')
+    })
   } else if (cmd.cmd === 'avatarStyle') {
     // as the mod: the style is the person's own, and the next state names it (the dev deck keeps it while it runs)
     later(200, () => {

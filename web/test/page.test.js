@@ -659,10 +659,10 @@ test('Org`s Timeline, its third view (kept): a lane an agent from /timeline, in 
   // the background tasks the deck saw start, under the agents: each its words and a bar from its call to now; a hover says what it is
   const svgOf = () => find(p.view('OrgPage()'), 'tl-svg')[0]
   assert.deepEqual(find(svgOf(), 'tl-bg-head').map(t => flat(textOf(t))), ['BACKGROUND'])
-  assert.deepEqual(find(svgOf(), 'tl-bg-name').map(t => flat(textOf(t))), ['npm run dev', 'CI checks on PR 42'])
+  assert.deepEqual(find(svgOf(), 'tl-bg-name').map(t => flat(textOf(t))), ['Start the dev server', 'CI checks on PR 42'])
   assert.equal(find(svgOf(), 'tl-bg').length, 2)
   const onBackground = (k, minutes) => p.run(`(() => { const g = tl.geo; return tlWhat(g.L + ((g.right - g.L) * ${minutes} * 60000) / g.span, g.bgTop + 16 + ${k} * g.LANE + g.LANE / 2) })()`)
-  assert.equal(onBackground(0, 30)[0], 'Shell · Start the dev server: npm run dev')
+  assert.equal(onBackground(0, 30)[0], 'Shell · npm run dev: Start the dev server')
   assert.match(onBackground(0, 30)[1], / – now · 18m$/)
   assert.equal(onBackground(1, 38)[0], 'Monitor: CI checks on PR 42')
   // read again once per state, not per drawing
@@ -1160,6 +1160,51 @@ test('Changes: git`s diff comes from /gitdiff/<diffId>, fetched again when the i
   assert.deepEqual(p.fetched('gitdiff').slice(-2), ['/gitdiff/gone-1-1', '/gitdiff/gone-1-1'])
 })
 
+test('Changes with no repository: it says where the chat runs and what Changes follows, offers the repositories inside its folder (a press sends selectRepo), and the agents` edits by file, the one edited last first and open; pinned, "pinned" and Follow the work', async () => {
+  const where = { cwd: 'C:\\Users\\sam\\Documents', name: 'Documents', isRepo: false, pinned: '', picks: [{ name: 'agent-deck', root: 'C:/Users/sam/Documents/agent-deck' }, { name: 'notes-app', root: 'C:/Users/sam/Documents/notes-app' }] }
+  // as the mod writes it with no repository: every path absolute, none outside it, no git files or commits
+  const noRepo = s => {
+    s.changes = { repo: null, where, files: [], commits: [], edits: s.changes.edits.map(({ isOutside, ...e }) => ({ ...e, path: /^[A-Za-z]:/.test(e.path) ? e.path : `C:/Users/sam/code/acme-api/${e.path}` })) }
+  }
+  const p = page({ hash: '#/changes' })
+  p.load(sample(noRepo))
+  const view = () => p.view('ChangesPage()')
+  assert.equal(flat(textOf(find(view(), 'chg-sum')[0])), 'No repository This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in; the edits agents made outside one are below, exact.')
+  const picks = () => find(view(), 'chg-pick')
+  assert.equal(flat(textOf(find(view(), 'sec-picks')[0].c[0])), 'Repositories in Documents 2')
+  assert.deepEqual(picks().map(b => flat(textOf(b))), ['agent-deck', 'notes-app'])
+  assert.equal(picks()[0].p.title, 'C:/Users/sam/Documents/agent-deck')
+  click(picks()[0])
+  await settle()
+  const [sent] = p.commands()
+  assert.deepEqual(sent, { cmd: 'selectRepo', id: sent.id, root: 'C:/Users/sam/Documents/agent-deck' })
+  // the agents' edits by file, the one edited last first, the newest open with its patch, the rest shut
+  const groups = () => find(view(), 'fgroup')
+  assert.deepEqual(groups().map(g => g.k), ['C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js', 'C:/Users/sam/code/acme-api/src/rateLimit.ts', 'C:/Users/sam/code/acme-api/tests/rateLimit.test.ts', 'C:/Users/sam/code/acme-api/docs/api.md', 'C:/Users/sam/code/acme-api/src/app.ts'])
+  assert.deepEqual(groups().map(g => g.p.class.includes('open')), [true, false, false, false, false])
+  assert.match(flat(textOf(groups()[0])), /1 edit \+3 −0 Write builder 11m ago/)
+  assert.match(flat(textOf(groups()[1])), /2 edits \+7 −1$/)
+  // a later edit opens nothing by itself: what is open stays
+  p.load(sample(s => { noRepo(s); s.now += 1000; s.changes.edits.push({ id: 'toolu_01Late', agent: BUILDER, tool: 'Edit', path: 'C:/Users/sam/code/acme-api/README.md', at: s.now, added: 1, removed: 0 }) }))
+  assert.deepEqual(groups().map(g => [g.k.split(/[\\/]/).pop(), g.p.class.includes('open')]).slice(0, 2), [['README.md', false], ['bench.js', true]])
+  // pinned: the usual git view, "pinned", and Follow the work, which sends the empty root
+  p.load(sample(s => { s.now += 2000; s.changes.where = { ...where, pinned: s.changes.repo.root } }))
+  assert.match(flat(textOf(find(view(), 'chg-repo')[0])), /· acme-api · pinned$/)
+  assert.equal(picks().length, 0)
+  click(byText(view(), 'chg-follow', 'Follow the work'))
+  await settle()
+  assert.deepEqual(p.commands().at(-1), { cmd: 'selectRepo', id: p.commands().at(-1).id, root: '' })
+  // the chat's own repository: no picks, no Follow the work
+  p.load(sample(s => { s.now += 3000 }))
+  assert.equal(picks().length, 0)
+  assert.equal(find(view(), 'chg-follow').length, 0)
+  // another session's deck, viewed: read-only, its picks and Follow the work go nowhere from here
+  const other = page({ hash: '#/s/other-1/changes' })
+  assert.equal(other.run('route.session'), 'other-1')
+  assert.equal(await other.run("command({ cmd: 'selectRepo', root: '' }).then(() => 'sent', e => e.message)"), 'Read-only here: this is another session\'s deck. Do that in its window.')
+  assert.equal(other.commands().length, 0)
+})
+
 // ---- the drawers
 
 test('the agent drawer: its task, live call, result and todos; Activity from /agent/<fileId>, every call opening on all of it; its edits; Chat with it; Message', async () => {
@@ -1489,10 +1534,12 @@ test('Background: under the agents while something runs or is scheduled, its cou
   const rows = () => find(sec(), 'bg-row')
   assert.deepEqual(rows().map(r => r.k), ['bash_7', 'mon_2', 'bash_3', 'wake_9c2', 'cron_4e1'])
   const row = id => rows().find(r => r.k === id)
-  assert.equal(flat(textOf(row('bash_7'))), 'npm run dev Shell · Start the dev server started by builder running 18m Stop')
+  assert.equal(flat(textOf(row('bash_7'))), 'Start the dev server Shell · npm run dev started by builder running 18m Stop')
   assert.equal(flat(textOf(row('mon_2'))), 'CI checks on PR 42 Monitor started by Orchestrator running 3m Stop')
   // first seen in Claude Code's snapshot: no starter, no age; Claude Code would ask before TaskStop, so no Stop
-  assert.equal(flat(textOf(row('bash_3'))), 'npx vitest --watch Shell · Watch the limiter tests running')
+  assert.equal(flat(textOf(row('bash_3'))), 'Watch the limiter tests Shell · npx vitest --watch running')
+  // a shell by its description reads as words
+  assert.equal(find(row('bash_7'), 'bg-title')[0].p.class, 'bg-title')
   assert.equal(find(row('bash_3'), 'bg-stop').length, 0)
   assert.equal(flat(textOf(row('wake_9c2'))), 'Check the deploy finished Wakeup started by Orchestrator scheduled in 18m Cancel')
   assert.equal(flat(textOf(row('cron_4e1'))), "Summarise yesterday's PRs Cron · Every weekday at 9:00 started by Orchestrator scheduled in 11h Cancel")
@@ -1510,8 +1557,11 @@ test('Background: under the agents while something runs or is scheduled, its cou
   p.load(sample(s => { s.now = NOW + 1; s.acks.push({ id: sent.id, ok: true, status: 'delivered', text: 'Stopped npm run dev', at: NOW }) }))
   assert.equal(p.run('ui.toast.text'), 'Stopped npm run dev')
   assert.equal(flat(textOf(find(row('bash_7'), 'bg-stop')[0])), 'Stop')
+  // a shell with no description of its own goes by its command, in code's face
+  p.load(sample(s => { s.now = NOW + 2; Object.assign(s.background.rows[0], { title: 'npm run dev', what: 'Shell' }) }))
+  assert.equal(find(row('bash_7'), 'bg-title')[0].p.class, 'bg-title mono')
   // nothing in the background: no section
-  p.load(sample(s => { s.now = NOW + 2; s.background = BG_NONE }))
+  p.load(sample(s => { s.now = NOW + 3; s.background = BG_NONE }))
   assert.equal(find(p.view('NowPage()'), 'sec-background').length, 0)
 })
 

@@ -48,9 +48,10 @@ function started(data: DeckData, one: { id: string; name: string; description: s
   return agent
 }
 
-/** A deck of the sample as its mod would write it: its state at the sample's now, and its agents' files. */
-function deckOf(id: string, data: DeckData, cwd: string, costUsd: number, contextPercent: number): SampleDeck {
-  const state = W.deckStateOf(data, emptyGit(), { startedAt: data.startedAt, contextPercent, costUsd, limits: [] }, SAMPLE_NOW, id, cwd)
+/** A deck of the sample as its mod would write it: its state at the sample's now (its directory in a repository or not, git's files unread), and its agents' files. */
+function deckOf(id: string, data: DeckData, cwd: string, costUsd: number, contextPercent: number, isCwdRepo = true): SampleDeck {
+  const git = isCwdRepo ? { ...emptyGit(), isCwdRepo } : { ...emptyGit(), isRepo: false, isCwdRepo, checkedAt: SAMPLE_NOW }
+  const state = W.deckStateOf(data, git, { startedAt: data.startedAt, contextPercent, costUsd, limits: [] }, SAMPLE_NOW, id, cwd)
   return { id, dir: `sessions/${id}`, state, agentFiles: W.agentFilesOf(data) }
 }
 
@@ -93,7 +94,7 @@ function notes(): SampleDeck {
   M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'answer', text: answer, at: ago(120) })
   M.noteMainAnswer(main, answer)
   Object.assign(main, { status: 'idle' })
-  return deckOf('9a7c5e3b-1d2f-4e6a-8c0b-2e4f6a8c0d13', data, NOTES, 0.31, 7)
+  return deckOf('9a7c5e3b-1d2f-4e6a-8c0b-2e4f6a8c0d13', data, NOTES, 0.31, 7, false)
 }
 
 /** The sample's registry, as each session's deck writes its file, and the four other sessions' decks. */

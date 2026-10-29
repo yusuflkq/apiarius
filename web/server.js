@@ -35,6 +35,7 @@ const CALL_ID = /^[A-Za-z0-9_-]{1,100}$/ // a tool call's tool_use_id
 const TURN_ID = /^[A-Za-z0-9_-]{1,100}$/ // the main loop's running turn (abortTurn's)
 const BG_ID = /^[A-Za-z0-9_-]{1,200}$/ // a background row's id (stopBackground's bgId): a task's or a schedule's, made web-safe
 const STYLE = /^[a-z]{1,20}$/ // an avatar style's id (web/avatars.mjs STYLE_IDS); the mod says whether it knows it
+const ROOT = /^[^\u0000-\u001f\u007f]{0,1000}$/ // a repository's root (selectRepo's): one line, '' to follow the work; the mod says whether Changes offers it
 const SESSION_ID = /^[A-Za-z0-9_-]{1,100}$/ // another session's id, as its registry file is named
 const SESSION_LIVE_MS = 3 * 60_000 // a registry file whose heartbeat is older is no live session's (hooks/sessions.ts STALE_MS)
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never open them as files
@@ -243,7 +244,8 @@ function answersOf(value) {
  * other shape. Every command may carry the page's `id`, which the mod's ack
  * names again; it stays optional. `stopAgent` names its agent; `abortTurn`
  * may name the running turn it means; `stopBackground` names a background
- * row (`bgId`); `avatarStyle` names a style;
+ * row (`bgId`); `avatarStyle` names a style; `selectRepo` names the root
+ * Changes is to show ('' to follow the work again);
  * `clearFinished` and `showCleared` (the deck's own tidying) name nothing.
  */
 function commandOf(value) {
@@ -275,6 +277,7 @@ function commandOf(value) {
   if (value.cmd === 'abortTurn' && keys === 'cmd,turnId' && typeof value.turnId === 'string' && TURN_ID.test(value.turnId)) return { cmd: 'abortTurn', ...id, turnId: value.turnId }
   if (value.cmd === 'stopBackground' && keys === 'bgId,cmd' && typeof value.bgId === 'string' && BG_ID.test(value.bgId)) return { cmd: 'stopBackground', ...id, bgId: value.bgId }
   if (value.cmd === 'avatarStyle' && keys === 'cmd,style' && typeof value.style === 'string' && STYLE.test(value.style)) return { cmd: 'avatarStyle', ...id, style: value.style }
+  if (value.cmd === 'selectRepo' && keys === 'cmd,root' && typeof value.root === 'string' && ROOT.test(value.root)) return { cmd: 'selectRepo', ...id, root: value.root }
   if (value.cmd === 'clearFinished' && keys === 'cmd') return { cmd: 'clearFinished', ...id }
   if (value.cmd === 'showCleared' && keys === 'cmd') return { cmd: 'showCleared', ...id }
   if (value.cmd === 'answer' && keys === 'answers,callId,cmd' && typeof value.callId === 'string' && CALL_ID.test(value.callId)) {

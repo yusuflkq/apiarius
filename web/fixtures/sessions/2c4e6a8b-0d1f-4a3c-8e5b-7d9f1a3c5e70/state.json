@@ -105,6 +105,13 @@
   ],
   "changes": {
     "repo": null,
+    "where": {
+      "cwd": "C:\\Users\\sam\\code\\api-server",
+      "name": "api-server",
+      "isRepo": true,
+      "pinned": "",
+      "picks": []
+    },
     "files": [],
     "edits": [],
     "commits": []

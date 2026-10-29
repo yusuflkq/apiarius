@@ -252,6 +252,8 @@ function gitKeyOf(state: G.GitState): string {
     state.error ?? '',
     state.pinned,
     state.repos.map(repo => repo.root).join(','),
+    state.isCwdRepo,
+    state.nearby.map(repo => repo.root).join(','),
     state.commits.length,
     state.today.commits,
     state.today.added,
@@ -1061,7 +1063,23 @@ function onWebLine($: EngineInterface, line: string): boolean {
     void ack($, ackId, 'delivered', `Avatars: ${AV.styleName(route.style)}`)
   } else if (route.kind === 'clearFinished') void clearFinished($, ackId)
   else if (route.kind === 'showCleared') void showCleared($, ackId)
+  else if (route.kind === 'selectRepo') void repoFromPage($, route.root, ackId)
   return false
+}
+
+/**
+ * The page's pick in Changes (`selectRepo`): a repository the deck offers
+ * (one of the picks in the session's directory, or one it found agents
+ * editing in) pinned, or '' to follow the work again; any other is refused.
+ */
+async function repoFromPage($: EngineInterface, root: string, ackId: string): Promise<void> {
+  const offered = [...git.nearby, ...git.repos].find(one => R.sameRoot(one.root, root))
+  if (root !== '' && !offered) {
+    void ack($, ackId, 'failed', 'Not a repository Changes offers here')
+    return
+  }
+  const why = await chooseRepo($, offered?.root ?? '')
+  void ack($, ackId, why === '' ? 'delivered' : 'failed', why || (offered ? `Changes shows ${offered.name}` : 'Changes follows the work again'))
 }
 
 /** Keeps the person's own settings in the store (`prefs`), for every session: the band hidden or not, and the avatar style. */
@@ -1498,12 +1516,48 @@ async function probeRoot($: EngineInterface, dir: string): Promise<string | null
   return (ran.ok && R.rootOf(ran.out)) || null
 }
 
-/** Probes what the book has not seen yet (the session's directory, a kept pin, each new edited directory), four at a time. */
+/** Probes what the book has not seen yet (the session's directory, a kept pin, each new edited directory), four at a time; then looks once into a session's directory in no repository. */
 async function discoverRepos($: EngineInterface): Promise<void> {
   const probes = R.probesOf(book)
   for (let i = 0; i < probes.length; i += 4) {
     await Promise.all(probes.slice(i, i + 4).map(async probe => R.settle(book, probe, await probeRoot($, probe.dir))))
   }
+  if (R.needsNearby(book)) await lookNearby($)
+}
+
+/**
+ * Looks once into the session's directory while it is in no repository, for
+ * Changes' picks: each child directory holding a `.git` (a folder, or a
+ * worktree's file), and when that last changed. No git runs: one listing and
+ * a stat a child, sixteen at a time; what it found is kept for that directory.
+ */
+async function lookNearby($: EngineInterface): Promise<void> {
+  const dir = book.cwd
+  let names: string[] = []
+  try {
+    names = R.childDirsOf(await $.fs.list(dir))
+  } catch {
+    // a directory that cannot be listed offers no picks
+  }
+  const found: { name: string; changedAt: number }[] = []
+  for (let i = 0; i < names.length; i += 16) {
+    await Promise.all(
+      names.slice(i, i + 16).map(async name => {
+        try {
+          const stat = await $.fs.stat(R.childOf(R.childOf(dir, name), '.git'))
+          if (stat.kind !== 'other') found.push({ name, changedAt: stat.mtimeMs })
+        } catch {
+          // no .git there: not a repository's top
+        }
+      }),
+    )
+  }
+  if (R.sameRoot(dir, book.cwd)) R.settleNearby(book, dir, found)
+}
+
+/** What the book tells git's state: every repository found, the pin, whether the session's directory is in one, and the picks inside it while it is not. */
+function bookFields(): Pick<G.GitState, 'repos' | 'pinned' | 'isCwdRepo' | 'nearby'> {
+  return { repos: R.repoList(book), pinned: book.pinned, isCwdRepo: book.cwdRoot === null ? null : book.cwdRoot !== '', nearby: R.nearbyOf(book) }
 }
 
 /** Keeps the pin in `$.state`, so a reload of the deck keeps it too. */
@@ -1530,27 +1584,26 @@ async function startRepos($: EngineInterface): Promise<void> {
 }
 
 /**
- * Pins the deck to the repository holding `root` (a root from `git.repos`,
- * or any directory inside a repository); '' lets it follow the work again:
- * the repository an agent edited last, else the session's own.
+ * Pins the deck to the repository holding `root` (a root from `git.repos` or
+ * `git.nearby`, or any directory inside a repository); '' lets it follow the
+ * work again: the repository an agent edited last, else the session's own.
+ * Answers why it could not ('' when it did).
  */
-async function chooseRepo($: EngineInterface, root: string): Promise<void> {
+async function chooseRepo($: EngineInterface, root: string): Promise<string> {
   const wanted = root.trim()
   let pin = ''
   if (wanted) {
     const known = R.lookup(book, wanted)
     pin = (known === undefined ? await probeRoot($, wanted) : known) ?? ''
-    if (!pin) {
-      $.ui.toast(`Not in a git repository: ${wanted}`)
-      return
-    }
+    if (!pin) return `Not in a git repository: ${wanted}`
     if (known === undefined) R.settleDir(book, wanted, pin)
   }
   book.pinned = pin
   savePin($)
-  git = { ...git, pinned: pin, repos: R.repoList(book) }
+  git = { ...git, ...bookFields() }
   redraw($)
   await refreshGit($, true)
+  return ''
 }
 
 /**
@@ -1570,7 +1623,7 @@ function switchRepo($: EngineInterface, root: string) {
   for (const agent of data.agents) agent.files = [...new Set(agent.files.map(path => R.rerootPath(path, from, root)))]
   shownRoot = root
   lastHeavyAt = 0
-  git = { ...G.emptyGit(), root, repos: R.repoList(book), pinned: book.pinned }
+  git = { ...G.emptyGit(), root, ...bookFields() }
   save($)
 }
 
@@ -1620,10 +1673,9 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     const now = await $.clock.now()
     const root = R.activeRoot(book)
     if (shownRoot === null || !R.sameRoot(root, shownRoot)) switchRepo($, root)
-    const repos = R.repoList(book)
 
     if (!root) {
-      git = { ...G.emptyGit(), isRepo: false, checkedAt: now, repos, pinned: book.pinned }
+      git = { ...G.emptyGit(), isRepo: false, checkedAt: now, ...bookFields() }
       return
     }
 
@@ -1636,7 +1688,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
         R.dropRepo(book, root)
         isGitQueued = true
       }
-      git = { ...G.emptyGit(), root, isRepo: false, checkedAt: now, error: F.trunc(status.err.trim(), 200), repos: R.repoList(book), pinned: book.pinned }
+      git = { ...G.emptyGit(), root, isRepo: false, checkedAt: now, error: F.trunc(status.err.trim(), 200), ...bookFields() }
       return
     }
 
@@ -1664,8 +1716,7 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
       added: files.reduce((sum, file) => sum + file.added, 0),
       removed: files.reduce((sum, file) => sum + file.removed, 0),
       checkedAt: now,
-      repos,
-      pinned: book.pinned,
+      ...bookFields(),
     }
 
     const isMoved = headHash !== git.head
@@ -2416,7 +2467,8 @@ function actionsFor($: EngineInterface): DeckActions {
     // j and k: the focus a row down or up; n: the next thing that needs you
     focusNext: (dir, keys) => void focusNext($, dir, keys),
     focusNeed: () => void focusNeed($),
-    selectRepo: root => void chooseRepo($, root),
+    // Changes' picks and Follow the work: the repository it shows pinned, or let follow the work again; the sample's are a recording
+    selectRepo: root => (view.isDemo ? $.ui.toast('Sample data: Changes shows the sample’s repository. Back to this chat to pick one of yours.') : void chooseRepo($, root).then(why => why && $.ui.toast(why))),
     selectFile: path => {
       view.file = view.file === path ? '' : path
       fileDiff = null

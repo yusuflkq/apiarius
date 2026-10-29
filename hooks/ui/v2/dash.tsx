@@ -67,6 +67,7 @@ import {
   type FileRow,
   type TickPart,
 } from './dashModel'
+import { editsKeyOf, openEditsOf } from './changes'
 import { rowsOf } from './fit'
 import { AVATAR, advanceOf, avatar, avatarCells, glyph, icon, quiet, statusPill, svgOf, wordMark } from './look'
 import { cardStop, cardStopCells } from './stop'
@@ -607,13 +608,20 @@ function outsideMore(kit: Kit, more: number): RenderElement {
  * One file, as the web's row: its icon, its folder dim and its name bright
  * (a plain Button), "shared" where two or more agents edited it, the
  * editors' faces, +a −r in green and red. A press on its name opens Changes
- * on that file (open there, in view) where Changes lists it; else Changes.
+ * on that file (open there, in view): git's file where git lists it, else the
+ * agents' edits of it where Changes lists those (with no repository, or
+ * outside it); else Changes.
  */
 function fileRow(kit: Kit, state: WebStateV2, row: FileRow, actions: DashActions, width: number): RenderElement {
   const { Box, Text, Button } = kit
   const adv = advanceOf(kit)
   const open = () => {
     actions.setV2View({ tab: 'changes', isInspectOpen: false })
+    if (row.changesPath === '' && (state.changes.repo === null || row.isOutside)) {
+      openEditsOf(row.path)
+      actions.reveal(editsKeyOf(row.path))
+      return
+    }
     if (row.changesPath === '') return
     // a file already open there would fold at a second press: none open first, then this one
     actions.selectFile('')
