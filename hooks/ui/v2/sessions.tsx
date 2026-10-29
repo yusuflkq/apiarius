@@ -25,7 +25,8 @@ import type { DashActions, Kit } from '../types'
 import { listBox, listRow } from './dash'
 import { keyButton, quiet, svgOf } from './look'
 import { P } from './palette'
-import { pressText, rule, tag } from './parts'
+import { cellsForPx, edgesOf, pressText, rule, tag, wrapAdvanceOf } from './parts'
+import { cellsOf } from './text'
 
 /** The key that opens the list, on every surface: one lowercase letter, as a pane's hotkey must be. */
 export const SESSIONS_KEY = 's'
@@ -50,7 +51,7 @@ function surfaceIcon(kit: Kit, row: SessionRowV2): RenderElement | null {
   const Svg = svgOf(kit)
   if (!Svg || row.surface === '') return null
   const which = row.surface === 'terminal' ? 'terminal' : 'desktop'
-  return <Svg source={surfaceSvg(which, P.muted2, 12)} alt={row.place} width={12} height={12} />
+  return <Svg source={surfaceSvg(which, P.muted2, ICON)} alt={row.place} width={ICON} height={ICON} />
 }
 
 /** Narrower than this, the header's way in says "◆ 1" alone, as the page's header does when narrow. */
@@ -127,6 +128,20 @@ const WORD_FROM = 48
 /** How much faster what a session says gives way than where it runs when its line runs short: as on the page, its place and repository are cut only once it has gone. */
 const SAY_SHRINK = 100
 
+/** A surface's icon in a row, in px. */
+const ICON = 12
+
+/**
+ * The cells a row's second line has, about (a cell under, to be sure):
+ * the list's width less its edges, the row's padding, its dot, the columns
+ * shown at its right and the surface's icon. Where it runs keeps its whole
+ * width up to this, so it cuts only where it alone does not fit.
+ */
+function lineRoom(kit: Kit, isWord: boolean, isCost: boolean, hasIcon: boolean): number {
+  const right = (isWord ? WORD + 1 : 0) + (isCost ? COST + 1 : 0) + AGE + 1
+  return Math.max(0, Math.floor(kit.columns - edgesOf(kit) - 2 - 2 - right - (hasIcon ? cellsForPx(ICON) + 1 : 0) - 1))
+}
+
 /**
  * One session: its dot; its title (its deck's Open), cut to the room
  * "this chat" leaves, then where it runs and what it says, each cut before
@@ -140,6 +155,10 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
   const title = row.isMe || row.canOpen ? pressText(kit, `session:${row.id}`, [<Text bold color={P.text} wrap="truncate-end">{row.title}</Text>], open) : <Text bold color={P.text} wrap="truncate-end">{row.title}</Text>
   const where = [row.place, row.repo].filter(part => part !== '').join(' · ')
   const icon = surfaceIcon(kit, row)
+  const isWord = kit.columns >= WORD_FROM
+  const isCost = kit.columns >= COST_FROM
+  // where it runs stays whole while the line has room for it: what it says gives way first
+  const whereWidth = Math.min(Math.ceil(cellsOf(where, wrapAdvanceOf(kit))), lineRoom(kit, isWord, isCost, icon !== null))
   return listRow(kit, `session-row:${row.id}`, [
     <Box flexShrink={0}>
       <Text color={DOT[row.state]}>●</Text>
@@ -153,7 +172,7 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
       </Box>
       <Box flexDirection="row" columnGap={1} alignItems="center">
         {icon ? <Box flexShrink={0}>{icon}</Box> : null}
-        <Box flexShrink={1} minWidth={0}>
+        <Box flexShrink={1} minWidth={whereWidth}>
           <Text color={P.muted2} wrap="truncate-end">
             {where}
           </Text>
@@ -167,12 +186,12 @@ function sessionRow(kit: Kit, row: SessionRowV2, actions: DashActions): RenderEl
         ) : null}
       </Box>
     </Box>,
-    kit.columns >= WORD_FROM ? (
+    isWord ? (
       <Box flexShrink={0} width={WORD} justifyContent="flex-end">
         <Text color={HUE[row.state]}>{row.stateText}</Text>
       </Box>
     ) : null,
-    kit.columns >= COST_FROM ? (
+    isCost ? (
       <Box flexShrink={0} width={COST} justifyContent="flex-end">
         <Text color={P.muted2}>{row.cost}</Text>
       </Box>
