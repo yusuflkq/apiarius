@@ -1,6 +1,6 @@
 /**
  * Every session on the sample's machine (All sessions): the v2 sample's own
- * session (tests/v2session.ts, "this chat") and four others, each recorded
+ * session (tests/v2session.ts, "here") and four others, each recorded
  * through the model's own recorders as a live one is, at the sample's `now`.
  * web/fixtures/make-v2.mjs writes them as the sample's registry
  * (web/fixtures/sessions.v2.json: each session's file as its deck writes it,
@@ -28,7 +28,7 @@ import { SAMPLE_NOW, ago, v2Session } from './v2session'
 /** One of the sample's other sessions: its id, where its deck's folder sits under web/fixtures, its state and its agent files. */
 export type SampleDeck = { id: string; dir: string; state: W.WebStateV2; agentFiles: { id: string; text: string }[] }
 
-/** The sample's registry and decks: when it was made, this chat's id, each session's file, the list as this chat's deck shows it, and the other sessions' decks. */
+/** The sample's registry and decks: when it was made, here's id (the sample's own), each session's file, the list as its deck shows it, and the other sessions' decks. */
 export type SampleSessions = { now: number; me: string; entries: S.SessionEntry[]; view: S.SessionsV2; decks: SampleDeck[] }
 
 /** A session begun `minutes` ago on `prompt` (its first line its headline), the Orchestrator at work in its turn. */

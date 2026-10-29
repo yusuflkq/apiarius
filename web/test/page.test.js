@@ -1198,10 +1198,10 @@ test('Changes with no repository: it says where the chat runs and what Changes f
   p.load(sample(s => { s.now += 3000 }))
   assert.equal(picks().length, 0)
   assert.equal(find(view(), 'chg-follow').length, 0)
-  // another session's deck, viewed: read-only, its picks and Follow the work go nowhere from here
+  // another session's deck, shown here: its picks and Follow the work are its own deck's, done in its window
   const other = page({ hash: '#/s/other-1/changes' })
   assert.equal(other.run('route.session'), 'other-1')
-  assert.equal(await other.run("command({ cmd: 'selectRepo', root: '' }).then(() => 'sent', e => e.message)"), 'Read-only here: this is another session\'s deck. Do that in its window.')
+  assert.equal(await other.run("command({ cmd: 'selectRepo', root: '' }).then(() => 'sent', e => e.message)"), 'This is another session\'s deck. Do that in its window.')
   assert.equal(other.commands().length, 0)
 })
 

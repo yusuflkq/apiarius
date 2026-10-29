@@ -128,6 +128,8 @@ export type SessionRowV2 = {
   cwd: string
   /** The first thing that needs you there, in a line; null when nothing does, and for a quiet one. */
   need: string | null
+  /** How many things need you there (a row's amber badge); 0 for a quiet one. */
+  needs: number
   /** What the row says under its title: the need, else what it is doing (derived from its calls), else ''; a quiet one's, when its deck was last heard ("Last heard 2m ago"). */
   say: string
   /** Its agents at work, and in all (`SessionEntry`'s): "3 agents working". */
@@ -438,6 +440,7 @@ function rowOf(entry: SessionEntry, isMe: boolean, now: number): SessionRowV2 {
     where: [place, repo].filter(part => part !== '').join(' · '),
     cwd: entry.cwd,
     need: isQuiet ? null : entry.need,
+    needs: isQuiet ? 0 : entry.needs,
     say: isQuiet ? heardOf(entry.heartbeatAt, now) : (entry.need ?? entry.live),
     working: entry.working,
     agents: entry.agents,
