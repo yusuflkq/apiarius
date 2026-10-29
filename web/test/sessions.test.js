@@ -212,130 +212,119 @@ const byClass = (v, cls) => findAll(v, one => !!one.p && typeof one.p.class === 
 /** The live state as the mod writes it: the sample, with every session on its machine. */
 const LIVE = { ...SAMPLE, sessions: SESSIONS.view }
 
-test('the rail beside a wide page: the brand, "This machine" (◆ 2 need you · 2 agents working), then each session, here`s first and tagged "here", the one shown lit; each row its dot, title, where it runs, what it needs or does, its needs` badge, its faces while it works (seeded by its id), its spend; the header`s button hides it', () => {
+test('the header: the brand; after the title a quiet "here" on this page`s own deck; All sessions (#/sessions), after "◆ 1 other session needs you" in amber while a session but the one shown waits on you (a quiet one counted nowhere), lit on its page; a mod that lists no sessions draws neither', () => {
   const p = page({ hash: '#/now' })
-  p.run('window.innerWidth = 1280')
   p.load(LIVE)
-  const app = p.run('App()')
-  assert.match(app.p.class, /\bhas-rail\b/)
-  const rail = byClass(app, 'rail')[0]
-  assert.match(flat(textOf(rail)), /^Agent Deck This machine ◆ 2 need you · 2 agents working Sessions 5 /)
-  assert.match(flat(textOf(rail)), /Every Claude Code session on this machine whose deck runs\. s moves here; ↑ ↓ pick\.$/)
-  const rows = byClass(rail, 'rail-row')
-  assert.equal(rows.length, 5)
-  // here first, lit (it shows), "here" its quiet tag; a press keeps the tab
-  assert.equal(rows[0].p.href, '#/now')
-  assert.match(rows[0].p.class, /\bon\b/)
-  assert.equal(flat(textOf(byClass(rows[0], 'rail-here')[0])), 'here')
-  assert.equal(byClass(rows[0], 'tab-n')[0].c[0].s, '4')
-  const site = rows.find(row => flat(textOf(row)).includes('Landing page copy'))
-  assert.equal(site.p.href, `#/s/${SITE.id}/now`)
-  assert.equal(flat(textOf(site)), 'Landing page copy Terminal · site Needs your OK: Bash rm -rf dist 1 ≈$0.22')
-  assert.equal(byClass(site, 'rail-say')[0].p.class, 'rail-say is-need')
-  // faces while it works: its two agents at work, seeded by its id (no other session's alike)
-  const faces = rows.find(row => flat(textOf(row)).includes('Agent Deck terminal faces'))
-  assert.equal(byClass(faces, 'sess-faces').length, 1)
-  assert.equal(byClass(rows.find(row => flat(textOf(row)).includes('Notes sync')), 'sess-faces').length, 0)
-  assert.deepEqual(JSON.parse(p.run(`JSON.stringify(facesOf(sessionsNow().rows.find(r => r.title === 'Agent Deck terminal faces')))`)), { seeds: [faces.k, `${faces.k}:1`], more: 0 })
-  // the header: no brand (the rail holds it), its button lit; pressed, the rail hides, and "◆ 1 needs you" says the other waiting on you
-  assert.equal(byClass(p.run('Header()'), 'brand-mark').length, 0)
-  assert.equal(p.run('RailToggle()').p['aria-pressed'], 'true')
-  p.run('toggleRail()')
-  assert.equal(p.run('Rail()'), null)
-  assert.doesNotMatch(p.run('App()').p.class, /\bhas-rail\b/)
-  assert.equal(p.text('RailToggle()'), '◆ 1 needs you Sessions')
-  assert.equal(byClass(p.run('Header()'), 'brand-mark').length, 1)
-})
-
-test('the rail where the page is narrow: shut, the header`s button opens it over the page (a scrim behind it), a pick shuts it; a mod that lists no sessions draws none', () => {
-  const p = page({ hash: '#/chat' })
-  p.run('window.innerWidth = 700')
+  const header = p.run('Header()')
+  assert.equal(byClass(header, 'brand-mark').length, 1)
+  // the tag right after the title, inside the title's box
+  assert.match(p.text('Header()'), /^Waiting on you Also exempt \/health and \/metrics from the limiter\. \S+ here /)
+  assert.equal(flat(textOf(byClass(byClass(header, 'hd-title')[0], 'hd-where')[0])), 'here')
+  const link = byClass(header, 'hd-sessions')[0]
+  assert.equal(link.t, 'a')
+  assert.equal(link.p.href, '#/sessions')
+  assert.equal(flat(textOf(link)), '◆ 1 other session needs you All sessions')
+  assert.equal(byClass(link, 'hd-sessions-need').length, 1)
+  assert.doesNotMatch(link.p.class, /\bon\b/)
+  assert.equal(byClass(p.run('App()'), 'rail').length, 0)
+  // two others waiting; a quiet one waiting counted nowhere
+  const rowsAs = f => ({ ...LIVE, sessions: { ...SESSIONS.view, rows: SESSIONS.view.rows.map(f) } })
+  p.load(rowsAs(r => (r.title === 'Fix the flaky CI job' ? { ...r, state: 'waiting', stateText: 'Waiting on you' } : r)))
+  assert.equal(p.text('SessionsLink()'), '◆ 2 other sessions need you All sessions')
+  p.load(rowsAs(r => (r.title === 'Landing page copy' ? { ...r, isQuiet: true, heardAt: NOW - 125_000, stateText: '', need: null, needs: 0 } : r)))
+  assert.equal(p.text('SessionsLink()'), 'All sessions')
+  // the link opens All sessions, lit there; a row there keeps the tab it was opened from
   p.load(LIVE)
-  assert.equal(p.run('Rail()'), null)
-  assert.doesNotMatch(p.run('App()').p.class, /\bhas-rail\b/)
-  p.run('toggleRail()')
-  const [scrim, aside] = p.run('Rail()')
-  assert.equal(scrim.p.class, 'rail-scrim')
-  assert.equal(aside.p.class, 'rail is-over')
-  assert.doesNotMatch(p.run('App()').p.class, /\bhas-rail\b/)
-  // a row keeps the tab shown: Chat of the session picked
-  assert.equal(byClass(aside, 'rail-row').find(row => flat(textOf(row)).includes('Landing page copy')).p.href, `#/s/${SITE.id}/chat`)
-  p.run('railPicked()')
-  assert.equal(p.run('Rail()'), null)
+  p.go('#/org')
+  p.go('#/sessions')
+  assert.match(p.run('SessionsLink()').p.class, /\bon\b/)
+  assert.equal(byClass(p.run('Page()'), 'sess-row')[0].p.href, '#/org')
   const q = page({ hash: '#/now' })
-  q.run('window.innerWidth = 1280')
   q.load(SAMPLE)
-  assert.equal(q.run('Rail()'), null)
-  assert.equal(q.run('RailToggle()'), null)
+  assert.equal(q.run('SessionsLink()'), null)
+  assert.equal(q.run('WhereTag()'), null)
 })
 
-test('This machine (#/sessions): what needs you counted, then each session its row, here`s first: its dot, title and "here", where it runs, its need in amber or what it does, its faces, its word, spend (an estimate, a fork`s counting its parent`s) and age; a deck not heard from lately says when it was, no state; a press shows its deck', () => {
-  const quiet = { ...LIVE, sessions: { ...SESSIONS.view, rows: SESSIONS.view.rows.map(r => (r.title === 'Notes sync' ? { ...r, isQuiet: true, heardAt: NOW - 125_000, stateText: '', need: null, needs: 0, say: 'Last heard 2m ago' } : r)) } }
+test('All sessions (#/sessions): "This machine" and what needs you counted, then each session its row, here`s first and lit: its dot, title, "here" and its needs` amber badge, where it runs, its need in amber or what it does, its faces over its agents` count, its word, spend (an estimate, a fork`s counting its parent`s) and age; a deck not heard from lately says when it was, no state; a press shows its deck; the keys at the foot', () => {
+  const quiet = { ...LIVE, sessions: { ...SESSIONS.view, rows: SESSIONS.view.rows.map(r => (r.title === 'Notes sync' ? { ...r, isQuiet: true, heardAt: NOW - 125_000, stateText: '', need: null, needs: 0, agents: 3, say: 'Last heard 2m ago' } : r)) } }
   const p = page({ hash: '#/sessions' })
   p.load(quiet)
   const v = p.run('Page()')
-  assert.match(p.text('Page()'), /^This machine ◆ 2 need you · 5 sessions · 2 agents working /)
+  assert.match(p.text('Page()'), /^All sessions This machine · ◆ 2 need you · 2 agents working /)
+  assert.match(p.text('Page()'), /the rest is done in its window\. ↑ ↓ pick one, Enter shows its deck, s goes back\.$/)
   const rows = byClass(v, 'sess-row')
   assert.equal(rows.length, 5)
+  // here first: opened with no deck before it, its row lit; its badge and its agents counted
   assert.equal(rows[0].p.href, '#/now')
-  assert.match(flat(textOf(rows[0])), /^Also exempt .* here /)
+  assert.equal(rows[0].p.id, `sess-${SAMPLE.session.id}`)
+  assert.deepEqual(rows.map(row => /\bon\b/.test(row.p.class)), [true, false, false, false, false])
+  assert.match(flat(textOf(rows[0])), /^Also exempt \/health and \/metrics from the limiter\. here 4 Desktop · acme-api · Orchestrator asks: .* 7 agents Waiting on you ≈\$4\.12 /)
   assert.doesNotMatch(p.text('Page()'), /this chat/)
   const site = rows.find(row => flat(textOf(row)).includes('Landing page copy'))
   assert.equal(site.p.href, `#/s/${SITE.id}/now`)
-  assert.equal(flat(textOf(site)), 'Landing page copy Terminal · site · Needs your OK: Bash rm -rf dist Waiting on you ≈$0.22 9m')
+  assert.equal(flat(textOf(site)), 'Landing page copy 1 Terminal · site · Needs your OK: Bash rm -rf dist Waiting on you ≈$0.22 9m')
   assert.equal(byClass(site, 'sess-say')[0].p.class, 'sess-say is-need')
-  // a quiet deck: its dot hollow, when it was last heard on the page's clock, no state word
+  assert.equal(byClass(site, 'tab-n')[0].p.class, 'tab-n is-need')
+  // a quiet deck: its dot hollow, when it was last heard on the page's clock, no state word, badge or agents
   const notes = rows.find(row => flat(textOf(row)).includes('Notes sync'))
   assert.match(notes.p.class, /\bis-quiet\b/)
   assert.equal(byClass(notes, 'dot-quiet').length, 1)
-  assert.match(flat(textOf(notes)), /Desktop · notes · Last heard 2m ago ≈\$0\.31 2h$/)
-  // a fork's spend began at the session it was forked from: "incl. its parent's" under it, as the mod words it
+  assert.equal(flat(textOf(notes)), 'Notes sync Desktop · notes · Last heard 2m ago ≈$0.31 2h')
+  // its faces while it works, seeded by its id (no other session's alike), its agents under them; a fork's spend began at the session it was forked from: "incl. its parent's" under it, as the mod words it
   const faces = rows.find(row => flat(textOf(row)).includes('Agent Deck terminal faces'))
   assert.match(faces.p.class, /\bis-fork\b/)
   assert.equal(byClass(faces, 'sess-faces').length, 1)
+  assert.equal(flat(textOf(byClass(faces, 'sess-face')[0])), '2 agents')
+  assert.deepEqual(JSON.parse(p.run(`JSON.stringify(facesOf(sessionsNow().rows.find(r => r.title === 'Agent Deck terminal faces')))`)), { seeds: [faces.k, `${faces.k}:1`], more: 0 })
+  assert.deepEqual([site, notes].map(row => byClass(row, 'sess-faces').length), [0, 0])
   assert.match(flat(textOf(faces)), /Working ≈\$1\.80 now incl\. its parent’s$/)
   assert.deepEqual([site, notes].map(row => byClass(row, 'sess-cost-note').length), [0, 0])
   const q = page({ hash: '#/sessions' })
   q.load(SAMPLE)
-  assert.match(q.text('Page()'), /No sessions listed/)
+  assert.match(q.text('Page()'), /^All sessions No sessions listed/)
 })
 
-test('s moves the focus to the rail (opening it where it is shut), on the session shown; there, s gives the page the focus back; ↑ ↓ pick the entry before or after it; a mod that lists no sessions takes no s', () => {
+test('s opens All sessions, the focus on the row of the deck shown, a row picked keeping the tab you came from; ↑ ↓ there move the focus down and up the rows (Enter follows one); s again goes back where you were; a mod that lists no sessions takes no s', () => {
   const p = page({ hash: '#/chat' })
-  p.run('window.innerWidth = 1280')
   p.load(LIVE)
-  p.run('toggleRail()')
-  assert.equal(p.run('Rail()'), null)
   assert.equal(p.run("keyAction('s')"), true)
-  assert.notEqual(p.run('Rail()'), null)
-  assert.equal(p.run('ui.focusTo'), `rail-${SAMPLE.session.id}`)
-  // a DOM of the rail's entries: This machine, then the sessions, the focus on the first session
+  assert.equal(p.location.hash, '#/sessions')
+  assert.equal(p.run('route.tab'), 'sessions')
+  assert.equal(p.run('ui.focusTo'), `sess-${SAMPLE.session.id}`)
+  const rows = byClass(p.run('Page()'), 'sess-row')
+  assert.match(rows[0].p.class, /\bon\b/)
+  assert.equal(rows[0].p.href, '#/chat')
+  assert.equal(rows.find(row => flat(textOf(row)).includes('Landing page copy')).p.href, `#/s/${SITE.id}/chat`)
+  // a DOM of the page's rows, the focus on here's
   p.run(`(() => {
-    const hrefs = ['#/sessions', ...sessionsNow().rows.map(r => rowHref(r))]
-    const items = hrefs.map((href, i) => ({ href, i, focused: false, getAttribute: () => href, focus() { items.forEach(x => (x.focused = false)); this.focused = true; document.activeElement = this }, closest: function () { return this }, blur() { document.activeElement = null }, classList: { contains: () => false } }))
-    globalThis.__items = items
+    const items = sessionsNow().rows.map(r => ({ id: r.id, getClientRects: () => [{}], focus() { document.activeElement = this }, scrollIntoView() {}, closest() { return this } }))
+    const page = { querySelectorAll: s => (s === '[data-nav]' ? items : []) }
+    document.querySelector = s => (s === '.scroll' ? page : null)
     document.querySelectorAll = () => items
-    items[1].focus()
+    items[0].focus()
   })()`)
-  p.run('railStep(1)')
-  assert.equal(p.location.hash, `#/s/${SESSIONS.view.rows[1].id}/chat`)
-  p.run('railStep(-1); railStep(-1)')
-  assert.equal(p.location.hash, '#/sessions')
-  p.run('railStep(-1)')
-  assert.equal(p.location.hash, '#/sessions')
-  // s there: the focus back to the page
-  p.run("document.activeElement.closest = s => (s === '.rail' ? {} : document.activeElement)")
+  assert.equal(p.run("keyAction('ArrowDown')"), true)
+  assert.equal(p.run('document.activeElement.id'), SESSIONS.view.rows[1].id)
+  p.run("keyAction('ArrowDown'); keyAction('ArrowDown')")
+  assert.equal(p.run('document.activeElement.id'), SESSIONS.view.rows[3].id)
+  assert.equal(p.run("keyAction('ArrowUp')"), true)
+  assert.equal(p.run('document.activeElement.id'), SESSIONS.view.rows[2].id)
+  // s again: back on Chat; there ↑ ↓ are the browser's
   assert.equal(p.run("keyAction('s')"), true)
-  assert.equal(p.run('document.activeElement'), null)
+  assert.equal(p.location.hash, '#/chat')
+  assert.equal(p.run('route.tab'), 'chat')
+  assert.equal(p.run("keyAction('ArrowDown')"), false)
   const q = page({ hash: '#/now' })
   q.load(SAMPLE)
   assert.equal(q.run("keyAction('s')"), false)
+  assert.equal(q.run('route.tab'), 'now')
 })
 
-test('another session`s deck in this one`s place (#/s/<id>/…): read from /s/<id>/state, its deck asked to keep writing it (view); its own header, no bar and no Back; its row lit in the rail; its permission prompt says where to answer it; its tabs keep it; its lazy files come from /s/<id>/; here picked again shows this one`s', async () => {
+test('another session`s deck in this one`s place (#/s/<id>/…): read from /s/<id>/state, its deck asked to keep writing it (view); its own header, where it runs after its title, no bar and no Back; its row lit on All sessions; its permission prompt says where to answer it; its tabs keep it; its lazy files come from /s/<id>/; here picked again shows this one`s', async () => {
   const p = page({ hash: `#/s/${SITE.id}/now`, others: { [SITE.id]: { v: 1, now: SITE_STATE.now, v2: SITE_STATE } } })
-  p.run('window.innerWidth = 1280')
   p.load(LIVE)
+  // before its state is read: its row's state, title and where it runs
+  assert.match(p.text('Header()'), /^Waiting on you Landing page copy Terminal · site /)
   p.run('switchView(route.session)')
   await settle()
   assert.deepEqual(p.calls.filter(one => one.url === '/cmd').map(one => one.body), [{ cmd: 'view', session: SITE.id }])
@@ -344,17 +333,27 @@ test('another session`s deck in this one`s place (#/s/<id>/…): read from /s/<i
   assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.peer)')), { where: 'Terminal · site', canSteer: true })
   assert.equal(p.run('hrefOf("chat", null)'), `#/s/${SITE.id}/chat`)
   assert.equal(p.run('baseUrl()'), `/s/${SITE.id}`)
-  // its header is its own; no Viewing bar, no Back, nothing "read-only" or "this chat"
+  // its header is its own, where it runs right after its title (no "here"); no Viewing bar, no Back, nothing "read-only" or "this chat"
   assert.match(p.text('Header()'), /Waiting on you Landing page copy/)
+  assert.equal(flat(textOf(byClass(byClass(p.run('Header()'), 'hd-title')[0], 'hd-where')[0])), 'Terminal · site')
+  assert.doesNotMatch(p.text('Header()'), /\bhere\b/)
+  // here waits on you too: the one other waiting
+  assert.equal(p.text('SessionsLink()'), '◆ 1 other session needs you All sessions')
   const all = p.text('App()')
   for (const gone of ['Viewing', 'Back to this chat', 'Read-only', 'this chat']) assert.doesNotMatch(all, new RegExp(gone))
-  // the rail lights it, here's row not
-  const rows = byClass(p.run('Rail()')[1], 'rail-row')
-  assert.match(rows.find(row => flat(textOf(row)).includes('Landing page copy')).p.class, /\bon\b/)
-  assert.doesNotMatch(rows[0].p.class, /\bon\b/)
   // its permission prompt: answered in its window, named
   assert.match(p.text('NeedsList()'), /Answer it in its window: Terminal · site\./)
   assert.doesNotMatch(p.text('NeedsList()'), /in Claude Code/)
+  // s: All sessions, its row lit and focused, here's not; s again: back on its deck
+  assert.equal(p.run("keyAction('s')"), true)
+  assert.equal(p.run('ui.focusTo'), `sess-${SITE.id}`)
+  const rows = byClass(p.run('Page()'), 'sess-row')
+  assert.match(rows.find(row => flat(textOf(row)).includes('Landing page copy')).p.class, /\bon\b/)
+  assert.doesNotMatch(rows[0].p.class, /\bon\b/)
+  assert.equal(p.run("keyAction('s')"), true)
+  assert.equal(p.location.hash, `#/s/${SITE.id}/now`)
+  await settle()
+  assert.equal(p.run('S.header.goal.headline'), 'Landing page copy')
   // here again: this session's own state
   p.go('#/now')
   assert.equal(p.run('S.header.goal.headline'), SAMPLE.header.goal.headline)

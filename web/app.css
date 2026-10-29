@@ -129,6 +129,9 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 .goal-age { flex: none; font: 11px var(--mono); color: var(--muted-2); }
 .goal-chev { width: 14px; height: 14px; color: var(--muted-2); transition: transform 0.15s; }
 .goal-chev.flip { transform: rotate(180deg); }
+/* the title and, right after it, the tag that says whose deck shows */
+.hd-title { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.hd-title > .goal { flex: 0 1 auto; }
 .hd-line { flex: none; font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
@@ -1413,58 +1416,9 @@ kbd {
 }
 
 /* ---------------------------------------------------------- all sessions */
-/* Every session on this machine as peers: the rail at the page's left (over the
-   page where it is narrow), the header's button that shows or hides it, "This
-   machine" (#/sessions), and a quiet note where a control acts only in another
-   session's window. */
-
-:root { --rail-w: 280px; }
-.app.has-rail { margin-left: var(--rail-w); }
-
-.rail {
-  position: fixed; left: 0; top: 0; bottom: 0; z-index: 30; width: var(--rail-w);
-  display: flex; flex-direction: column; min-height: 0;
-  background: #0b0b0b; border-right: 1px solid var(--border);
-}
-.rail.is-over { z-index: 46; width: min(var(--rail-w), calc(100vw - 48px)); box-shadow: 24px 0 64px rgba(0, 0, 0, 0.55); animation: rail-in 0.16s ease-out; }
-@keyframes rail-in { from { transform: translateX(-14px); opacity: 0.6; } }
-.rail-scrim { position: fixed; inset: 0; z-index: 45; background: rgba(0, 0, 0, 0.5); }
-.rail-hd { display: flex; align-items: center; gap: 10px; flex: none; height: 52px; padding: 0 18px; }
-.rail-brand { font-size: 13.5px; font-weight: 600; color: var(--fg); }
-.rail-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; padding: 4px 8px 12px; }
-.rail-head { display: flex; align-items: baseline; gap: 8px; padding: 14px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted-2); }
-
-.rail-machine, .rail-row { position: relative; border-radius: var(--radius); color: var(--fg-2); transition: background-color 0.12s; }
-.rail-machine:hover, .rail-row:hover { background: var(--hover-2); }
-.rail-machine.on, .rail-row.on { background: rgba(255, 255, 255, 0.07); }
-/* the one shown: a bar at the rail's edge */
-.rail-machine.on::before, .rail-row.on::before { content: ""; position: absolute; left: -8px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--fg); }
-.rail-machine:focus-visible, .rail-row:focus-visible { outline-offset: -2px; }
-
-.rail-machine { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; align-items: center; padding: 9px 10px; }
-.rail-machine .ic { width: 16px; height: 16px; color: var(--muted); }
-.rail-machine-name { font-size: 13.5px; font-weight: 600; color: var(--fg); }
-.rail-machine-sub { grid-column: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted-2); }
-.rail-machine-sub b { font-weight: 500; color: var(--wait-text); }
-
-.rail-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; column-gap: 10px; align-items: start; padding: 9px 10px 10px; }
-.rail-row > .dot { margin-top: 6px; }
-.rail-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rail-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.rail-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 500; color: var(--fg-2); }
-.rail-row.on .rail-name { font-weight: 600; color: var(--fg); }
-.rail-here, .sess-here { height: 17px; padding: 0 6px; font-size: 10.5px; }
-.rail-sub { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; color: var(--muted-2); white-space: nowrap; }
-.rail-sub .ic { width: 12px; height: 12px; }
-.rail-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.rail-say { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
-.rail-say.is-need, .sess-say.is-need { color: #fde68a; }
-.rail-say.is-quiet, .sess-say.is-quiet { font-style: italic; color: var(--muted-2); }
-.rail-row.is-quiet .rail-name { color: var(--muted); }
-.rail-end { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; padding-top: 1px; }
-.rail-cost { font: 11px var(--mono); color: var(--muted-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.rail-foot { flex: none; margin: 0; padding: 12px 18px 16px; font-size: 11.5px; line-height: 1.5; color: var(--muted-2); border-top: 1px solid var(--border-soft); }
-.rail-foot kbd { min-width: 18px; height: 18px; padding: 0 4px; font-size: 10.5px; }
+/* Every session on this machine as peers: the header's tag (whose deck shows)
+   and its link to All sessions (#/sessions), and a quiet note where a control
+   acts only in another session's window. */
 
 /* a deck not heard from lately: a hollow dot */
 .dot.dot-quiet { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-3); }
@@ -1474,7 +1428,10 @@ kbd {
 .sess-faces-img { display: block; height: 16px; width: auto; }
 .sess-faces-more { font: 10.5px var(--mono); color: var(--muted-2); }
 
-/* the header's button: shows or hides the rail */
+/* the header's tag after the title: "here" on this page's own deck, where another runs on its */
+.hd-where { display: block; max-width: 40%; height: 18px; padding: 0 7px; font-size: 10.5px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; }
+
+/* the header's link to All sessions */
 .hd-sessions {
   display: inline-flex; align-items: center; gap: 12px; flex: none; height: 30px; padding: 0 10px;
   border: 0; border-radius: 6px; background: none; font-size: 12.5px; color: var(--muted); white-space: nowrap; cursor: pointer;
@@ -1490,7 +1447,7 @@ kbd {
 .hd-peer-stop { flex: none; white-space: nowrap; color: var(--muted-2); }
 .bg-where { margin: 0; padding: 0 2px; }
 
-/* This machine (#/sessions) */
+/* All sessions (#/sessions) */
 .page-sessions { gap: 16px; }
 .sess-top { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .sess-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
@@ -1498,25 +1455,34 @@ kbd {
 .sess-need { font-weight: 500; color: var(--wait-text); }
 .sess-list { overflow: hidden; }
 .sess-row {
-  display: grid; grid-template-columns: 8px minmax(0, 1fr) 52px 118px 56px 36px; align-items: center; gap: 14px;
+  display: grid; grid-template-columns: 8px minmax(0, 1fr) 64px 118px 56px 36px; align-items: center; gap: 14px;
   min-height: 60px; padding: 10px 16px; color: inherit; transition: background-color 0.12s;
 }
 a.sess-row:hover { background: var(--hover); }
 a.sess-row:focus-visible { outline-offset: -2px; }
+/* the one you came from: lit, a bar at its left edge */
+.sess-row.on { background: rgba(255, 255, 255, 0.05); box-shadow: inset 3px 0 0 var(--fg); }
 .sess-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .sess-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sess-line > .tab-n { flex: none; }
 .sess-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
 .sess-row.is-quiet .sess-name { color: var(--muted); }
+.sess-here { height: 17px; padding: 0 6px; font-size: 10.5px; }
 .sess-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; color: var(--muted-2); white-space: nowrap; }
 .sess-ic { flex: none; width: 13px; height: 13px; color: var(--muted-2); }
 .sess-where { flex: none; }
 .sess-say { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-.sess-face { display: flex; justify-content: flex-end; }
+.sess-say.is-need { color: #fde68a; }
+.sess-say.is-quiet { font-style: italic; color: var(--muted-2); }
+/* its faces while it works, its agents counted under them */
+.sess-face { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; }
+.sess-agents { font-size: 11px; color: var(--muted-2); white-space: nowrap; }
 .sess-state { font-size: 12.5px; text-align: right; white-space: nowrap; color: var(--muted-2); }
 .sess-state.is-working { color: var(--run-text); }
 .sess-state.is-waiting { color: var(--wait-text); }
 .sess-cost, .sess-age { font: 11.5px var(--mono); color: var(--muted-2); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.sess-note { margin: 0; font-size: 12.5px; color: var(--muted-2); }
+.sess-note { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted-2); }
+.sess-note kbd { min-width: 18px; height: 18px; padding: 0 4px; font-size: 10.5px; }
 /* a fork's spend counts its parent's: "incl. its parent's" under its word and its spend, where the spend shows */
 .sess-cost-note { display: none; }
 @container page (width > 720px) {

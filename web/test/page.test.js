@@ -186,6 +186,11 @@ test('the header: the state in one word, your latest request in your words, and 
   // the permission mode, lit as Claude Code's footer lights it; the whole line on hover
   assert.deepEqual(find(p.view('Header()'), 'hd-mode').map(one => flat(textOf(one))), ['auto mode', 'auto mode'])
   assert.equal(find(p.view('Header()'), 'hd-line')[0].p.title, 'opus-5.5 · auto mode · context 41% · ≈$4.12')
+  // a mod that lists no sessions: no "here" after the title, no All sessions, and s does nothing
+  assert.equal(find(p.view('Header()'), 'brand-mark').length, 1)
+  assert.deepEqual(['hd-where', 'hd-sessions'].map(cls => find(p.view('Header()'), cls).length), [0, 0])
+  assert.equal(p.key('s'), false)
+  assert.equal(p.run('route.tab'), 'now')
   click(find(p.view('Header()'), 'goal')[0])
   assert.match(p.text('Header()'), /Your latest request · 4m ago Also exempt \/health and \/metrics from the limiter\./)
   // a goal the state cut short: its whole text from /message/<messageId>, fetched once
@@ -1494,6 +1499,7 @@ test('Settings (6, #/settings) holds the avatar style and Help, laid out as a pa
   const help = p.text('HelpSection()')
   assert.match(help, /^Help Dashboard What needs you, a card per agent.* Chat The session as a group chat\..* Org Every agent under the one that started it.* Changes Git's uncommitted files.* Inspect What fills the context and each compaction.* Settings This page/)
   assert.match(help, /Keys .* 1 2 3 4 5 6 Dashboard · Chat · Org · Changes · Inspect · Settings j k Move the focus down, up/)
+  assert.match(help, / s All sessions: every session on this machine, ↑ ↓ to pick one, Enter to show its deck; s again goes back n /)
   // no f key, said or kept
   assert.match(help, /1 to 6, Enter and b work in the Desktop pane and the terminal too/)
   assert.equal(findAll(p.view('HelpSection()'), one => one.t === 'dt' && flat(textOf(one)) === 'f').length, 0)
