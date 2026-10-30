@@ -16,7 +16,8 @@
  *   (a press shows its deck, the list closing) and "here" on the session the
  *   deck belongs to; where it runs (its surface's icon, its place and its
  *   repository) and what it waits on you for (amber) or what it is doing;
- *   its faces while it works, its state's word, its spend (a fork's "incl.
+ *   its agents' faces while they work (as its own deck draws them; none
+ *   for the Orchestrator), its state's word, its spend (a fork's "incl.
  *   its parent's" under it) and how long since it changed. The one shown is
  *   lit. A quiet one (its deck not heard from lately) says when it was last
  *   heard, its dot hollow, no word, need or face.
@@ -234,16 +235,16 @@ function lineRoom(kit: Kit, isFaces: boolean, isWord: boolean, isCost: boolean, 
   return Math.max(0, Math.floor(kit.columns - edgesOf(kit) - 2 - 2 - right - (hasIcon ? cellsForPx(ICON) + 1 : 0) - 1))
 }
 
-/** A row's faces while its session works (./sessions `facesOf`: seeded by its id), one stacked image; nothing where Svg does not draw, whose words count them. */
+/** A row's faces while its agents work (./sessions `facesOf`): each as its session's own deck draws it (its id the seed, its title the name), one stacked image; nothing for the Orchestrator alone, whose dot says it works, nor where Svg does not draw, whose words count them. */
 function rowFaces(kit: Kit, row: SessionRowV2): RenderElement | null {
   const { Box, Text } = kit
   const Svg = svgOf(kit)
-  const { seeds, more } = facesOf(row)
-  if (!Svg || seeds.length === 0) return null
-  const agents = seeds.map(seed => ({ id: seed, name: row.title, role: '', status: 'running' }))
+  const { faces, more } = facesOf(row)
+  if (!Svg || faces.length === 0) return null
+  const agents = faces.map(face => ({ id: face.id, name: face.title, role: '', status: face.status, progress: face.progress }))
   return (
     <Box flexDirection="row" alignItems="center">
-      <Svg source={AV.avatarStackSvg(avatarStyleOf(kit), agents, { size: FACE, ground: P.ground })} alt={`${row.working} at work`} width={AV.stackWidth(seeds.length, FACE)} height={FACE} />
+      <Svg source={AV.avatarStackSvg(avatarStyleOf(kit), agents, { size: FACE, ground: P.ground })} alt={`${row.working} at work`} width={AV.stackWidth(faces.length, FACE)} height={FACE} />
       {more > 0 ? <Text color={P.muted2}>{`+${more}`}</Text> : null}
     </Box>
   )

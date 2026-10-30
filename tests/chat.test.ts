@@ -17,7 +17,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/testing'
 
 import * as M from '../hooks/model'
-import { chatEndOf, fieldRowsOf, followStep, isAtEndAfter, isAtEndOf, membersOf, routeFrom, type ChatFollow } from '../hooks/ui/v2/chat'
+import { chatEndOf, fieldRowsOf, followStep, isAtEndAfter, isAtEndOf, listStep, membersOf, routeFrom, type ChatFollow } from '../hooks/ui/v2/chat'
 import type { Kit } from '../hooks/ui/types'
 import { rowsOf } from '../hooks/ui/v2/fit'
 import * as AV from '../web/avatars.mjs'
@@ -782,6 +782,28 @@ test('Chat keeps to its newest message: to the end as Chat comes into view, and 
   expect(followStep(follow, null)).toBeNull()
   expect(followStep(follow, '6|msg:d|')).toBe('end')
   expect(follow.isAtEnd).toBe(true)
+})
+
+test('the list of sessions dropped over Chat: as it drops Chat`s end is let go, the pane to its top once when it kept to that end; then no drawing steps, whatever Chat ends with; shut, nothing follows until you scroll back to the end', () => {
+  const follow: ChatFollow = { isShown: false, end: '', isAtEnd: false }
+  expect(followStep(follow, '3|msg:a|')).toBe('end')
+  // dropped while the pane keeps to Chat's end: its top, where the list is, once
+  expect(listStep(follow)).toBe('start')
+  expect(follow).toEqual({ isShown: true, end: '3|msg:a|', isAtEnd: false })
+  // drawing after drawing under it, something new at Chat's end each time, or none drawn at all: no step
+  for (const end of ['4|msg:b|', '5|msg:c|', null, '5|msg:c|delivered:It reads it', '6|msg:d|']) expect(followStep(follow, end, true)).toBeNull()
+  // your own scrolling down to the end under it moves no drawing either
+  follow.isAtEnd = isAtEndAfter({ offset: 90, by: 30, bodyRows: 30, contentRows: 120 })
+  expect(followStep(follow, '7|msg:e|', true)).toBeNull()
+  // shut, you at the end: something new follows again; up at the list when it shut, nothing does
+  expect(followStep(follow, '8|msg:f|')).toBe('end')
+  expect(listStep(follow)).toBe('start')
+  follow.isAtEnd = isAtEndAfter({ offset: 0, by: -90, bodyRows: 30, contentRows: 120 })
+  expect(listStep(follow)).toBeNull()
+  expect(followStep(follow, '9|msg:g|')).toBeNull()
+  // dropped from another tab: nothing to let go, nothing moves
+  expect(followStep(follow, null)).toBeNull()
+  expect(listStep(follow)).toBeNull()
 })
 
 test('your own move of the pane: any move up leaves Chat`s end, however short; one that lands at the end, or one down to it, keeps you there; read from the move as you made it', () => {

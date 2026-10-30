@@ -352,9 +352,13 @@ export type ChatFollow = { isShown: boolean; end: string; isAtEnd: boolean }
  * left view while the pane kept to its end, so the screen in its place
  * shows from its top and keeps to no end of its own (the engine keeps a
  * window taken to its end there through the draws to come, until a move
- * takes it off); null to leave the pane where it is.
+ * takes it off); null to leave the pane where it is. While the list of
+ * sessions is dropped over the tabs (`isListOpen`) the pane is yours alone:
+ * no step at all, whatever Chat under it ends with (`listStep` let go of
+ * its end as the list dropped).
  */
-export function followStep(follow: ChatFollow, end: string | null): 'end' | 'start' | null {
+export function followStep(follow: ChatFollow, end: string | null, isListOpen = false): 'end' | 'start' | null {
+  if (isListOpen) return null
   if (end === null) {
     const wasFollowing = follow.isShown && follow.isAtEnd
     follow.isShown = false
@@ -370,6 +374,21 @@ export function followStep(follow: ChatFollow, end: string | null): 'end' | 'sta
   }
   follow.end = end
   return isGoing ? 'end' : null
+}
+
+/**
+ * The list of sessions dropped over the tabs, `follow` updated in place:
+ * you are at the list, above Chat, so Chat's end is let go (nothing takes
+ * the pane down to it once the list shuts, until you scroll back there).
+ * `start` when the pane kept to Chat's end: the engine and the Desktop keep
+ * a window taken to its end there through every draw, so the list would
+ * drop out of sight above it and the window follow the foot as it grows;
+ * null to leave the pane where it is.
+ */
+export function listStep(follow: ChatFollow): 'start' | null {
+  const wasFollowing = follow.isShown && follow.isAtEnd
+  follow.isAtEnd = false
+  return wasFollowing ? 'start' : null
 }
 
 /** Whether a window `offset` rows down a tree `contentRows` tall, `bodyRows` of it showing, shows the tree's end (a row short counts). */

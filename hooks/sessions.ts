@@ -11,7 +11,8 @@
  *   once its process is gone (or long after).
  * - **The list** (`SessionsV2`, the v2 state's `sessions`): each session's
  *   state in a word, its title, where it runs, what it waits on you for or
- *   what it is doing, its agents at work and in all, its spend (/cost's
+ *   what it is doing, its agents at work and in all (the first three at
+ *   work as its deck draws them: its row's faces), its spend (/cost's
  *   estimate at API list prices, a fork's counting its parent's) and how
  *   long since it changed; one whose deck has not been heard from lately
  *   says when it was ("Last heard 2m ago"), not a state that may be stale.
@@ -34,6 +35,7 @@
  *
  * Pure: the hooks module does the reading, writing and timing.
  */
+import * as AV from '../web/avatars.mjs'
 import type { V2Stop } from './background'
 import * as F from './format'
 import type { V2AgentRow, V2Need, V2Peer, V2Press, WebAck, WebStateV2 } from './web'
@@ -87,8 +89,10 @@ export type SessionEntry = {
   needs: number
   /** How many of its agents are at work (the Orchestrator and Claude Code's own loops left out). */
   working: number
-  /** How many agents it shows in all, at work or not (the Orchestrator, Claude Code's own loops and those Clear finished hid left out); 0 from an older build. Counts alone: no deck shares its agents' list. */
+  /** How many agents it shows in all, at work or not (the Orchestrator, Claude Code's own loops and those Clear finished hid left out); 0 from an older build. */
   agents: number
+  /** Its first agents at work (`MOST_FACES`), in its deck's order, each as its deck draws it: the faces its row shows. None from an older build. */
+  faces: SessionFace[]
   /** What it is doing, in a line, from its rows' calls in flight ("builder: Bash npm test"), else its latest answer when idle; '' for neither. */
   live: string
   /** Its spend, as /cost reports it (an estimate at API list prices); null while unknown. */
@@ -109,6 +113,14 @@ export type SessionEntry = {
   /** Set by `session.end` before the file goes: it ended. */
   endedAt?: number
 }
+
+/**
+ * One of a session's agents at work, as its own deck draws its avatar: its
+ * id (the face's seed), its title (its name: a monogram's letters), its
+ * status, and how far through its own TodoWrite list it is (0 to 1; left
+ * out with none).
+ */
+export type SessionFace = { id: string; title: string; status: 'starting' | 'running'; progress?: number }
 
 /** One row of the list: a session as every surface shows it. */
 export type SessionRowV2 = {
@@ -137,6 +149,8 @@ export type SessionRowV2 = {
   /** Its agents at work, and in all (`SessionEntry`'s): "3 agents working". */
   working: number
   agents: number
+  /** Its first agents at work as its deck draws them (`SessionEntry`'s): its row's faces (`facesOf`). */
+  faces: SessionFace[]
   costUsd: number | null
   /** "≈$4.12", whole dollars from $100 ("≈$491"); '' while unknown. */
   cost: string
@@ -357,6 +371,27 @@ function isWorkingAgent(row: V2AgentRow): boolean {
   return row.kind !== 'orchestrator' && row.kind !== 'engine' && (row.status === 'running' || row.status === 'starting')
 }
 
+/** An agent at work as its row's face: as its deck's avatar takes it (./ui/v2/look `avatarAgentOf`: seeded by its id, named by its title), its own list's progress where it keeps one. */
+function faceOf(row: V2AgentRow): SessionFace {
+  const progress = AV.progressOf(row.todos)
+  return { id: row.id, title: row.title, status: row.status === 'starting' ? 'starting' : 'running', ...(progress !== undefined ? { progress } : {}) }
+}
+
+/** A file's faces, each checked (an id and a title; at work; progress 0 to 1), three at most; none from an older build's, which names none. */
+function facesFrom(value: unknown): SessionFace[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(isRecord)
+    .filter(one => typeof one.id === 'string' && one.id !== '' && one.id.length <= 200 && typeof one.title === 'string')
+    .slice(0, MOST_FACES)
+    .map(one => ({
+      id: one.id as string,
+      title: F.trunc(one.title as string, 120),
+      status: one.status === 'starting' ? 'starting' : 'running',
+      ...(typeof one.progress === 'number' && Number.isFinite(one.progress) ? { progress: Math.min(1, Math.max(0, one.progress)) } : {}),
+    }))
+}
+
 /**
  * What a session is doing, in a line, from its own rows: "2 agents working
  * · builder: Bash npm test" (the first agent with a call in flight), the
@@ -384,6 +419,7 @@ export function entryOf(
   facts: { surface: SessionSurface; terminal: string; repo: string; pid: number | null; dir: string; updatedAt: number; heartbeatAt: number },
 ): SessionEntry {
   const need = state.needs[0]
+  const atWork = state.agents.filter((row): row is V2AgentRow => row.row === 'agent' && isWorkingAgent(row))
   return {
     v: REGISTRY_V,
     id: state.session.id,
@@ -395,8 +431,9 @@ export function entryOf(
     state: state.header.state,
     need: need ? needLineOf(need) : null,
     needs: state.needs.length,
-    working: state.agents.filter((row): row is V2AgentRow => row.row === 'agent' && isWorkingAgent(row)).length,
+    working: atWork.length,
     agents: state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine' && row.isCleared !== true).length,
+    faces: atWork.slice(0, MOST_FACES).map(faceOf),
     live: liveLineOf(state),
     costUsd: state.header.costUsd,
     ...(state.session.isFork === true ? { isFork: true as const } : {}),
@@ -441,6 +478,7 @@ export function entryFromText(text: string): SessionEntry | null {
     needs: Math.max(0, num(value.needs)),
     working: Math.max(0, num(value.working)),
     agents: Math.max(0, num(value.agents), num(value.working)),
+    faces: facesFrom(value.faces),
     live: str(value.live, 200),
     costUsd: typeof value.costUsd === 'number' && Number.isFinite(value.costUsd) ? value.costUsd : null,
     ...(value.isFork === true ? { isFork: true as const } : {}),
@@ -535,6 +573,7 @@ function rowOf(entry: SessionEntry, isMe: boolean, now: number): SessionRowV2 {
     say: isQuiet ? heardOf(entry.heartbeatAt, now) : (entry.need ?? entry.live),
     working: entry.working,
     agents: entry.agents,
+    faces: entry.faces,
     costUsd: entry.costUsd,
     cost: costOf(entry.costUsd),
     costNote: entry.isFork === true && entry.costUsd !== null ? 'incl. its parent’s' : '',
@@ -576,18 +615,17 @@ export function othersWaitingOf(view: Pick<SessionsV2, 'rows'>, shownId: string)
 export const MOST_FACES = 3
 
 /**
- * The faces a row draws while its session works: one an agent at work (the
- * Orchestrator's alone while none is), at most three, then how many more;
- * none while it does not work, or is quiet. Each is seeded by the session's
- * id (the first by it alone, the next `<id>:1`, `<id>:2`), so no two
- * sessions' Orchestrators look alike; a deck shares counts, never its
- * agents' ids, so these are the session's faces, not its agents' own.
+ * The faces a row draws while its session works: its agents at work, each
+ * as its own deck draws it (`SessionFace`: seeded by its id, named by its
+ * title), at most three, then how many more are at work. None while it does
+ * not work or is quiet, none for the Orchestrator (the row's dot says the
+ * session works), and none from an older build's file, which names none:
+ * a row never draws a face that is not one of its agents.
  */
-export function facesOf(row: Pick<SessionRowV2, 'id' | 'state' | 'working' | 'isQuiet'>): { seeds: string[]; more: number } {
-  if (row.state !== 'working' || row.isQuiet) return { seeds: [], more: 0 }
-  const n = Math.max(1, row.working)
-  const seeds = Array.from({ length: Math.min(MOST_FACES, n) }, (_, i) => (i === 0 ? row.id : `${row.id}:${i}`))
-  return { seeds, more: n - seeds.length }
+export function facesOf(row: Pick<SessionRowV2, 'state' | 'working' | 'isQuiet' | 'faces'>): { faces: SessionFace[]; more: number } {
+  if (row.state !== 'working' || row.isQuiet || row.faces.length === 0) return { faces: [], more: 0 }
+  const faces = row.faces.slice(0, MOST_FACES)
+  return { faces, more: Math.max(0, row.working - faces.length) }
 }
 
 /** A note at what is answered only in a session's own window (a permission prompt, Claude Code's notification): "Answer it in its window: Terminal · site." (`where` its row's, '' when the list does not hold it). */
