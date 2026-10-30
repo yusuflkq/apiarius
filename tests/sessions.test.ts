@@ -16,7 +16,10 @@ import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 
 import * as S from '../hooks/sessions'
+import { avatarAgentOf } from '../hooks/ui/v2/look'
+import { P } from '../hooks/ui/v2/palette'
 import * as W from '../hooks/web'
+import * as AV from '../web/avatars.mjs'
 import { SAMPLE_NOW, v2Session } from './v2session'
 import { sampleSessions } from './v2sessions'
 import { command, deck, newWorld, NOW, work, world, type World } from './world'
@@ -38,7 +41,7 @@ function sampleState(): W.WebStateV2 {
 
 /** A registry file of another session, live at `now`. */
 function entry(id: string, extra: Partial<S.SessionEntry> = {}): S.SessionEntry {
-  return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, agents: 0, live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `/x/.web/${id}`, inbox: true, ...extra }
+  return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, agents: 0, faces: [], live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `/x/.web/${id}`, inbox: true, ...extra }
 }
 
 test('the registry folder: AGENT_DECK_SESSIONS, else under CLAUDE_CONFIG_DIR, else ~/.claude; none with no home', () => {
@@ -57,16 +60,23 @@ test('the registry folder: AGENT_DECK_SESSIONS, else under CLAUDE_CONFIG_DIR, el
   expect(S.isStateDirOf('C:/mod/.web/../.web/a1', 'a1')).toBe(false)
 })
 
-test('a session`s file says what its header says: its request`s headline, its state, the first need in a line, its agents at work and in all (counts, never their list), what it is doing, its spend', () => {
+test('a session`s file says what its header says: its request`s headline, its state, the first need in a line, its agents at work and in all (the first three at work by their ids, titles and statuses, no other), what it is doing, its spend', () => {
   const state = sampleState()
   const one = S.entryOf(state, { surface: 'desktop', terminal: '', repo: 'acme-api', pid: 4242, dir: '/m/.web/s', updatedAt: SAMPLE_NOW - 1000, heartbeatAt: SAMPLE_NOW })
   expect(one).toMatchObject({ v: 1, id: state.session.id, title: state.header.goal?.headline, state: 'waiting', needs: state.needs.length, costUsd: 4.12, pid: 4242, inbox: true, dir: '/m/.web/s', surface: 'desktop', repo: 'acme-api' })
-  // its agents: every row but the Orchestrator's and Claude Code's own loops, counted; none of their ids goes in the file
-  const agents = state.agents.filter(row => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine')
-  expect([one.working, one.agents]).toEqual([agents.filter(row => row.row === 'agent' && (row.status === 'running' || row.status === 'starting')).length, agents.length])
-  expect(agents.some(row => JSON.stringify(one).includes(row.id))).toBe(false)
-  // an older build's file names no total: its agents at work stand for it
+  // its agents: every row but the Orchestrator's and Claude Code's own loops, counted; the first three at work named for their faces, and no other's id goes in the file
+  const agents = state.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine')
+  const atWork = agents.filter(row => row.status === 'running' || row.status === 'starting')
+  expect([one.working, one.agents]).toEqual([atWork.length, agents.length])
+  expect(one.faces.map(face => [face.id, face.title, face.status])).toEqual(atWork.slice(0, S.MOST_FACES).map(row => [row.id, row.title, row.status]))
+  expect(agents.filter(row => !atWork.slice(0, S.MOST_FACES).includes(row)).some(row => JSON.stringify(one).includes(row.id))).toBe(false)
+  // read back as written; an older build's file names no total (its agents at work stand for it) and no faces
+  expect(S.entryFromText(JSON.stringify(one))?.faces).toEqual(one.faces)
   expect(S.entryFromText(JSON.stringify({ ...one, agents: undefined, working: 2 }))?.agents).toBe(2)
+  expect(S.entryFromText(JSON.stringify({ ...one, faces: undefined }))?.faces).toEqual([])
+  // a face that is no agent's is left out, and three at most are read
+  const face = { id: 'a1', title: 'scout', status: 'running' }
+  expect(S.entryFromText(JSON.stringify({ ...one, faces: [face, { title: 'no id' }, { id: 'a2' }, face, face, face] }))?.faces).toEqual([face, face, face])
   expect(one.need).toBe('Orchestrator asks: Which store should back the limiter in production?')
   // the times are no part of what it says: a heartbeat alone is no change
   expect(S.entryKeyOf({ ...one, heartbeatAt: 1, updatedAt: 2 })).toBe(S.entryKeyOf(one))
@@ -161,7 +171,7 @@ test('a deck not heard from lately: its row says when it was ("Last heard 2m ago
   const view = S.sessionsViewOf([quiet], entry('me'), now)
   expect(view.rows[1]).toMatchObject({ isQuiet: true, heardAt: now - 125_000, stateText: '', need: null, say: 'Last heard 2m ago', state: 'waiting' })
   expect([view.others.waiting, view.machine.waiting, view.machine.agents, view.text]).toEqual([0, 0, 0, '2 on this machine'])
-  expect(S.facesOf(view.rows[1]!)).toEqual({ seeds: [], more: 0 })
+  expect(S.facesOf({ ...view.rows[1]!, state: 'working', faces: [{ id: 'a1', title: 'scout', status: 'running' }] })).toEqual({ faces: [], more: 0 })
   // the pane words it again as minutes pass, from when it was heard
   expect(S.sessionsAgedOf(view, now + 120_000).rows[1]?.say).toBe('Last heard 4m ago')
   // within QUIET_MS it is heard: its own words, and its heartbeat no part of the row
@@ -172,14 +182,29 @@ test('a deck not heard from lately: its row says when it was ("Last heard 2m ago
   expect(S.sessionsViewOf([], entry('me', { heartbeatAt: now - 600_000 }), now).rows[0]?.isQuiet).toBe(false)
 })
 
-test('a row`s faces while its session works: one an agent at work (the Orchestrator`s alone while none is), three at most, then how many more, each seeded by the session`s id so no two sessions` look alike', () => {
-  const row = (extra: Partial<S.SessionRowV2>) => ({ id: 's-1', state: 'working' as const, working: 0, isQuiet: false, ...extra })
-  expect(S.facesOf(row({}))).toEqual({ seeds: ['s-1'], more: 0 })
-  expect(S.facesOf(row({ working: 2 }))).toEqual({ seeds: ['s-1', 's-1:1'], more: 0 })
-  expect(S.facesOf(row({ working: 5 }))).toEqual({ seeds: ['s-1', 's-1:1', 's-1:2'], more: 2 })
-  expect(S.facesOf(row({ id: 's-2' })).seeds).toEqual(['s-2'])
-  expect(S.facesOf(row({ state: 'idle', working: 3 }))).toEqual({ seeds: [], more: 0 })
-  expect(S.facesOf(row({ state: 'waiting' }))).toEqual({ seeds: [], more: 0 })
+test('a row`s faces: its agents at work, each drawn as its own deck draws it (its id the seed, its title the name), three at most, then how many more; none for the Orchestrator at work alone, whose dot says it, none from an older build`s file, none while it does not work or is quiet', () => {
+  const { decks } = sampleSessions()
+  const fact = { surface: 'desktop' as const, terminal: '', repo: '', pid: 1, dir: '/x/.web/s', updatedAt: SAMPLE_NOW, heartbeatAt: SAMPLE_NOW }
+  const rowOf = (state: W.WebStateV2) => S.sessionsViewOf([S.entryOf(state, fact)], null, SAMPLE_NOW).rows[0]!
+  // builder and painter at work: their faces, in Monogram tiles as in their deck ("Bl", "Pn"), and in every other style the same
+  const two = decks.find(deck => deck.state.header.goal?.headline === 'Agent Deck terminal faces')!.state
+  const atWork = two.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'orchestrator' && row.status === 'running')
+  expect(atWork.map(row => row.title)).toEqual(['builder', 'painter'])
+  const { faces, more } = S.facesOf(rowOf(two))
+  expect([faces.map(face => face.title), more]).toEqual([['builder', 'painter'], 0])
+  const drawn = (style: string) => AV.avatarStackSvg(style, faces.map(face => ({ id: face.id, name: face.title, role: '', status: face.status, progress: face.progress })), { size: 16 })
+  for (const style of AV.STYLE_IDS) expect(drawn(style)).toBe(AV.avatarStackSvg(style, atWork.map(avatarAgentOf), { size: 16 }))
+  expect(drawn('mono')).toContain('>Bl</text>')
+  expect(drawn('mono')).toContain('>Pn</text>')
+  // the Orchestrator alone at work (its own gh run view in flight): no face, though the session works, and nothing of its title ("Fix the flaky CI job") drawn as one
+  const ci = rowOf(decks.find(deck => deck.state.header.goal?.headline === 'Fix the flaky CI job')!.state)
+  expect([ci.state, ci.working]).toEqual(['working', 0])
+  expect(S.facesOf(ci)).toEqual({ faces: [], more: 0 })
+  // three at most, then how many more are at work; none while it does not work or is quiet; none from an older build's file, whatever it counts
+  const face = (id: string) => ({ id, title: id, status: 'running' as const })
+  const row = (extra: Partial<S.SessionRowV2>) => ({ state: 'working' as const, working: 5, isQuiet: false, faces: ['a', 'b', 'c'].map(face), ...extra })
+  expect(S.facesOf(row({}))).toEqual({ faces: ['a', 'b', 'c'].map(face), more: 2 })
+  for (const none of [row({ state: 'idle' }), row({ state: 'waiting' }), row({ isQuiet: true }), row({ faces: [] })]) expect(S.facesOf(none)).toEqual({ faces: [], more: 0 })
 })
 
 test('the spend in the list: /cost`s estimate, "≈$4.12", whole dollars from $100; a fork`s file says it is one, and its row that its spend counts its parent`s', () => {
@@ -543,10 +568,15 @@ function diskWorld(d: Disk): World {
   })
 }
 
-test('the list`s rows: a working session`s faces (one image, seeded by its id) where the pane is wide, none on the terminal, whose words count them; a deck not heard from lately says when it was, its dot hollow, no state word, and goes quiet within a tick of its heartbeat stopping', async ($, on) => {
+test('the list`s rows: a working session`s agents` faces (one image, each face as its deck draws it) where the pane is wide, none on the terminal, whose words count them, none for an Orchestrator at work alone; a deck not heard from lately says when it was, its dot hollow, no state word, and goes quiet within a tick of its heartbeat stopping', async ($, on) => {
   const d: Disk = { files: new Map() }
-  listed(d, 'busy-4', '/busy/.web/busy-4', { title: 'Busy one', state: 'working', need: null, working: 2, agents: 3, live: '2 agents working · scout: Bash npm test' })
-  listed(d, 'hush-5', '/hush/.web/hush-5', { title: 'Hushed one', state: 'working', need: null, working: 1, agents: 1, heartbeatAt: NOW })
+  const atWork: S.SessionFace[] = [
+    { id: 'a1b2c3d4e5f60718', title: 'scout', status: 'running' },
+    { id: 'b2c3d4e5f6071829', title: 'builder', status: 'running' },
+  ]
+  listed(d, 'busy-4', '/busy/.web/busy-4', { title: 'Busy one', state: 'working', need: null, working: 2, agents: 3, faces: atWork, live: '2 agents working · scout: Bash npm test' })
+  listed(d, 'hush-5', '/hush/.web/hush-5', { title: 'Hushed one', state: 'working', need: null, working: 1, agents: 1, faces: atWork.slice(0, 1), heartbeatAt: NOW })
+  listed(d, 'solo-6', '/solo/.web/solo-6', { title: 'lemme see the sessions', state: 'working', need: null, working: 0, agents: 0, live: 'Orchestrator: Bash git status' })
   const { clock } = await started($, on, newWorld(), d)
   await $.command.run(deck('sessions'))
   await clock.advance(3000)
@@ -554,8 +584,14 @@ test('the list`s rows: a working session`s faces (one image, seeded by its id) w
     const ui = await $.ui.mount(pane(surface, 120))
     const drawn = await ui.drawn()
     const [busy] = nodesIn(drawn, node => (node.key ?? node.props?.key) === 'session-row:busy-4')
-    expect(nodesIn(busy, node => node.type === 'Svg' && node.props?.alt === '2 at work').length).toBe(surface === 'desktop' ? 1 : 0)
+    const faces = nodesIn(busy, node => node.type === 'Svg' && node.props?.alt === '2 at work')
+    expect(faces.length).toBe(surface === 'desktop' ? 1 : 0)
+    if (surface === 'desktop') expect(faces[0]?.props?.source).toBe(AV.avatarStackSvg(AV.DEFAULT_STYLE, atWork.map(face => ({ id: face.id, name: face.title, role: '', status: face.status })), { size: 16, ground: P.ground }))
     expect(wordsIn(busy)).toContain('2 agents working')
+    // the Orchestrator at work alone: its dot says it works, and no face stands for it
+    const [solo] = nodesIn(drawn, node => (node.key ?? node.props?.key) === 'session-row:solo-6')
+    expect(wordsIn(solo)).toContain('Working')
+    expect(nodesIn(solo, node => node.type === 'Svg' && String(node.props?.alt).endsWith('at work')).length).toBe(0)
     await ui.unmount()
   }
   // its heartbeat stops: past QUIET_MS its row says when it was last heard; its file is read again while the list shows
@@ -768,6 +804,69 @@ test('with the registry on, ticks that change nothing draw nothing again and wri
   w.invalidates = 0
   await clock.advance(10_000)
   expect([states(), w.invalidates]).toEqual([first, 0])
+  await ui.unmount()
+})
+
+/** What the deck's latest debug dump says of the pane's window (`.debug/session-1.json`): the list, Chat's end, the moves it asked for. */
+function paneOf(w: World): { isListOpen: boolean; follow: { isShown: boolean; isAtEnd: boolean }; moves: number; latest: string[] } {
+  const dump = w.writes.filter(one => /[\\/]\.debug[\\/]session-1\.json$/.test(one.path)).at(-1)
+  if (!dump) throw new Error('no debug dump was written')
+  return JSON.parse(dump.text).pane
+}
+
+test('the list dropped over Chat: no drawing under it moves the pane, however much changes, so you scroll it as you like; a pane kept at Chat`s end goes to its top once, where the list drops; shut, it leaves the pane where you are', async ($, on) => {
+  // the window moves where you scroll it
+  on('ui.scroll', () => ({}))
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, newWorld({ isDebug: true }), d, async one => {
+    await one.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+    await one.prompt.submit({ text: 'Fix the off-by-one in src/range.js', origin: { kind: 'composer' }, wait: false })
+    await one.turn.start({ text: 'Fix the off-by-one in src/range.js', turnId: 't1' })
+  })
+  // Chat comes into view: the pane to its newest message, kept there
+  await $.command.run(deck('chat'))
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.redraw()
+  await clock.advance(2500)
+  expect(paneOf(w)).toMatchObject({ isListOpen: false, follow: { isShown: true, isAtEnd: true }, latest: ['end'] })
+  // the list dropped while the pane keeps to Chat's end: its top, once, where the list is
+  await ui.press({ key: 'sessions:switch' })
+  await ui.redraw()
+  await clock.advance(2500)
+  const opened = paneOf(w)
+  expect(opened).toMatchObject({ isListOpen: true, follow: { isAtEnd: false }, latest: ['end', 'start'] })
+  // the session works on under it, the other session too, and you scroll down the pane: drawing after drawing, nothing moves it
+  const scroll = (offset: number, by: number) => $.ui.scroll({ component: 'Pane', requestId: 'agent-deck', offset, by, bodyRows: 30, contentRows: 90, origin: { kind: 'person' } })
+  for (let i = 0; i < 5; i++) {
+    listed(d, OTHER, OTHER_DIR, { live: `Bash npm test, step ${i}`, updatedAt: NOW + i * 3000 })
+    await $.turn.complete({ turnId: 't1', answer: `Step ${i} done.`, durationMs: 1000, isAborted: false, reason: 'answer' })
+    expect(await scroll(10 * (i + 1), 10)).toEqual({})
+    await ui.redraw()
+    await clock.advance(3000)
+  }
+  // even down to Chat's end and back up: you move it, the deck does not
+  expect(await scroll(60, 50)).toEqual({})
+  await $.turn.complete({ turnId: 't1', answer: 'At the end.', durationMs: 1000, isAborted: false, reason: 'answer' })
+  await ui.redraw()
+  await clock.advance(3000)
+  expect(await scroll(20, -40)).toEqual({})
+  await ui.redraw()
+  await clock.advance(3000)
+  expect(await ui.find({ key: 'sessions' })).toBeDefined()
+  expect(paneOf(w)).toMatchObject({ isListOpen: true, moves: opened.moves, latest: ['end', 'start'] })
+  // shut: the pane stays where you left it, and something new in Chat leaves it there too (you were up at the list)
+  await ui.press({ key: 'sessions:switch' })
+  await ui.redraw()
+  await $.turn.complete({ turnId: 't1', answer: 'One more.', durationMs: 1000, isAborted: false, reason: 'answer' })
+  await ui.redraw()
+  await clock.advance(3000)
+  expect(await ui.find({ key: 'sessions' })).toBeUndefined()
+  expect(paneOf(w)).toMatchObject({ isListOpen: false, moves: opened.moves })
+  // Chat pressed again takes you to its newest message, as before
+  await ui.press({ key: 'tab:chat' })
+  await ui.redraw()
+  await clock.advance(2500)
+  expect(paneOf(w).latest.at(-1)).toBe('end')
   await ui.unmount()
 })
 

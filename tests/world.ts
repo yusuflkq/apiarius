@@ -74,6 +74,8 @@ export type World = {
   invalidates: number
   /** What /cost totals (`session.usage`'s `cost.usd`), when the test moves it; left out, $1.25. */
   costUsd?: number
+  /** The mod's `.debug/` folder is there: the deck writes its debug dump (`.debug/<sessionId>.json`) among the writes. */
+  isDebug?: boolean
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -165,7 +167,8 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
       return entries ? { value: entries.map(one => ({ ...one, size: 0, mtimeMs: 0, isLink: false })) } : { deny: 'no such folder' }
     })
   }
-  on('fs.exists', () => ({ value: false }))
+  // the mod's `.debug/` folder, while the test lays it out: the deck dumps what it believes there
+  on('fs.exists', ($, e) => ({ value: w.isDebug === true && /[\\/]\.debug$/.test(e.path) }))
   on('fs.stat', ($, e) => {
     const said = w.stat ? w.stat(e.path) : { size: 12, mtimeMs: NOW }
     return said ? { value: { kind: 'file', size: said.size, mtimeMs: said.mtimeMs, isLink: false } } : { deny: 'no such file' }

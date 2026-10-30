@@ -15,6 +15,7 @@
       "needs": 4,
       "working": 0,
       "agents": 7,
+      "faces": [],
       "live": "Orchestrator: AskUserQuestion Which store should back the limiter in production?",
       "costUsd": 4.12,
       "startedAt": 1792011060000,
@@ -37,6 +38,18 @@
       "needs": 0,
       "working": 2,
       "agents": 2,
+      "faces": [
+        {
+          "id": "c1a2b3c4d5e6f708",
+          "title": "builder",
+          "status": "running"
+        },
+        {
+          "id": "d1e2f3a4b5c6d708",
+          "title": "painter",
+          "status": "running"
+        }
+      ],
       "live": "2 agents working · builder: Bash npm test",
       "costUsd": 1.8,
       "isFork": true,
@@ -60,6 +73,7 @@
       "needs": 0,
       "working": 0,
       "agents": 0,
+      "faces": [],
       "live": "Orchestrator: Bash gh run view 1842 --log",
       "costUsd": 0.64,
       "startedAt": 1792012860000,
@@ -82,6 +96,7 @@
       "needs": 1,
       "working": 0,
       "agents": 0,
+      "faces": [],
       "live": "Orchestrator: Bash rm -rf dist",
       "costUsd": 0.22,
       "startedAt": 1792011780000,
@@ -104,6 +119,7 @@
       "needs": 0,
       "working": 0,
       "agents": 0,
+      "faces": [],
       "live": "Finished: “Synced 14 notebooks.”",
       "costUsd": 0.31,
       "startedAt": 1792004580000,
@@ -132,6 +148,7 @@
         "say": "Orchestrator asks: Which store should back the limiter in production?",
         "working": 0,
         "agents": 7,
+        "faces": [],
         "costUsd": 4.12,
         "cost": "≈$4.12",
         "costNote": "",
@@ -159,6 +176,7 @@
         "say": "Orchestrator: Bash gh run view 1842 --log",
         "working": 0,
         "agents": 0,
+        "faces": [],
         "costUsd": 0.64,
         "cost": "≈$0.64",
         "costNote": "",
@@ -186,6 +204,18 @@
         "say": "2 agents working · builder: Bash npm test",
         "working": 2,
         "agents": 2,
+        "faces": [
+          {
+            "id": "c1a2b3c4d5e6f708",
+            "title": "builder",
+            "status": "running"
+          },
+          {
+            "id": "d1e2f3a4b5c6d708",
+            "title": "painter",
+            "status": "running"
+          }
+        ],
         "costUsd": 1.8,
         "cost": "≈$1.80",
         "costNote": "incl. its parent’s",
@@ -213,6 +243,7 @@
         "say": "Needs your OK: Bash rm -rf dist",
         "working": 0,
         "agents": 0,
+        "faces": [],
         "costUsd": 0.22,
         "cost": "≈$0.22",
         "costNote": "",
@@ -240,6 +271,7 @@
         "say": "Finished: “Synced 14 notebooks.”",
         "working": 0,
         "agents": 0,
+        "faces": [],
         "costUsd": 0.31,
         "cost": "≈$0.31",
         "costNote": "",

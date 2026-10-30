@@ -49,7 +49,7 @@ import * as R from './repos'
 import * as SR from './registry'
 import * as SE from './sessions'
 import type { DashModel, DeckModel, Kit, UsageInfo, WebPane } from './ui/types'
-import { chatEndOf, followStep, isAtEndAfter, type ChatFollow } from './ui/v2/chat'
+import { chatEndOf, followStep, isAtEndAfter, listStep, type ChatFollow } from './ui/v2/chat'
 import { openRowsFor, paneRowsFor } from './ui/v2/fit'
 import { newRenderMemo } from './renderMemo'
 import * as T from './timeline'
@@ -200,6 +200,15 @@ let gitDiffs: W.GitDiffs = new Map()
 
 /** The key of the Button the pane's focus ring is on, as `ui.focus` last landed it ('' for none, or one of the engine's own stops): where `j`, `k` and `n` move it from. */
 let paneFocus = ''
+
+/** The moves of the pane the deck asked for (`$.ui.scroll`), for the debug dump: how many in all, and the newest ten, where each took it ("end", "start", a key and where it lands). */
+const paneMoves = { count: 0, latest: [] as string[] }
+
+/** A move of the pane the deck asks for, noted for the debug dump. */
+function noteMove(to: string) {
+  paneMoves.count += 1
+  paneMoves.latest = [...paneMoves.latest, to].slice(-10)
+}
 
 /**
  * The surfaces whose Org chart Client failed (`ui.fault`): their Org lists
@@ -619,7 +628,8 @@ async function writeDump($: EngineInterface): Promise<void> {
 
 /**
  * What the deck believes now, as plain data, nothing in it made up: the raw
- * counts; git; the view (v2's own, and the pane's focus); from the v2 state
+ * counts; git; the view (v2's own, and the pane's focus); the pane's window
+ * (the list of sessions, Chat's end, the moves asked for); from the v2 state
  * every surface draws (`v2Of`), its header, needs, plan sources, latest chat
  * rows and tree; per loop what Claude Code gave it (its name, description,
  * type, origin, status, parent, background flag, calls, list and result);
@@ -642,6 +652,8 @@ function debugStateOf(now: number) {
     },
     git: { root: git.root, isRepo: git.isRepo, checkedAt: git.checkedAt, files: git.files.map(file => file.path) },
     view: { tab: view.tab, page: view.page, v2: view.v2, focus: paneFocus, isDemo: view.isDemo },
+    // how the pane's window stands for the deck: whether the list of sessions shows, Chat's end kept to, and the moves the deck asked for
+    pane: { isListOpen: SR.isListOpen(), follow: { ...chatFollow }, moves: paneMoves.count, latest: paneMoves.latest },
     // what every surface draws, as v2 has it: the header (your latest request, the word, the turn), what needs you, the plan's sources, the chat's latest rows
     header: state.header,
     needs: state.needs.map(need => ({ id: need.id, kind: need.kind, agent: need.agent, age: need.age, text: F.trunc(F.oneLine(need.text), 200), isAnswerable: need.isAnswerable })),
@@ -2278,6 +2290,7 @@ const SCROLL_MS = 150
  */
 function scrollTo($: EngineInterface, key: string, block: 'start' | 'nearest' = 'start', tries = 2) {
   $.clock.after(SCROLL_MS, () => {
+    noteMove(`${key} ${block}`)
     try {
       void $.ui
         .scroll({ to: { key }, in: PANE, block })
@@ -2304,12 +2317,14 @@ const chatFollow: ChatFollow = { isShown: false, end: '', isAtEnd: false }
 /**
  * Takes the pane to its end, where the engine keeps it while the drawing
  * grows and nothing else moves it, once the drawing is up: unless, by then,
- * you scrolled away from the end or Chat left view. It scrolls and never
- * redraws, so a click in flight still lands.
+ * you scrolled away from the end, Chat left view or the list of sessions
+ * dropped over it. It scrolls and never redraws, so a click in flight still
+ * lands.
  */
 function scrollToEnd($: EngineInterface) {
   $.clock.after(SCROLL_MS, () => {
-    if (!chatFollow.isShown || !chatFollow.isAtEnd) return
+    if (!chatFollow.isShown || !chatFollow.isAtEnd || SR.isListOpen()) return
+    noteMove('end')
     try {
       void $.ui.scroll({ in: PANE, to: 'end' }).catch(() => undefined)
     } catch {
@@ -2326,6 +2341,7 @@ function scrollToEnd($: EngineInterface) {
  * foot nor follows it as it grows. A reveal a press asked for lands after it.
  */
 function scrollToStart($: EngineInterface) {
+  noteMove('start')
   try {
     void $.ui.scroll({ in: PANE, to: 'start' }).catch(() => undefined)
   } catch {
@@ -2337,13 +2353,28 @@ function scrollToStart($: EngineInterface) {
  * At each drawing of the pane: Chat coming into view takes the pane to its
  * end, and something new at Chat's end does too while you were there; Chat
  * leaving view while the pane kept to its end takes it to the top of what
- * shows instead. Anything else leaves the pane to you.
+ * shows instead. While the list of sessions is dropped over the tabs, no
+ * drawing moves the pane. Anything else leaves the pane to you.
  */
 function keepChat($: EngineInterface, now: number) {
-  const state = view.v2.tab === 'chat' && view.page === '' && !view.v2.isInspectOpen ? shownV2Of(now) : null
-  const step = followStep(chatFollow, state ? chatEndOf(state, view.v2.chatFilter) : null)
+  const isListOpen = SR.isListOpen()
+  const state = !isListOpen && view.v2.tab === 'chat' && view.page === '' && !view.v2.isInspectOpen ? shownV2Of(now) : null
+  const step = followStep(chatFollow, state ? chatEndOf(state, view.v2.chatFilter) : null, isListOpen)
   if (step === 'end') scrollToEnd($)
   else if (step === 'start') scrollToStart($)
+}
+
+/**
+ * `s`, the header's title or its count of sessions, `/deck sessions`: the
+ * list of sessions dropped over the tabs (./registry), or shut. As it
+ * drops, Chat's end is let go (./ui/v2/chat's `listStep`): you are up at
+ * the list, and no drawing moves the pane while it shows. A pane kept at
+ * Chat's end goes to its top at once, where the list drops, which ends the
+ * end the engine and the Desktop kept it on.
+ */
+function toggleSessions($: EngineInterface) {
+  SR.toggleList()
+  if (SR.isListOpen() && listStep(chatFollow) === 'start') scrollToStart($)
 }
 
 /**
@@ -2508,7 +2539,7 @@ function actionsFor($: EngineInterface): DeckActions {
     },
     review: text => fillReview($, text),
     // every session on this machine (./registry): the list dropped over the tabs (`s`), and any session's deck shown in this one's place (here's again: this deck's own)
-    openSessions: () => SR.toggleList(),
+    openSessions: () => toggleSessions($),
     closeSessions: () => SR.closeList(),
     openSession: id => void SR.openSession(id, view.isDemo),
     // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
@@ -3361,7 +3392,7 @@ export const register: Register = on => {
     orgDown.clear()
     // every session on this machine, dropped over the tabs
     if (arg === 'sessions' || arg === 'all') {
-      if (!SR.isListOpen()) SR.toggleList()
+      if (!SR.isListOpen()) toggleSessions($)
       const isShown = await openPane($)
       changed($)
       return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }

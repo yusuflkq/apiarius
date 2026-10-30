@@ -4271,6 +4271,13 @@ const VIEW_POLL = 1500, VIEW_AGAIN = 30000;
 /** Where the lazy files come from: another session's under /s/<id>, this one's at the root. */
 function baseUrl() { return route.session ? `/s/${encodeURIComponent(route.session)}` : ''; }
 
+/** A row's agents at work as the mod gives them (hooks/sessions.ts `SessionFace`: each its id, title, status and its own list's progress), three at most; none from an earlier mod, which names none. */
+function sessionFacesOf(list) {
+  return arr(list).filter(f => f && typeof f.id === 'string' && f.id && typeof f.title === 'string').slice(0, 3).map(f => ({
+    id: f.id, title: f.title, status: f.status === 'starting' ? 'starting' : 'running', progress: typeof f.progress === 'number' && Number.isFinite(f.progress) ? f.progress : undefined,
+  }));
+}
+
 /** Every session on this machine as the page reads it (the mod's `sessions`); null from a mod that writes none. */
 function sessionsOf(x) {
   x = obj(x);
@@ -4282,7 +4289,7 @@ function sessionsOf(x) {
       id: r.id, isMe: r.isMe === true, title: str(r.title) || 'No request yet', state, stateText: isQuiet ? '' : str(r.stateText) || STATE_TEXT[state],
       surface: str(r.surface), place: str(r.place), repo: str(r.repo), where: str(r.where) || [str(r.place), str(r.repo)].filter(Boolean).join(' · '), cwd: str(r.cwd),
       need: !isQuiet && typeof r.need === 'string' && r.need ? r.need : null, needs: isQuiet ? 0 : numOr(r.needs, 0), say: str(r.say),
-      working: numOr(r.working, 0), agents: numOr(r.agents, 0),
+      working: numOr(r.working, 0), agents: numOr(r.agents, 0), faces: sessionFacesOf(r.faces),
       costUsd: numOr(r.costUsd), cost: str(r.cost), costNote: str(r.costNote), at: numOr(r.at, 0), startedAt: numOr(r.startedAt, 0),
       isQuiet, heardAt: numOr(r.heardAt, 0), canOpen: r.canOpen === true, canSteer: r.canSteer === true,
     };
@@ -4328,19 +4335,19 @@ function machineLine(list) {
   };
 }
 
-/** A row's faces while its session works (hooks/sessions.ts `facesOf`): one an agent at work (the Orchestrator's alone while none is), three at most, each seeded by the session's id. */
+/** A row's faces while its agents work (hooks/sessions.ts `facesOf`): each as its session's own deck draws it, three at most, then how many more; none for the Orchestrator (the dot says the session works), nor from an earlier mod's row, which names none. */
 function facesOf(r) {
-  if (r.state !== 'working' || r.isQuiet) return { seeds: [], more: 0 };
-  const n = Math.max(1, r.working);
-  const seeds = Array.from({ length: Math.min(3, n) }, (_, i) => (i === 0 ? r.id : `${r.id}:${i}`));
-  return { seeds, more: n - seeds.length };
+  if (r.state !== 'working' || r.isQuiet || !r.faces.length) return { faces: [], more: 0 };
+  const faces = r.faces.slice(0, 3);
+  return { faces, more: Math.max(0, r.working - faces.length) };
 }
 
 function Faces16(r) {
   const f = facesOf(r);
-  if (!f.seeds.length) return null;
-  const svg = AV.avatarStackSvg(styleNow(), f.seeds.map(id => ({ id, name: r.title, role: '', status: 'running' })), { size: 16, ground: '#0b0b0b' });
-  return h('span', { key: 'faces', class: 'sess-faces', title: r.agents > r.working ? `${r.working} of ${plural(r.agents, 'agent')} working` : `${plural(Math.max(1, r.working), 'agent')} working` },
+  if (!f.faces.length) return null;
+  // seeded by each agent's id and named by its title, as its deck's own avatar (`faceOf`)
+  const svg = AV.avatarStackSvg(styleNow(), f.faces.map(a => ({ id: a.id, name: a.title, role: '', status: a.status, progress: a.progress })), { size: 16, ground: '#0b0b0b' });
+  return h('span', { key: 'faces', class: 'sess-faces', title: r.agents > r.working ? `${r.working} of ${plural(r.agents, 'agent')} working` : `${plural(r.working, 'agent')} working` },
     h('img', { class: 'sess-faces-img', alt: '', draggable: 'false', src: urlOf(svg) }),
     f.more > 0 && h('span', { class: 'sess-faces-more' }, `+${f.more}`));
 }
@@ -4502,7 +4509,7 @@ function SessionsPage() {
     h('kbd', { key: 'up' }, '↑'), h('kbd', { key: 'down' }, '↓'), ' pick one, ', h('kbd', { key: 'enter' }, 'Enter'), ' shows its deck, ', h('kbd', { key: 's' }, 's'), ' goes back.'));
 }
 
-/** One session: its dot (hollow while quiet); its title, "here" and its needs' amber badge; its surface's icon, where it runs and what it waits on you for (amber), is doing, or when it was last heard; its faces while it works over its agents' count; its word, spend and age, a fork's "incl. its parent's" under its word and spend. The one you came from lit. */
+/** One session: its dot (hollow while quiet); its title, "here" and its needs' amber badge; its surface's icon, where it runs and what it waits on you for (amber), is doing, or when it was last heard; its agents' faces while they work (none for the Orchestrator) over its agents' count; its word, spend and age, a fork's "incl. its parent's" under its word and spend. The one you came from lit. */
 function SessionRow(r, on) {
   const href = rowHref(r);
   const say = sayOf(r);
