@@ -1203,6 +1203,9 @@ function inline(text) {
   return out;
 }
 
+/** Inline words (`inline`) with their links as plain words: for words inside a link of their own. */
+const unlinked = parts => parts.map(x => (x && typeof x === 'object' && x.t === 'a' ? x.c : x));
+
 function Markdown(text) {
   const blocks = [];
   const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
@@ -2106,8 +2109,8 @@ function OrgPage() {
 // Org's Timeline (web/timeline.mjs lays it out), from /timeline
 // (timeline.json, which the mod writes before the state that follows it),
 // laid out by timeline.mjs as the Desktop pane and the terminal lay theirs. A
-// row an agent: its face, its name (a link to its drawer), its status, and
-// what it is doing now or did last; its lane beside it, every lane on one
+// row an agent: its face, its name, its status, and what it is doing now or
+// did last, all one link to its drawer; its lane beside it, every lane on one
 // axis that folds each stretch of 20 minutes or more where nobody worked.
 // Its calls are segments named where the name fits ("Read ×10"), a failed
 // one red; its waits on you amber; thinking a thin line; its end a cap. The
@@ -2327,12 +2330,13 @@ function TimelineView() {
     }
     const l = r.lane, a = IX.byId.get(l.id), st = l.isStopped ? 'stopped' : l.status;
     const line = tlNowLine(a, l, d);
-    cells.push(h('div', { key: `l:${l.id}`, class: `tl-left${isAgentOpen(l.id) ? ' on' : ''}`, style: { '--d': String(Math.min(3, Math.max(0, l.depth - 1))) } },
-      h('div', { class: 'tl-line' },
+    // the row's words are one link to its agent's drawer: its face, its name, its status and its line, as its lane beside it opens it
+    cells.push(h('a', { key: `l:${l.id}`, class: `tl-left${isAgentOpen(l.id) ? ' on' : ''}`, style: { '--d': String(Math.min(3, Math.max(0, l.depth - 1))) }, href: hrefOf('org', { kind: 'agent', id: l.id }), 'data-nav': 'agent', title: line ? `${l.title}: ${line}` : l.title, 'aria-label': `${l.title}, ${statusOf(st).label}: open its drawer` },
+      h('span', { class: 'tl-line' },
         AvatarDot(a || { id: l.id, title: l.title, kind: l.kind, status: l.status, isStopped: l.isStopped, todos: [] }, 22),
-        h('a', { class: 'tl-name', href: hrefOf('org', { kind: 'agent', id: l.id }), title: l.title, 'aria-label': `${l.title}, ${statusOf(st).label}: open its drawer` }, l.title),
+        h('span', { class: 'tl-name' }, l.title),
         Pill(st)),
-      h('div', { class: 'tl-now', title: line }, line ? inline(line) : ' ')));
+      h('span', { class: 'tl-now' }, line ? unlinked(inline(line)) : ' ')));
     cells.push(TimelineLane(d, l, axis, grid, crossings[i], messages, w, narrow ? TL_H.narrow : TL_H.lane));
   });
   const folded = foldSummary(axis.folds);

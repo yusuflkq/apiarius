@@ -13,7 +13,9 @@
  *   type, its model and tokens, and its one line (its call in flight, else
  *   what it handed back). Its edge in its status's hue while it runs, waits
  *   on you or failed, brighter for the agent whose page was opened last;
- *   under the pointer, a tint.
+ *   under the pointer, a tint. A veil (./parts) over the whole card opens
+ *   the page too, so a click on its avatar, or anywhere on it, does as a
+ *   click on its name: a Button takes no image, and the avatar is one.
  * - The connectors: each run down one Text of lines; each run across cut at
  *   its junctions (`orgPiecesOf`), each junction a glyph on its own cell and
  *   each stretch of `─` clipped to its cells (the Desktop's box-drawing
@@ -36,16 +38,17 @@ import { agentRowsOf } from './dashModel'
 import { AVATAR, advanceOf, avatar, svgOf, type Face } from './look'
 import { CARD_H, CARD_W, orgLayoutOf, orgPiecesOf, type OrgAgent, type OrgHeat, type OrgLayout, type OrgStatus } from './orgLayout'
 import { P } from './palette'
-import { cellsForPx, plainSlack } from './parts'
+import { cellsForPx, plainSlack, veil } from './parts'
 import { cutCells } from './text'
 
 /**
  * What each part of the chart costs in the Desktop's count of elements
  * (strings count): the frame, a card (its box, its head row, the avatar's
- * box and image, the name's box and Button, and three Text lines and their
- * strings), a run down, a junction, a stretch across.
+ * box and image, the name's box and Button, three Text lines and their
+ * strings, and the veil over it: two Boxes and a Button), a run down, a
+ * junction, a stretch across.
  */
-export const CHART_NODES = { frame: 1, card: 12, down: 3, glyph: 3, stretch: 4 } as const
+export const CHART_NODES = { frame: 1, card: 15, down: 3, glyph: 3, stretch: 4 } as const
 
 /** The most elements the chart takes: the rest of the pane (the header, the tabs, Org's head) keeps it well under the Desktop's 2000. */
 export const CHART_MOST = 1500
@@ -171,6 +174,7 @@ function cardOf(kit: Kit, agent: OrgAgent, row: V2AgentRow | undefined, x: numbe
   const meta = [agent.model || '—', agent.tokens ? `${agent.tokens} tokens` : ''].filter(one => one !== '').join(' · ')
   const said = agent.now || (face.isStopped ? 'stopped' : agent.status)
   const edge = isSelected ? EDGE_SELECTED[agent.status] : EDGE[agent.status]
+  const open = () => actions.openAgent(agent.id)
   return (
     <Box
       key={`org:card:${agent.id}`}
@@ -189,7 +193,7 @@ function cardOf(kit: Kit, agent: OrgAgent, row: V2AgentRow | undefined, x: numbe
       <Box flexDirection="row" columnGap={1} alignItems="center">
         <Box flexShrink={0}>{avatar(kit, face, AVATAR.card, { dot: true, animated: isMoving })}</Box>
         <Box flexShrink={1} minWidth={0}>
-          <Button key={agentKeyOf(agent.id)} label={name} plain onPress={() => actions.openAgent(agent.id)} />
+          <Button key={agentKeyOf(agent.id)} label={name} plain onPress={open} />
         </Box>
       </Box>
       <Text color={P.muted} wrap="truncate-end">
@@ -201,6 +205,7 @@ function cardOf(kit: Kit, agent: OrgAgent, row: V2AgentRow | undefined, x: numbe
       <Text color={P.fg2} wrap="truncate-end">
         {fit(said)}
       </Text>
+      {veil(kit, agentKeyOf(agent.id), open)}
     </Box>
   )
 }

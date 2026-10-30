@@ -641,7 +641,20 @@ test('Org`s Timeline, its third view (kept): from /timeline a row an agent (its 
   assert.equal(flat(textOf(find(view, 'org-bar')[0])), '40m · 8 agents · 2 in the background · 2 messages Chart List Timeline')
   // a row an agent, each name a link that opens its agent's drawer over Org; each shell under the loop that started it
   assert.deepEqual(find(view, 'tl-name').map(a => flat(textOf(a))), ['Orchestrator', 'researcher', 'builder', 'tester', 'Lint the new files', 'docs', 'scout', 'reviewer'])
-  assert.equal(find(view, 'tl-name')[2].p.href, `#/org/agent/${BUILDER}`)
+  // an agent's row is one link to its drawer, its face, name, status and line all in it (a press on its avatar opens it as its name does); no link inside it
+  const agentRows = find(view, 'tl-left').filter(el => !el.p.class.includes('tl-left-bg'))
+  assert.deepEqual(agentRows.map(el => [el.t, el.p.href]), ['main', RESEARCHER, BUILDER, TESTER, LINT, DOCS, SCOUT, REVIEWER].map(id => ['a', `#/org/agent/${id}`]))
+  for (const row of agentRows) {
+    assert.equal(find(row, 'av').length, 1, 'its avatar in the link')
+    assert.deepEqual(['tl-name', 'pill', 'tl-now'].map(cls => find(row, cls).length), [1, 1, 1])
+    assert.equal(findAll(row.c, v => v.t === 'a' || v.t === 'button').length, 0, 'no control inside the link')
+    assert.equal(row.p['data-nav'], 'agent')
+  }
+  assert.equal(agentRows[2].p['aria-label'], 'builder, waiting on you: open its drawer')
+  // a line with an address in it: its words, never a link inside the row's own
+  const said = p.run("h('span', null, unlinked(inline('WebFetch https://example.com/limits now')))")
+  assert.equal(findAll(said, v => v.t === 'a').length, 0)
+  assert.equal(flat(textOf(said)), 'WebFetch https://example.com/limits now')
   const rows = find(view, 'tl-left').map(el => flat(textOf(el)))
   assert.equal(rows.length, 10)
   assert.match(rows[0], /^Orchestrator waiting Waiting on you: AskUserQuestion/)

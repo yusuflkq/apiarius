@@ -136,6 +136,51 @@ test('the tabs are 1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Inspect · 6
   await ui.unmount()
 })
 
+test('a click on an agent`s avatar, or anywhere on its card, opens its page as its name does: on the desktop`s chart a veil over the whole card (an avatar is an image, which no Button holds); on the terminal`s tree its corner, avatar, name and pill one Button', async ($, on) => {
+  const state = sampleState()
+  await demo($, on, state)
+  const ui = await $.ui.mount(pane('desktop'))
+  await press(ui, 'tab:org')
+  const layout = orgLayoutOf(chartAgentsOf(state), 83)
+  for (const card of layout.cards) {
+    const id = card.agent.id
+    // the card's last part: a blank plain Button at its four edges, its name's Button kept (the focus moves among those)
+    const box = (await ui.find({ key: `org:card:${id}` }))!
+    expect((box.children.at(-1) as { props: Record<string, unknown> }).props).toMatchObject({ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, overflow: 'hidden' })
+    const veil = await ui.find({ key: `row:${W.agentKeyOf(id)}` })
+    expect(veil?.props.plain).toBe(true)
+    expect(String(veil?.props.label).trim()).toBe('')
+  }
+  expect(await keysOf(ui, 'agent:')).toEqual(layout.cards.map(card => W.agentKeyOf(card.agent.id)))
+  // a press on it: that agent's page
+  await press(ui, `row:${W.agentKeyOf(IDS.tester)}`)
+  expect((await ui.find({ key: 'page:head' }))?.text).toContain('tester')
+  await press(ui, 'key:b')
+  await press(ui, 'tab:now')
+  await ui.unmount()
+
+  // the terminal's tree: one Button the head of each row, its avatar in it
+  const term = await $.ui.mount(pane('terminal'))
+  await press(term, 'tab:org')
+  const face = AV.terminalFace({ id: IDS.builder, status: 'waiting' })
+  const builder = (await term.find({ key: W.agentKeyOf(IDS.builder) }))!
+  expect(builder.props).toMatchObject({ label: 'builder', plain: true })
+  expect(builder.text).toBe(`└ ${face.glyph}${face.mark} builder  waiting `)
+  const main = (await term.find({ key: W.agentKeyOf('main') }))!
+  expect(main.text.startsWith(AV.terminalFace({ id: 'main', role: 'main', status: 'waiting' }).glyph)).toBe(true)
+  expect(await term.find({ key: `row:${W.agentKeyOf(IDS.builder)}` })).toBeUndefined()
+  await press(term, W.agentKeyOf(IDS.builder))
+  expect((await term.find({ key: 'page:head' }))?.text).toContain('builder')
+  await press(term, 'key:b')
+  // the one opened last: its name on a plate, the Button still marked primary
+  const marked = (await term.find({ key: W.agentKeyOf(IDS.builder) }))!
+  expect(marked.props.variant).toBe('primary')
+  expect(JSON.stringify(marked.children)).toContain('"inverse":true')
+  expect(JSON.stringify((await term.find({ key: W.agentKeyOf(IDS.tester) }))!.children)).not.toContain('"inverse":true')
+  await press(term, 'tab:now')
+  await term.unmount()
+})
+
 test('the agent whose page was opened last is marked on the chart; where the pane cannot hold the chart the Client draws it, and what it posts opens that agent`s page, anything else let go', async ($, on) => {
   await demo($, on, sampleState())
   const ui = await $.ui.mount(pane('desktop'))

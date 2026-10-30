@@ -6,7 +6,10 @@
  * name (a Button keyed `agent:<id>`, W.agentKeyOf; the one opened last the
  * primary plate), its pill and "Open →"; its one line under it (its call in
  * flight verbatim, else what it handed back). Every line of a row opens the
- * agent's page, and "Open →" lights while the pointer is on the row.
+ * agent's page, its avatar too: on the terminal its corner, avatar, name and
+ * pill are one Button (the name of the one opened last on a plate), and on a
+ * desktop a veil (./parts) lies over the whole row. "Open →" lights while
+ * the pointer is on the row.
  *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
@@ -18,7 +21,7 @@ import type { DashActions, Kit } from '../types'
 import { agentRowsOf, cardLine, wrapTicks } from './dashModel'
 import { AVATAR, advanceOf, avatar, quiet, statusPill } from './look'
 import { P, toneOf } from './palette'
-import { OPEN_LABEL, buttonSlack, openButton, pillCells, plainSlack, pressText, tickParts, wrapAdvanceOf } from './parts'
+import { OPEN_LABEL, buttonSlack, isRowButton, openButton, pillCells, plainSlack, pressText, tickParts, veil, wrapAdvanceOf } from './parts'
 import { cellsOf, cutCells, plural } from './text'
 
 /** The cells each level of the tree indents, and the most levels it indents. */
@@ -81,28 +84,49 @@ export function orgTree(kit: Kit, state: WebStateV2, actions: DashActions, selec
         const word = row.isStopped ? 'stopped' : toneOf(row.status).word
         const open = () => actions.openAgent(row.id)
         const said = wrapTicks(orgLineOf(row) || '—', Math.max(8, kit.columns - indent - lead - plainSlack(kit)), 1, wrapAdvanceOf(kit))[0] ?? []
+        const isSelected = row.id === selected
+        // the terminal: its corner, avatar, name and pill one Button, the one opened last its name on a plate; elsewhere the avatar is an image, which no Button holds
+        const head = isRowButton(kit) ? (
+          <Box flexShrink={1} minWidth={0}>
+            <Button key={agentKeyOf(row.id)} label={name} plain {...(isSelected ? { variant: 'primary' as const } : {})} onPress={open}>
+              {depth > 0 ? <Text color={P.muted3}>└ </Text> : null}
+              {avatar(kit, row, AVATAR.row, { dot: true, animated: true })}
+              {' '}
+              <Text bold color={P.text} inverse={isSelected}>
+                {name}
+              </Text>
+              {' '}
+              {statusPill(kit, row.status, word)}
+            </Button>
+          </Box>
+        ) : (
+          [
+            depth > 0 ? <Text color={P.muted3}>└</Text> : null,
+            <Box flexShrink={0}>{avatar(kit, row, AVATAR.row, { dot: true, animated: true })}</Box>,
+            <Box flexShrink={1} minWidth={0}>
+              {isSelected ? (
+                <Button key={agentKeyOf(row.id)} label={name} variant="primary" onPress={open} />
+              ) : (
+                <Button key={agentKeyOf(row.id)} label={name} plain onPress={open}>
+                  <Text bold color={P.text}>
+                    {name}
+                  </Text>
+                </Button>
+              )}
+            </Box>,
+            <Box flexShrink={0}>{statusPill(kit, row.status, word)}</Box>,
+          ]
+        )
         return (
           <Box key={`org:${row.id}`} flexDirection="column" paddingLeft={indent}>
             <Box flexDirection="row" columnGap={1} alignItems="center">
-              {depth > 0 ? <Text color={P.muted3}>└</Text> : null}
-              <Box flexShrink={0}>{avatar(kit, row, AVATAR.row, { dot: true, animated: true })}</Box>
-              <Box flexShrink={1} minWidth={0}>
-                {row.id === selected ? (
-                  <Button key={agentKeyOf(row.id)} label={name} variant="primary" onPress={open} />
-                ) : (
-                  <Button key={agentKeyOf(row.id)} label={name} plain onPress={open}>
-                    <Text bold color={P.text}>
-                      {name}
-                    </Text>
-                  </Button>
-                )}
-              </Box>
-              <Box flexShrink={0}>{statusPill(kit, row.status, word)}</Box>
+              {head}
               <Box flexGrow={1} flexShrink={0} justifyContent="flex-end">
                 {openButton(kit, `org:open:${row.id}`, toneOf(row.status).pillFg, open)}
               </Box>
             </Box>
             <Box paddingLeft={lead}>{pressText(kit, `org:now:${row.id}`, tickParts(kit, said, P.muted), open, true)}</Box>
+            {veil(kit, agentKeyOf(row.id), open)}
           </Box>
         )
       })}

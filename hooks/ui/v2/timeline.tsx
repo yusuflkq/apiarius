@@ -6,7 +6,9 @@
  *
  * - Each agent a row: its face, its name (a plain Button that opens its
  *   page), its status word, and on a line under them what it is doing now or
- *   did last. Its lane sits beside it, every lane on one axis: its tool calls
+ *   did last; a press on any of it, its face and its lane too, opens its page
+ *   (a veil over the row on a desktop, ./parts; on the terminal its face,
+ *   name and word one Button, its lane and its line each another). Its lane sits beside it, every lane on one axis: its tool calls
  *   as segments named where the name fits, a failed one red, its waits on
  *   you amber, thinking a thin line between them, idle a dotted one, its end
  *   a cap (a green check done, a red cross failed, a grey square stopped),
@@ -41,7 +43,7 @@ import { listBox, listRow } from './dash'
 import { agoText, quoted } from './dashModel'
 import { avatar, avatarCells, quiet, svgOf } from './look'
 import { P, toneOf } from './palette'
-import { CELL_PX, rule } from './parts'
+import { CELL_PX, isRowButton, rule, veil } from './parts'
 import { ago, cellsOf, cutCells, flat, monoAdvance, plural, uiAdvance, type Advance } from './text'
 
 /** The lanes the pane draws at most: the Orchestrator and the newest to start; past them, "and n more" (the web page draws them all). */
@@ -651,6 +653,7 @@ function svgRows(kit: Kit, layout: TimelineLayout, state: Pick<WebStateV2, 'agen
         <Box flexShrink={0}>
           <Svg source={source} alt={laneAltOf(timeline, lane)} width={w} height={ROW_PX.lane} />
         </Box>
+        {veil(kit, agentKeyOf(lane.id), () => actions.openAgent(lane.id))}
       </Box>,
     )
   })
@@ -712,25 +715,57 @@ function cellRows(kit: Kit, layout: TimelineLayout, state: Pick<WebStateV2, 'age
     // the name's room: the row's words less the indent, the face (and its mark), the two gaps and the word
     const name = cutCells(lane.title, Math.max(4, label + 1 - indent - avatarCells(kit, 18, true) - 2 - cellsOf(word, advance)), advance)
     const now = nowLineOf(rowOf.get(lane.id), lane, timeline)
+    const open = () => actions.openAgent(lane.id)
+    const cells = cellsLine(kit, 'lane', laneCellsOf(timeline, lane, axis, crossings))
+    const nowText = cutCells(now, Math.max(4, kit.columns - indent - 2), advance)
+    if (isRowButton(kit)) {
+      // the terminal: its face, name and word one Button, its lane and its line under it each another, all opening its page
+      out.push(
+        <Box key={`tl:${lane.id}`} flexDirection="row">
+          <Box width={label + 1} flexShrink={0} flexDirection="row" paddingLeft={indent}>
+            <Box flexShrink={1} minWidth={0}>
+              <Button key={agentKeyOf(lane.id)} label={name} plain onPress={open}>
+                {avatar(kit, lane, 18, { dot: true })}
+                {` ${name} `}
+                <Text color={hue}>{word}</Text>
+              </Button>
+            </Box>
+          </Box>
+          <Button key={`tl:lane:${lane.id}`} label={`${lane.title}'s lane`} plain onPress={open}>
+            {cells}
+          </Button>
+        </Box>,
+      )
+      if (now !== '') {
+        out.push(
+          <Box key={`tl:now:${lane.id}`} flexDirection="row" paddingLeft={indent + 2}>
+            <Button key={`tl:said:${lane.id}`} label={nowText} plain onPress={open}>
+              <Text color={P.muted2}>{nowText}</Text>
+            </Button>
+          </Box>,
+        )
+      }
+      return
+    }
     out.push(
       <Box key={`tl:${lane.id}`} flexDirection="row">
         <Box width={label + 1} flexShrink={0} flexDirection="row" columnGap={1} paddingLeft={indent}>
           <Box flexShrink={0}>{avatar(kit, lane, 18, { dot: true })}</Box>
           <Box flexShrink={1} minWidth={0}>
-            <Button key={agentKeyOf(lane.id)} label={name} plain onPress={() => actions.openAgent(lane.id)} />
+            <Button key={agentKeyOf(lane.id)} label={name} plain onPress={open} />
           </Box>
           <Box flexShrink={0}>
             <Text color={hue}>{word}</Text>
           </Box>
         </Box>
-        {cellsLine(kit, 'lane', laneCellsOf(timeline, lane, axis, crossings))}
+        {cells}
       </Box>,
     )
     if (now !== '') {
       out.push(
         <Box key={`tl:now:${lane.id}`} flexDirection="row" paddingLeft={indent + 2}>
           <Text color={P.muted2} wrap="truncate-end">
-            {cutCells(now, Math.max(4, kit.columns - indent - 2), advance)}
+            {nowText}
           </Text>
         </Box>,
       )

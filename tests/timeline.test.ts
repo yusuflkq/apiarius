@@ -795,6 +795,42 @@ test('the terminal`s Timeline: the same rows in cells fitted to its columns, eac
   }
 })
 
+test('a click on an agent`s row of the Timeline opens its page wherever it lands, its face and its lane too: a veil over the row on the desktop; on the terminal its face, name and word one Button, its lane another, what it does a third', async ($, on) => {
+  await demo($, on)
+  const ids = ['main', IDS.researcher, IDS.builder, IDS.tester, IDS.linter, IDS.docs, IDS.scout, IDS.reviewer]
+  const desk = (await $.ui.mount(pane('desktop'))) as unknown as Drawing
+  await press(desk, 'tab:org')
+  await press(desk, 'org:show:timeline')
+  for (const id of ids) {
+    const row = (await desk.find({ key: `tl:${id}` }))!
+    expect((row.children.at(-1) as { props: Record<string, unknown> }).props).toMatchObject({ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 })
+    expect(String((await desk.find({ key: `row:${W.agentKeyOf(id)}` }))?.props.label).trim()).toBe('')
+  }
+  // a shell's row opens nothing: no veil
+  expect(((await desk.find({ key: 'tl:bg:bash_7' }))!.children as { props?: Record<string, unknown> }[]).some(one => one.props?.position === 'absolute')).toBe(false)
+  await press(desk, `row:${W.agentKeyOf(IDS.docs)}`)
+  expect((await desk.find({ key: 'page:head' }))?.text).toContain('docs')
+  await press(desk, 'key:b')
+  await press(desk, 'org:show:chart')
+  await desk.unmount()
+
+  const term = (await $.ui.mount(pane('terminal'))) as unknown as Drawing
+  await press(term, 'tab:org')
+  await press(term, 'org:show:timeline')
+  const tester = (await term.find({ key: W.agentKeyOf(IDS.tester) }))!
+  expect(tester.props).toMatchObject({ label: 'tester', plain: true })
+  expect(tester.text).toMatch(/^\S+ tester done$/)
+  expect((await term.find({ key: `tl:lane:${IDS.tester}` }))?.text).toContain('✓')
+  expect((await term.find({ key: `tl:said:${IDS.docs}` }))?.text).toMatch(/^Done \d+m ago: “Documented the limits/)
+  for (const key of [W.agentKeyOf(IDS.tester), `tl:lane:${IDS.tester}`, `tl:said:${IDS.tester}`]) {
+    await press(term, key)
+    expect((await term.find({ key: 'page:head' }))?.text).toContain('tester')
+    await press(term, 'key:b')
+  }
+  await press(term, 'org:show:chart')
+  await term.unmount()
+})
+
 test('the terminal`s Timeline folds the hours nobody worked: ╱╱╱ on the axis and across the lanes that lived through them, the summary saying how long', async ($, on) => {
   await demo($, on, longTimeline())
   const ui = (await $.ui.mount(pane('terminal', 84))) as unknown as Drawing
