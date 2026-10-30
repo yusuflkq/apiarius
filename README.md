@@ -5,7 +5,7 @@ See what every agent and subagent in your Claude Code session is doing, live.
 [![tests](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml/badge.svg)](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-![Apiarius](assets/hero.png)
+![Four agents building a rate limiter, watched live in the Apiarius web deck](assets/demo.gif)
 
 Apiarius is a Claude Code mod for people who hand work to agents and subagents. `/apiarius` opens the deck: every agent in the session, what each one is doing, who started whom, what they tell each other and what they changed, updated as they work. It shows you how your orchestration actually plays out. The deck opens in the Claude Desktop side pane, in the terminal, or in your browser.
 
