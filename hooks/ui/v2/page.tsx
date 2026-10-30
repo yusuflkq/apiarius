@@ -34,7 +34,7 @@ import { diffBlocks, editBlock, titleOf, type Budget } from './diffs'
 import { AVATAR, advanceOf, avatar, glyph, icon, keyButton, quiet, svgOf, toolTag, toolTagCells, wordMark } from './look'
 import { needsSection } from './needs'
 import { P } from './palette'
-import { face, plainSlack, rule, wordParts } from './parts'
+import { face, plainSlack, rule, veil, wordParts } from './parts'
 import { pageStop } from './stop'
 import { ago, cellsOf, cut, cutCells, flat, foldText, msText, num, plural } from './text'
 
@@ -671,7 +671,10 @@ function fileBlock(kit: Kit, state: WebStateV2, files: V2Files, row: V2AgentRow,
   const { Box } = kit
   const part = `file:${group.path}`
   const open = isOpen(row.id, part, false)
-  const head = editsRow(kit, state, group, open, toggler(row.id, part, false, actions), { key: `page:edits:${group.path}`, isOwn: true })
+  const toggle = toggler(row.id, part, false, actions)
+  const key = `page:edits:${group.path}`
+  // on a desktop the veil lies over the padded Box the row stands in, so its padding presses too
+  const head = editsRow(kit, state, group, open, toggle, { key, isOwn: true, isVeiled: !isAiry(kit) })
   const earlier = group.edits.length - MOST_EDITS
   const edits = open
     ? [
@@ -680,7 +683,10 @@ function fileBlock(kit: Kit, state: WebStateV2, files: V2Files, row: V2AgentRow,
           .slice(0, MOST_EDITS)
           .map(edit => {
             const isShut = !isOpen(row.id, `edit:${edit.id}`, false)
-            return editBlock(kit, state, files, edit, budget, { isOwn: true, isShut, right: editLinks(kit, row, edit, calls.has(edit.id), group.edits.length > 1, isShut, actions) })
+            const isOneOfMany = group.edits.length > 1
+            // among several, a press anywhere on an edit's head but its links shows or hides its diff, as Show diff does
+            const toggle = isOneOfMany ? { toggle: toggler(row.id, `edit:${edit.id}`, false, actions), key: `page:edithead:${edit.id}` } : {}
+            return editBlock(kit, state, files, edit, budget, { isOwn: true, isShut, right: editLinks(kit, row, edit, calls.has(edit.id), isOneOfMany, isShut, actions), ...toggle })
           }),
         earlier > 0 ? quiet(kit, `${plural(earlier, 'earlier edit')}: Changes lists them all.`) : null,
       ]
@@ -700,6 +706,7 @@ function fileBlock(kit: Kit, state: WebStateV2, files: V2Files, row: V2AgentRow,
   return listBox(kit, `page:file:${group.path}`, [
     <Box paddingX={1} paddingY={1} hover={{ backgroundColor: P.rowHover }}>
       {head}
+      {veil(kit, key, toggle)}
     </Box>,
     edits ? rule(kit) : null,
     edits ? (

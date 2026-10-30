@@ -3557,16 +3557,21 @@ function OwnEdits(a, edits, calls) {
   return h('div', { class: 'fgroups' }, files.map(([p, list], i) => FileGroup(p, list, { scope: `agent:${a.id}`, open: i === 0, showAgent: false, outside: list.some(e => e.isOutside), own: { a, calls } })));
 }
 
-/** One edit on its agent's drawer: its chip, when, its lines, and at the right the way to its call and, among several, Show diff; its diff while open. */
+/**
+ * One edit on its agent's drawer: its chip, when, its lines, and at the right the way to its call and, among several,
+ * Show diff; its diff while open. Among several, all of its head but its links is one button that shows or hides its
+ * diff, as Show diff does, the head lit under the pointer; "In Activity" keeps its own press.
+ */
 function OwnEdit(e, own, isNewest, isOneOfMany) {
   const key = `edit|${own.a.id}|${e.id}`;
   const open = isOpen(key, isNewest);
+  const said = [ToolTag(e.tool), h('span', { class: 'edit-time' }, agoText(e.at)), DiffStat(e.added, e.removed)];
   return h('div', { key: e.id, id: editAnchor(own.a, e.id), class: `edit edit-own${open ? '' : ' shut'}` },
     h('div', { class: 'edit-head' },
-      ToolTag(e.tool),
-      h('span', { class: 'edit-time' }, agoText(e.at)),
-      DiffStat(e.added, e.removed),
-      h('span', { class: 'edit-links' },
+      isOneOfMany
+        ? h('button', { key: 'toggle', type: 'button', class: 'edit-toggle', 'aria-expanded': open ? 'true' : 'false', title: open ? 'Hide its diff' : 'Show its diff', onClick: () => toggle(key) }, said)
+        : said,
+      h('span', { key: 'links', class: 'edit-links' },
         own.calls.has(e.id) && h('button', { type: 'button', class: 'link-btn', onClick: () => showCall(own.a, e.id) }, icon('arrowUp'), 'In Activity'),
         isOneOfMany && h('button', { type: 'button', class: 'link-btn', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(key) }, open ? 'Hide diff' : 'Show diff'))),
     open && PatchView(e.id, `agent:${own.a.id}`));

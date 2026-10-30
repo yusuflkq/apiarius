@@ -19,6 +19,7 @@ import type { V2AgentRow, V2Changes, V2Files, WebStateV2 } from '../../web'
 import type { Kit } from '../types'
 import { quiet, svgOf, toolTag } from './look'
 import { P, mix } from './palette'
+import { isRowButton, veil } from './parts'
 import { ago, num } from './text'
 
 /** Below this many characters left in a budget, a diff is noted as cut rather than drawn a few lines deep. */
@@ -150,9 +151,53 @@ export function editorsOf(state: Pick<WebStateV2, 'agents' | 'changes'>, ids: re
  * lines. On its agent's page (`isOwn`), as the web's drawer: its tool's chip,
  * when and its lines, no name, `right` at the line's right (its links), its
  * diff numbered where the surface draws its own; `isShut` leaves the diff
- * out, its head alone.
+ * out, its head alone. With `toggle` (an edit among several of its file) a
+ * press anywhere on its head but its links shows or hides its diff: on the
+ * terminal its chip, when and its lines are one Button keyed `key`, on a
+ * desktop a veil (./parts) lies over them.
  */
-export type EditLook = { isOwn?: boolean; isShut?: boolean; right?: RenderElement | null }
+export type EditLook = { isOwn?: boolean; isShut?: boolean; right?: RenderElement | null; toggle?: () => void; key?: string }
+
+/** An edit's head on its agent's page: its tool's chip, when and its lines, its links at the right; with `look.toggle`, all but its links one press. */
+function ownHead(kit: Kit, state: WebStateV2, edit: V2Changes['edits'][number], look: EditLook): RenderElement {
+  const { Box, Text, Button } = kit
+  const counts = delta(kit, edit.added, edit.removed)
+  const when = ago(edit.at, state.now)
+  const toggle = look.toggle
+  const key = look.key ?? `edithead:${edit.id}`
+  const right = (
+    <Box flexShrink={0} justifyContent="flex-end">
+      {look.right ?? null}
+    </Box>
+  )
+  if (toggle && isRowButton(kit)) {
+    return (
+      <Box flexDirection="row" columnGap={1} alignItems="center">
+        <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row">
+          <Button key={key} label={`${edit.tool} ${when}`} plain onPress={toggle}>
+            {toolTag(kit, edit.tool)}
+            <Text color={P.muted2}>{` ${when}`}</Text>
+            {counts ? [' ', counts] : null}
+          </Button>
+        </Box>
+        {right}
+      </Box>
+    )
+  }
+  return (
+    <Box flexDirection="row" columnGap={1} alignItems="center">
+      <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" columnGap={1} alignItems="center">
+        <Box flexShrink={0}>{toolTag(kit, edit.tool)}</Box>
+        <Box flexShrink={0}>
+          <Text color={P.muted2}>{when}</Text>
+        </Box>
+        {counts ? <Box flexShrink={0}>{counts}</Box> : null}
+        {toggle ? veil(kit, key, toggle) : null}
+      </Box>
+      {right}
+    </Box>
+  )
+}
 
 /** One edit of an agent's: its head (`look`), then its exact patch (from its lazy file). */
 export function editBlock(kit: Kit, state: WebStateV2, files: V2Files, edit: V2Changes['edits'][number], budget: Budget, look: EditLook = {}): RenderElement {
@@ -160,16 +205,7 @@ export function editBlock(kit: Kit, state: WebStateV2, files: V2Files, edit: V2C
   const counts = delta(kit, edit.added, edit.removed)
   const patch = files.patch(edit.id)
   const head = look.isOwn ? (
-    <Box flexDirection="row" columnGap={1} alignItems="center">
-      <Box flexShrink={0}>{toolTag(kit, edit.tool)}</Box>
-      <Box flexShrink={0}>
-        <Text color={P.muted2}>{ago(edit.at, state.now)}</Text>
-      </Box>
-      {counts ? <Box flexShrink={0}>{counts}</Box> : null}
-      <Box flexGrow={1} flexShrink={1} minWidth={0} justifyContent="flex-end">
-        {look.right ?? null}
-      </Box>
-    </Box>
+    ownHead(kit, state, edit, look)
   ) : (
     <Text wrap="truncate-end">
       <Text color={P.muted}>{`${edit.tool} by ${titleOf(state, edit.agent)} · ${ago(edit.at, state.now)}`}</Text>

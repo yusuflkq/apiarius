@@ -1154,6 +1154,12 @@ test('Changes: git`s files, each opening on git`s own diff and the agents` own p
   assert.match(flat(textOf(view())), new RegExp(`^${files.length} uncommitted files \\+${add} −${rem} feat/rate-limit ↑1 · 9c1e4b7 · acme-api Ask for review Uncommitted ${files.length}`))
   assert.deepEqual(find(view(), 'chg').map(c => c.k), files.map(f => f.path))
   const chg = path => find(view(), 'chg').find(c => c.k === path)
+  // a row is one button: its chevron, git's code, its path, its editors' faces and its counts all in it, so a press anywhere on it opens it
+  for (const head of find(view(), 'chg-head')) {
+    assert.deepEqual([head.t, head.p.type], ['button', 'button'])
+    for (const cls of ['chev', 'code-badge', 'path', 'diffstat']) assert.equal(find(head, cls).length, 1, `.${cls} in the row's button`)
+  }
+  assert.equal(find(find(chg('src/rateLimit.ts'), 'chg-head')[0], 'stack').length, 1)
   click(find(chg('src/app.ts'), 'chg-head')[0])
   const app = () => chg('src/app.ts')
   assert.match(flat(textOf(app())), /^M src\/ app\.ts \+2 −1 Git's diff against HEAD/)
@@ -1175,6 +1181,8 @@ test('Changes: git`s files, each opening on git`s own diff and the agents` own p
   assert.equal(find(other(), 'path')[0].p.title, 'C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js')
   assert.equal(flat(textOf(find(other(), 'path')[0])), '…/Temp/ bench.js')
   assert.equal(flat(textOf(find(view(), 'commit')[0])), '9c1e4b7 Add the sliding-window limiter builder 1 file +6 −0 15m')
+  // the other edits' rows, one button each too
+  assert.deepEqual(find(other(), 'fgroup-head').map(head => [head.t, find(head, 'chev').length, find(head, 'path').length, find(head, 'diffstat').length]), [['button', 1, 1, 1]])
   // Review: nothing goes before you say yes
   const review = () => p.view(`ReviewButton('changes', 'Review the diff')`)
   click(byText(review(), 'btn', 'Ask for review'))
@@ -1367,6 +1375,22 @@ test('the drawer`s Edits, as the pane`s page: a file a card, the one edited last
   drawer()
   await settle()
   assert.ok(find(edits()[1], 'dl-add').length > 0, 'Show diff opens an earlier edit on its patch')
+  // among several, all of an edit's head but its links is one button that shows or hides its diff: its chip, when and lines
+  const toggles = () => edits().map(e => find(e, 'edit-toggle')[0])
+  assert.deepEqual(toggles().map(b => [b.t, b.p.type, b.p['aria-expanded']]), [['button', 'button', 'true'], ['button', 'button', 'true']])
+  assert.equal(flat(textOf(toggles()[0])), 'Edit 1m ago +1 −1')
+  assert.match(flat(textOf(toggles()[1])), /^Edit \S+ ago \+\d+ −\d+$/)
+  assert.equal(find(toggles()[1], 'link-btn').length, 0, 'its links stand beside the button, never in it')
+  click(toggles()[1])
+  drawer()
+  assert.equal(find(edits()[1], 'diff').length, 0, 'a press on the head hides its diff')
+  assert.equal(toggles()[1].p['aria-expanded'], 'false')
+  assert.equal(flat(textOf(find(edits()[1], 'edit-links')[0])), 'In Activity Show diff')
+  click(toggles()[1])
+  await settle()
+  drawer()
+  await settle()
+  assert.ok(find(edits()[1], 'dl-add').length > 0, 'and shows it again')
   // In Activity: the call that made it, opened, brought into view
   click(byText(edits()[1], 'link-btn', 'In Activity'))
   assert.deepEqual({ ...p.run('ui.drawerTo') }, { id: 'act-c4d7e8f9a0b1263d-toolu_01TstE1', until: p.run('ui.drawerTo.until') })
@@ -1380,6 +1404,8 @@ test('the drawer`s Edits, as the pane`s page: a file a card, the one edited last
   drawer()
   await settle()
   assert.match(flat(textOf(groups()[1])), /a burst past the limit is refused/)
+  // the one edit of a file has no button of its head: its diff stays
+  assert.equal(find(groups()[1], 'edit-toggle').length, 0)
 })
 
 test('the drawer resizes: its left edge a separator, focusable, saying its width; dragged, ← or →, the width follows within its bounds (the page keeps 420px beside it, a window less its margin over it) and is kept per viewer; a double click resets it; with storage refused it works for the visit', () => {

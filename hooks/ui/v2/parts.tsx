@@ -4,8 +4,9 @@
  * takes, the amber "shared" tag, a stack of editors' faces, a list's 1 px
  * rule, a section's head that folds it (`foldHead`: "▾ AGENTS 7", a press
  * folds the section to it and one dim line), a line whose code spans read
- * as code, the chrome of a bordered card, and the pressable lines and
- * "Open →" every card and row is made of.
+ * as code, the chrome of a bordered card, the pressable lines and "Open →"
+ * every card and row is made of, and the veil that makes a whole row or card
+ * one press on a desktop.
  *
  * A desktop draws a plain Button's label alone, in its own ink (the Text in
  * it keeps neither colour nor weight), so what carries colour beside a
@@ -96,6 +97,19 @@ export function faces(kit: Kit, who: readonly (Face | null)[], px: number, names
       )}
       {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
     </Box>
+  )
+}
+
+/** The editors' faces on the terminal as one Text (each one's glyph in its colour, then "+n"), which a Button can hold. */
+export function facesText(kit: Kit, who: readonly (Face | null)[], most = 3): RenderElement {
+  const { Text } = kit
+  const shown = who.slice(0, most)
+  const more = who.length - shown.length
+  return (
+    <Text>
+      {shown.map(one => (one === null ? <Text color={P.muted3}>●</Text> : terminalCell(kit, AV.terminalFace(avatarAgentOf(one), avatarStyleOf(kit)))))}
+      {more > 0 ? <Text color={P.muted2}>{` +${more}`}</Text> : null}
+    </Text>
   )
 }
 
@@ -313,6 +327,50 @@ export const OPEN_LABEL = 'Open →'
 export function openButton(kit: Kit, key: string, hue: string, onPress: () => void): RenderElement {
   const { Button } = kit
   return <Button key={key} label={OPEN_LABEL} plain dimColor hover={{ color: hue, dimColor: false }} onPress={onPress} />
+}
+
+/**
+ * The veil's blank label: em spaces (13 px each, never collapsed) wider than
+ * the widest pane, and the cells of the Box that holds it, wider still, so
+ * its Button never shrinks to that Box and draws no "…" at its end.
+ */
+const VEIL_LABEL = ' '.repeat(160)
+const VEIL_CELLS = 300
+
+/** The key of the veil over a row whose own Button is keyed `key`. */
+export function veilKeyOf(key: string): string {
+  return `row:${key}`
+}
+
+/**
+ * A press over the whole of a row or a card, on a desktop: a plain Button of
+ * a blank label laid over all of it, in a Box placed at its parent's four
+ * edges that clips the Button to them, drawn after the row's own parts so a
+ * click anywhere on them (an icon, faces, coloured counts, the gaps between)
+ * lands on it, and the pointer anywhere on the row lights it as one control.
+ *
+ * A desktop draws a Button's label alone and takes no image in one, so the
+ * row keeps its own look under it, and its named Button stays for the
+ * keyboard. Put it last in the row's own Box, over parts that do what it
+ * does: a control that does something else under it would take no click.
+ * Null elsewhere: the terminal makes the row one Button of its runs, and VS
+ * Code places no Box absolutely.
+ */
+export function veil(kit: Kit, key: string, onPress: () => void): RenderElement | null {
+  const { Box, Button } = kit
+  if (kit.surface !== 'desktop') return null
+  return (
+    <Box position="absolute" left={0} top={0} right={0} bottom={0} overflow="hidden">
+      <Box width={VEIL_CELLS} flexShrink={0} flexDirection="row" alignItems="stretch">
+        <Button key={veilKeyOf(key)} label={VEIL_LABEL} plain onPress={onPress} />
+      </Box>
+    </Box>
+  )
+}
+
+/** Whether a row is drawn as one Button of its runs: on the terminal, which draws a Button's Text children (a press anywhere on them is one press). */
+export function isRowButton(kit: Kit): boolean {
+  return kit.surface === 'terminal'
 }
 
 /** The cells a plain Button takes beyond its label where a line is laid out: none on the terminal, about a cell on a desktop. */

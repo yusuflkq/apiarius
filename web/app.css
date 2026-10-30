@@ -1052,6 +1052,14 @@ span.cg-av { cursor: default; }
 .edit-time { margin-left: auto; font: 11px var(--mono); color: var(--muted-2); white-space: nowrap; }
 /* on its agent's drawer: its chip, when and its lines together, its links at the right */
 .edit-own .edit-time { margin-left: 0; }
+/* among several edits of a file, all of the head but its links is one button that shows or hides the diff, the head lit under the pointer */
+.edit-toggle {
+  display: flex; align-items: center; gap: 10px; flex: 1 1 auto; align-self: stretch; min-width: 0;
+  margin: -8px 0 -8px -14px; padding: 8px 0 8px 14px; border: 0; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.edit-toggle:focus-visible { outline-offset: -2px; }
+.edit-head:has(> .edit-toggle:hover) { background: var(--hover); }
 .edit-links { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .link-btn {
   display: inline-flex; align-items: center; gap: 5px; flex: none;

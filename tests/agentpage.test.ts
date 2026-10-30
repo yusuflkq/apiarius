@@ -186,6 +186,8 @@ test('tester`s page, as the web`s drawer: its head and facts, Back at the right;
     expect((await ui.find({ key: 'page:editrow:src/rateLimit.ts' }))?.text).toMatch(/src\/.*rateLimit\.ts.*1 edit/s)
     expect(await keysOf(ui, 'edit:', 'Box')).toEqual(['edit:toolu_01TstE1'])
     expect((await ui.find({ key: 'edit:toolu_01TstE1' }))?.text).toContain('(await store.hit(key, now)) <= perMinute')
+    // the one edit of its file shows its diff, with no head to press and no Show diff
+    expect([...(await keysOf(ui, 'page:edithead:')), ...(await keysOf(ui, 'row:page:edithead:'))]).toEqual([])
     await press(ui, 'page:edits:tests/rateLimit.test.ts')
     expect(await keysOf(ui, 'edit:', 'Box')).toEqual(['edit:toolu_01TstE1', 'edit:toolu_01TstW1'])
     expect((await ui.find({ key: 'edit:toolu_01TstW1' }))?.text).toContain('a burst past the limit is refused')
@@ -228,6 +230,58 @@ test('an edit and the call that made it are a press apart: "↑ In Activity" ope
     // as it was, for the next surface
     await press(ui, 'page:act:toolu_01TstW1')
     await press(ui, 'page:edits:tests/rateLimit.test.ts')
+    await press(ui, 'key:b')
+    await ui.unmount()
+  }
+})
+
+test('Edits opens a file from anywhere on its row, and among several edits of a file an edit`s diff from anywhere on its head but its links: the terminal`s row and head one Button, a desktop`s a veil over them; "↑ In Activity" keeps its own press', async ($, on) => {
+  // tester's two edits, of one file here: an edit among several shows or hides its diff
+  await demo($, on, newWorld(), {
+    change: state => ({ ...state, changes: { ...state.changes, edits: state.changes.edits.map(edit => (edit.id === 'toolu_01TstW1' ? { ...edit, path: 'src/rateLimit.ts' } : edit)) } }),
+  })
+  const file = 'src/rateLimit.ts'
+  for (const surface of SURFACES) {
+    const ui = (await $.ui.mount(pane(surface))) as unknown as Drawing
+    await openPage(ui, IDS.tester)
+    const rowKey = surface === 'terminal' ? `page:edits:${file}` : `row:page:edits:${file}`
+    if (surface === 'terminal') {
+      // the file's row one Button: its chevron, folder, name, count and lines
+      expect((await ui.find({ key: `page:edits:${file}` }))?.text).toBe((await ui.find({ key: `page:editrow:${file}` }))?.text)
+      expect((await ui.find({ key: `page:edits:${file}` }))?.text).toMatch(/^[▸▾] src\/rateLimit\.ts 2 edits \+\d+/)
+      expect(await ui.find({ key: `row:page:edits:${file}` })).toBeUndefined()
+    } else {
+      expect((await ui.find({ key: `page:edits:${file}` }))?.props).toMatchObject({ label: 'rateLimit.ts', plain: true })
+      expect(String((await ui.find({ key: rowKey }))?.props.label).trim()).toBe('')
+    }
+    // the file's row, pressed anywhere: shut, then open again
+    const isOpenNow = async () => (await keysOf(ui, 'edit:', 'Box')).length > 0
+    const wasOpen = await isOpenNow()
+    await press(ui, rowKey)
+    expect(await isOpenNow()).toBe(!wasOpen)
+    if (!(await isOpenNow())) await press(ui, rowKey)
+    expect(await keysOf(ui, 'edit:', 'Box')).toEqual(['edit:toolu_01TstE1', 'edit:toolu_01TstW1'])
+    // an edit's head among several: a press on it shows or hides its diff, as Show diff does
+    const headKey = surface === 'terminal' ? 'page:edithead:toolu_01TstW1' : 'row:page:edithead:toolu_01TstW1'
+    const shown = String((await ui.find({ key: 'page:diff:toolu_01TstW1' }))?.props.label)
+    expect(['Show diff', 'Hide diff']).toContain(shown)
+    await press(ui, headKey)
+    expect((await ui.find({ key: 'page:diff:toolu_01TstW1' }))?.props.label).toBe(shown === 'Show diff' ? 'Hide diff' : 'Show diff')
+    await press(ui, headKey)
+    expect((await ui.find({ key: 'page:diff:toolu_01TstW1' }))?.props.label).toBe(shown)
+    if (surface === 'terminal') expect((await ui.find({ key: headKey }))?.text).toMatch(/^ Write +\S+ \+\d+/)
+    // the veil lies over its chip, when and lines alone: its links stand beside it, and keep their own press
+    if (surface === 'desktop') {
+      const head = (await ui.find({ key: 'edit:toolu_01TstW1' })) as unknown as { children: { children: { children: { props: Record<string, unknown> }[] }[] }[] }
+      const [left, right] = head.children[0]!.children
+      expect(left!.children.at(-1)?.props).toMatchObject({ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 })
+      expect(JSON.stringify(right)).toContain('page:tocall:toolu_01TstW1')
+    }
+    const isCallOpen = async () => ((await ui.find({ key: 'page:call:toolu_01TstW1' }))?.text ?? '').includes('toolu_01TstW1 · ')
+    if (await isCallOpen()) await press(ui, 'page:act:toolu_01TstW1')
+    await press(ui, 'page:tocall:toolu_01TstW1')
+    expect(await isCallOpen()).toBe(true)
+    await press(ui, 'page:act:toolu_01TstW1')
     await press(ui, 'key:b')
     await ui.unmount()
   }

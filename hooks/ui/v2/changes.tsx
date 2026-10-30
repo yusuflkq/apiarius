@@ -1,13 +1,15 @@
 /**
  * Changes: git's uncommitted files (the v2 state's `changes`), each a row
- * that opens, its chevron and its path a plain Button keyed `file:<path>`
- * (W.fileKeyOf) that opens git's own diff of it (`selectFile`, the hooks
+ * that a press anywhere on opens (its chevron, its path, its faces, its
+ * counts): its plain Button keyed `file:<path>` (W.fileKeyOf), the whole row
+ * on the terminal and its path under a veil over the row on a desktop
+ * (./parts), opens git's own diff of it (`selectFile`, the hooks
  * module reading it), with each agent's own edit patches of that file beside
  * it, from 140 cells side by side, and the faces of the agents who made
  * them. Git's hunks are never tagged by agent: that would be invented. Then
  * the edits agents made outside the repository, a row a file as the web
- * page's, the commits (a press opens one, `selectCommit`), and Review, which
- * puts a prompt for Claude in the prompt box (`review`).
+ * page's, the commits (a press anywhere on one opens it, `selectCommit`),
+ * and Review, which puts a prompt for Claude in the prompt box (`review`).
  *
  * With no repository to show it says where the chat runs and that Changes
  * follows the repository an agent edits in, offers the repositories directly
@@ -30,8 +32,8 @@ import { rowOf } from './dashModel'
 import { delta, diffBlocks, editBlock, editorIdsOf, editorsOf, titleOf, type Budget } from './diffs'
 import { advanceOf, icon, quiet, sectionHead, svgOf } from './look'
 import { P } from './palette'
-import { cellsForPx, chevronOf, faces, facesCells, plainSlack, pressed, pressNote, pressOf, pressSending } from './parts'
-import { ago, cellsOf, cutCells, plural } from './text'
+import { cellsForPx, chevronOf, faces, facesCells, facesText, isRowButton, plainSlack, pressed, pressNote, pressOf, pressSending, veil } from './parts'
+import { ago, cellsOf, cutCells, num, plural } from './text'
 
 /** The diff characters one drawing of Changes spends at most, every open file and commit together. */
 const DIFF_CHARS = 36_000
@@ -197,12 +199,29 @@ function picksList(kit: Kit, state: WebStateV2, actions: DashActions): RenderEle
     <Box key="changes:picks" flexDirection="column">
       {sectionHead(kit, `Repositories in ${where.name || where.cwd}`, where.picks.length)}
       <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
-        {where.picks.map(pick => (
-          <Box key={`pick:${pick.root}`} flexDirection="row" columnGap={1} flexShrink={0}>
-            <Text color={P.muted2}>⎇</Text>
-            {deaf !== '' ? <Text color={P.fg2}>{cutCells(pick.name, room, advanceOf(kit))}</Text> : <Button key={`changes:pick:${pick.root}`} label={cutCells(pick.name, room, advanceOf(kit))} plain onPress={() => actions.selectRepo(pick.root)} />}
-          </Box>
-        ))}
+        {where.picks.map(pick => {
+          const name = cutCells(pick.name, room, advanceOf(kit))
+          const key = `changes:pick:${pick.root}`
+          const pin = () => actions.selectRepo(pick.root)
+          // a pick is one press, its branch mark too: one Button of both on the terminal, a veil over both on a desktop
+          if (deaf === '' && isRowButton(kit)) {
+            return (
+              <Box key={`pick:${pick.root}`} flexDirection="row" flexShrink={0}>
+                <Button key={key} label={name} plain onPress={pin}>
+                  <Text color={P.muted2}>⎇ </Text>
+                  {name}
+                </Button>
+              </Box>
+            )
+          }
+          return (
+            <Box key={`pick:${pick.root}`} flexDirection="row" columnGap={1} flexShrink={0}>
+              <Text color={P.muted2}>⎇</Text>
+              {deaf !== '' ? <Text color={P.fg2}>{name}</Text> : <Button key={key} label={name} plain onPress={pin} />}
+              {deaf !== '' ? null : veil(kit, key, pin)}
+            </Box>
+          )
+        })}
       </Box>
       {deaf !== '' ? (
         <Text key="changes:deaf" color={P.muted2} wrap="wrap">
@@ -259,13 +278,53 @@ function filesList(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel
   )
 }
 
-/** A file's row, as the web page's: its chevron, git's code, its path (the Button), the faces of the agents whose own edits touched it, `+a −r`, and their names. */
+/** `+a −r` as `delta` draws it, as text: what it takes of a line. */
+function deltaText(added: number, removed: number): string {
+  return `${added > 0 ? `+${num(added)}` : ''}${added > 0 && removed > 0 ? ' ' : ''}${removed > 0 ? `−${num(removed)}` : ''}`
+}
+
+/** The faces of the agents `ids` names as one Text, the terminal's glyphs, which a Button can hold. */
+function facesRun(kit: Kit, state: WebStateV2, ids: readonly string[]): RenderElement {
+  return facesText(
+    kit,
+    ids.map(id => rowOf(state, id) ?? null),
+    MOST_FACES,
+  )
+}
+
+/**
+ * A file's row, as the web page's: its chevron, git's code, its path, the
+ * faces of the agents whose own edits touched it, `+a −r`, and their names;
+ * a press anywhere on it opens or shuts it. On the terminal the row is one
+ * Button keyed `file:<path>` holding all of it; on a desktop its path is that
+ * Button and a veil (./parts) over the whole row presses as it does.
+ */
 function fileRow(kit: Kit, state: WebStateV2, file: File, isOpen: boolean, actions: DashActions): RenderElement {
   const { Box, Text, Button } = kit
+  const adv = advanceOf(kit)
   const by = editorsOf(state, file.edits)
   const ids = editorIdsOf(state, file.edits)
+  const press = () => actions.selectFile(file.path)
   const shown = ids.length > 0 ? facesCells(kit, ids.length, FACE, MOST_FACES) + 1 : 0
-  const path = cutCells(file.path, Math.max(16, kit.columns - 26 - chevronCells(kit) - shown - (by ? Math.min(24, by.length + 2) : 0)), advanceOf(kit))
+  const path = cutCells(file.path, Math.max(16, kit.columns - 26 - chevronCells(kit) - shown - (by ? Math.min(24, by.length + 2) : 0)), adv)
+  const counts = delta(kit, file.added, file.removed)
+  if (isRowButton(kit)) {
+    const lead = `${chevronOf(isOpen)} ${file.code || ' '} `
+    const lines = deltaText(file.added, file.removed)
+    const used = cellsOf(lead, adv) + cellsOf(path, adv) + shown + (lines ? cellsOf(lines, adv) + 1 : 0) + 1
+    const names = by ? cutCells(by, Math.max(0, kit.columns - used), adv) : ''
+    return (
+      <Box key={`filerow:${file.path}`} flexDirection="row">
+        <Button key={fileKeyOf(file.path)} label={path} plain onPress={press}>
+          <Text color={P.muted2}>{lead}</Text>
+          {path}
+          {ids.length > 0 ? [' ', facesRun(kit, state, ids)] : null}
+          {counts ? [' ', counts] : null}
+          {names ? <Text color={P.muted2}>{` ${names}`}</Text> : null}
+        </Button>
+      </Box>
+    )
+  }
   return (
     <Box key={`filerow:${file.path}`} flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>{chevron(kit, isOpen)}</Box>
@@ -273,15 +332,16 @@ function fileRow(kit: Kit, state: WebStateV2, file: File, isOpen: boolean, actio
         <Text color={P.muted2}>{file.code}</Text>
       </Box>
       <Box flexShrink={1} minWidth={0}>
-        <Button key={fileKeyOf(file.path)} label={path} plain onPress={() => actions.selectFile(file.path)} />
+        <Button key={fileKeyOf(file.path)} label={path} plain onPress={press} />
       </Box>
       {ids.length > 0 ? <Box flexShrink={0}>{facesOf(kit, state, ids)}</Box> : null}
-      <Box flexShrink={0}>{delta(kit, file.added, file.removed) ?? <Text> </Text>}</Box>
+      <Box flexShrink={0}>{counts ?? <Text> </Text>}</Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
         <Text color={P.muted2} wrap="truncate-end">
           {by}
         </Text>
       </Box>
+      {veil(kit, fileKeyOf(file.path), press)}
     </Box>
   )
 }
@@ -422,22 +482,28 @@ export function pathParts(path: string): { dir: string; base: string } {
 /**
  * How a file's row of the agents' edits reads: Changes' (the faces of who
  * edited it, and when it was edited last), or an agent page's (`isOwn`:
- * neither, the agent being the page's own), its Button keyed `key`.
+ * neither, the agent being the page's own), its Button keyed `key`; with
+ * `isVeiled` false a desktop lays no veil over the row (its caller lays one
+ * over the Box it stands in).
  */
-export type EditsRowLook = { key?: string; isOwn?: boolean }
+export type EditsRowLook = { key?: string; isOwn?: boolean; isVeiled?: boolean }
 
 /**
  * One file of the agents' edits, as the web page's row: chevron, the file
- * icon where Svg draws, its folder dim and cut at its end, its file's name
- * (the Button), faces, "n edits", `+a −r`, and when it was edited last.
+ * icon where Svg draws, its folder dim and cut at its end, its file's name,
+ * faces, "n edits", `+a −r`, and when it was edited last; a press anywhere
+ * on it opens or shuts it. On the terminal the row is one Button holding all
+ * of it; on a desktop the name is that Button and a veil (./parts) over the
+ * whole row presses as it does.
  */
 export function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: boolean, toggle: () => void, look: EditsRowLook = {}): RenderElement {
   const { Box, Text, Button } = kit
   const adv = advanceOf(kit)
   const isOwn = look.isOwn === true
+  const key = look.key ?? editsKeyOf(group.path)
   const count = plural(group.edits.length, 'edit')
   const when = isOwn ? '' : ago(group.lastAt, state.now)
-  const lines = `${group.added > 0 ? `+${group.added}` : ''}${group.added > 0 && group.removed > 0 ? ' ' : ''}${group.removed > 0 ? `−${group.removed}` : ''}`
+  const lines = deltaText(group.added, group.removed)
   const faceCells = isOwn ? 0 : facesCells(kit, group.agents.length, FACE, MOST_FACES) + 1
   // the path's room: the row less the chevron, the icon, the Button's chrome, the faces, the count, the lines, the age and the gaps
   const taken = chevronCells(kit) + fileIconCells(kit) + plainSlack(kit) + faceCells + cellsOf(count, adv) + cellsOf(lines, adv) + cellsOf(when, adv) + 6
@@ -447,8 +513,24 @@ export function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: 
   // the folder takes what the name leaves, cut at its end as the web's ("C:/Users/sam…"); too little left, it goes
   const left = room - cellsOf(name, adv)
   const folder = dir !== '' && left >= 6 ? cutCells(dir, left, adv) : ''
+  const rowKey = isOwn ? `page:editrow:${group.path}` : `editrow:${group.path}`
+  if (isRowButton(kit)) {
+    const counts = delta(kit, group.added, group.removed)
+    return (
+      <Box key={rowKey} flexDirection="row">
+        <Button key={key} label={name} plain onPress={toggle}>
+          <Text color={P.muted2}>{`${chevronOf(isOpen)} ${folder}`}</Text>
+          {name}
+          {isOwn ? null : [' ', facesRun(kit, state, group.agents)]}
+          <Text color={P.muted2}>{` ${count}`}</Text>
+          {counts ? [' ', counts] : null}
+          {when ? <Text color={P.muted2}>{` ${when}`}</Text> : null}
+        </Button>
+      </Box>
+    )
+  }
   return (
-    <Box key={isOwn ? `page:editrow:${group.path}` : `editrow:${group.path}`} flexDirection="row" columnGap={1} alignItems="center">
+    <Box key={rowKey} flexDirection="row" columnGap={1} alignItems="center">
       <Box flexShrink={0}>{chevron(kit, isOpen)}</Box>
       {svgOf(kit) ? <Box flexShrink={0}>{icon(kit, 'file', P.muted2, '', FILE_ICON)}</Box> : null}
       <Box flexShrink={1} minWidth={0} flexDirection="row" alignItems="center">
@@ -460,7 +542,7 @@ export function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: 
           </Box>
         ) : null}
         <Box flexShrink={0}>
-          <Button key={look.key ?? editsKeyOf(group.path)} label={name} plain onPress={toggle} />
+          <Button key={key} label={name} plain onPress={toggle} />
         </Box>
       </Box>
       {isOwn ? null : <Box flexShrink={0}>{facesOf(kit, state, group.agents)}</Box>}
@@ -473,13 +555,21 @@ export function editsRow(kit: Kit, state: WebStateV2, group: EditGroup, isOpen: 
           {when}
         </Text>
       </Box>
+      {look.isVeiled === false ? null : veil(kit, key, toggle)}
     </Box>
   )
 }
 
-/** The newest commits: short hash, subject (the Button), the agent whose shell call made it, when, `+a −r`; the open one's detail under it. */
+/**
+ * The newest commits: short hash, subject, the agent whose shell call made
+ * it, when, `+a −r`; a press anywhere on the row opens it (its detail under
+ * it) or shuts it. On the terminal the row is one Button keyed
+ * `commit:<hash>` holding all of it; on a desktop the subject is that Button
+ * and a veil (./parts) over the whole row presses as it does.
+ */
 function commitsList(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActions, isDemo: boolean, budget: Budget): RenderElement {
   const { Box, Text, Button } = kit
+  const adv = advanceOf(kit)
   const list = state.changes.commits
   return (
     <Box key="changes:commits" flexDirection="column">
@@ -488,7 +578,27 @@ function commitsList(kit: Kit, state: WebStateV2, model: DeckModel, actions: Das
       {list.map(commit => {
         const isOpen = model.view.commit === commit.hash
         const by = commit.agent ? titleOf(state, commit.agent) : ''
-        const subject = cutCells(clean(commit.subject) || '(no subject)', Math.max(16, Math.min(60, kit.columns - 30)), advanceOf(kit))
+        const subject = cutCells(clean(commit.subject) || '(no subject)', Math.max(16, Math.min(60, kit.columns - 30)), adv)
+        const press = () => actions.selectCommit(commit.hash)
+        const about = `${by ? `${by} · ` : ''}${commit.author} · ${ago(commit.at, state.now)}`
+        const counts = delta(kit, commit.added, commit.removed)
+        if (isRowButton(kit)) {
+          const lines = deltaText(commit.added, commit.removed)
+          const used = cellsOf(commit.short, adv) + 1 + cellsOf(subject, adv) + 1 + (lines ? cellsOf(lines, adv) + 1 : 0)
+          return (
+            <Box key={`commit:${commit.hash}:row`} flexDirection="column">
+              <Box flexDirection="row">
+                <Button key={`commit:${commit.hash}`} label={subject} plain onPress={press}>
+                  <Text color={P.muted2}>{`${commit.short} `}</Text>
+                  <Text dimColor={!isOpen}>{subject}</Text>
+                  <Text color={P.muted2}>{` ${cutCells(about, Math.max(4, kit.columns - used), adv)}`}</Text>
+                  {counts ? [' ', counts] : null}
+                </Button>
+              </Box>
+              {isOpen ? commitDetail(kit, model, commit.hash, isDemo, budget) : null}
+            </Box>
+          )
+        }
         return (
           <Box key={`commit:${commit.hash}:row`} flexDirection="column">
             <Box flexDirection="row" columnGap={1}>
@@ -496,14 +606,15 @@ function commitsList(kit: Kit, state: WebStateV2, model: DeckModel, actions: Das
                 <Text color={P.muted2}>{commit.short}</Text>
               </Box>
               <Box flexShrink={1} minWidth={0}>
-                <Button key={`commit:${commit.hash}`} label={subject} plain dimColor={!isOpen} onPress={() => actions.selectCommit(commit.hash)} />
+                <Button key={`commit:${commit.hash}`} label={subject} plain dimColor={!isOpen} onPress={press} />
               </Box>
               <Box flexGrow={1} flexShrink={1} minWidth={0}>
                 <Text color={P.muted2} wrap="truncate-end">
-                  {`${by ? `${by} · ` : ''}${commit.author} · ${ago(commit.at, state.now)} `}
-                  {delta(kit, commit.added, commit.removed)}
+                  {`${about} `}
+                  {counts}
                 </Text>
               </Box>
+              {veil(kit, `commit:${commit.hash}`, press)}
             </Box>
             {isOpen ? commitDetail(kit, model, commit.hash, isDemo, budget) : null}
           </Box>

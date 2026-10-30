@@ -130,6 +130,15 @@ test('no repository: Changes names the folder the chat runs in and offers the re
     expect((await ui.find({ key: 'changes:picks' }))?.text).toContain('⎇')
     await press(ui, `changes:pick:${PICKS[0]!.root}`)
     expect(w.toasts.at(-1)).toBe('Sample data: Changes shows the sample’s repository. Back to this chat to pick one of yours.')
+    // a pick is one press with its branch mark: one Button of both on the terminal, a veil over both on a desktop
+    const toasts = w.toasts.length
+    if (surface === 'terminal') {
+      expect((await ui.find({ key: `changes:pick:${PICKS[1]!.root}` }))?.text).toBe('⎇ notes-app')
+    } else {
+      expect(String((await ui.find({ key: `row:changes:pick:${PICKS[1]!.root}` }))?.props.label).trim()).toBe('')
+      await press(ui, `row:changes:pick:${PICKS[1]!.root}`)
+      expect(w.toasts.length).toBe(toasts + 1)
+    }
     // a row a file, the one edited last first, as the web page's
     expect(await keysOf(ui, 'edits:')).toEqual(editGroupsOf(state.changes.edits).map(group => `edits:${group.path}`))
     expect((await ui.find({ key: `edits:${limiter}` }))?.props).toMatchObject({ plain: true })
@@ -185,18 +194,86 @@ test('git`s files: a chevron before each, open or shut, and the faces of the age
     await press(ui, 'tab:changes')
     expect((await ui.find({ key: 'file:src/app.ts' }))?.props.dimColor).toBeFalsy()
     if (surface === 'terminal') {
-      expect((await ui.find({ key: 'filerow:src/app.ts' }))?.text.startsWith('▸M')).toBe(true)
+      expect((await ui.find({ key: 'filerow:src/app.ts' }))?.text.startsWith('▸ M src/app.ts')).toBe(true)
     } else {
       expect((await ui.findAll({ type: 'Svg' })).some(svg => svg.props.alt === 'builder, tester')).toBe(true)
     }
     await press(ui, 'file:src/app.ts')
-    if (surface === 'terminal') expect((await ui.find({ key: 'filerow:src/app.ts' }))?.text.startsWith('▾M')).toBe(true)
+    if (surface === 'terminal') expect((await ui.find({ key: 'filerow:src/app.ts' }))?.text.startsWith('▾ M src/app.ts')).toBe(true)
     else expect((await ui.findAll({ type: 'Svg' })).filter(svg => svg.props.alt === 'Open')).toHaveLength(1)
     expect((await ui.find({ key: 'filediff:src/app.ts' }))?.text).toContain('Edit by builder')
     await press(ui, 'file:src/app.ts')
     await press(ui, 'tab:now')
     await ui.unmount()
   }
+})
+
+/** A Button's children, as the drawing holds them: none for a Button of a label alone. */
+function childrenOf(node: { children?: unknown[] } | undefined): unknown[] {
+  return node?.children ?? []
+}
+
+test('a press anywhere on a row of Changes opens or shuts it, not on its name alone: the terminal`s row one Button holding its chevron, code, path, faces, +a −r and names; a desktop`s a veil over the whole row (its icons and faces images no Button can hold), its name`s Button kept', async ($, on) => {
+  const session = v2Session()
+  const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
+  await demo($, on, state)
+  const limiter = 'src/rateLimit.ts'
+  const commit = state.changes.commits[0]!
+  const outside = state.changes.edits.find(edit => edit.isOutside)!.path
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    await press(ui, 'tab:changes')
+    const fileButton = await ui.find({ key: `file:${limiter}` })
+    if (surface === 'terminal') {
+      // one Button the whole row: what it holds is all the row says, its faces the terminal's glyphs
+      expect(fileButton?.props).toMatchObject({ label: limiter, plain: true })
+      expect(childrenOf(fileButton).length).toBeGreaterThan(1)
+      expect(fileButton?.text).toBe((await ui.find({ key: `filerow:${limiter}` }))?.text)
+      expect(fileButton?.text).toMatch(/^▸ N src\/rateLimit\.ts .+ \+6 builder, tester$/)
+      expect(await ui.find({ key: `row:file:${limiter}` })).toBeUndefined()
+      // the commits' and the outside edits' rows too
+      expect((await ui.find({ key: `commit:${commit.hash}` }))?.text).toBe((await ui.find({ key: `commit:${commit.hash}:row` }))?.text)
+      expect((await ui.find({ key: `commit:${commit.hash}` }))?.text).toMatch(new RegExp(`^${commit.short} Add the sliding-window limiter builder · `))
+      expect((await ui.find({ key: `edits:${outside}` }))?.text).toBe((await ui.find({ key: `editrow:${outside}` }))?.text)
+      expect((await ui.find({ key: `edits:${outside}` }))?.text).toContain('1 edit +3')
+    } else {
+      // the name's Button stays (the keyboard's), and a blank plain Button lies over the whole row, its last part, placed at its four edges
+      expect(fileButton?.props).toMatchObject({ label: limiter, plain: true })
+      const veil = await ui.find({ key: `row:file:${limiter}` })
+      expect(veil?.props.plain).toBe(true)
+      expect(String(veil?.props.label).trim()).toBe('')
+      const row = (await ui.find({ key: `filerow:${limiter}` })) as unknown as { children: { props: Record<string, unknown> }[] }
+      expect(row.children.at(-1)?.props).toMatchObject({ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, overflow: 'hidden' })
+      for (const key of [`row:commit:${commit.hash}`, `row:edits:${outside}`]) expect((await ui.find({ key }))?.props.plain).toBe(true)
+    }
+    // a press on the row opens it as a press on its name does, and shuts it again
+    const rowKey = surface === 'terminal' ? `file:${limiter}` : `row:file:${limiter}`
+    expect(await ui.find({ key: `filediff:${limiter}` })).toBeUndefined()
+    await press(ui, rowKey)
+    expect((await ui.find({ key: `filediff:${limiter}` }))?.text).toContain('Write by builder')
+    await press(ui, rowKey)
+    expect(await ui.find({ key: `filediff:${limiter}` })).toBeUndefined()
+    // the edits outside the repository and the commits, the same
+    const editKey = surface === 'terminal' ? `edits:${outside}` : `row:edits:${outside}`
+    const before = (await ui.find({ key: `edited:${outside}` }))?.text ?? ''
+    await press(ui, editKey)
+    expect((await ui.find({ key: `edited:${outside}` }))?.text).not.toBe(before)
+    await press(ui, editKey)
+    expect((await ui.find({ key: `edited:${outside}` }))?.text).toBe(before)
+    await press(ui, surface === 'terminal' ? `commit:${commit.hash}` : `row:commit:${commit.hash}`)
+    expect((await ui.find({ key: `commit:${commit.hash}:row` }))?.text).toContain('The sample holds no commit of its own to read.')
+    await press(ui, surface === 'terminal' ? `commit:${commit.hash}` : `row:commit:${commit.hash}`)
+    expect((await ui.find({ key: `commit:${commit.hash}:row` }))?.text).not.toContain('The sample holds no commit')
+    // the veils keep the drawing inside the desktop's bounds
+    expect(nodesOf(await ui.drawn())).toBeLessThan(2000)
+    await press(ui, 'tab:now')
+    await ui.unmount()
+  }
+  // a veil is the desktop's alone: VS Code places no Box absolutely, so it draws none there
+  const vscode = await $.ui.mount({ ...pane('desktop'), surface: 'vscode' as const })
+  await press(vscode, 'tab:changes')
+  expect((await vscode.findAll({ type: 'Button' })).filter(button => (button.key ?? '').startsWith('row:'))).toEqual([])
+  await vscode.unmount()
 })
 
 test('the page`s selectRepo: a pick the state offers pins Changes there, acked "Changes shows <name>", and "" follows the work again; a root it does not offer is refused and changes nothing', async ($, on) => {
