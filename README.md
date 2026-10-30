@@ -43,8 +43,8 @@ When you do need to step in, you can answer Claude's questions, message an agent
 | Chat | Changes |
 | :-: | :-: |
 | ![Chat](assets/screenshots/web-chat.png) | ![Changes](assets/screenshots/web-changes.png) |
-| Timeline | Inspect |
-| ![Timeline](assets/screenshots/web-timeline.png) | ![Inspect](assets/screenshots/web-inspect.png) |
+| Org chart | Inspect |
+| ![Org chart](assets/screenshots/web-org.png) | ![Inspect](assets/screenshots/web-inspect.png) |
 | Claude Desktop side pane | Terminal |
 | ![The deck in the Claude Desktop side pane](assets/screenshots/pane-dashboard.png) | ![The deck in the terminal](assets/screenshots/terminal.png) |
 
