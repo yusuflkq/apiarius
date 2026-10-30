@@ -1,5 +1,5 @@
 /**
- * Org's Timeline in the pane (web/CONTRACT.md, "The timeline"): a row an
+ * Org's Timeline in the pane: a row an
  * agent, from ../../timeline's `V2Timeline` (the live deck's, or the
  * sample's timeline.json), laid out by web/timeline.mjs as the web page lays
  * its own.

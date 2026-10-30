@@ -7,8 +7,8 @@ import * as W from '../hooks/web'
 import type { DeckAgent, DeckData, DeckWebSaved } from '../types'
 
 /**
- * The web deck: what `.web/<sessionId>/state.json` holds (web/CONTRACT.md,
- * v1), the patches written beside it once each, and `/deck web`: the server
+ * The web deck: what `.web/<sessionId>/state.json` holds (v1),
+ * the patches written beside it once each, and `/deck web`: the server
  * started through `$.process.spawn` (stubbed here as a child the test
  * drives), its link answered, the Browser pane asked to open it, and the
  * page's commands read back off the child's stdout.
@@ -109,7 +109,7 @@ test('webStateOf: the v1 schema, field by field, as plain JSON', () => {
   expect(state.summary.tokens).toBe(tokens)
   expect(state.plan.source).toBe('implicit')
 
-  // every agent but you, each with the contract's fields
+  // every agent but you, each with the state's fields
   expect(state.agents.map(one => one.id)).not.toContain(M.YOU)
   for (const one of state.agents) expect(Object.keys(one)).toEqual(AGENT_KEYS)
   const byId = new Map(state.agents.map(one => [one.id, one]))
@@ -217,7 +217,7 @@ test('webStateOf on a live run`s shape: the step only while one is in progress, 
   M.endTool(main, 't-read', true, NOW - 900)
   jitter.status = 'completed'
   jitter.endedAt = NOW - 500
-  // a long task and report stay whole up to the contract's caps (not cut at 700 and 1400 characters)
+  // a long task and report stay whole up to the state's caps (not cut at 700 and 1400 characters)
   M.noteResult(data, jitter, `Added the jitter option. ${'r'.repeat(2500)}`, NOW - 500)
   state = stateOf()
   expect(at(state, 'agent-jitter')?.task.length).toBe(1512)

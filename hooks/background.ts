@@ -26,7 +26,7 @@
  * Nothing here is made up: titles, notes, statuses, schedules and next runs
  * are Claude Code's own words and times. What the deck words itself (a row's
  * kind, "running" before any snapshot names a status, "scheduled", the ages)
- * is said so in web/CONTRACT.md.
+ * is the deck's own wording.
  *
  * Pure, like the model: the hooks module (register.tsx) records and asks.
  */

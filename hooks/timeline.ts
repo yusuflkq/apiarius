@@ -1,5 +1,5 @@
 /**
- * Org's Timeline (web/CONTRACT.md, "The timeline"): the whole run at a
+ * Org's Timeline: the whole run at a
  * glance, one lane an agent from its start to its end (or to now), in the
  * tree's order with the Orchestrator first. Built once here from the deck's
  * model and the v2 state, and drawn three ways: the web page's SVG

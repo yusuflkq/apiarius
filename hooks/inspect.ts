@@ -1,5 +1,5 @@
 /**
- * Inspect's half of the model (web/CONTRACT.md v2, "Inspect"): what Claude
+ * Inspect's half of the model: what Claude
  * Code says of the session's depth, recorded as it says it, and the v2
  * state's `inspect` built from that.
  *

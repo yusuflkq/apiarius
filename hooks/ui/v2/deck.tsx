@@ -1,5 +1,5 @@
 /**
- * The deck's pane on the v2 view model (web/CONTRACT.md v2), the same
+ * The deck's pane on the v2 view model, the same
  * design the web page and the terminal draw:
  *
  * - the header: the session's state in one word, your latest request in

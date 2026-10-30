@@ -74,7 +74,7 @@ The pane also works in a terminal session, where Stats draws its charts as text.
 - `/deck web` starts `web/server.js`, a plain Node server with no dependencies. It listens on 127.0.0.1 only, every request needs a token made for the session, and the page loads nothing from the internet, so nothing leaves the machine.
 - While it runs, the mod writes `.web/<sessionId>/state.json` (at most every 300 ms) and one patch file per edit. The server streams each new state to the page over SSE, and the page updates in place without losing your view, scroll or draft.
 - Messages and review requests from the page come back to the mod on the server's stdout. The mod checks each one against the session before it acts on it.
-- The server stops with the session or on `/deck web stop`, and the page keeps showing the last state. A reload of the mod restarts it on the same link. `web/CONTRACT.md` is the spec for the state file, the routes and the commands.
+- The server stops with the session or on `/deck web stop`, and the page keeps showing the last state. A reload of the mod restarts it on the same link.
 
 ## Develop
 

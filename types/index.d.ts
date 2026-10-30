@@ -666,7 +666,7 @@ export type DeckAgentPane = 'activity' | 'edits' | 'chat'
 export type DeckMapView = 'tree' | 'wire'
 
 /**
- * What the v2 screens (web/CONTRACT.md v2) keep of their own in the pane:
+ * What the v2 screens keep of their own in the pane:
  * the tab open (Dashboard, Chat, Org, Changes, Inspect, Settings; keys 1 to
  * 6), the fold rows opened and Chat's filter. The agent page open is `page`.
  */

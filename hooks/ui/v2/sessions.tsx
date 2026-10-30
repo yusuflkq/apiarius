@@ -1,7 +1,7 @@
 /**
- * Every session on this machine (../../sessions, web/CONTRACT.md "All
- * sessions"), in the pane and the terminal: one deck at a time, any
- * session's, with no mode for another's.
+ * Every session on this machine (../../sessions), in the pane and
+ * the terminal: one deck at a time, any session's, with no mode for
+ * another's.
  *
  * - The header's first line is the switcher (`headLine`): the state's dot
  *   and word, then the session's title with ▾, a press dropping the list in

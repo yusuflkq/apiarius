@@ -1,5 +1,5 @@
 /**
- * The deck's pane and its band, on the v2 view model (web/CONTRACT.md v2),
+ * The deck's pane and its band, on the v2 view model,
  * the one state the web page, the Desktop pane and the terminal draw:
  *
  * - the pane (`deckView`): in the sample (`/deck demo`) a header saying so,

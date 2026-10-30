@@ -1,5 +1,5 @@
 /**
- * Now's reading of the v2 state (web/CONTRACT.md v2) for its dashboard, the
+ * Now's reading of the v2 state for its dashboard, the
  * screen the old Dashboard drew, on v2's own truthful data: the agents in
  * card order, how many cards a row and what a card says (its step box, its
  * now line, its foot); the figures; Recent activity's rows; the files

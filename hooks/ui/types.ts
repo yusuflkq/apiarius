@@ -189,7 +189,7 @@ export type DashActions = Actions & {
 /** What the pane draws from, beside the deck's model. */
 export type DashModel = {
   /**
-   * The v2 view model (`deckStateOf`, web/CONTRACT.md v2) of the live deck,
+   * The v2 view model (`deckStateOf`) of the live deck,
    * the very one state.json's `v2` holds (built once per screen); the
    * sample's (web/fixtures/state.v2.json, its times moved to now) while the
    * sample shows; null while that is read or could not be.

@@ -1,5 +1,5 @@
 /**
- * Every session on this machine (web/CONTRACT.md, "All sessions"): each
+ * Every session on this machine: each
  * session's deck keeps a small file in a folder of the person's own, and
  * every deck reads the others' to list them.
  *

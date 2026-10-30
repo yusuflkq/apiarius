@@ -3,7 +3,6 @@
  * patches, git's own diffs of the uncommitted files, the whole text of
  * messages cut for the state and the agents' page files, live updates over
  * SSE, and turns the page's commands into stdout lines for the mod.
- * web/CONTRACT.md is the spec.
  *
  *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid> [--sessions <registry>]
  *

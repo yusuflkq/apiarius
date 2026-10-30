@@ -5,7 +5,7 @@
  * The hooks here record what the engine reports (tool calls, spawns, turns,
  * messages between agents) into one live model, run git in the background,
  * and draw the views from `./views`. `/deck web` serves the same model as a
- * live dashboard in the Desktop's Browser pane (`./web`, web/CONTRACT.md).
+ * live dashboard in the Desktop's Browser pane (`./web`).
  * Every `$` call lives in this file.
  */
 import type {
@@ -101,7 +101,7 @@ const demo: { v2: W.WebStateV2 | null; v2Files: W.V2Files; note: string; version
 let dataGen = 0
 
 /**
- * The v2 view model (`W.deckStateOf`, web/CONTRACT.md) as the screen
+ * The v2 view model (`W.deckStateOf`) as the screen
  * stands, shared by the pane (`dashOf`), the band, state.json (`writeWeb`)
  * and the debug dump, with what it shows as one key (`W.v2KeyOf`). Each
  * screen key builds it afresh (`screenKey`); `v2Of` builds it again only
@@ -694,7 +694,7 @@ function debugStateOf(now: number) {
 }
 
 /**
- * The web deck (web/CONTRACT.md). `/deck web`, or the pane's Open dashboard,
+ * The web deck. `/deck web`, or the pane's Open dashboard,
  * starts `web/server.js` for the session, answers with the page's link and
  * tries to open it in the Desktop's Browser pane. While it is on, what the
  * deck holds goes to `.web/<sessionId>/state.json` at most every 300 ms after

@@ -1,6 +1,6 @@
 /**
- * Org's Timeline as every surface lays it out (web/CONTRACT.md, "The
- * timeline"): the rows (each agent, the shells it started under it), the
+ * Org's Timeline as every surface lays it out: the rows (each agent, the
+ * shells it started under it), the
  * axis folded where nobody worked, the words on that axis, a lane's calls as
  * segments, and where the messages between agents cross the rows. The web
  * page imports it as it is; the mod lays the Desktop pane's and the

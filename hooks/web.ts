@@ -1,6 +1,6 @@
 /**
  * The web deck's half of the mod: what `.web/<sessionId>/state.json` holds
- * (`webStateOf`, the v1 `WebState` of web/CONTRACT.md, and beside it under
+ * (`webStateOf`, the v1 `WebState`, and beside it under
  * `v2` the one view model every surface draws, `deckStateOf`'s
  * `WebStateV2`), the patch, message and agent files written beside it, and
  * the lines the server prints back (`splitLines`, `parseLine`, `routeOf`,
@@ -23,7 +23,7 @@ import { othersLineOf, type SessionsV2 } from './sessions'
 import { timelineOf, type V2Timeline } from './timeline'
 import type { UsageInfo } from './ui/types'
 
-// The state file (web/CONTRACT.md, v1).
+// The state file (v1).
 
 export type WebStatus = 'starting' | 'running' | 'waiting' | 'done' | 'failed' | 'idle'
 export type WebKind = 'orchestrator' | 'agent' | 'teammate' | 'peer' | 'background'
@@ -159,7 +159,7 @@ export type WebPending = Omit<DeckPending, 'questions'> & {
 
 export type WebAck = { id: string; ok: boolean; status: 'queued' | 'delivered' | 'answered' | 'failed'; text: string; at: number }
 
-/** The contract's sizes. */
+/** The size limits the page relies on. */
 export const WEB_CAPS = { task: 2000, result: 4000, messages: 200, messageChars: 600, activity: 150, edits: 300, commits: 20, acks: 50 } as const
 
 /** The longest command text the mod acts on. */
@@ -424,7 +424,7 @@ function webPendingOf(item: DeckPending, answerable: ReadonlySet<string>): WebPe
 }
 
 /**
- * The whole state the page reads, as web/CONTRACT.md (v1) lays it out, from
+ * The whole state the page reads, in its v1 layout, from
  * the deck's live model at `now`. `view` is the pane's and changes nothing
  * here: the page keeps its own. `answerable` holds the questions whose race
  * is live in this mod instance (none after a reload): only those the page
@@ -537,7 +537,7 @@ export function newPatchesOf(data: DeckData, written: ReadonlySet<string>): { id
 
 // ---------------------------------------------------------------------------
 // v2: the one view model the web page, the Desktop pane and the terminal all
-// draw (web/CONTRACT.md, v2). Only what Claude Code did, said or holds: no
+// draw (v2). Only what Claude Code did, said or holds: no
 // plan it did not make, no step links, no addressee it did not use, no need
 // it did not raise. Its derived wording (a row's title, a chat row's
 // sentence head, a fold's counts, the header's word) is made here once.
@@ -839,7 +839,7 @@ export type V2Figures = {
   needs: number
 }
 
-/** The state every surface draws (web/CONTRACT.md, v2). */
+/** The state every surface draws (v2). */
 export type WebStateV2 = {
   v: 2
   /** When it was built, ms since the epoch. */
@@ -1434,7 +1434,7 @@ function headerLineOf(model: string, usage: UsageInfo | null, mode = ''): string
 }
 
 /**
- * The one view model every surface draws (web/CONTRACT.md, v2), from the
+ * The one view model every surface draws (v2), from the
  * deck's live model at `now`: the header, what needs you, the tree of
  * agents with its fold rows, the plan as Claude made it (null for none),
  * the one chat, the changes, Inspect's first part and the acks.

@@ -3,7 +3,7 @@
  * counts, cuts and folds, and how much room text takes where it is drawn (a
  * cell a character on the terminal; less, and by the letter, in a desktop's
  * proportional face). The v2 state words most of what it says itself
- * (web/CONTRACT.md v2: a row's `elapsed`, a need's `age`); these are for
+ * (a row's `elapsed`, a need's `age`); these are for
  * what it leaves to a surface (a chat row's time, a call's length).
  *
  * Pure.

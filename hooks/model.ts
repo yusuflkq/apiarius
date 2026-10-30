@@ -106,7 +106,7 @@ export const LIMITS = {
   messages: 200,
   minutes: 240,
   patchChars: 3200,
-  /** An agent's task and its result, in characters: whole up to what the web deck shows (web/CONTRACT.md: task 2000, result 4000). */
+  /** An agent's task and its result, in characters: whole up to what the web deck shows (task 2000, result 4000). */
   promptChars: 2000,
   answerChars: 4000,
   messageChars: 700,

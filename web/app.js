@@ -1,8 +1,8 @@
 /* Agent Deck: the web page.
  *
  * What Claude Code is doing, who is working on what, and whether anything
- * needs you, live over SSE. It draws the mod's v2 view model (web/CONTRACT.md,
- * "v2: one view model for every surface"), the one the Desktop pane and the
+ * needs you, live over SSE. It draws the mod's v2 view model (hooks/web.ts,
+ * `WebStateV2`), the one the Desktop pane and the
  * terminal draw too, with the same names, order and keys: six routes (#/now,
  * the Dashboard; #/chat, the group chat; #/org, the org chart; #/changes;
  * #/inspect: the context, permissions, what is loaded and the spend;
@@ -415,7 +415,7 @@ function AvatarStack(ids, size = 18, max = 4) {
 const nameOf = id => (id === 'you' ? 'You' : id === 'engine' ? 'Claude Code' : IX && IX.byId.has(id) ? IX.byId.get(id).title : String(id || ''));
 
 // ============================================================== state + index
-// The state as the page reads it: v2 (web/CONTRACT.md), every list a list and
+// The state as the page reads it: v2 (hooks/web.ts), every list a list and
 // every field its type, so a field an older or newer mod leaves out never
 // breaks a view.
 
@@ -2103,7 +2103,7 @@ function OrgPage() {
 }
 
 // ------------------------------------------------------------ the timeline
-// Org's Timeline (web/CONTRACT.md, "The timeline"), from /timeline
+// Org's Timeline (web/timeline.mjs lays it out), from /timeline
 // (timeline.json, which the mod writes before the state that follows it),
 // laid out by timeline.mjs as the Desktop pane and the terminal lay theirs. A
 // row an agent: its face, its name (a link to its drawer), its status, and
@@ -4093,8 +4093,8 @@ function App() {
 }
 
 // ======================================================================= keys
-// The same keys as the Desktop pane and the terminal (web/CONTRACT.md,
-// "Keys"), plus the page's own /, @, ? and Esc. None fires while you type,
+// The same keys as the Desktop pane and the terminal, plus the page's own
+// /, @, ? and Esc. None fires while you type,
 // and no badge in the header says them: Settings' Help lists them.
 
 const isTyping = t => !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable === true);

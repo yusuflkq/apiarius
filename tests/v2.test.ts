@@ -10,7 +10,7 @@ import { IDS, SAMPLE_NOW, v2Session } from './v2session'
 import { command, deck, lastState, newWorld, work, world } from './world'
 
 /**
- * The v2 view model (`W.deckStateOf`, web/CONTRACT.md v2): the one state the
+ * The v2 view model (`W.deckStateOf`): the one state the
  * web page, the Desktop pane and the terminal draw. Every rule of "nothing
  * invented" is checked here: no plan without a Claude source, needs only
  * from Claude Code's questions, permission prompts and notifications, the
