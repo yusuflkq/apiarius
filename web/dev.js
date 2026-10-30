@@ -21,7 +21,10 @@
  * Review) plays on its own state and is acked there, as its deck would, or
  * refused where its deck reads no inbox.
  * Editing the sample starts the copy again from it. `--static` keeps the
- * sample's own times and only prints commands. Ctrl+C stops both processes.
+ * sample's own times and only prints commands. `--fixtures <dir>` serves
+ * another sample laid out as web/fixtures is (state.v2.json, v2/, and
+ * sessions.v2.json with the sessions' folders it names, if any). Ctrl+C
+ * stops both processes.
  */
 'use strict'
 const { spawn } = require('child_process')
@@ -30,7 +33,17 @@ const os = require('os')
 const path = require('path')
 
 const TOKEN = 'apiarius-dev-token'
-const FIXTURES = path.join(__dirname, 'fixtures')
+const USAGE = 'usage: node web/dev.js [--static] [--fixtures <dir>]'
+/** The sample's folder: web/fixtures, or the one `--fixtures` names. */
+const FIXTURES = (() => {
+  const at = process.argv.indexOf('--fixtures')
+  if (at < 0) return path.join(__dirname, 'fixtures')
+  const named = process.argv[at + 1]
+  if (!named || named.startsWith('--')) { console.error(USAGE); process.exit(2) }
+  const folder = path.resolve(named)
+  if (!fs.existsSync(path.join(folder, 'state.v2.json'))) { console.error(`dev: no state.v2.json in ${folder}`); process.exit(2) }
+  return folder
+})()
 const SAMPLE = path.join(FIXTURES, 'state.v2.json')
 const LAZY = path.join(FIXTURES, 'v2')
 const isStatic = process.argv.includes('--static')
