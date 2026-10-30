@@ -212,8 +212,8 @@ export type DashModel = {
    * once it does), its state as read from its folder (null until it is),
    * marked as another session's (`peer`) with this deck's list, the list, its
    * lazy files, and the model and presses it is drawn with (its own agent
-   * page; answers and messages to its deck, or refused). Absent or null: this
-   * session's own.
+   * page; every press its own window has, to its own deck, what came of each
+   * in `peer.presses`). Absent or null: this session's own.
    */
   viewing?: { id: string; row: SessionRowV2 | null; note: string; state: WebStateV2 | null; list: SessionsV2 | null; files: V2Files; model: DeckModel; actions: DashActions } | null
 }

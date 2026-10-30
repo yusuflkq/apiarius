@@ -12,8 +12,10 @@
  * A press goes through DashActions to the hooks module, which stops only
  * through Claude Code's own channels (TaskStop, CronDelete), asking its
  * check again first; in the sample, nothing is stopped. On another
- * session's deck (its state marked `peer`) none is offered: one quiet line
- * under the list says where to stop them.
+ * session's deck (its state marked `peer`) the same, by its deck's own
+ * check: a press goes to that deck, and its row says what came of it; where
+ * its deck takes nothing from here, none is offered, and one quiet line
+ * under the list says why.
  *
  * Pure: Kit, the state and DashActions come from the hooks module.
  */
@@ -21,14 +23,13 @@ import type { RenderElement } from 'claude-code'
 
 import type { V2BackgroundRow } from '../../background'
 import { clean } from '../../format'
-import { inItsWindow } from '../../sessions'
 import type { WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { listBox, listRow, section } from './dash'
 import { rowOf } from './dashModel'
 import { advanceOf, avatar, svgOf } from './look'
 import { P } from './palette'
-import { cellsForPx, foldHead, rule, type Fold } from './parts'
+import { cellsForPx, foldHead, pressNote, pressOf, pressSending, rule, type Fold } from './parts'
 import { cellsOf, cutCells, plural } from './text'
 
 /** Background's fold id in the view's `collapsed`, beside dashModel's FOLD ids. */
@@ -99,19 +100,18 @@ export function backgroundSection(kit: Kit, state: WebStateV2, actions: DashActi
   const more = background.rows.length - shown.length
   const rows = shown.flatMap((row, i) => [i > 0 ? rule(kit) : null, backgroundRow(kit, state, row, actions)])
   if (more > 0) rows.push(rule(kit), listRow(kit, 'bg:more', [<Text color={P.muted2} wrap="truncate-end">{`and ${plural(more, 'more')}: /deck web lists them all`}</Text>]))
-  // another session's: its Stop and Cancel act only in its own window, so the list says where, once
-  const stops = state.peer ? background.rows.filter(row => row.stop).length : 0
-  const where = state.peer && stops > 0 ? inItsWindow(stops === 1 ? 'Stop it' : 'Stop them', state.peer.where) : ''
+  // another session's whose deck takes nothing from here: its Stop and Cancel are offered nowhere, so the list says why, once
+  const deaf = state.peer && !state.peer.canSteer && background.rows.some(row => row.stop) ? state.peer.why : ''
   const list = listBox(kit, 'bg:list', rows)
   return section(
     kit,
     'now:background',
     head,
-    where !== '' ? (
+    deaf !== '' ? (
       <Box flexDirection="column">
         {list}
-        <Text key="bg:where" color={P.muted2} wrap="wrap">
-          {where}
+        <Text key="bg:deaf" color={P.muted2} wrap="wrap">
+          {deaf}
         </Text>
       </Box>
     ) : (
@@ -136,9 +136,14 @@ function backgroundRow(kit: Kit, state: WebStateV2, row: V2BackgroundRow, action
   const room = Math.max(12, kit.columns - 4 - iconCells - 1 - STATUS - 1 - WHEN - 1 - STOP - 1)
   const title = cutCells(clean(row.title), Math.max(8, Math.min(room, Math.ceil(room * 0.6))), adv)
   const what = cutCells(clean(row.what), Math.max(4, room - cellsOf(title, adv) - 1), adv)
-  const stop = row.stop?.can ? (
+  // a press on another session's: "…" in its place while its deck has not answered, and under the words what is under way, then what came of it
+  const press = pressOf(state, `bg:${row.id}`)
+  const said = press ? (press.status === 'sending' ? pressSending(kit, press, `bg:${row.id}`) : pressNote(kit, press, `bg:${row.id}`)) : null
+  const stop = !row.stop?.can ? null : press?.status === 'sending' ? (
+    <Text color={P.muted2}>…</Text>
+  ) : (
     <Button key={`bg:stop:${row.id}`} label={row.stop.label} plain dimColor onPress={() => actions.stopBackground(row.id)} />
-  ) : null
+  )
   return listRow(kit, `bg:${row.id}`, [
     <Box flexShrink={0}>{mark(kit, row.kind, isTask ? P.runText : P.muted)}</Box>,
     <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
@@ -167,6 +172,7 @@ function backgroundRow(kit: Kit, state: WebStateV2, row: V2BackgroundRow, action
           </Box>
         </Box>
       ) : null}
+      {said ? <Box flexDirection="row">{said}</Box> : null}
     </Box>,
     <Box flexShrink={0} width={STATUS} justifyContent="flex-end">
       <Text color={status.color}>{status.text}</Text>

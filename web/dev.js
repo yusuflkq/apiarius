@@ -16,9 +16,10 @@
  * Every session on the sample's machine (All sessions) comes along: the
  * sample's registry (web/fixtures/sessions.v2.json) in a registry folder the
  * server reads (`--sessions`), the other sessions' decks in `.web/<id>/`
- * beside it, and the list in the state; an answer or a message to one of
- * them is acked in its own state, as its deck would, or refused where its
- * deck reads no inbox.
+ * beside it, and the list in the state; a command to one of them (an
+ * answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick,
+ * Review) plays on its own state and is acked there, as its deck would, or
+ * refused where its deck reads no inbox.
  * Editing the sample starts the copy again from it. `--static` keeps the
  * sample's own times and only prints commands. Ctrl+C stops both processes.
  */
@@ -67,8 +68,8 @@ function reset() {
   try { for (const name of ['agents', 'patches', 'messages', 'gitdiffs']) copyFolder(name, by) } catch (err) { console.error(`dev: ${err.message}`); return }
   // Org's Timeline: its times count from its startedAt, so moving that (and its now) moves it all
   try { fs.writeFileSync(path.join(dir, 'timeline.json'), `${JSON.stringify(shift(JSON.parse(fs.readFileSync(path.join(LAZY, 'timeline.json'), 'utf8')), by))}\n`) } catch { fs.rmSync(path.join(dir, 'timeline.json'), { force: true }) }
+  // a fresh state: what Clear finished kept of the last one (`stashes`) goes with it
   state = by ? shift(sample, by) : sample
-  stash = null
   resetSessions()
   save()
 }
@@ -108,21 +109,16 @@ function saveOthers() {
 }
 setInterval(saveOthers, 60000).unref()
 
-/** A command for another session's deck: an answer or a message acked in its own state, as its deck would; refused where its deck reads no inbox. */
+/** A command for another session's deck: played on its own state as this deck's are (an answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick, Review), its ack there, as its deck would; refused where its deck reads no inbox. */
 function playOther(cmd) {
   if (cmd.cmd === 'view' || !others) return
   const entry = others.entries.find(one => one.id === cmd.session)
   const theirs = others.states.get(cmd.session)
-  if (!entry || !theirs || !entry.inbox) return later(300, () => ack(cmd.id, false, 'failed', 'Answer it in its window: its deck takes no answers or messages from another'))
-  setTimeout(() => {
-    const at = Date.now()
-    const word = cmd.cmd === 'answer' ? { ok: true, status: 'answered', text: 'Claude carries on' } : { ok: true, status: 'queued', text: 'Claude reads it when it finishes its current turn' }
-    if (cmd.id) theirs.acks = [...(theirs.acks || []).filter(one => one.id !== cmd.id), { id: cmd.id, ...word, at }].slice(-50)
-    const row = (theirs.agents || []).find(one => one.row === 'agent' && one.id === cmd.agentId)
-    if (cmd.cmd === 'chat') theirs.chat.push({ id: `m${at}_dev${++seq}`, at, from: 'you', to: cmd.agentId, who: `You → ${row ? row.title : cmd.agentId}`, kind: 'chat', text: cmd.text, ...(cmd.id ? { ackId: cmd.id } : {}) })
-    theirs.now = at
-    saveOthers()
-  }, 800)
+  if (!entry || !theirs || !entry.inbox) return later(300, () => ack(cmd.id, false, 'failed', "Its deck isn't answering: it runs an older Agent Deck"))
+  const { session: _session, ...own } = cmd
+  // a beat for its deck to read its inbox, as a tick would
+  target = theirs
+  try { later(500, () => play(own)) } finally { target = null }
 }
 
 function save() {
@@ -134,9 +130,24 @@ function save() {
 
 // ---- the mod's part, roughly: acks, the chat, the questions, Clear finished
 let seq = 0
-/** The rows as they stood before Clear finished, for Show N cleared. */
-let stash = null
-const later = (ms, fn) => setTimeout(() => { if (state) { fn(); save() } }, ms)
+/** The rows as they stood before Clear finished, for Show N cleared: each session's state its own. */
+const stashes = new WeakMap()
+/** The other session's state a command plays on (`playOther`); null: this one's. */
+let target = null
+/** `fn` in `ms`, on the state it was given for (this one's, or another session's, `target`), which is written after it. */
+const later = (ms, fn) => {
+  const on = target
+  setTimeout(() => {
+    if (!state) return
+    if (!on) { fn(); save(); return }
+    const kept = state
+    state = on
+    target = on
+    try { fn() } finally { state = kept; target = null }
+    on.now = Date.now()
+    saveOthers()
+  }, ms)
+}
 const rows = () => state.agents.filter(r => r.row === 'agent')
 const rowOf = id => rows().find(r => r.id === id)
 const firstLine = text => { const line = String(text).split('\n').find(l => l.trim()) || ''; return line.length > 80 ? `${line.slice(0, 79)}…` : line }
@@ -241,7 +252,7 @@ function play(cmd) {
       const isDone = r => r.kind !== 'orchestrator' && !r.needs && !r.isCleared && (r.status === 'done' || r.status === 'failed' || r.status === 'idle')
       const ids = rows().filter(isDone).map(r => r.id)
       if (!ids.length) return ack(cmd.id, false, 'failed', 'Nothing finished to clear')
-      if (!stash) stash = state.agents.map(r => ({ ...r }))
+      if (!stashes.has(state)) stashes.set(state, state.agents.map(r => ({ ...r })))
       for (const r of rows()) if (ids.includes(r.id)) r.isCleared = true
       const gone = new Set(rows().filter(r => r.isCleared).map(r => r.id))
       state.agents = state.agents.filter(r => r.row !== 'fold' || r.ids.some(id => !gone.has(id)))
@@ -252,10 +263,11 @@ function play(cmd) {
   } else if (cmd.cmd === 'showCleared') {
     later(200, () => {
       const n = state.cleared ? state.cleared.count : 0
+      const stash = stashes.get(state)
       if (!n || !stash) return ack(cmd.id, false, 'failed', 'Nothing cleared to show')
       const current = new Map(rows().map(r => [r.id, r]))
       state.agents = stash.map(r => { const one = { ...(r.row === 'agent' ? current.get(r.id) || r : r) }; delete one.isCleared; return one })
-      stash = null
+      stashes.delete(state)
       for (const m of state.chat) delete m.isCleared
       state.cleared = { count: 0, at: null }
       ack(cmd.id, true, 'delivered', `Showing ${n} cleared ${n === 1 ? 'agent' : 'agents'} again`)

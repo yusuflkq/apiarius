@@ -20,21 +20,23 @@
  * - **Showing one.** A session's deck shows from its state folder (the
  *   `state.json` and lazy files `/deck web` writes). A deck writes them only
  *   while it is asked to: another deck showing it says so in its inbox
- *   (`InboxFile.viewUntil`), as long as it looks. Its controls that act
- *   only in its own window (Stop, Stop turn, a permission prompt) say so
- *   where they stand (`peerStateOf`, `inItsWindow`).
- * - **Steering one.** Answering its question or messaging it goes to its own
- *   deck, which acts through Claude Code's channels as for its own page: the
- *   viewer writes the command into `<dir>/inbox/<its own id>.json`, the
- *   session's deck reads it on its tick, and its ack shows in its state.
- *   Nothing else is taken from an inbox, and a deck that reads none
- *   (`inbox: false`, an older build) is answered in its own window.
+ *   (`InboxFile.viewUntil`), as long as it looks. Its controls are its own
+ *   window's; a permission prompt alone, which Claude Code takes only in its
+ *   own window, says so where it stands (`peerStateOf`, `inItsWindow`).
+ * - **Steering one.** Every press on its deck goes to its own deck (`STEERING`:
+ *   an answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick of
+ *   Changes, Review), which runs it as its own page's, through Claude Code's
+ *   channels and with its own checks: the viewer writes the command into
+ *   `<dir>/inbox/<its own id>.json`, the session's deck reads it on its tick,
+ *   and its ack shows in its state, at the control pressed (`pressesOf`). A
+ *   deck gone quiet, or one that reads none (`inbox: false`, an older
+ *   build), says so at its controls before a press (`notAnsweringOf`).
  *
  * Pure: the hooks module does the reading, writing and timing.
  */
 import type { V2Stop } from './background'
 import * as F from './format'
-import type { V2AgentRow, V2Need, V2Peer, WebStateV2 } from './web'
+import type { V2AgentRow, V2Need, V2Peer, V2Press, WebAck, WebStateV2 } from './web'
 
 /** The registry file's version. */
 export const REGISTRY_V = 1
@@ -174,22 +176,111 @@ export type InboxFile = {
   at: number
   /** Until when the viewer looks: the session writes its state folder till then; 0 when it looks no more. */
   viewUntil: number
-  /** Its commands, oldest first, the newest 20: `chat` or `answer`, each with its own `id` (its ack's). */
+  /** Its commands, oldest first, the newest 20: one of `STEERING`, each with its own `id` (its ack's). */
   cmds: InboxCommand[]
 }
 
-/** One command in an inbox: a page command (`chat`, `answer`) as the page sends it, with its `id`, and when it was given. */
+/** One command in an inbox: a page command (`STEERING`) as the page sends it, with its `id`, and when it was given. */
 export type InboxCommand = { at: number; cmd: Record<string, unknown> }
 
 const STATE_TEXT: Readonly<Record<SessionEntry['state'], string>> = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' }
 
 const SURFACE_WORD: Readonly<Record<Exclude<SessionSurface, ''>, string>> = { desktop: 'Desktop', terminal: 'Terminal', vscode: 'VS Code', mobile: 'Mobile' }
 
-/** The commands a deck takes from another session's deck: what its page's answer and composer send. */
-export const STEERING: readonly string[] = ['chat', 'answer']
+/** The commands a deck takes from another session's deck: every one of its page's that is about its session. The avatar style is the person's, for every session, so it never goes to another. */
+export const STEERING: readonly string[] = ['chat', 'answer', 'stopAgent', 'abortTurn', 'stopBackground', 'clearFinished', 'showCleared', 'selectRepo', 'review']
+
+/** How long a press on another session's deck shows what came of it, once its ack came. */
+export const PRESS_SHOWN_MS = 10_000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The id a command carries for its ack: `[A-Za-z0-9_-]{1,40}`, as the page's (./web `cmdIdOf`). */
+const CMD_ID = /^[A-Za-z0-9_-]{1,40}$/
+
+/**
+ * A command from another session's deck rebuilt from exactly its known keys,
+ * each checked as web/server.js checks the page's: its `id` (which the ack
+ * names), `chat`'s agent and words, `answer`'s call and one to four answers,
+ * `stopAgent`'s agent, `abortTurn`'s turn (optional), `stopBackground`'s row,
+ * `selectRepo`'s root (one line, '' to follow the work), `review`'s words;
+ * `clearFinished` and `showCleared` name nothing. Null for any other shape,
+ * and for a command not in `STEERING`.
+ */
+export function steeringCmdOf(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || !CMD_ID.test(value.id)) return null
+  const id = value.id
+  const keys = Object.keys(value)
+    .filter(key => key !== 'id')
+    .sort()
+    .join(',')
+  const isText = (text: unknown): text is string => typeof text === 'string' && text.trim() !== '' && text.length <= 4000
+  const isName = (name: unknown): name is string => typeof name === 'string' && /^[^\u0000-\u001f\u007f]{1,200}$/.test(name)
+  const isWebId = (said: unknown, most: number): said is string => typeof said === 'string' && said.length <= most && /^[A-Za-z0-9_-]+$/.test(said)
+  if (value.cmd === 'chat' && keys === 'agentId,cmd,text' && isName(value.agentId) && isText(value.text)) return { cmd: 'chat', id, agentId: value.agentId, text: value.text }
+  if (value.cmd === 'answer' && keys === 'answers,callId,cmd' && isWebId(value.callId, 100) && isRecord(value.answers)) {
+    const answers = Object.entries(value.answers)
+    const isAnswer = (text: unknown) => typeof text === 'string' && text.trim() !== '' && text.length <= 2000
+    if (answers.length >= 1 && answers.length <= 4 && answers.every(([question, answer]) => isAnswer(question) && isAnswer(answer))) return { cmd: 'answer', id, callId: value.callId, answers: Object.fromEntries(answers) }
+  }
+  if (value.cmd === 'stopAgent' && keys === 'agentId,cmd' && isName(value.agentId)) return { cmd: 'stopAgent', id, agentId: value.agentId }
+  if (value.cmd === 'abortTurn' && keys === 'cmd') return { cmd: 'abortTurn', id }
+  if (value.cmd === 'abortTurn' && keys === 'cmd,turnId' && isWebId(value.turnId, 100)) return { cmd: 'abortTurn', id, turnId: value.turnId }
+  if (value.cmd === 'stopBackground' && keys === 'bgId,cmd' && isWebId(value.bgId, 200)) return { cmd: 'stopBackground', id, bgId: value.bgId }
+  if ((value.cmd === 'clearFinished' || value.cmd === 'showCleared') && keys === 'cmd') return { cmd: value.cmd, id }
+  if (value.cmd === 'selectRepo' && keys === 'cmd,root' && typeof value.root === 'string' && /^[^\u0000-\u001f\u007f]{0,1000}$/.test(value.root)) return { cmd: 'selectRepo', id, root: value.root }
+  if (value.cmd === 'review' && keys === 'cmd,text' && isText(value.text)) return { cmd: 'review', id, text: value.text }
+  return null
+}
+
+/** Why another session's deck refused a command `steeringCmdOf` could not read, as its ack says it. */
+export function steeringRefusalOf(value: unknown): string {
+  const cmd = isRecord(value) && typeof value.cmd === 'string' ? value.cmd : ''
+  if (!STEERING.includes(cmd)) return `Not a command another session's deck sends${cmd !== '' ? `: ${F.trunc(F.oneLine(cmd), 40)}` : ''}`
+  return 'Not a command the deck can read'
+}
+
+/** What a control of another session's says, before a press, while its deck takes nothing from here; where there is room, why (`notAnsweringOf`). */
+export const NOT_ANSWERING = "Its deck isn't answering"
+
+/**
+ * Why another session's controls do nothing from here, said at each before
+ * a press; '' while its deck takes commands from here: one not heard from
+ * lately ("Its deck isn't answering: last heard 2m ago."), one that reads no
+ * inbox (an older build), one the list holds no more.
+ */
+export function notAnsweringOf(row: Pick<SessionRowV2, 'canSteer' | 'isQuiet' | 'say'> | null): string {
+  if (!row) return `${NOT_ANSWERING}: it is not listed any more.`
+  if (row.isQuiet) return `${NOT_ANSWERING}: ${row.say !== '' ? `${row.say.charAt(0).toLowerCase()}${row.say.slice(1)}` : 'not heard from lately'}.`
+  if (!row.canSteer) return `${NOT_ANSWERING}: it runs an older Agent Deck.`
+  return ''
+}
+
+/** A press sent to another session's deck from here: its command's id, when it went, what its control says until the ack ("Stopping…"), and why it could not go ('' when it went). */
+export type PressSent = { id: string; at: number; doing: string; failed: string }
+
+/**
+ * What each press sent to another session's deck says at its control, by
+ * its key, from that deck's acks: `sending` until its ack, then `done` or
+ * `failed` with the ack's words, for `PRESS_SHOWN_MS`; one that could not go
+ * `failed` with why; one that heard nothing within `COMMAND_MS` (its deck
+ * lets such a command go unread) `failed`, its deck did not answer. Those
+ * past showing are left out.
+ */
+export function pressesOf(sent: ReadonlyMap<string, PressSent>, acks: readonly WebAck[], now: number): Record<string, V2Press> {
+  const out: Record<string, V2Press> = {}
+  for (const [key, one] of sent) {
+    const ack = [...acks].reverse().find(said => said.id === one.id)
+    if (one.failed !== '') {
+      if (now - one.at <= PRESS_SHOWN_MS) out[key] = { status: 'failed', text: one.failed }
+    } else if (ack) {
+      if (now - Math.max(ack.at, one.at) <= PRESS_SHOWN_MS) out[key] = { status: ack.ok && ack.status !== 'failed' ? 'done' : 'failed', text: ack.text }
+    } else if (now - one.at <= COMMAND_MS) out[key] = { status: 'sending', text: one.doing }
+    else if (now - one.at <= COMMAND_MS + PRESS_SHOWN_MS) out[key] = { status: 'failed', text: 'Its deck did not answer: it may be busy or gone' }
+  }
+  return out
 }
 
 /** A session id as a file name: `[A-Za-z0-9_-]`, 1 to 100 characters; '' for anything else. */
@@ -499,7 +590,7 @@ export function facesOf(row: Pick<SessionRowV2, 'id' | 'state' | 'working' | 'is
   return { seeds, more: n - seeds.length }
 }
 
-/** A note at a control that acts only in a session's own window: "Answer it in its window: Terminal · site." (`lead` "Answer it", "Stop it"…; `where` its row's, '' when the list does not hold it). */
+/** A note at what is answered only in a session's own window (a permission prompt, Claude Code's notification): "Answer it in its window: Terminal · site." (`where` its row's, '' when the list does not hold it). */
 export function inItsWindow(lead: string, where: string): string {
   return `${lead} in its window${where !== '' ? `: ${where}` : ''}.`
 }
@@ -510,7 +601,7 @@ export function othersLineOf(view: Pick<SessionsV2, 'others'> | undefined | null
   return n > 0 ? `${n} other ${n === 1 ? 'session needs' : 'sessions need'} you` : null
 }
 
-/** A page command meant for another session (`session` names it): `view`, `chat` or `answer`, the rest as sent; null for any other, and for one naming this session (`me`). */
+/** A page command meant for another session (`session` names it): `view` or one of `STEERING`, the rest as sent; null for any other, and for one naming this session (`me`). */
 export function sessionCmdOf(cmd: Record<string, unknown>, me: string): { session: string; cmd: Record<string, unknown> } | null {
   const session = typeof cmd.session === 'string' ? cmd.session : ''
   if (session === '' || session === me || sessionFileOf(session) === '') return null
@@ -519,7 +610,7 @@ export function sessionCmdOf(cmd: Record<string, unknown>, me: string): { sessio
   return { session, cmd: rest }
 }
 
-/** An inbox file read: its view and its commands (`chat` and `answer` with an `id` alone), each checked; null for anything else. */
+/** An inbox file read: its view and its commands, each one with an `id` its ack can name (its deck checks the rest: `steeringCmdOf`, refused with an ack); null for anything else. */
 export function inboxFromText(text: string): InboxFile | null {
   let value: unknown
   try {
@@ -531,7 +622,7 @@ export function inboxFromText(text: string): InboxFile | null {
   const at = typeof value.at === 'number' ? value.at : 0
   const viewUntil = typeof value.viewUntil === 'number' ? value.viewUntil : 0
   const cmds: InboxCommand[] = Array.isArray(value.cmds)
-    ? value.cmds.flatMap((one: unknown) => (isRecord(one) && typeof one.at === 'number' && isRecord(one.cmd) && STEERING.includes(String(one.cmd.cmd)) && typeof one.cmd.id === 'string' ? [{ at: one.at, cmd: one.cmd }] : []))
+    ? value.cmds.flatMap((one: unknown) => (isRecord(one) && typeof one.at === 'number' && isRecord(one.cmd) && typeof one.cmd.id === 'string' && CMD_ID.test(one.cmd.id) ? [{ at: one.at, cmd: one.cmd }] : []))
     : []
   return { v: 1, from: value.from, at, viewUntil, cmds: cmds.slice(-INBOX_MOST) }
 }
@@ -558,21 +649,21 @@ export function stateFileV2Of(text: string): string | null {
 /**
  * Another session's state as this deck shows it: its own list of sessions
  * left out (this deck's own is shown), marked `peer` (where its window is,
- * whether its deck takes answers from here); its questions answerable only
- * where it does; every Stop and Cancel it offers none here, its `why`
- * saying where to stop it ("Stop it in its window: Terminal · site."): a
- * stop never goes to another session. Its permission prompts, notifications
- * and Stop turn say the same where they stand (`peer`).
+ * whether its deck takes commands from here, what came of the presses sent
+ * to it). Its controls are its own window's: a Stop or Cancel where its own
+ * deck's check allows it, its questions answerable through its deck. Where
+ * its deck takes nothing from here (`peer.why`), none is offered, each
+ * saying why instead. A permission prompt says where it is answered (`peer`).
  */
 export function peerStateOf(state: WebStateV2, peer: V2Peer): WebStateV2 {
   const { sessions: _theirs, ...rest } = state as WebStateV2 & { sessions?: unknown }
-  const why = inItsWindow('Stop it', peer.where)
-  const here = (stop: V2Stop): V2Stop => ({ ...stop, can: false, why })
+  if (peer.canSteer) return { ...rest, peer }
+  const deaf = (stop: V2Stop): V2Stop => ({ ...stop, can: false, why: peer.why })
   return {
     ...rest,
     peer,
-    needs: peer.canSteer ? rest.needs : rest.needs.map(need => ({ ...need, isAnswerable: false })),
-    agents: rest.agents.map(row => (row.row === 'agent' && row.stop ? { ...row, stop: here(row.stop) } : row)),
-    ...(rest.background ? { background: { ...rest.background, rows: rest.background.rows.map(row => (row.stop ? { ...row, stop: here(row.stop) } : row)) } } : {}),
+    needs: rest.needs.map(need => ({ ...need, isAnswerable: false })),
+    agents: rest.agents.map(row => (row.row === 'agent' && row.stop ? { ...row, stop: deaf(row.stop) } : row)),
+    ...(rest.background ? { background: { ...rest.background, rows: rest.background.rows.map(row => (row.stop ? { ...row, stop: deaf(row.stop) } : row)) } } : {}),
   }
 }

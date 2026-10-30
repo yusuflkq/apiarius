@@ -710,14 +710,14 @@ function apply(next) {
   }
   // another session's deck shows: this one's state waits behind it (its list of sessions and its acks are still read)
   if (route.session) {
-    if (S) indexViewed();
+    if (S) { indexViewed(); notePresses(); }
     invalidate();
     return;
   }
   S = HOME;
   IX = buildIndex(S);
   noteResolved();
-  noteStops();
+  notePresses();
   // a style picked here holds until the state names it: from then on the state's (the person's setting) is drawn
   if (ui.picked && S.avatarStyle === ui.picked.style) ui.picked = null;
   invalidate();
@@ -784,11 +784,10 @@ function retryNow() {
 }
 
 async function command(body) {
-  // another session's deck: an answer or a message goes to its own deck, which acts on it as on its own page's; nothing else goes from here
-  if (route.session && body.cmd !== 'view') {
-    const row = sessionRow(route.session);
-    if (body.cmd !== 'chat' && body.cmd !== 'answer') throw new Error(`This is another session's deck. ${inItsWindow('Do that', row ? row.where : '')}`);
-    if (!row || !row.canSteer) throw new Error('Answer it in its window: its deck takes no answers or messages from another.');
+  // another session's deck: every command about its session goes to its own deck, which runs it as its own page's; the avatar style is the person's, this deck's own
+  if (route.session && !['view', 'avatarStyle', 'ping'].includes(body.cmd)) {
+    const why = notAnswering(sessionRow(route.session));
+    if (why) throw new Error(why);
     body = { ...body, session: route.session };
   }
   let res;
@@ -1074,7 +1073,7 @@ const ui = {
   picked: null,            // { style, until }: an avatar style picked here, drawn until the state names it
   toast: null,             // { text, until }
   needAt: -1,              // the need `n` went to last
-  stops: new Map(),        // command id -> { key, at }: a Stop, Cancel or Stop turn sent from here, until its ack
+  presses: new Map(),      // command id -> { key, at, ack }: a Stop, Cancel, Stop turn, Clear finished or pick sent from here, and its ack once the state holds it
   drawerW: keptDrawerW(),  // the width the reader dragged the agent drawer to, px; null for its default
   drawerTo: null,          // { id, until }: an element of the drawer to bring into view once drawn (a call, an edit)
 };
@@ -1470,7 +1469,8 @@ function QuestionForm(n) {
   return h('div', { class: 'qform' },
     h('div', { class: `qform-qs${qs.length > 1 ? ' several' : ''}` }, qs.map((q, qi) => QuestionBlock(n, q, qi, c, mode))),
     h('div', { class: 'qform-foot' },
-      st ? StatusNote(st) : h('span', { class: 'need-where' }, readOnly ? whereNote('Answer it', 'Answer it in Claude Code.') : whereNote('Or answer it', 'Or answer it in Claude Code.')),
+      // one its deck answers, as its own window's deck says it; one no deck can answer, where; another session's whose deck takes nothing from here, why
+      st ? StatusNote(st) : h('span', { class: 'need-where' }, readOnly ? deafWhy() || whereNote('Answer it', 'Answer it in Claude Code.') : 'Or answer it in Claude Code.'),
       !readOnly && !instant && h('button', { class: 'btn btn-primary btn-sm', type: 'button', disabled: !ready || locked, onClick: submit }, qs.length > 1 ? 'Submit answers' : 'Submit')));
 }
 
@@ -1629,7 +1629,7 @@ function Header() {
         WhereTag()),
       hd && hd.line ? HeaderLine(hd, 'hd-line-top') : null,
       SessionsLink(),
-      hd && hd.turn ? (S.peer ? PeerStopTurn() : StopTurn()) : null),
+      hd && hd.turn ? (deafWhy() ? PeerStopTurn() : StopTurn()) : null),
     GoalPanel(),
     h('nav', { class: 'hd-tabs', 'aria-label': 'Pages' },
       TABS.map(([id, label]) => Tab(id, label)),
@@ -1702,29 +1702,25 @@ function cardRows(isFinishedOpen) {
 function FinishedRow(scope, n, open) {
   const cleared = S.cleared ? S.cleared.count : 0;
   if (!n && !cleared) return null;
+  // another session's whose deck takes nothing from here: why, in Clear finished's place
+  const deaf = deafWhy();
+  const clearing = isPressing('clear'), showing = isPressing('show');
   return h('div', { key: `fin:${scope}`, class: `finished finished-${scope}` },
     n > 0 && h('button', { key: 'fold', type: 'button', class: 'fin-fold', 'aria-expanded': open ? 'true' : 'false', onClick: () => toggle(`finished|${scope}`) }, `${n} finished ${open ? '▾' : '▸'}`),
-    n > 0 && h('button', { key: 'clear', type: 'button', class: 'btn btn-xs fin-clear', title: 'Hide the finished agents from this deck: Claude Code keeps them', onClick: () => clearFinished() }, 'Clear finished'),
-    cleared > 0 && h('button', { key: 'show', type: 'button', class: 'btn btn-xs fin-show', onClick: () => showCleared() }, `Show ${cleared} cleared`));
+    deaf && h('span', { key: 'deaf', class: 'peer-note fin-deaf' }, deaf),
+    !deaf && n > 0 && h('button', { key: 'clear', type: 'button', class: 'btn btn-xs fin-clear', disabled: clearing, title: 'Hide the finished agents from this deck: Claude Code keeps them', onClick: () => clearFinished() }, clearing ? 'Clearing…' : 'Clear finished'),
+    !deaf && cleared > 0 && h('button', { key: 'show', type: 'button', class: 'btn btn-xs fin-show', disabled: showing, onClick: () => showCleared() }, showing ? 'Showing them…' : `Show ${cleared} cleared`),
+    PressNote('clear'), PressNote('show'));
 }
 
-/** Clear finished: the mod hides every finished agent from the deck, here and in the pane, and the next state says so. Nothing in Claude Code changes. */
-async function clearFinished() {
-  try {
-    await command({ cmd: 'clearFinished', id: newCmdId('cl') });
-    toast('Finished agents cleared from the deck: Claude Code keeps them');
-  } catch (err) {
-    toast(err.message);
-  }
+/** Clear finished: the mod (another session's: its own deck) hides every finished agent from the deck, here and in the pane, and the next state says so; its ack shows beside it. Nothing in Claude Code changes. */
+function clearFinished() {
+  return sendPress('clear', { cmd: 'clearFinished' }, 'cl');
 }
 
 /** Show N cleared: the agents Clear finished hid come back. */
-async function showCleared() {
-  try {
-    await command({ cmd: 'showCleared', id: newCmdId('cl') });
-  } catch (err) {
-    toast(err.message);
-  }
+function showCleared() {
+  return sendPress('show', { cmd: 'showCleared' }, 'cl');
 }
 
 const PILL = { starting: 'starting', running: 'running', waiting: 'waiting', done: 'done', failed: 'failed', stopped: 'stopped', idle: 'idle' };
@@ -1818,54 +1814,87 @@ function AgentsSection() {
 // Stop turn, Stop and Cancel: the page asks the mod, which stops only
 // through Claude Code's own channels (TaskStop, CronDelete, $.turn.abort),
 // asking Claude Code's own permission check first; a Stop or Cancel shows
-// only where the state says that check allows it (`stop.can`). What came of
-// each press comes back as a toast.
+// only where the state says that check allows it (`stop.can`). On another
+// session's deck the same, by its own deck's state: the press goes to that
+// deck, which runs it as its own window would. Each press (Clear finished
+// and a pick of Changes too) says what came of it at its control: its
+// doing until the ack, then the ack's words a while, and a toast.
 
-/** Sends a stop command (`body`; its `id` made here) for the target keyed `key`; its ack, once the state holds it, is a toast. */
-async function sendStop(key, body) {
-  const id = newCmdId('st');
-  ui.stops.set(id, { key, at: Date.now() });
+/** How long a press's control says what came of it, once its ack came. */
+const PRESS_SHOW = 10000;
+
+/** Sends a press's command (`body`; its `id` made here, of `kind`) for the control keyed `key`; its ack, once the state holds it, shows at that control and as a toast. */
+async function sendPress(key, body, kind = 'st') {
+  const id = newCmdId(kind);
+  const sent = { key, at: Date.now(), ack: null };
+  ui.presses.set(id, sent);
   renderNow();
   try {
     await command({ ...body, id });
-    setTimeout(invalidate, ACK_WAIT + 50);
+    setTimeout(() => { notePresses(); invalidate(); }, ACK_WAIT + 50);
   } catch (err) {
-    ui.stops.delete(id);
+    sent.ack = { ok: false, text: err.message, at: Date.now() };
     toast(err.message);
+    setTimeout(invalidate, PRESS_SHOW + 50);
   }
   renderNow();
 }
 
-/** Whether a stop of the target keyed `key` sent from here waits on its ack. */
-const isStopping = key => [...ui.stops.values()].some(s => s.key === key && Date.now() - s.at < ACK_WAIT);
+/** What the newest press of the control keyed `key` says now: `busy` while it waits on its ack, else its ack a while after it came; null for none. */
+function pressOf(key) {
+  let last = null;
+  for (const s of ui.presses.values()) if (s.key === key && (!last || s.at >= last.at)) last = s;
+  if (!last) return null;
+  if (!last.ack) return Date.now() - last.at < ACK_WAIT ? { busy: true, ack: null } : null;
+  return Date.now() - last.ack.at < PRESS_SHOW ? { busy: false, ack: last.ack } : null;
+}
+const isPressing = key => !!(pressOf(key) || {}).busy;
 
-/** The stops sent from here whose ack the state now holds: each said once, as a toast. */
-function noteStops() {
-  for (const [id, s] of ui.stops) {
-    const k = IX.acks.get(id);
+/** What came of a press, beside its control: ✓ and its ack's words, or ✕ and why; null while it waits, and for none. */
+function PressNote(key) {
+  const p = pressOf(key);
+  if (!p || !p.ack) return null;
+  return h('span', { key: `press:${key}`, class: `press-note ${p.ack.ok ? 'is-done' : 'is-failed'}`, role: 'status', title: p.ack.text }, p.ack.ok ? '✓ ' : '✕ ', p.ack.text);
+}
+
+/** The presses sent from here whose ack the state now holds: each kept for its control and said once, as a toast; one that heard nothing within ACK_WAIT says so; those long past go. */
+function notePresses() {
+  for (const [id, s] of ui.presses) {
+    if (s.ack) {
+      if (Date.now() - s.ack.at > PRESS_SHOW) ui.presses.delete(id);
+      continue;
+    }
+    const k = IX && IX.acks.get(id);
     if (k) {
-      ui.stops.delete(id);
-      toast(k.ok ? k.text : lead('Not stopped', k.text));
-    } else if (Date.now() - s.at > ACK_WAIT) ui.stops.delete(id);
+      s.ack = { ok: k.ok, text: k.text || (k.ok ? 'Done' : 'Not done'), at: Date.now() };
+      toast(k.ok ? k.text : lead(s.key === 'clear' || s.key === 'show' || s.key === 'repo' ? 'Not done' : 'Not stopped', k.text));
+      setTimeout(invalidate, PRESS_SHOW + 50);
+    } else if (Date.now() - s.at > ACK_WAIT) {
+      s.ack = { ok: false, text: route.session ? 'Its deck did not answer: it may be busy or gone' : 'The deck did not answer', at: Date.now() };
+      setTimeout(invalidate, PRESS_SHOW + 50);
+    }
   }
 }
 
-/** Stop turn, at the right of the header while the main loop's turn runs: `$.turn.abort` of it, as Esc in Claude Code does. */
+/** Stop turn, at the right of the header while the main loop's turn runs: `$.turn.abort` of it, as Esc in Claude Code does; what came of a press before it. */
 function StopTurn() {
-  const busy = isStopping('turn');
-  return h('button', {
-    key: 'stopturn', type: 'button', class: 'stop-btn stop-turn', disabled: busy,
-    title: 'End the Orchestrator\'s turn, and the foreground agents with it, as Esc in Claude Code does',
-    onClick: () => sendStop('turn', { cmd: 'abortTurn', turnId: S.header.turn.id }),
-  }, icon('square', 'stop-ic'), busy ? 'Stopping…' : 'Stop turn');
+  const busy = isPressing('turn');
+  return [
+    PressNote('turn'),
+    h('button', {
+      key: 'stopturn', type: 'button', class: 'stop-btn stop-turn', disabled: busy,
+      title: 'End the Orchestrator\'s turn, and the foreground agents with it, as Esc in Claude Code does',
+      onClick: () => sendPress('turn', { cmd: 'abortTurn', turnId: S.header.turn.id }),
+    }, icon('square', 'stop-ic'), busy ? 'Stopping…' : 'Stop turn'),
+  ];
 }
 
 /** Stop on a background agent or a teammate: Claude Code's own TaskStop of it. */
 function StopAgent(a, cls) {
-  const busy = isStopping(`agent:${a.id}`);
+  const busy = isPressing(`agent:${a.id}`);
   return h('button', {
     key: 'stop', type: 'button', class: cls, disabled: busy, title: `Stop ${a.title}: Claude Code's own TaskStop`,
-    onClick: e => { stop(e); sendStop(`agent:${a.id}`, { cmd: 'stopAgent', agentId: a.id }); },
+    onClick: e => { stop(e); sendPress(`agent:${a.id}`, { cmd: 'stopAgent', agentId: a.id }); },
   }, icon('square', 'stop-ic'), busy ? 'Stopping…' : a.stop.label);
 }
 
@@ -1902,7 +1931,7 @@ function BgStatus(x) {
 function BgRow(x) {
   const scheduled = x.status === 'scheduled';
   const key = `bg:${x.id}`;
-  const busy = isStopping(key);
+  const busy = isPressing(key);
   const next = x.nextAt != null ? `Next run ${new Date(x.nextAt).toLocaleString()}` : '';
   return h('div', { key: x.id, id: `bg-${x.id}`, class: `bg-row${scheduled ? ' is-scheduled' : ''}` },
     icon(BG_ICON[x.kind] || 'circle', 'bg-ic'),
@@ -1911,24 +1940,25 @@ function BgRow(x) {
         // a shell goes by its own description, its command after its kind; with none, by its command, in code's face
         h('span', { class: `bg-title${x.kind === 'shell' && !x.what.includes(' · ') ? ' mono' : ''}`, title: x.title }, x.title),
         x.what && h('span', { class: 'bg-what', title: [x.what, x.schedule].filter(Boolean).join(' · ') }, x.what)),
-      x.by && h('span', { class: 'bg-by' }, 'started by ', NameLink(x.by, 14))),
+      x.by && h('span', { class: 'bg-by' }, 'started by ', NameLink(x.by, 14)),
+      PressNote(key)),
     BgStatus(x),
     h('span', { class: 'bg-when', title: next }, bgWhen(x)),
     h('span', { class: 'bg-act' },
       x.stop && x.stop.can && h('button', {
         type: 'button', class: 'btn btn-xs bg-stop', disabled: busy, title: `${x.stop.label}: Claude Code's own ${x.stop.tool}`,
-        onClick: () => sendStop(key, { cmd: 'stopBackground', bgId: x.id }),
+        onClick: () => sendPress(key, { cmd: 'stopBackground', bgId: x.id }),
       }, busy ? '…' : x.stop.label)));
 }
 
 function BackgroundSection() {
   const bg = S.background;
   if (!bg || !bg.rows.length) return null;
-  // another session's: its Stop and Cancel act only in its own window, so the list says where, once
-  const stops = S.peer ? bg.rows.filter(x => x.stop).length : 0;
+  // another session's whose deck takes nothing from here: its Stop and Cancel are offered nowhere, so the list says why, once
+  const deaf = deafWhy() && bg.rows.some(x => x.stop);
   return Section('background', 'Background', bg.rows.length, bg.text ? h('span', { class: 'sec-note' }, bg.text) : null, () => [
     h('div', { key: 'list', class: 'card list bg-list' }, bg.rows.map(BgRow)),
-    stops > 0 && h('p', { key: 'where', class: 'peer-note bg-where' }, inItsWindow(stops === 1 ? 'Stop it' : 'Stop them', S.peer.where)),
+    deaf && h('p', { key: 'deaf', class: 'peer-note bg-where' }, deafWhy()),
   ]);
 }
 
@@ -2924,7 +2954,7 @@ function Bubble(e, showTo) {
       open ? 'Show less' : 'Show more', icon('chevronDown', open ? 'flip' : '')),
     held && (held.isAnswerable
       ? h('button', { type: 'button', class: 'more more-start b-answer', onClick: () => goToNeed(held) }, 'Answer on Dashboard', icon('arrowRight'))
-      : h('p', { class: 'b-held' }, whereNote('Answer it', 'Answer it in Claude Code.')))),
+      : h('p', { class: 'b-held' }, deafWhy() || whereNote('Answer it', 'Answer it in Claude Code.')))),
   m.isDelivered === false && !m.ackId && h('p', { class: 'b-note' }, StatusNote({ tone: 'fail', icon: 'x', text: 'Not delivered' })),
   note && h('p', { class: 'b-note' }, StatusNote(note)));
 }
@@ -3105,6 +3135,8 @@ function targetOf(scope, words) {
 
 /** What the composer's foot says of its words: who they go to, the agents an @name could be ("Did you mean"), or why they cannot go. */
 function previewOf(scope, draft) {
+  // another session's whose deck takes nothing from here: why, before anything is sent
+  if (deafWhy()) return { text: deafWhy(), hint: true };
   if (scope !== 'chat') { const a = IX.byId.get(scope.slice(6)); return a ? { text: viaOf(a.id, a.title) } : { text: 'No such agent in this session', err: true }; }
   const said = draft.trim();
   const at = /^@(\S+)/.exec(said);
@@ -3343,19 +3375,17 @@ function noRepoText(ch) {
   return w ? (ch.edits.length ? 'No git repository here: the edits agents made are below, exact.' : 'No git repository here.') : 'The session is not in a git repository; the agents\' own edits are below.';
 }
 
-/** Changes shows the repository at `root`, pinned (a pick); '' follows the work again. The next state shows it; a refusal is a toast. */
-async function selectRepo(root) {
-  try {
-    await command({ cmd: 'selectRepo', id: newCmdId('rp'), root });
-  } catch (err) {
-    toast(err.message);
-  }
+/** Changes shows the repository at `root`, pinned (a pick); '' follows the work again. The next state shows it, and what came of it shows beside Changes' head (`repo`). */
+function selectRepo(root) {
+  return sendPress('repo', { cmd: 'selectRepo', root }, 'rp');
 }
 
-/** While the chat's folder is in no repository and none is pinned: the repositories directly inside it, the one changed last first, each a press that pins Changes to it. */
+/** While the chat's folder is in no repository and none is pinned: the repositories directly inside it, the one changed last first, each a press that pins Changes to it (on another session's deck that takes nothing from here, why instead). */
 function PicksSection(w) {
+  const busy = isPressing('repo');
   return Section('picks', `Repositories in ${w.name || w.cwd}`, w.picks.length, null, () => h('div', { class: 'chg-picks' },
-    w.picks.map(p => h('button', { key: p.root, type: 'button', class: 'btn btn-sm chg-pick', title: p.root, onClick: () => selectRepo(p.root) }, icon('branch'), h('span', null, p.name)))));
+    w.picks.map(p => h('button', { key: p.root, type: 'button', class: 'btn btn-sm chg-pick', title: p.root, disabled: busy || !!deafWhy(), onClick: () => selectRepo(p.root) }, icon('branch'), h('span', null, p.name))),
+    deafWhy() && h('p', { key: 'deaf', class: 'peer-note' }, deafWhy())));
 }
 
 function ChangesPage() {
@@ -3370,7 +3400,11 @@ function ChangesPage() {
   // with no repository the newest is open the first time the list is seen, as the pane's; a fold's default is fixed then
   const isFresh = !repo && !own.some(p => ui.open.has(`other|${p}`));
   const fileGroup = p => FileGroup(p, IX.editsByPath.get(p), { scope: 'other', open: isFresh && p === own[0], showAgent: true, editors: [...new Set(IX.editsByPath.get(p).map(e => e.agent))], outside: isOut(p) });
-  const follow = isPinned && h('button', { key: 'follow', type: 'button', class: 'btn btn-xs chg-follow', title: 'Let go of the pin: Changes follows the repository an agent edits in', onClick: () => selectRepo('') }, 'Follow the work');
+  // another session's: its Follow the work and Review go to its own deck; where it takes nothing from here, why in their place
+  const deaf = deafWhy();
+  const following = isPressing('repo');
+  const follow = isPinned && !deaf && h('button', { key: 'follow', type: 'button', class: 'btn btn-xs chg-follow', disabled: following, title: 'Let go of the pin: Changes follows the repository an agent edits in', onClick: () => selectRepo('') }, following ? 'Asking…' : 'Follow the work');
+  const note = PressNote('repo');
   return h('div', { key: 'changes', class: 'page page-changes' },
     h('div', { class: 'chg-top' },
       h('div', { class: 'chg-sum' },
@@ -3381,9 +3415,11 @@ function ChangesPage() {
             h('span', { class: 'sep' }, '·'), h('span', null, repo.head.slice(0, 7)), h('span', { class: 'sep' }, '·'), h('span', null, repo.name),
             isPinned ? [h('span', { key: 'sep', class: 'sep' }, '·'), h('span', { key: 'pinned', class: 'chg-pinned' }, 'pinned')] : null)
           : h('p', { class: 'chg-where' }, noRepoText(ch))),
-      (follow || files.length > 0) && h('div', { class: 'chg-acts' },
+      (follow || note || files.length > 0 || (deaf && isPinned)) && h('div', { class: 'chg-acts' },
+        note,
         follow,
-        files.length > 0 && ReviewButton('changes', `Review the uncommitted changes (${plural(files.length, 'file')}, +${add} −${rem}) and tell me what to fix before I commit.`))),
+        deaf && (isPinned || files.length > 0) && h('span', { key: 'deaf', class: 'peer-note' }, deaf),
+        !deaf && files.length > 0 && ReviewButton('changes', `Review the uncommitted changes (${plural(files.length, 'file')}, +${add} −${rem}) and tell me what to fix before I commit.`))),
     !repo && where && where.isRepo === false && !isPinned && where.picks.length > 0 && PicksSection(where),
     repo && Section('uncommitted', 'Uncommitted', files.length || null, null, () => (files.length
       ? h('div', { class: 'card list chgs' }, files.map(GitFileRow))
@@ -3600,7 +3636,8 @@ function AgentDrawer(id) {
       h('div', { key: 'actions', class: 'drawer-actions' },
         h('button', { type: 'button', class: 'btn btn-sm', onClick: () => { ui.focusTo = composerId(scope); renderNow(); } }, icon('message'), 'Message'),
         h('button', { type: 'button', class: 'btn btn-sm', onClick: () => { ui.chatFilter = a.id; ui.pinChat = true; navigate('chat', isWide() ? route.drawer : null); } }, icon('arrowRight'), `Chat with ${a.title}`),
-        a.stop && a.stop.can && StopAgent(a, 'btn btn-sm stop-drawer')),
+        a.stop && a.stop.can && StopAgent(a, 'btn btn-sm stop-drawer'),
+        PressNote(`agent:${a.id}`)),
       a.stop && !a.stop.can && a.stop.why && h('p', { key: 'stopwhy', class: 'stop-why' }, a.stop.why),
       NeedsList(a.id),
       // its call in flight, unless a need above already shows that very call; else its words since its latest call
@@ -4258,11 +4295,12 @@ function afterRender(pin) {
 // All sessions was opened from, #/s/<id>/<tab>, read from its
 // folder (/s/<id>/state and its lazy files) every 1.5 s while it shows, its
 // own deck asked to keep writing them (`view`, every 30 s). There is no mode
-// for another's deck: its header is its own, and a control that acts only
-// in its window says so where it stands ("Answer it in its window: Terminal
-// · site."). An answer or a message goes to its own deck, which acts on it
-// through Claude Code as on its own page's; where its deck takes none,
-// "Answer it in its window".
+// for another's deck: its header is its own, and its controls are its own
+// window's. Every press on it goes to its own deck, which acts on it through
+// Claude Code as on its own page's, and the control says what came of it; a
+// permission prompt, which only its window answers, says so where it stands
+// ("Answer it in its window: Terminal · site."); a deck gone quiet, or one
+// that takes nothing from here, says so at its controls before a press.
 
 /** The session whose deck shows (null: this one's), its state as read, why none shows, and its poll. */
 const VIEW = { id: null, S: null, error: '', timer: 0, asked: 0, openedAt: 0, seq: 0 };
@@ -4306,10 +4344,22 @@ const sessionRow = id => { const list = sessionsNow(); return (list && list.rows
 /** The session whose deck shows: the one picked, else here. */
 const shownId = () => route.session || (HOME && HOME.session.id) || '';
 
-/** A note at a control that acts only in a session's own window, as the mod words it (hooks/sessions.ts `inItsWindow`). */
+/** A note at what is answered only in a session's own window (a permission prompt, Claude Code's notification), as the mod words it (hooks/sessions.ts `inItsWindow`). */
 const inItsWindow = (lead, where) => `${lead} in its window${where ? `: ${where}` : ''}.`;
-/** What a control of the deck shown says of where to act: `own` on this session's deck, its window on another's. */
+/** Where what no deck answers is answered: `own` on this session's deck, its window on another's. */
 const whereNote = (lead, own) => (S && S.peer ? inItsWindow(lead, S.peer.where) : own);
+
+/** What another session's controls say, before a press, while its deck takes nothing from here (hooks/sessions.ts `NOT_ANSWERING`). */
+const NOT_ANSWERING = 'Its deck isn\'t answering';
+/** Why another session's controls do nothing from here (hooks/sessions.ts `notAnsweringOf`); '' while its deck takes commands from here. */
+function notAnswering(row) {
+  if (!row) return `${NOT_ANSWERING}: it is not listed any more.`;
+  if (row.isQuiet) return `${NOT_ANSWERING}: ${row.heardAt ? heardText(row.heardAt).replace(/^L/, 'l') : 'not heard from lately'}.`;
+  if (!row.canSteer) return `${NOT_ANSWERING}: it runs an older Agent Deck.`;
+  return '';
+}
+/** On another session's deck that takes nothing from here, why, said at its controls in their place; '' on this deck's own, and while it does. */
+const deafWhy = () => (S && S.peer && !S.peer.canSteer ? S.peer.why : '');
 
 /** A quiet deck's line on the page's clock: "Last heard 2m ago". */
 function heardText(at) {
@@ -4403,19 +4453,22 @@ async function pollView(seq) {
 
 /**
  * Another session's state as this page shows it (hooks/sessions.ts
- * `peerStateOf`): marked `peer` (its window, whether its deck takes answers
- * from here), its questions answerable only where it does, every Stop and
- * Cancel offered nowhere here, saying where to stop it instead.
+ * `peerStateOf`): marked `peer` (its window, whether its deck takes commands
+ * from here, why not). Its controls are its own window's: a Stop or Cancel
+ * where its own deck's check allows it, its questions answerable through its
+ * deck. Where its deck takes nothing from here, none is offered, each saying
+ * why instead.
  */
 function peerOf(s, row) {
-  const peer = { where: row ? row.where : '', canSteer: !!row && row.canSteer };
-  const why = inItsWindow('Stop it', peer.where);
-  const here = x => (x.stop ? { ...x, stop: { ...x.stop, can: false, why } } : x);
+  const why = notAnswering(row);
+  const peer = { where: row ? row.where : '', canSteer: !why, why };
+  if (!why) return { ...s, peer, sessions: null };
+  const deaf = x => (x.stop ? { ...x, stop: { ...x.stop, can: false, why } } : x);
   return {
     ...s, peer, sessions: null,
-    needs: peer.canSteer ? s.needs : s.needs.map(n => ({ ...n, isAnswerable: false })),
-    agents: s.agents.map(here),
-    background: { ...s.background, rows: s.background.rows.map(here) },
+    needs: s.needs.map(n => ({ ...n, isAnswerable: false })),
+    agents: s.agents.map(deaf),
+    background: { ...s.background, rows: s.background.rows.map(deaf) },
   };
 }
 
@@ -4427,6 +4480,7 @@ function applyViewed(v2) {
   S = s;
   indexViewed();
   noteResolved();
+  notePresses();
 }
 
 /** The session whose row All sessions lights: the deck it was opened from, else here. */
@@ -4464,9 +4518,9 @@ function SessionsLink() {
     h('span', { class: 'hd-sessions-label' }, icon('layers'), h('span', { class: 'hd-sessions-word' }, 'All sessions')));
 }
 
-/** Stop turn on another session's deck: where to stop it, quietly where the button would be. */
+/** Stop turn on another session's deck that takes nothing from here: that its deck isn't answering, quietly where the button would be, why under the pointer. */
 function PeerStopTurn() {
-  return h('span', { key: 'stopturn', class: 'peer-note hd-peer-stop', title: inItsWindow('Stop the turn', S.peer.where) }, 'Stop the turn in its window');
+  return h('span', { key: 'stopturn', class: 'peer-note hd-peer-stop', title: deafWhy() }, NOT_ANSWERING);
 }
 
 /** The header's lead on another session's deck before its state is read: its row's state and title. */
@@ -4497,7 +4551,7 @@ function SessionsPage() {
       ? h('div', { key: 'none', class: 'card' }, Empty('layers', 'No sessions listed', HOME && !HOME.empty ? 'This deck lists the sessions on this machine once it has read them.' : 'Waiting for this session\'s deck.'))
       : h('div', { key: 'list', class: 'card list sess-list' }, list.rows.map(r => SessionRow(r, r.id === lit))),
     list && h('p', { key: 'note', class: 'sess-note' }, list.rows.length > 1
-      ? 'Every Claude Code session here whose Agent Deck runs, Desktop and terminal alike. A press shows its deck: its Dashboard, Chat and Changes. Answers and messages go through its own deck; the rest is done in its window. '
+      ? 'Every Claude Code session here whose Agent Deck runs, Desktop and terminal alike. A press shows its deck: its Dashboard, Chat and Changes. What you do there goes through its own deck; only a permission prompt is answered in its window. '
       : 'No other session here runs Agent Deck now. Each one that does shows here, Desktop and terminal alike. ',
     h('kbd', { key: 'up' }, '↑'), h('kbd', { key: 'down' }, '↓'), ' pick one, ', h('kbd', { key: 'enter' }, 'Enter'), ' shows its deck, ', h('kbd', { key: 's' }, 's'), ' goes back.'));
 }

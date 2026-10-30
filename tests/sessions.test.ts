@@ -6,20 +6,23 @@
  * others' read and listed (the header's switcher and "◆ 1 needs you · 2
  * sessions", `s`, the band's "◆ 1 other session needs you"), another
  * session's deck shown in this one's place from its folder (no Viewing bar,
- * no Back: here's picked again), its controls that act only in its window
- * saying so where they stand, and steering through its own deck's inbox
- * only: a command another deck sent runs here as the page's own does, and
- * one for a deck that reads no inbox is refused. The registry folder is the
- * test's (`AGENT_DECK_SESSIONS`), never the person's.
+ * no Back: here's picked again), its controls its own window's, each press
+ * through its own deck's inbox and what came of it at the control: a
+ * command another deck sent runs here as the page's own does, with the same
+ * checks; one it cannot read is refused with its ack; a deck that reads no
+ * inbox, or has gone quiet, says so at its controls before a press. Only a
+ * permission prompt says to answer it in its window. The registry folder is
+ * the test's (`AGENT_DECK_SESSIONS`), never the person's.
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 
 import * as S from '../hooks/sessions'
 import * as W from '../hooks/web'
+import { bash } from './tools'
 import { SAMPLE_NOW, v2Session } from './v2session'
 import { sampleSessions } from './v2sessions'
-import { command, deck, newWorld, NOW, work, world, type World } from './world'
+import { command, deck, lastState, newWorld, NOW, work, world, type World } from './world'
 
 const REG = '/reg'
 const OTHER = 'other-1'
@@ -212,32 +215,103 @@ test('the band counts the other sessions waiting on you: "◆ 1 other session ne
   expect(W.bandOf({ agents: [], needs: [] })).toBeNull()
 })
 
-test('an inbox: a viewer`s look and its chat or answer commands, each with its id; anything else left out; the newest 20, none past two minutes', () => {
+test('an inbox: a viewer`s look and its commands, each with an id its ack can name; anything else left out; the newest 20, none past two minutes', () => {
   const now = SAMPLE_NOW
   const file = S.inboxWith('me-1', now, now + S.VIEW_MS, [{ at: now - S.COMMAND_MS - 1, cmd: { cmd: 'chat', id: 'old', agentId: 'main', text: 'x' } }], { cmd: 'answer', id: 'a1', callId: 'toolu_1', answers: { 'Which?': 'Redis' } })
   expect(file).toEqual({ v: 1, from: 'me-1', at: now, viewUntil: now + S.VIEW_MS, cmds: [{ at: now, cmd: { cmd: 'answer', id: 'a1', callId: 'toolu_1', answers: { 'Which?': 'Redis' } } }] })
-  const read = S.inboxFromText(JSON.stringify({ ...file, cmds: [...file.cmds, { at: now, cmd: { cmd: 'review', id: 'r', text: 'x' } }, { at: now, cmd: { cmd: 'chat', agentId: 'main', text: 'no id' } }] }))
-  expect(read?.cmds.map(one => one.cmd.id)).toEqual(['a1'])
+  const read = S.inboxFromText(JSON.stringify({ ...file, cmds: [...file.cmds, { at: now, cmd: { cmd: 'review', id: 'r', text: 'x' } }, { at: now, cmd: { cmd: 'chat', agentId: 'main', text: 'no id' } }, { at: now, cmd: { cmd: 'chat', id: '../x', agentId: 'main', text: 'a bad id' } }] }))
+  // its deck checks the rest (`steeringCmdOf`), and says why it refused one in its ack
+  expect(read?.cmds.map(one => one.cmd.id)).toEqual(['a1', 'r'])
   expect(S.inboxFromText(JSON.stringify({ ...file, from: '../x' }))).toBeNull()
-  // a page command for another session: view, chat or answer, naming it; none for this one
+  // a page command for another session: view, or any about its session, naming it; none for this one, and never the avatar style
   expect(S.sessionCmdOf({ cmd: 'chat', id: 'c', agentId: 'main', text: 'hi', session: 'other-1' }, 'me-1')).toEqual({ session: 'other-1', cmd: { cmd: 'chat', id: 'c', agentId: 'main', text: 'hi' } })
   expect(S.sessionCmdOf({ cmd: 'view', session: 'other-1' }, 'me-1')).toEqual({ session: 'other-1', cmd: { cmd: 'view' } })
-  expect(S.sessionCmdOf({ cmd: 'stopAgent', agentId: 'x', session: 'other-1' }, 'me-1')).toBeNull()
+  expect(S.sessionCmdOf({ cmd: 'stopAgent', agentId: 'x', session: 'other-1' }, 'me-1')).toEqual({ session: 'other-1', cmd: { cmd: 'stopAgent', agentId: 'x' } })
+  expect(S.sessionCmdOf({ cmd: 'avatarStyle', style: 'critter', session: 'other-1' }, 'me-1')).toBeNull()
   expect(S.sessionCmdOf({ cmd: 'chat', agentId: 'main', text: 'hi', session: 'me-1' }, 'me-1')).toBeNull()
   expect(S.sessionCmdOf({ cmd: 'chat', agentId: 'main', text: 'hi' }, 'me-1')).toBeNull()
 })
 
-test('another session`s state as a deck shows it: marked `peer` (its window, whether its deck takes answers), its own list left out, its questions answerable only where its deck takes them, every Stop and Cancel offered nowhere here, saying where to stop it', () => {
+test('a command from another session`s deck, rebuilt from exactly its known keys, each checked as the server checks the page`s: every one about a session; any other shape, or the avatar style, refused, saying why', () => {
+  const ok: Record<string, unknown>[] = [
+    { cmd: 'chat', id: 'c1', agentId: 'main', text: 'Rebuild it' },
+    { cmd: 'answer', id: 'a1', callId: 'toolu_1', answers: { 'Which?': 'Redis' } },
+    { cmd: 'stopAgent', id: 's1', agentId: 'agent-x1' },
+    { cmd: 'abortTurn', id: 's2' },
+    { cmd: 'abortTurn', id: 's3', turnId: 't1' },
+    { cmd: 'stopBackground', id: 's4', bgId: 'bash_7' },
+    { cmd: 'clearFinished', id: 'k1' },
+    { cmd: 'showCleared', id: 'k2' },
+    { cmd: 'selectRepo', id: 'r1', root: '' },
+    { cmd: 'selectRepo', id: 'r2', root: 'C:/code/site' },
+    { cmd: 'review', id: 'v1', text: 'Review it' },
+  ]
+  for (const cmd of ok) expect(S.steeringCmdOf(cmd)).toEqual(cmd)
+  expect(S.STEERING).toEqual(['chat', 'answer', 'stopAgent', 'abortTurn', 'stopBackground', 'clearFinished', 'showCleared', 'selectRepo', 'review'])
+  const bad: Record<string, unknown>[] = [
+    { cmd: 'stopAgent', agentId: 'agent-x1' },
+    { cmd: 'stopAgent', id: 'x', agentId: 5 },
+    { cmd: 'stopAgent', id: 'x', agentId: 'a', extra: true },
+    { cmd: 'abortTurn', id: 'x', turnId: 'a b' },
+    { cmd: 'stopBackground', id: 'x', bgId: '../bash' },
+    { cmd: 'clearFinished', id: 'x', all: true },
+    { cmd: 'selectRepo', id: 'x', root: 'a\nb' },
+    { cmd: 'selectRepo', id: 'x' },
+    { cmd: 'review', id: 'x', text: '   ' },
+    { cmd: 'answer', id: 'x', callId: 'toolu_1', answers: {} },
+    { cmd: 'chat', id: 'x', agentId: 'main', text: 'y'.repeat(4001) },
+  ]
+  for (const cmd of bad) expect(S.steeringCmdOf(cmd)).toBeNull()
+  expect(S.steeringRefusalOf({ cmd: 'stopAgent', id: 'x', agentId: 5 })).toBe('Not a command the deck can read')
+  expect(S.steeringCmdOf({ cmd: 'avatarStyle', id: 'x', style: 'critter' })).toBeNull()
+  expect(S.steeringRefusalOf({ cmd: 'avatarStyle', id: 'x', style: 'critter' })).toBe("Not a command another session's deck sends: avatarStyle")
+})
+
+test('why another session`s controls do nothing from here, said before a press: quiet ("last heard 2m ago"), an older deck that reads no inbox, one the list holds no more; and what each press sent there says at its control, from that deck`s acks', () => {
+  const row = { canSteer: true, isQuiet: false, say: 'Orchestrator: Bash npm test' }
+  expect(S.notAnsweringOf(row)).toBe('')
+  expect(S.notAnsweringOf({ ...row, isQuiet: true, say: 'Last heard 2m ago' })).toBe("Its deck isn't answering: last heard 2m ago.")
+  expect(S.notAnsweringOf({ ...row, canSteer: false })).toBe("Its deck isn't answering: it runs an older Agent Deck.")
+  expect(S.notAnsweringOf(null)).toBe("Its deck isn't answering: it is not listed any more.")
+  const now = SAMPLE_NOW
+  const sent = new Map<string, S.PressSent>([
+    ['turn', { id: 'p1', at: now - 4000, doing: 'Stopping…', failed: '' }],
+    ['bg:bash_7', { id: 'p2', at: now - 3000, doing: 'Stopping…', failed: '' }],
+    ['clear', { id: 'p3', at: now - 2000, doing: 'Clearing…', failed: '' }],
+    ['repo', { id: 'p4', at: now - 1000, doing: 'Asking its deck…', failed: "Its deck isn't answering: it runs an older Agent Deck" }],
+    ['review', { id: 'p5', at: now - S.COMMAND_MS - 1000, doing: 'Sending…', failed: '' }],
+    ['show', { id: 'p6', at: now - 60_000, doing: 'Showing them…', failed: '' }],
+  ])
+  const acks: W.WebAck[] = [
+    { id: 'p1', ok: true, status: 'delivered', text: 'Stopped the turn', at: now - 3000 },
+    { id: 'p2', ok: false, status: 'failed', text: 'Claude Code refused TaskStop: not now', at: now - 2000 },
+    { id: 'p6', ok: true, status: 'delivered', text: 'Showing 2 cleared agents again', at: now - 59_000 },
+  ]
+  expect(S.pressesOf(sent, acks, now)).toEqual({
+    turn: { status: 'done', text: 'Stopped the turn' },
+    'bg:bash_7': { status: 'failed', text: 'Claude Code refused TaskStop: not now' },
+    clear: { status: 'sending', text: 'Clearing…' },
+    repo: { status: 'failed', text: "Its deck isn't answering: it runs an older Agent Deck" },
+    review: { status: 'failed', text: 'Its deck did not answer: it may be busy or gone' },
+  })
+})
+
+test('another session`s state as a deck shows it: marked `peer` (its window, whether its deck takes commands from here, why not), its own list left out; its controls its own window`s (each Stop and Cancel its own deck`s check allows, its questions answerable); where its deck takes nothing from here, none, each saying why', () => {
   const state = { ...sampleState(), sessions: S.sessionsViewOf([], null, SAMPLE_NOW) }
-  const shown = S.peerStateOf(state, { where: 'Terminal · site', canSteer: false })
+  const why = "Its deck isn't answering: last heard 2m ago."
+  const shown = S.peerStateOf(state, { where: 'Terminal · site', canSteer: false, why })
   expect('sessions' in shown).toBe(false)
-  expect(shown.peer).toEqual({ where: 'Terminal · site', canSteer: false })
+  expect(shown.peer).toEqual({ where: 'Terminal · site', canSteer: false, why })
   expect(shown.needs.some(need => need.isAnswerable)).toBe(false)
-  expect(S.peerStateOf(state, { where: '', canSteer: true }).needs.filter(need => need.isAnswerable).map(need => need.id)).toEqual(state.needs.filter(need => need.isAnswerable).map(need => need.id))
-  // its stops: none offered here, each saying where (a stop never goes to another session)
+  // one that takes commands from here: its own window's controls, as its own deck's state has them
+  const open = S.peerStateOf(state, { where: 'Terminal · site', canSteer: true, why: '' })
+  expect(open.needs).toEqual(state.needs)
+  expect(open.agents).toEqual(state.agents)
+  expect(open.background).toEqual(state.background)
+  // its stops where its deck takes nothing from here: none offered, each saying why
   const stops = [...shown.agents.flatMap(row => (row.row === 'agent' && row.stop ? [row.stop] : [])), ...shown.background.rows.flatMap(row => (row.stop ? [row.stop] : []))]
   expect(stops.length).toBeGreaterThan(3)
-  expect(stops.every(stop => !stop.can && stop.why === 'Stop it in its window: Terminal · site.')).toBe(true)
+  expect(stops.every(stop => !stop.can && stop.why === why)).toBe(true)
   expect(S.inItsWindow('Answer it', '')).toBe('Answer it in its window.')
   // its own state is untouched
   expect(state.background.rows.some(row => row.stop?.can === true)).toBe(true)
@@ -612,45 +686,131 @@ test('a press on another session shows its deck in this one`s place: no bar, no 
   await ui.unmount()
 })
 
-test('another session`s controls that act only in its window say so where they stand: its permission prompt and notification, Stop turn, its background`s Stop and Cancel, an agent`s Stop on its page; its question answers through its own deck', async ($, on) => {
+/** The commands this deck wrote into other-1's inbox, as its last write holds them. */
+function inboxCmds(w: World): Record<string, unknown>[] {
+  return w.writes
+    .filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`)
+    .map(one => JSON.parse(one.text) as S.InboxFile)
+    .at(-1)
+    ?.cmds.map(one => one.cmd) ?? []
+}
+
+test('another session`s deck shows the controls its own window would, by its own deck`s state: Stop turn, its background`s Stop and Cancel, an agent`s Stop on its card and page, Clear finished, its questions; each press goes into its inbox with its id (Stop turn naming its turn), says what is under way at the control, then what came of it from that deck`s ack; only its permission prompt and Claude Code`s notification say to answer them in its window', async ($, on) => {
   const d: Disk = { files: new Map() }
   const { clock, w } = await started($, on, diskWorld(d), d)
-  // other-1's deck: the v2 sample's (a turn running, Stops its permission check allows, questions, a permission prompt, a notification)
+  // other-1's deck: the v2 sample's (a turn running, Stops its permission check allows, questions, a permission prompt, a notification, finished agents)
   const own = sampleState()
-  d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, v2: { ...own, now: NOW, session: { ...own.session, id: OTHER } } }))
+  const theirs: W.WebStateV2 = { ...own, now: NOW, session: { ...own.session, id: OTHER } }
+  const write = (state: W.WebStateV2) => d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: state.now, v2: state }))
+  write(theirs)
   await $.command.run(deck('sessions'))
   await clock.advance(3000)
   const ui = await $.ui.mount(pane('desktop'))
   await ui.press({ key: `session:${OTHER}` })
   await clock.advance(3000)
   const terminal = await $.ui.mount(pane('terminal'))
+  const canStop = own.background.rows.filter(row => row.stop?.can === true).map(row => `bg:stop:${row.id}`)
+  const builder = own.agents.find(row => row.row === 'agent' && row.stop?.can === true)!
   for (const one of [ui, terminal]) {
     await one.redraw()
     const drawn = JSON.stringify(await one.drawn())
     const keys = (await one.findAll({ type: 'Button' })).map(button => button.key ?? '')
-    // nothing stops another session from here, and each says where it is stopped instead
-    expect(keys.filter(key => key === 'stop:turn' || key.startsWith('bg:stop:') || key.startsWith('card:stop:'))).toEqual([])
-    expect((await one.find({ key: 'deck:header' }))?.text).toContain('Stop the turn in its window')
-    expect((await one.find({ key: 'now:background' }))?.text).toContain('Stop them in its window: Terminal · other-1.')
-    // its permission prompt and Claude Code's notification: answered in its window
+    // its own window's controls, as its own deck's check allows them
+    expect(keys).toContain('stop:turn')
+    expect(keys.filter(key => key.startsWith('bg:stop:'))).toEqual(canStop)
+    expect(keys).toContain('finished:now:clear')
+    for (const gone of ['Stop the turn in its window', 'Stop them in its window', 'Stop it in its window', 'Or answer it in its window', "another session's deck"]) expect(drawn).not.toContain(gone)
+    // its permission prompt and Claude Code's notification: answered in its window, the one exception; its questions through its own deck
     expect(drawn.split('Answer it in its window: Terminal · other-1.').length - 1).toBe(2)
-    expect(drawn).not.toContain('in Claude Code')
-    // its questions: answerable, through its own deck
-    expect(drawn).toContain('Or answer it in its window: Terminal · other-1.')
+    expect(drawn).toContain('Or answer it in Claude Code.')
   }
+  expect((await ui.findAll({ type: 'Button' })).map(button => button.key ?? '')).toContain(`card:stop:${builder.id}`)
+  // Stop turn: into its inbox, naming its turn; "Stopping…" in its place until its deck's ack
+  await ui.press({ key: 'stop:turn' })
+  await clock.advance(500)
+  await ui.redraw()
+  const turn = inboxCmds(w).at(-1)!
+  expect(turn).toEqual({ cmd: 'abortTurn', turnId: own.header.turn?.id, id: expect.stringMatching(/^deck-/) })
+  expect(await ui.find({ key: 'stop:turn' })).toBeUndefined()
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('Stopping…')
+  // Stop on a background shell, and Clear finished: the same, each under way where it stands
+  await ui.press({ key: canStop[0]! })
+  await ui.press({ key: 'finished:now:clear' })
+  await clock.advance(500)
+  await ui.redraw()
+  const [bg, clear] = inboxCmds(w).slice(-2)
+  expect(bg).toEqual({ cmd: 'stopBackground', bgId: canStop[0]!.slice('bg:stop:'.length), id: expect.stringMatching(/^deck-/) })
+  expect(clear).toEqual({ cmd: 'clearFinished', id: expect.stringMatching(/^deck-/) })
+  expect((await ui.find({ key: 'now:background' }))?.text).toContain('Stopping…')
+  expect(JSON.stringify(await ui.drawn())).toContain('Clearing…')
+  // its deck's acks, in its own state: the turn had ended, the shell stopped (its row gone), the finished cleared
+  const at = NOW + 6000
+  write({
+    ...theirs,
+    now: at,
+    background: { ...theirs.background, rows: theirs.background.rows.filter(row => `bg:stop:${row.id}` !== canStop[0]) },
+    acks: [...theirs.acks, { id: String(turn.id), ok: false, status: 'failed', text: 'That turn has ended', at }, { id: String(bg?.id), ok: true, status: 'delivered', text: 'Stopped npm run dev', at }, { id: String(clear?.id), ok: true, status: 'delivered', text: 'Cleared 5 finished agents from the deck', at }],
+  })
+  await clock.advance(3000)
+  await ui.redraw()
+  expect((await ui.find({ key: 'deck:header' }))?.text).toContain('✕ That turn has ended')
+  expect(await ui.find({ key: 'stop:turn' })).toBeDefined()
+  expect(JSON.stringify(await ui.drawn())).toContain('✓ Cleared 5 finished agents from the deck')
+  expect(w.toasts).toEqual(expect.arrayContaining(['That turn has ended', 'Stopped npm run dev', 'Cleared 5 finished agents from the deck']))
+  // a while on, the words go; the controls stay as its deck's state has them
+  await clock.advance(S.PRESS_SHOWN_MS + 3000)
+  await ui.redraw()
+  expect((await ui.find({ key: 'deck:header' }))?.text).not.toContain('That turn has ended')
+  expect(JSON.stringify(await ui.drawn())).not.toContain('Cleared 5 finished agents')
+  // its question: through its own deck
   const question = own.needs.find(need => need.kind === 'question' && need.questions?.length === 1 && !need.questions[0]?.multiSelect)!
   await ui.press({ key: `answer:${question.id}:0:0` })
   await clock.advance(500)
-  const inbox = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile).at(-1)
-  expect(inbox?.cmds.map(one => one.cmd)).toEqual([expect.objectContaining({ cmd: 'answer', callId: question.id })])
+  expect(inboxCmds(w).at(-1)).toEqual(expect.objectContaining({ cmd: 'answer', callId: question.id }))
   expect(w.toasts.at(-1)).toBe('Sent to its deck, which passes it to Claude Code: what came of it shows there.')
-  // an agent's page: its Stop says where
-  const builder = own.agents.find(row => row.row === 'agent' && row.stop?.can === true)!
+  // an agent's page: its Stop, to its own deck
   await ui.press({ key: `agent:${builder.id}` })
   await clock.advance(500)
   await ui.redraw()
-  expect((await ui.find({ key: 'page:stopline' }))?.text).toBe('Stop it in its window: Terminal · other-1.')
-  expect(await ui.find({ key: 'page:stop' })).toBeUndefined()
+  await ui.press({ key: 'page:stop' })
+  await clock.advance(500)
+  await ui.redraw()
+  expect(inboxCmds(w).at(-1)).toEqual({ cmd: 'stopAgent', agentId: builder.id, id: expect.stringMatching(/^deck-/) })
+  expect((await ui.find({ key: 'page:stopline' }))?.text).toContain('Stopping…')
+  await ui.unmount()
+  await terminal.unmount()
+})
+
+test('another session`s deck gone quiet ("Last heard …"): its controls say so before a press, "Its deck isn`t answering": no Stop turn, Stop or Cancel, Clear finished or answers; its background, its finished row, its questions and its composer say why', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const { clock, w } = await started($, on, diskWorld(d), d)
+  const own = sampleState()
+  d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, v2: { ...own, now: NOW, session: { ...own.session, id: OTHER } } }))
+  // its deck last heard 95 s ago (its file written again, so it is read again)
+  listed(d, OTHER, OTHER_DIR, { heartbeatAt: NOW - 95_000, live: 'Orchestrator: Bash npm test' })
+  await $.command.run(deck('sessions'))
+  await clock.advance(3000)
+  const ui = await $.ui.mount(pane('desktop'))
+  await ui.press({ key: `session:${OTHER}` })
+  await clock.advance(3000)
+  const terminal = await $.ui.mount(pane('terminal'))
+  const why = /Its deck isn't answering: last heard \d+m ago\./
+  for (const one of [ui, terminal]) {
+    await one.redraw()
+    const keys = (await one.findAll({ type: 'Button' })).map(button => button.key ?? '')
+    expect(keys.filter(key => key === 'stop:turn' || key.startsWith('bg:stop:') || key.startsWith('card:stop:') || key.endsWith(':clear') || key.startsWith('answer:'))).toEqual([])
+    expect((await one.find({ key: 'deck:header' }))?.text).toContain("Its deck isn't answering")
+    expect((await one.find({ key: 'now:background' }))?.text).toMatch(why)
+    expect((await one.find({ key: 'needs:now' }))?.text).toMatch(why)
+    expect(JSON.stringify(await one.drawn()).split(/Its deck isn't answering: last heard \d+m ago\./).length - 1).toBeGreaterThanOrEqual(3)
+  }
+  // its composer says so before anything is typed
+  await ui.press({ key: 'tab:chat' })
+  await clock.advance(500)
+  await ui.redraw()
+  expect((await ui.find({ key: 'chat:compose' }))?.text).toMatch(why)
+  // nothing went into its inbox but this deck's look
+  expect(inboxCmds(w)).toEqual([])
   await ui.unmount()
   await terminal.unmount()
 })
@@ -771,29 +931,45 @@ test('with the registry on, ticks that change nothing draw nothing again and wri
   await ui.unmount()
 })
 
-test('from the page: a message to another session goes into its inbox (its own deck takes it); one to a deck that reads no inbox is refused, "Answer it in its window"; view asks its deck to write; the server reads the registry', async ($, on) => {
+test('from the page: every command about another session goes into its inbox (its own deck takes it), none of it run here; one to a deck that reads no inbox, or gone quiet, is refused, "Its deck isn`t answering", nothing written there; view asks its deck to write; the server reads the registry', async ($, on) => {
   const d: Disk = { files: new Map() }
-  const w = newWorld()
+  const w = newWorld({ verdict: 'allow' })
+  const QUIET = 'quiet-3'
+  const QUIET_DIR = '/quiet/.web/quiet-3'
   listed(d, OLD, OLD_DIR, { inbox: false })
+  listed(d, QUIET, QUIET_DIR, { heartbeatAt: NOW - 95_000 })
   const { clock } = await started($, on, w, d, work)
   await clock.advance(1000)
   const child = w.children[0]
   expect(child?.request.argv.slice(-2)).toEqual(['--sessions', REG])
   command(child, { cmd: 'view', session: OTHER })
   command(child, { cmd: 'chat', id: 'x-1', agentId: 'main', text: 'Go ahead and rebuild', session: OTHER })
+  command(child, { cmd: 'abortTurn', id: 'x-3', turnId: 'turn_9', session: OTHER })
+  command(child, { cmd: 'clearFinished', id: 'x-4', session: OTHER })
+  // one of a shape its deck cannot read: refused here, before it goes
+  command(child, { cmd: 'stopAgent', id: 'x-5', agentId: 'agent-x1', extra: 1, session: OTHER })
   await clock.advance(1000)
   const inbox = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).map(one => JSON.parse(one.text) as S.InboxFile).at(-1)
   expect(inbox?.viewUntil).toBeGreaterThan(NOW)
-  expect(inbox?.cmds.map(one => one.cmd)).toEqual([{ cmd: 'chat', id: 'x-1', agentId: 'main', text: 'Go ahead and rebuild' }])
+  expect(inbox?.cmds.map(one => one.cmd)).toEqual([
+    { cmd: 'chat', id: 'x-1', agentId: 'main', text: 'Go ahead and rebuild' },
+    { cmd: 'abortTurn', id: 'x-3', turnId: 'turn_9' },
+    { cmd: 'clearFinished', id: 'x-4' },
+  ])
   // nothing of it ran here
   expect(w.submitted.some(one => one.text === 'Go ahead and rebuild')).toBe(false)
+  expect(w.aborted).toEqual([])
   command(child, { cmd: 'chat', id: 'x-2', agentId: 'main', text: 'Hello', session: OLD })
+  command(child, { cmd: 'stopBackground', id: 'x-6', bgId: 'bash_1', session: QUIET })
   await clock.advance(1000)
   const states = w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
-  expect(states.at(-1)?.v2.acks.find(one => one.id === 'x-2')).toMatchObject({ ok: false, status: 'failed', text: 'Answer it in its window: its deck takes no answers or messages from another' })
-  expect(w.writes.some(one => norm(one.path).startsWith(`${OLD_DIR}/`))).toBe(false)
+  const acks = states.at(-1)?.v2.acks ?? []
+  expect(acks.find(one => one.id === 'x-2')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it runs an older Agent Deck" })
+  expect(acks.find(one => one.id === 'x-6')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it has not been heard from lately" })
+  expect(acks.find(one => one.id === 'x-5')).toMatchObject({ ok: false, status: 'failed', text: 'Not a command the deck can read' })
+  expect(w.writes.some(one => norm(one.path).startsWith(`${OLD_DIR}/`) || norm(one.path).startsWith(`${QUIET_DIR}/inbox/`))).toBe(false)
   // the page's state lists the sessions
-  expect(states.at(-1)?.v2.sessions?.rows.map(row => row.id)).toEqual(['session-1', OLD, OTHER])
+  expect(states.at(-1)?.v2.sessions?.rows.map(row => row.id)).toEqual(['session-1', OLD, OTHER, QUIET])
 })
 
 test('this session`s inbox: a deck viewing it has its state written (no /deck web), and its message runs here as the page`s own (your next prompt), acked in its state; a stranger`s inbox file is ignored', async ($, on) => {
@@ -818,6 +994,67 @@ test('this session`s inbox: a deck viewing it has its state written (no /deck we
   d.files.set(`${dir}/inbox/${OTHER}.json`, `${file(OTHER, [{ at: NOW, cmd: { cmd: 'chat', id: 'o-1', agentId: 'main', text: 'Also run the linter' } }])} `)
   await clock.advance(3000)
   expect(w.submitted.filter(one => one.text === 'Also run the linter').length).toBe(1)
+})
+
+test('this session`s inbox: every command about it another deck sends runs here as the page`s own, through the same code and checks, its ack in this state: Stop of a background shell and of a background agent (TaskStop, asked of Claude Code`s check first), Stop turn of its own running turn, Clear finished and Show cleared, a pick of Changes (refused where Changes offers none), Review; one it cannot read, or the avatar style, refused with its ack', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const w = newWorld({ holding: ['TaskStop'], verdict: 'allow' })
+  const { clock } = await started($, on, w, d, work)
+  // a shell the Orchestrator started in the background, its id from Claude Code's snapshot
+  await $.tool.call(bash({ command: 'npm run dev', run_in_background: true, tool_use_id: 'toolu_dev' }))
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ id: 'bash_7', type: 'shell', status: 'running', description: '', command: 'npm run dev' }], session_crons: [] })
+  await clock.advance(3000)
+  const dir = norm(ownEntries(w)[0]!.dir)
+  const v2 = () => (lastState(w) as unknown as { v2: W.WebStateV2 }).v2
+  const ackOf = (id: string) => v2().acks.find(one => one.id === id)
+  const inbox = (cmds: Record<string, unknown>[]) => d.files.set(`${dir}/inbox/${OTHER}.json`, JSON.stringify({ v: 1, from: OTHER, at: NOW, viewUntil: NOW + S.VIEW_MS, cmds: cmds.map(cmd => ({ at: NOW, cmd })) }))
+  expect(v2().background.rows.map(row => [row.id, row.stop?.can])).toEqual([['bash_7', true]])
+  // the stops: Claude Code's own TaskStop and $.turn.abort, as the page's own buttons
+  const checked = w.checks.length
+  inbox([
+    { cmd: 'stopBackground', id: 'o-bg', bgId: 'bash_7' },
+    { cmd: 'stopAgent', id: 'o-agent', agentId: 'agent-x1' },
+    { cmd: 'abortTurn', id: 'o-turn', turnId: 't1' },
+  ])
+  await clock.advance(3000)
+  // each asked of Claude Code's check again at the press, never with a consent of the deck's
+  expect(w.checks.slice(checked)).toEqual(expect.arrayContaining([{ tool: 'TaskStop', input: { task_id: 'bash_7' } }, { tool: 'TaskStop', input: { task_id: 'agent-x1' } }]))
+  const held = w.held.filter(one => one.tool === 'TaskStop')
+  expect(held.map(one => one.e.task_id).sort()).toEqual(['agent-x1', 'bash_7'])
+  expect(held.every(one => one.e.consent === undefined)).toBe(true)
+  for (const one of held) one.settle({ result: { message: 'Stopped', task_id: one.e.task_id, task_type: 'local_bash' } as never })
+  w.held.length = 0
+  await clock.advance(1000)
+  expect(w.aborted).toEqual(['t1'])
+  expect(ackOf('o-bg')).toMatchObject({ ok: true, status: 'delivered', text: 'Stopped npm run dev' })
+  expect(ackOf('o-agent')).toMatchObject({ ok: true, status: 'delivered', text: 'Stopped scout' })
+  expect(ackOf('o-turn')).toMatchObject({ ok: true, status: 'delivered', text: 'Stopped the turn' })
+  expect(v2().background.rows).toEqual([])
+  // Chat says what you stopped, as for a press in its own window
+  expect(v2().chat.filter(row => row.kind === 'stop').map(row => `${row.ackId}: ${row.text}`).sort()).toEqual(['o-agent: You stopped scout', 'o-bg: You stopped npm run dev', 'o-turn: You stopped the turn'])
+  // the deck's own tidying, a pick, Review; and what it cannot take
+  inbox([
+    { cmd: 'clearFinished', id: 'o-clear' },
+    { cmd: 'selectRepo', id: 'o-repo', root: 'C:/nowhere' },
+    { cmd: 'review', id: 'o-review', text: 'Review my uncommitted changes' },
+    { cmd: 'stopAgent', id: 'o-bad', agentId: 5 },
+    { cmd: 'avatarStyle', id: 'o-style', style: 'critter' },
+    { cmd: 'stopBackground', id: 'o-gone', bgId: 'bash_7' },
+  ])
+  await clock.advance(3000)
+  expect(ackOf('o-clear')).toMatchObject({ ok: true, status: 'delivered', text: 'Cleared 1 finished agent from the deck' })
+  expect(v2().cleared).toMatchObject({ count: 1 })
+  expect(ackOf('o-repo')).toMatchObject({ ok: false, status: 'failed', text: 'Not a repository Changes offers here' })
+  expect(ackOf('o-review')).toMatchObject({ ok: true, status: 'delivered', text: 'In your prompt box: press Enter to send it' })
+  expect(w.filled.at(-1)).toBe('Review my uncommitted changes')
+  expect(ackOf('o-bad')).toMatchObject({ ok: false, status: 'failed', text: 'Not a command the deck can read' })
+  expect(ackOf('o-style')).toMatchObject({ ok: false, status: 'failed', text: "Not a command another session's deck sends: avatarStyle" })
+  // the same checks as its own buttons: a shell that has ended stops no more
+  expect(ackOf('o-gone')).toMatchObject({ ok: false, status: 'failed', text: 'Nothing runs in the background by that name: it may have ended' })
+  inbox([{ cmd: 'showCleared', id: 'o-show' }])
+  await clock.advance(3000)
+  expect(ackOf('o-show')).toMatchObject({ ok: true, status: 'delivered', text: 'Showing 1 cleared agent again' })
+  expect(v2().cleared).toMatchObject({ count: 0 })
 })
 
 test('/deck demo lists the sample`s sessions (s) and shows one`s deck from the fixtures in its place, under "Sample data": nothing is sent', async ($, on) => {
@@ -863,7 +1100,7 @@ test('/deck demo lists the sample`s sessions (s) and shows one`s deck from the f
   await ui.unmount()
 })
 
-test('another session`s Changes, shown: its agents` edits open on their patches as read from its folder (its newest open), on the desktop and the terminal; its picks are its own deck`s, refused here', async ($, on) => {
+test('another session`s Changes, shown: its agents` edits open on their patches as read from its folder (its newest open), on the desktop and the terminal; a pick there goes to its own deck', async ($, on) => {
   const d: Disk = { files: new Map() }
   const { clock, w } = await started($, on, diskWorld(d), d)
   // its deck: a chat in Documents, no repository, the Orchestrator's script written in its scratchpad
@@ -892,9 +1129,13 @@ test('another session`s Changes, shown: its agents` edits open on their patches 
     expect(String(diff?.props.source)).toContain('+const sample = 1')
     expect(JSON.stringify(await one.drawn())).not.toContain('Its patch is not on disk.')
   }
-  // a pick there would pin this session's Changes: refused, nothing pinned
+  // a pick there pins its own deck's Changes: into its inbox, "Asking its deck…" under the picks until its ack
   await ui.press({ key: 'changes:pick:C:/Users/sam/Documents/agent-deck' })
-  expect(w.toasts.at(-1)).toBe("Pick a repository: this is another session's deck. Do it in its window: Terminal · other-1.")
+  await clock.advance(500)
+  await ui.redraw()
+  expect(inboxCmds(w).at(-1)).toEqual({ cmd: 'selectRepo', root: 'C:/Users/sam/Documents/agent-deck', id: expect.stringMatching(/^deck-/) })
+  expect((await ui.find({ key: 'changes:picks' }))?.text).toContain('Asking its deck…')
+  expect(w.toasts.join(' ')).not.toContain("another session's deck")
   await ui.unmount()
   await terminal.unmount()
 })

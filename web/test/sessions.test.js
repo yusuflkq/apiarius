@@ -134,24 +134,41 @@ test('/s/ refuses: no token, a session not listed, stale or ended, a folder not 
   assert.equal((await request(plain.port, `/s/${OTHER}/state`)).status, 404)
 })
 
-test('POST /cmd passes a chat or an answer naming a session, and view; nothing else may name one; a server with no registry takes none', async () => {
+test('POST /cmd passes every command about a session naming one (an answer, a message, Stop, Stop turn, Cancel, Clear finished, Show cleared, a pick, Review), each checked as this session`s, and view; the avatar style and ping may not name one; a server with no registry takes none', async () => {
   const count = main.lines.length
   const sent = [
     { cmd: 'view', session: OTHER },
     { cmd: 'chat', id: 'c1', agentId: 'main', text: 'Rebuild it', session: OTHER },
     { cmd: 'answer', id: 'a1', callId: 'toolu_1', answers: { 'Which?': 'Redis' }, session: OTHER },
+    { cmd: 'stopAgent', id: 's1', agentId: 'builder-1', session: OTHER },
+    { cmd: 'abortTurn', id: 's2', turnId: 'turn_9', session: OTHER },
+    { cmd: 'abortTurn', id: 's3', session: OTHER },
+    { cmd: 'stopBackground', id: 's4', bgId: 'bash_1', session: OTHER },
+    { cmd: 'clearFinished', id: 'k1', session: OTHER },
+    { cmd: 'showCleared', id: 'k2', session: OTHER },
+    { cmd: 'selectRepo', id: 'r1', root: '', session: OTHER },
+    { cmd: 'review', id: 'v1', text: 'Review it', session: OTHER },
   ]
-  for (const body of sent) assert.equal((await post(main.port, body)).status, 200)
-  for (const body of [{ cmd: 'stopAgent', agentId: 'x', session: OTHER }, { cmd: 'review', text: 'x', session: OTHER }, { cmd: 'chat', agentId: 'main', text: 'x', session: '../x' }, { cmd: 'view' }, { cmd: 'view', session: OTHER, text: 'x' }]) {
-    assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body))
-  }
+  for (const body of sent) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
+  const refused = [
+    { cmd: 'avatarStyle', style: 'critter', session: OTHER },
+    { cmd: 'ping', session: OTHER },
+    // each checked as this session's: no stray key, no bad field
+    { cmd: 'stopAgent', agentId: 'x', extra: 1, session: OTHER },
+    { cmd: 'stopBackground', bgId: '../x', session: OTHER },
+    { cmd: 'abortTurn', turnId: 'a b', session: OTHER },
+    { cmd: 'clearFinished', all: true, session: OTHER },
+    { cmd: 'selectRepo', root: 'a\nb', session: OTHER },
+    { cmd: 'review', text: ' ', session: OTHER },
+    { cmd: 'chat', agentId: 'main', text: 'x', session: '../x' },
+    { cmd: 'view' },
+    { cmd: 'view', session: OTHER, text: 'x' },
+  ]
+  for (const body of refused) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body))
   assert.equal((await post(plain.port, { cmd: 'view', session: OTHER })).status, 400)
-  for (let i = 0; i < 40 && main.lines.length < count + 3; i++) await sleep(50)
-  assert.deepEqual(main.lines.slice(count).map(line => JSON.parse(line)), [
-    { cmd: 'view', session: OTHER },
-    { cmd: 'chat', id: 'c1', agentId: 'main', text: 'Rebuild it', session: OTHER },
-    { cmd: 'answer', id: 'a1', callId: 'toolu_1', answers: { 'Which?': 'Redis' }, session: OTHER },
-  ])
+  assert.equal((await post(plain.port, { cmd: 'stopAgent', agentId: 'x', session: OTHER })).status, 400)
+  for (let i = 0; i < 40 && main.lines.length < count + sent.length; i++) await sleep(50)
+  assert.deepEqual(main.lines.slice(count).map(line => JSON.parse(line)), sent)
 })
 
 // ------------------------------------------------------------------ the page
@@ -208,6 +225,7 @@ function findAll(v, ok, out = []) {
   return out
 }
 const byClass = (v, cls) => findAll(v, one => !!one.p && typeof one.p.class === 'string' && one.p.class.split(' ').includes(cls))
+const click = v => v.p.onClick({ preventDefault() {}, stopPropagation() {}, target: {} })
 
 /** The live state as the mod writes it: the sample, with every session on its machine. */
 const LIVE = { ...SAMPLE, sessions: SESSIONS.view }
@@ -251,7 +269,7 @@ test('All sessions (#/sessions): "This machine" and what needs you counted, then
   p.load(quiet)
   const v = p.run('Page()')
   assert.match(p.text('Page()'), /^All sessions This machine · ◆ 2 need you · 2 agents working /)
-  assert.match(p.text('Page()'), /the rest is done in its window\. ↑ ↓ pick one, Enter shows its deck, s goes back\.$/)
+  assert.match(p.text('Page()'), /What you do there goes through its own deck; only a permission prompt is answered in its window\. ↑ ↓ pick one, Enter shows its deck, s goes back\.$/)
   const rows = byClass(v, 'sess-row')
   assert.equal(rows.length, 5)
   // here first: opened with no deck before it, its row lit; its badge and its agents counted
@@ -330,7 +348,7 @@ test('another session`s deck in this one`s place (#/s/<id>/…): read from /s/<i
   assert.deepEqual(p.calls.filter(one => one.url === '/cmd').map(one => one.body), [{ cmd: 'view', session: SITE.id }])
   assert.ok(p.calls.some(one => one.url === `/s/${SITE.id}/state`))
   assert.equal(p.run('S.header.goal.headline'), 'Landing page copy')
-  assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.peer)')), { where: 'Terminal · site', canSteer: true })
+  assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.peer)')), { where: 'Terminal · site', canSteer: true, why: '' })
   assert.equal(p.run('hrefOf("chat", null)'), `#/s/${SITE.id}/chat`)
   assert.equal(p.run('baseUrl()'), `/s/${SITE.id}`)
   // its header is its own, where it runs right after its title (no "here"); no Viewing bar, no Back, nothing "read-only" or "this chat"
@@ -360,46 +378,118 @@ test('another session`s deck in this one`s place (#/s/<id>/…): read from /s/<i
   assert.equal(p.run('S.peer'), undefined)
 })
 
-test('another session`s controls that act only in its window say so where they stand: Stop turn, its background`s Stop and Cancel (one line under its list), an agent`s Stop in its drawer; its notification; its questions answer through its own deck', async () => {
+test('another session`s deck shows the controls its own window would, by its own deck`s state: Stop turn, its background`s Stop and Cancel, an agent`s Stop on its card and in its drawer, Clear finished; a press goes to its own deck and says what came of it at the control (Stopping…, then its ack in that deck`s state); only a permission prompt and Claude Code`s notification say to answer them in its window', async () => {
   const theirs = { ...SAMPLE, session: { ...SAMPLE.session, id: SITE.id } }
   const p = page({ hash: `#/s/${SITE.id}/now`, others: { [SITE.id]: theirs } })
   p.load(LIVE)
   p.run('switchView(route.session)')
   await settle()
-  // Stop turn: where to stop it, never the button
+  const sent = () => p.calls.filter(one => one.url === '/cmd').map(one => one.body).filter(one => one.cmd !== 'view')
+  const viewed = next => { p.run(`applyViewed(${JSON.stringify(next)})`) }
+  // its controls are its own: Stop turn, and every Stop and Cancel its own deck's check allows
+  assert.equal(byClass(p.run('Header()'), 'stop-turn').length, 1)
+  assert.equal(byClass(p.run('BackgroundSection()'), 'bg-stop').length, SAMPLE.background.rows.filter(x => x.stop && x.stop.can).length)
+  assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.agents.filter(a => a.stop && a.stop.can).map(a => a.id))')), SAMPLE.agents.filter(a => a.stop && a.stop.can).map(a => a.id))
+  assert.equal(byClass(p.run('AgentsSection()'), 'run-stop').length, SAMPLE.agents.filter(a => a.stop && a.stop.can).length)
+  assert.equal(byClass(p.run('AgentsSection()'), 'fin-clear').length, 1)
+  for (const gone of ['in its window', 'another session']) {
+    assert.doesNotMatch(p.text('Header()'), new RegExp(gone))
+    assert.doesNotMatch(p.text('BackgroundSection()'), new RegExp(gone))
+    assert.doesNotMatch(p.text('AgentsSection()'), new RegExp(gone))
+  }
+  // Stop turn: to its own deck, its turn named; "Stopping…" until that deck's ack, then gone with its turn, the ack a toast
+  click(byClass(p.run('Header()'), 'stop-turn')[0])
+  await settle()
+  const turn = sent().at(-1)
+  assert.deepEqual(turn, { cmd: 'abortTurn', turnId: SAMPLE.header.turn.id, id: turn.id, session: SITE.id })
+  assert.equal(flat(textOf(byClass(p.run('Header()'), 'stop-turn')[0])), 'Stopping…')
+  assert.equal(byClass(p.run('Header()'), 'stop-turn')[0].p.disabled, true)
+  const later = (s, acks) => ({ ...s, now: s.now + 1000, acks: [...s.acks, ...acks.map(one => ({ at: NOW, ...one }))] })
+  let next = later({ ...theirs, header: { ...theirs.header, turn: null } }, [{ id: turn.id, ok: true, status: 'delivered', text: 'Stopped the turn' }])
+  viewed(next)
   assert.equal(byClass(p.run('Header()'), 'stop-turn').length, 0)
-  assert.match(p.text('Header()'), /Stop the turn in its window/)
-  // background: no Stop or Cancel, one line that says where
-  const bg = p.run('BackgroundSection()')
-  assert.equal(byClass(bg, 'bg-stop').length, 0)
-  assert.match(flat(textOf(bg)), /Stop them in its window: Terminal · site\.$/)
-  // its agents: no Stop on a card, and the drawer says where
-  assert.equal(p.run('S.agents.filter(a => a.stop && a.stop.can).length'), 0)
-  assert.deepEqual(JSON.parse(p.run("JSON.stringify(S.agents.filter(a => a.stop).map(a => a.stop.why))")), SAMPLE.agents.filter(a => a.stop).map(() => 'Stop it in its window: Terminal · site.'))
+  assert.equal(p.run('ui.toast.text'), 'Stopped the turn')
+  // a Stop its deck could not make: the row says why, and its Stop is there again
+  click(byClass(p.run('BackgroundSection()'), 'bg-stop')[0])
+  await settle()
+  const bg = sent().at(-1)
+  assert.deepEqual(bg, { cmd: 'stopBackground', bgId: SAMPLE.background.rows[0].id, id: bg.id, session: SITE.id })
+  assert.equal(flat(textOf(byClass(p.run('BackgroundSection()'), 'bg-stop')[0])), '…')
+  next = later(next, [{ id: bg.id, ok: false, status: 'failed', text: 'Claude Code refused TaskStop: not now' }])
+  viewed(next)
+  const row = byClass(p.run('BackgroundSection()'), 'bg-row')[0]
+  assert.equal(flat(textOf(byClass(row, 'press-note')[0])), '✕ Claude Code refused TaskStop: not now')
+  assert.equal(flat(textOf(byClass(row, 'bg-stop')[0])), 'Stop')
+  // Clear finished: to its own deck, "Clearing…", then what it did beside the row
+  click(byClass(p.run('AgentsSection()'), 'fin-clear')[0])
+  await settle()
+  const clear = sent().at(-1)
+  assert.deepEqual(clear, { cmd: 'clearFinished', id: clear.id, session: SITE.id })
+  assert.equal(flat(textOf(byClass(p.run('AgentsSection()'), 'fin-clear')[0])), 'Clearing…')
+  next = later(next, [{ id: clear.id, ok: true, status: 'delivered', text: 'Cleared 5 finished agents from the deck' }])
+  viewed(next)
+  assert.equal(flat(textOf(byClass(p.run('AgentsSection()'), 'press-note')[0])), '✓ Cleared 5 finished agents from the deck')
+  // an agent's Stop, from its drawer
   p.go(`#/s/${SITE.id}/now/agent/b81c6f3e2a9d4c17`)
-  assert.match(p.text('Drawer()'), /Stop it in its window: Terminal · site\./)
-  // its permission prompt and its notification: in its window; its questions: through its own deck, or in its window
+  click(byClass(p.run('Drawer()'), 'stop-drawer')[0])
+  await settle()
+  assert.deepEqual(sent().at(-1), { cmd: 'stopAgent', agentId: 'b81c6f3e2a9d4c17', id: sent().at(-1).id, session: SITE.id })
+  assert.match(p.text('Drawer()'), /Stopping…/)
+  assert.doesNotMatch(p.text('Drawer()'), /Stop it in its window/)
+  // its permission prompt and its notification: in its window, the one exception; its questions through its own deck
+  p.go(`#/s/${SITE.id}/now`)
   const needs = p.text('NeedsList()')
-  assert.match(needs, /Or answer it in its window: Terminal · site\./)
-  assert.equal(p.run("S.needs.filter(n => n.isAnswerable).length"), SAMPLE.needs.filter(n => n.isAnswerable).length)
+  assert.equal(p.text("PermissionBody(S.needs.find(n => n.kind === 'permission'))").endsWith('Answer it in its window: Terminal · site.'), true)
+  assert.equal(p.text("NoteBody(S.needs.find(n => n.kind === 'notification'))").endsWith('Answer it in its window: Terminal · site.'), true)
+  assert.doesNotMatch(needs, /Or answer it in its window/)
+  assert.match(needs, /Or answer it in Claude Code\./)
+  assert.equal(p.run('S.needs.filter(n => n.isAnswerable).length'), SAMPLE.needs.filter(n => n.isAnswerable).length)
 })
 
-test('steering another session from the page: a message to it goes with its id (its own deck takes it); a deck that reads no inbox is answered "Answer it in its window"; nothing else goes from its deck, said where to do it', async () => {
+test('steering another session from the page: every command about it goes with its id to its own deck (the avatar style stays the person`s, this deck`s own); a deck that reads no inbox, or one gone quiet, says so at its controls before a press, "Its deck isn`t answering", and nothing goes', async () => {
   const notesState = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', NOTES.dir, 'state.json'), 'utf8'))
-  const p = page({ hash: `#/s/${SITE.id}/chat`, others: { [SITE.id]: SITE_STATE, [NOTES.id]: notesState } })
+  const theirs = { ...SAMPLE, session: { ...SAMPLE.session, id: SITE.id } }
+  const p = page({ hash: `#/s/${SITE.id}/chat`, others: { [SITE.id]: theirs, [NOTES.id]: notesState } })
   p.load(LIVE)
   p.run('switchView(route.session)')
   await settle()
-  await p.run("command({ cmd: 'chat', id: 'c-1', agentId: 'main', text: 'Rebuild it' })")
-  assert.deepEqual(p.calls.filter(one => one.url === '/cmd').map(one => one.body).at(-1), { cmd: 'chat', id: 'c-1', agentId: 'main', text: 'Rebuild it', session: SITE.id })
-  await assert.rejects(p.run("command({ cmd: 'clearFinished', id: 'x' })"), /This is another session's deck\. Do that in its window: Terminal · site\./)
-  await assert.rejects(p.run("command({ cmd: 'review', id: 'x', text: 'y' })"), /Do that in its window/)
+  const sent = () => p.calls.filter(one => one.url === '/cmd').map(one => one.body)
+  for (const cmd of ["{ cmd: 'chat', id: 'c-1', agentId: 'main', text: 'Rebuild it' }", "{ cmd: 'clearFinished', id: 'k-1' }", "{ cmd: 'review', id: 'v-1', text: 'Review it' }", "{ cmd: 'selectRepo', id: 'r-1', root: '' }", "{ cmd: 'showCleared', id: 'k-2' }"]) {
+    await p.run(`command(${cmd})`)
+    assert.equal(sent().at(-1).session, SITE.id, cmd)
+  }
+  assert.deepEqual(sent().at(-5), { cmd: 'chat', id: 'c-1', agentId: 'main', text: 'Rebuild it', session: SITE.id })
+  // the avatar style is the person's: this deck's own, naming no session
+  await p.run("command({ cmd: 'avatarStyle', id: 'a-1', style: 'critter' })")
+  assert.deepEqual(sent().at(-1), { cmd: 'avatarStyle', id: 'a-1', style: 'critter' })
+  // a deck that reads no inbox (an older build): said before a press, at each control; a press sends nothing
   p.go(`#/s/${NOTES.id}/now`)
   await settle()
-  await assert.rejects(p.run("command({ cmd: 'chat', id: 'c-2', agentId: 'main', text: 'Hello' })"), /Answer it in its window/)
-  // its questions read-only here: none answerable
+  const why = "Its deck isn't answering: it runs an older Agent Deck."
+  assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.peer)')), { where: 'Desktop · notes', canSteer: false, why })
   assert.equal(p.run('S.needs.some(n => n.isAnswerable)'), false)
-  assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.peer)')), { where: 'Desktop · notes', canSteer: false })
+  const before = sent().length
+  await assert.rejects(p.run("command({ cmd: 'chat', id: 'c-2', agentId: 'main', text: 'Hello' })"), new RegExp(why.replace('.', '\\.')))
+  assert.equal(sent().length, before)
+  // a deck gone quiet: its Stop turn, Stop and Cancel, Clear finished, questions and composer say so up front
+  const quiet = { ...LIVE, sessions: { ...SESSIONS.view, rows: SESSIONS.view.rows.map(r => (r.id === SITE.id ? { ...r, isQuiet: true, heardAt: NOW - 125_000, stateText: '', need: null, needs: 0 } : r)) } }
+  const q = page({ hash: `#/s/${SITE.id}/now`, others: { [SITE.id]: theirs } })
+  q.load(quiet)
+  q.run('switchView(route.session)')
+  await settle()
+  const said = "Its deck isn't answering: last heard 2m ago."
+  assert.equal(q.run('S.peer.why'), said)
+  assert.equal(byClass(q.run('Header()'), 'stop-turn').length, 0)
+  assert.equal(flat(textOf(byClass(q.run('Header()'), 'hd-peer-stop')[0])), "Its deck isn't answering")
+  assert.equal(byClass(q.run('Header()'), 'hd-peer-stop')[0].p.title, said)
+  const bgs = q.run('BackgroundSection()')
+  assert.equal(byClass(bgs, 'bg-stop').length, 0)
+  assert.match(flat(textOf(bgs)), new RegExp(`${said.replace('.', '\\.')}$`))
+  assert.equal(byClass(q.run('AgentsSection()'), 'fin-clear').length, 0)
+  assert.match(q.text('AgentsSection()'), /Its deck isn't answering: last heard 2m ago\./)
+  assert.equal(q.run('S.needs.some(n => n.isAnswerable)'), false)
+  assert.match(q.text('NeedsList()'), /Its deck isn't answering: last heard 2m ago\./)
+  assert.equal(q.run("previewOf('chat', '').text"), said)
 })
 
 test('a session no longer listed: its deck says so, its header says what it can, and the page stays on it until you pick another', async () => {
