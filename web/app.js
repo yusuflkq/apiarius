@@ -3447,9 +3447,10 @@ function DrawerHead(lead, title, sub, extra) {
     h('button', { type: 'button', class: 'icon-btn', title: 'Close (Esc)', 'aria-label': 'Close', onClick: closeDrawer }, icon('x')));
 }
 
+/** A drawer's block: its head (the title, a note, and `extra` such as a switch at the right; with one, the note goes on a line of its own under them, so the switch always fits), then its body. */
 function Block(key, title, note, body, extra) {
   return h('section', { key, class: 'block' },
-    h('div', { class: 'block-head' }, h('h3', { class: 'block-title' }, title), note != null && note !== '' && h('span', { class: 'block-note' }, note), extra ? h('span', { class: 'block-extra' }, extra) : null),
+    h('div', { class: extra ? 'block-head has-extra' : 'block-head' }, h('h3', { class: 'block-title' }, title), note != null && note !== '' && h('span', { class: 'block-note' }, note), extra ? h('span', { class: 'block-extra' }, extra) : null),
     body);
 }
 

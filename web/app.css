@@ -1199,6 +1199,9 @@ span.cg-av { cursor: default; }
 .block-head { display: flex; align-items: baseline; gap: 10px; }
 .block-title { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .block-note { font: 11.5px var(--mono); color: var(--muted-2); }
+/* a head with a switch (Activity's): the title and the switch on its first line, the note on its own line under them, so the switch always fits */
+.block-head.has-extra { flex-wrap: wrap; row-gap: 4px; }
+.block-head.has-extra .block-note { order: 1; flex-basis: 100%; }
 .task-text { font-size: 13.5px; line-height: 1.6; color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 .block .fgroups { gap: 8px; }
 
@@ -1256,7 +1259,7 @@ span.cg-av { cursor: default; }
 .live.is-said .said-mark { margin-right: 0; }
 .live.is-said .live-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
 .ra-said { font-style: italic; color: var(--fg-2); }
-.block-extra { display: inline-flex; margin-left: auto; align-self: center; }
+.block-extra { display: inline-flex; flex: none; margin-left: auto; align-self: center; }
 .seg-toggle.seg-sm button { height: 24px; padding: 0 9px; font-size: 11.5px; }
 .act + .act-word, .act-word + .act, .act-word + .act-word { border-top: 1px solid var(--border-soft); }
 .act-word { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 9px 12px; font-size: 12.5px; }

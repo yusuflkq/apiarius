@@ -1897,6 +1897,30 @@ test('the drawer`s Activity lays an agent`s words and its thinking between its c
   assert.equal(find(drawer(), 'act-word').length, 0)
 })
 
+test('the drawer`s Activity head keeps its switch inside the drawer at any width: with the switch the head wraps, its note on a line of its own under the title and the switch, which never shrinks; a head with no switch stays as it was', async () => {
+  const p = page({ hash: `#/now/agent/${BUILDER}` })
+  p.load(SAMPLE)
+  p.view('Drawer()')
+  await settle()
+  const heads = () => Object.fromEntries(find(p.view('Drawer()'), 'block-head').map(one => [flat(textOf(find(one, 'block-title')[0])), one]))
+  const activity = heads().Activity
+  assert.equal(activity.p.class, 'block-head has-extra')
+  assert.deepEqual([...activity.c].filter(Boolean).map(one => one.p.class), ['block-title', 'block-note', 'block-extra'])
+  assert.match(flat(textOf(find(activity, 'block-note')[0])), /thinking as Claude Code shows it, which may be a summary$/)
+  assert.equal(find(activity, 'seg-sm').length, 1)
+  assert.equal(heads().Task.p.class, 'block-head')
+  // app.css: such a head wraps, its note goes after the switch on a line of its own, and the switch keeps its width
+  const css = fs.readFileSync(path.join(WEB, 'app.css'), 'utf8')
+  const rule = selector => {
+    const found = new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(css)
+    assert.ok(found, `no rule for ${selector}`)
+    return found[1].split(';').map(one => one.trim()).filter(Boolean)
+  }
+  assert.ok(rule('.block-head.has-extra').includes('flex-wrap: wrap'))
+  assert.deepEqual(rule('.block-head.has-extra .block-note').sort(), ['flex-basis: 100%', 'order: 1'])
+  assert.ok(rule('.block-extra').includes('flex: none'))
+})
+
 test('the drawer`s Activity draws words of more lines as Chat draws a message, its Markdown, unquoted; a line of them stays quoted in italics', async () => {
   const file = JSON.parse(FILES.agent[BUILDER])
   const last = file.activity[file.activity.length - 1]
