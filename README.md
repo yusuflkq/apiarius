@@ -1,90 +1,103 @@
 # Apiarius
 
-Apiarius is a Claude Code mod (a plugin of function hooks) that shows what a session's agents are doing. `/apiarius` opens it in a side pane of the Code tab, drawn with the app's own elements: a Paperclip-style dashboard that updates live with what needs you (questions you can answer right there), the goal and plan, a card per agent and what it is doing now, the org chart, the exact diffs each one made, and a box to message an agent; then a git checker. `/apiarius web` shows the same dashboard in the Desktop app's Browser pane, drawn from the same state.
+See and steer every agent in your Claude Code session, live.
+
+[![tests](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml/badge.svg)](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+![Apiarius](assets/hero.png)
+
+Apiarius is a Claude Code mod for people who run several agents at once. `/apiarius` opens the deck: every agent in the session, what each one is doing, what it changed and what is waiting on you, updated as they work. The deck shows in the Claude Desktop side pane, in the terminal, or in your browser.
 
 ## Install
 
-To load it in every session, put the folder's absolute path in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. With `CLAUDE_CODE_PLUGIN_DIR_WATCH` set to `1`, saving a file reloads the mod.
-
-```json
-{
-  "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "<absolute path to apiarius>",
-    "CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"
-  }
-}
+```
+/plugin marketplace add yusuflkq/apiarius
+/plugin install apiarius@apiarius
 ```
 
-To load it for one terminal session only: `claude --plugin-dir <path>`.
+On Claude Code 2.1.275 or later you can do it in one step:
 
-- It needs a Claude Code new enough to run mods. It was built and tested on 2.1.295, the Desktop app's bundled copy. The `claude` on your PATH is a separate install and may be a different version.
-- `/apiarius web` needs Node 18 or later on PATH. Without Node, the side pane still works.
+```
+/plugin install apiarius --marketplace yusuflkq/apiarius
+```
 
-## Use
+It needs Claude Code 2.1.287 or later in the terminal, or the Code tab of the Claude Desktop app (2.1.286 or later). The web page needs Node.js 18 or later on your PATH, and Changes needs git.
+
+Then run `/apiarius`.
+
+## What you can do
+
+The Dashboard puts what needs you first, so you can answer Claude's questions there. Below it are a card for each agent with what it is doing now, the session's figures, the plan, recent activity and the files the agents touched.
+
+- Chat shows the session as a group chat, messages between agents included, and you can write to any agent from it.
+- Org shows who started whom. Its Timeline gives each agent a row across the run with its work, its waits on you and its idle time.
+- Changes shows git's diff of each uncommitted file next to each agent's own edits of it.
+- Each agent has a page with its task, to-do list, result, tool calls and edits.
+- Inspect shows what fills the context, every permission decision and who made it, what is loaded and the spend per agent.
+- Background lists background shells, agents and schedules, with Stop or Cancel. Stop turn ends Claude's turn, as Esc does.
+- All sessions lists every Claude Code session on this machine that runs Apiarius, and you can steer any of them from any deck. Only permission prompts stay in their own window.
+
+| Chat | Changes |
+| :-: | :-: |
+| ![Chat](assets/screenshots/web-chat.png) | ![Changes](assets/screenshots/web-changes.png) |
+| Timeline | Inspect |
+| ![Timeline](assets/screenshots/web-timeline.png) | ![Inspect](assets/screenshots/web-inspect.png) |
+| Claude Desktop side pane | Terminal |
+| ![The deck in the Claude Desktop side pane](assets/screenshots/pane-dashboard.png) | ![The deck in the terminal](assets/screenshots/terminal.png) |
+
+## Commands
 
 | Command | What it does |
 | :- | :- |
-| `/apiarius web` | Starts the dashboard, opens it in the Browser pane and answers with its link (click it if the pane did not open; any browser on this machine works) |
-| `/apiarius web stop` | Stops the dashboard. The next `/apiarius web` gives a new link |
-| `/apiarius` | Opens the side pane on its Dashboard (works while Claude is mid-turn) |
-| `/apiarius org` · `/apiarius plan` · `/apiarius changes` | Opens the pane on that tab (a prefix works: `/apiarius c`) |
-| `/apiarius plan 3` | Opens the Plan tab with its third step open |
-| `/apiarius demo` | Shows the Dashboard, Org, Plan and agent pages on sample data (`web/fixtures/state.json`, its times moved to now); **Back to this chat** returns |
-| `/apiarius band` | Hides or shows the agents band above the prompt |
-| `/apiarius close` | Closes the pane |
+| `/apiarius` | Opens the deck on the Dashboard |
+| `/apiarius chat`, `org`, `changes`, `inspect`, `settings` | Opens that tab. A prefix works: `/apiarius i` is Inspect |
+| `/apiarius sessions` | Opens All sessions |
+| `/apiarius web` | Starts the web page and answers with its link |
+| `/apiarius web stop` | Stops the web page. The next start gives a new link |
+| `/apiarius demo` | Shows the deck on sample data |
+| `/apiarius clear` | Hides finished agents from the deck (Claude Code is untouched) |
+| `/apiarius clear show` | Shows them again |
+| `/apiarius avatars [style]` | Lists the ten avatar styles, or picks one |
+| `/apiarius band` | Hides or shows the status line above the prompt |
+| `/apiarius close` | Closes the deck |
+| `/apiarius probe` | Toggles a test pane for mod authors |
 
-Keys while the pane has focus: `1`–`4` switch tabs (Dashboard, Org, Plan, Changes); on an agent page `b` goes back and `d` / `a` / `t` show its Diffs, Activity or Talk.
-
-## The dashboard
-
-A sidebar lists the pages and every agent, with live and waiting dots.
-
-- **Dashboard:** what needs you (with Open), the goal and plan progress, a card per agent, KPIs (agents running, plan steps done, session spend, waiting on you), recent activity, and the files the agents edited.
-- **Org chart:** the Orchestrator at the top and the agents it started below it. Drag, scroll or use the arrow keys to pan; pinch, Ctrl+scroll or `+` / `−` to zoom; `0` fits it. **List** shows the same tree as indented rows. Click a card to open that agent.
-- **Plan:** the goal, a progress bar, and each step with its status and who works on it.
-- **Changes:** git's uncommitted files with `+/−` and who edited each; open a file for its agents' patches. Below, other agent edits and recent commits. In a folder that is no git repository, it says so, offers the repositories inside that folder (a press pins Changes to one, **Follow the work** lets go), and opens the newest of the agents' edits.
-- **Agent page:** its task, checklist and result, with its model, tokens, lines changed and tool calls. Then three tabs:
-  - **Diffs:** the patches from its own Edit and Write calls.
-  - **Activity:** its tool calls.
-  - **Talk:** its messages, and a box to message it. A subagent gets the message at once (a finished one resumes to answer); for the Orchestrator it becomes your next prompt. In auto mode, where Claude Code takes no message to a subagent from the deck, the Orchestrator passes it on: the request shows in the chat, and the message stays in that agent's Talk.
-- **Review** (on an agent page and on Changes) puts a review request in your Claude Code prompt box; you press Enter to send it.
-
-## The side pane
-
-- **Dashboard:** drawn from the same state as the web page, so the two always agree.
-  - **What needs you:** a question Claude asks shows its options as buttons, each with its description under it. One question with one answer sends on a press; several questions, or one with checkboxes, send with **Submit**; **Other…** takes your own words. The answer goes through the same path as the web page's. A permission prompt shows the exact command, to allow or deny in Claude Code.
-  - **Goal:** the headline and its words, "Step n of m" and the plan's bar.
-  - **Agents:** a card each, as many a row as fit (two in the docked pane, up to six when it is wide), with its avatar, status pill, an inner box with the step it is on, what it is doing now, and its model, tokens and age. Press any line of a card to open the agent. Recent activity and Files sit in bordered lists, side by side from 120 cells; files outside the repo fold into one row.
-  - **Figures:** agents running, plan steps, session spend, waiting on you. Then the recent activity; a row opens its agent.
-  - **Open in browser** starts `/apiarius web`.
-  - **Folding:** press a section's heading (**▾ AGENTS 7**) to fold it to one line of what it holds (**▸ AGENTS 7** · 2 running · 1 waiting), and again to open it. The goal, agents, figures, recent activity and files fold one by one, as do an agent page's Task and Checklist and the Plan tab's goal. What you fold stays folded through live updates and reloads of the mod.
-- **Org:** the org chart, cards over connectors. Click a card to open its agent; drag or the arrow keys pan a big chart. VS Code and mobile list the agents as an indented tree.
-- **Plan:** the goal and its follow-ups; how far the plan is (steps done, in progress and failed), where it came from, and its bar; then a row for each step with its status, its words, who works on it, and whether it needs you. Click a row to open it: a card for each agent on the step (with the agents it started under it), showing what it is doing now, its checklist, its last three tool calls, the files it touched, its result and anything it waits on you for, then **Open agent →** and **Talk →**. A step the Orchestrator does itself shows its checklist item and what it just did. Open steps stay open while the pane updates.
-- **Agent page:** its avatar, name, type, who it reports to and status; four boxes for its model, tokens, lines changed and tool calls; its Now line, its task beside its checklist, what it waits on you for and its result. Then Diffs (its exact patches), Activity (each tool call with its description, how long it took and when) and Talk (chat bubbles, each of your messages with its delivery status, and a box to message it). Back returns to the tab you came from.
-- **Changes:** the git checker: branch and upstream, uncommitted files with who edited each, and recent commits with the agent that made each. Press a file (▸) for its hunks or a commit for its patch. Outside a git repo, it says where the chat runs, offers the repositories inside that folder (a press pins Changes to one, **Follow the work** lets go), and lists the agents' edits by file, each with its editors' faces, the newest open.
-- **Band:** while subagents run, one line above the prompt says who is working on what, with **Open**.
-- **Off the tab row:** Stats and Classic, from earlier builds, are kept but no longer on the tab row. `/apiarius stats` opens Stats: session time, tool calls, lines changed by agents, uncommitted files, tokens and cost; activity over the last 30 minutes; lines changed per day over the last 7 days. `/apiarius classic` opens Classic, the earlier Agents tab: a short summary, and **Details** (`/apiarius details`) for the full outline of the Orchestrator, its plan steps, the agents under the step they serve, then the files they are changing. In Classic, `w` opens the dashboard in the Browser pane, `e` toggles Details and `n` opens what needs you; in Details, `o` selects the Orchestrator, `f` / `z` fold or zoom the selected row, and `u` goes back up a zoom level.
-
-The pane also works in a terminal session, where Stats draws its charts as text.
+Keys work while the pane has the keyboard (click it, or press ctrl+x then tab): `1` to `6` switch tabs, `Enter` opens what has the focus, `b` goes back from an agent's page, and `s` opens All sessions. The web page adds a few of its own, listed under Help in its Settings.
 
 ## How it works
 
-- Hooks on tool calls, agent spawns, turns, messages and notifications feed one live model of the session. It is kept in `$.state`, so it survives a reload of the mod; daily totals and the band setting are kept in `$.store`.
-- Git runs in the background (`--no-optional-locks`, no external diff tools) after edits and shell commands, and every few seconds while the pane or the dashboard is open.
-- `/apiarius web` starts `web/server.js`, a plain Node server with no dependencies. It listens on 127.0.0.1 only, every request needs a token made for the session, and the page loads nothing from the internet, so nothing leaves the machine.
-- While it runs, the mod writes `.web/<sessionId>/state.json` (at most every 300 ms) and one patch file per edit. The server streams each new state to the page over SSE, and the page updates in place without losing your view, scroll or draft.
-- Messages and review requests from the page come back to the mod on the server's stdout. The mod checks each one against the session before it acts on it.
-- The server stops with the session or on `/apiarius web stop`, and the page keeps showing the last state. A reload of the mod restarts it on the same link.
+Apiarius hooks Claude Code's events (tool calls, agent spawns, turns, messages, permission checks and notifications) into one model of the session, which the pane, the terminal and the web page all draw from. Everything it shows comes from what Claude Code and git report. Changes never credits a git hunk to an agent: the edits beside git's diff are the patches from each agent's own Edit and Write calls.
 
-## Develop
+It steers only through Claude Code's own channels: answering the questions Claude asks you, delivering your messages, TaskStop for background agents and tasks, CronDelete for schedules, and the same abort as Esc for the turn. Stop and Cancel appear only where Claude Code's permission check allows that call, and the check runs again before each press. Apiarius never grants itself a permission and never answers a permission prompt. In auto mode, where Claude Code refuses a plugin's message to a subagent, the deck asks the Orchestrator to pass yours on, and that request shows in the chat.
 
-```bash
+## What it runs and stores
+
+Apiarius makes no network requests of its own. What it hands to Claude goes through Claude Code like anything you type: your messages to agents, your answers to Claude's questions, and a note with the web page's link. Nothing is sent anywhere else.
+
+`/apiarius web` runs `node web/server.js` from the plugin's folder as a child process of the session. The server has no dependencies and listens on 127.0.0.1 only, on a port the system picks; a reload of the mod asks for the same port again. It refuses any request without a random token, which reaches the server in an environment variable and reaches you in the link; `/apiarius web stop` discards it. It also refuses requests addressed to any other host name, and takes commands only from its own page. The page loads nothing from the internet. The server exits with the session, on `/apiarius web stop`, or when its parent process is gone. On the Desktop the command asks the Browser pane to open the page through the pane's `preview_start` MCP tool. Its answer leaves Claude the note with the link, so Claude can open the page when you ask.
+
+For Changes it runs read-only git commands (`rev-parse`, `status`, `diff`, `log`, `rev-list`, `show`) in the session's repository or the ones its agents edit in, with `--no-optional-locks`, no pager or prompts, and `--no-ext-diff --no-textconv` on diffs. They run after edits and shell commands, and every 6 seconds while a deck is open. Short `node` one-liners read the session's process id, check whether other listed sessions' processes still run, and delete registry and inbox files the mod made.
+
+It writes:
+
+- `~/.claude/apiarius/sessions/<sessionId>.json` (under `CLAUDE_CONFIG_DIR` when set), so All sessions can list the session: its title, folder, repository, state, what needs you, what it is doing, its agents at work, its spend estimate and its process id. It is rewritten at most every 2 seconds and on a 30-second heartbeat, and deleted when the session ends or, if the session died, by another deck.
+- `.web/<sessionId>/` in the plugin's folder: the page's `state.json` and the files it loads on demand (patches, git diffs, long messages, agent pages, the timeline), written only while the web page is on or another session's deck is showing this one. That deck leaves its requests in `inbox/` there.
+- `.debug/<sessionId>.json` in the plugin's folder, a dump of the deck's state, only while a `.debug` folder exists there.
+
+Claude Code's plugin storage keeps your preferences (avatar style, the band) and, for each session, the deck's snapshot and the web page's token and port, so a reload of the mod keeps its place. Apiarius reads the files agents edit, the session's transcript, Claude Code's settings for Inspect, and other sessions' registry files and state folders.
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). To try a clone without installing it, run `claude --plugin-dir .` in its folder.
+
+```
 claude plugin validate .
-claude plugin test .     # 250 tests
-node --test web/test/    # 42 server and page tests
-node web/dev.js          # serves the dashboard on the sample data in web/fixtures and prints the URL
+claude plugin test .     # the mod's tests
+node --test web/test/    # the server and page tests
+node web/dev.js          # the web page on sample data; prints its link
 ```
 
-- Make a `.debug/` folder in the mod and it dumps its live state to `.debug/<sessionId>.json` about 2 s after each change.
-- `/apiarius demo` draws the side pane's Dashboard, Org, Plan and agent pages on `web/fixtures/state.json`, for judging the design without a session.
-- `/apiarius probe` toggles a diagnostic pane that shows how the current surface draws native text, a Client canvas and an Svg. The deck's own views don't use it.
+## License
+
+MIT. See [LICENSE](LICENSE).
