@@ -3341,7 +3341,7 @@ export const register: Register = on => {
 
     try {
       await $.command.register({
-        name: 'deck',
+        name: 'apiarius',
         description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in the Browser pane)',
         // now (the Dashboard's id), help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
         argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',

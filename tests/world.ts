@@ -62,6 +62,8 @@ export type World = {
   stat?: (path: string) => { size: number; mtimeMs: number } | null
   /** The plugin's own store (`$.store`: the person's prefs), when the test reads it back; left out, the testing kit's store in memory. */
   store?: Map<string, unknown>
+  /** Each slash command the deck registered (`$.command.register`), by name. */
+  commands: string[]
   /** Each pane opened (`$.ui.open`), as asked: its id, and the body rows it asked for. */
   opens: { id: string; rows?: number }[]
   /** Each permission check raised (`tool.check`: a call's, or a plugin's `$.tool.check`), its tool and input as asked. */
@@ -95,6 +97,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     steps: [],
     verdict: 'ask',
     isDecided: false,
+    commands: [],
     opens: [],
     checks: [],
     aborted: [],
@@ -120,7 +123,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     on('store.keys', () => ({ value: [...store.keys()] }))
   } else mock.store(on)
   on('session.start', () => ({ cwd: '/work' }))
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.register', ($, e) => {
+    w.commands.push(e.name)
+    return { value: { command: e.name } }
+  })
   on('ui.panes', () => ({ value: [] }))
   on('ui.open', ($, e) => {
     w.opens.push({ id: e.id, ...(e.rows !== undefined ? { rows: e.rows } : {}) })

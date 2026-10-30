@@ -79,6 +79,15 @@ async function keysOf(ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?: 
   return (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith(prefix))
 }
 
+test('the deck registers /apiarius, the command its run hook answers', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await clock.advance(1000)
+  expect(w.commands).toEqual([deck('').command])
+})
+
 test('the Dashboard: the header says the state, your request and model · mode · context · $ (the mode lit), and holds no keys; the tabs are Buttons with their digits as hotkeys, and nothing else has one', async ($, on) => {
   const { v2 } = await demo($, on)
   for (const surface of SURFACES) {
