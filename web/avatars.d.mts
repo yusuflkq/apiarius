@@ -4,7 +4,7 @@
  */
 
 /** The styles the deck draws an agent in. */
-export type AvatarStyle = 'robot' | 'mood' | 'critter' | 'pixel' | 'mono' | 'orbit' | 'bauhaus' | 'ring' | 'glyph' | 'blob'
+export type AvatarStyle = 'robot' | 'bee' | 'mood' | 'critter' | 'pixel' | 'mono' | 'orbit' | 'bauhaus' | 'ring' | 'glyph' | 'blob'
 
 /** A status as an avatar shows it: starting reads as running, stopped as idle. */
 export type AvatarLook = 'running' | 'waiting' | 'done' | 'failed' | 'idle'
@@ -13,7 +13,7 @@ export type AvatarLook = 'running' | 'waiting' | 'done' | 'failed' | 'idle'
 export type AvatarAgent = { id?: string; name?: string; role?: string; status?: string; progress?: number | null }
 
 export type AvatarOptions = {
-  /** Its status's motion (a robot's), still under prefers-reduced-motion; off by default. */
+  /** Its status's motion (a robot's, a bee's), still under prefers-reduced-motion; off by default. */
   animated?: boolean
   /** CSS px square; 40 by default. */
   size?: number
@@ -33,6 +33,7 @@ export const LOOK_HUE: Readonly<Record<AvatarLook, string>>
 export const LOOK_MARK: Readonly<Record<AvatarLook, string>>
 export const GLYPHS: readonly string[]
 export const ROBOT_GLYPHS: readonly string[]
+export const BEE_GLYPH: '⬢'
 export const BAUHAUS_GLYPHS: readonly string[]
 
 export function lookOf(status: string | undefined): AvatarLook

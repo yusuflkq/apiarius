@@ -129,7 +129,7 @@ test('the terminal draws no image: each card leads with the agent`s one-characte
   await cardsSay('robot')
   const first = (await ui.find({ key: `card:${shown[0]!.id}` }))?.text ?? ''
   expect(AV.ROBOT_GLYPHS.filter(head => first.includes(head))).toHaveLength(1)
-  for (const style of ['mono', 'ring', 'glyph'] as const) {
+  for (const style of ['bee', 'mono', 'ring', 'glyph'] as const) {
     await $.command.run(deck(`avatars ${style}`))
     await ui.redraw()
     await cardsSay(style)
@@ -155,18 +155,25 @@ test('the avatar style is the person`s own: read from the store`s prefs as a ses
   const ui = await $.ui.mount(pane('desktop'))
   const cardFaces = async () => (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar')).slice(0, order.length).map(svg => svg.props.source)
   expect(await cardFaces()).toEqual(order.map(row => faceOf(row, 22, { dot: true, animated: true }, 'mood')))
-  // /apiarius avatars lists the ten, the one drawn marked
+  // /apiarius avatars lists the eleven, the one drawn marked
   const listed = await $.command.run(deck('avatars'))
   expect(listed.text).toContain('Avatar styles (now Mood faces)')
   expect(listed.text).toContain('▸ mood     Mood faces')
   expect(listed.text).toContain('  critter  Critters')
+  expect(listed.text).toContain('  robot    Robots\n  bee      Bees\n▸ mood ')
   // a style by the start of its name: kept beside the band's, and drawn
   const set = await $.command.run(deck('avatars Crit'))
   expect(set.text).toContain('Avatars: Critters')
   expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'critter' })
   await ui.redraw()
   expect(await cardFaces()).toEqual(order.map(row => faceOf(row, 22, { dot: true, animated: true }, 'critter')))
-  // by its name too; one it does not know changes nothing
+  // by its name too; one it does not know changes nothing, nor the start of more than one (bee, bauhaus, blob)
+  expect((await $.command.run(deck('avatars Bees'))).text).toContain('Avatars: Bees')
+  expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'bee' })
+  await ui.redraw()
+  expect(await cardFaces()).toEqual(order.map(row => faceOf(row, 22, { dot: true, animated: true }, 'bee')))
+  expect((await $.command.run(deck('avatars b'))).text).toContain('No avatar style called "b"')
+  expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'bee' })
   expect((await $.command.run(deck('avatars pixel sprites'))).text).toContain('Avatars: Pixel sprites')
   expect((await $.command.run(deck('avatars plaid'))).text).toContain('No avatar style called "plaid"')
   expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'pixel' })
@@ -176,7 +183,7 @@ test('the avatar style is the person`s own: read from the store`s prefs as a ses
   await ui.unmount()
 })
 
-test('Settings` avatar style: the ten, each its name beside the page`s three sample agents drawn in it (done, at work, waiting on you, each with its dot), the one drawn marked; a press draws that one, kept as /apiarius avatars keeps one', async ($, on) => {
+test('Settings` avatar style: the eleven, each its name beside the page`s three sample agents drawn in it (done, at work, waiting on you, each with its dot), the one drawn marked; a press draws that one, kept as /apiarius avatars keeps one', async ($, on) => {
   const kept = new Map<string, unknown>()
   await demo($, on, sampleState(), kept)
   for (const surface of ['desktop', 'terminal'] as const) {
@@ -201,6 +208,7 @@ test('Settings` avatar style: the ten, each its name beside the page`s three sam
       const faces = (await ui.findAll({ type: 'Svg' })).filter(svg => / drawn in it$/.test(String(svg.props.alt)))
       expect(faces.map(svg => svg.props.source)).toEqual(AV.STYLE_IDS.flatMap(id => three.map(one => AV.avatarSvg(id, one, { size: 24, dot: true, ground: P.ground }))))
       expect(faces.slice(0, 3).map(svg => svg.props.alt)).toEqual(['Robots: bob drawn in it', 'Robots: helper drawn in it', 'Robots: deck drawn in it'])
+      expect(faces.slice(3, 6).map(svg => svg.props.alt)).toEqual(['Bees: bob drawn in it', 'Bees: helper drawn in it', 'Bees: deck drawn in it'])
       expect(faces.every(svg => svg.props.isInteractive === undefined)).toBe(true)
       // the one drawn is ringed and ticked
       expect((await ui.find({ key: 'avatars:chip:mood' }))?.text).toContain('✓')
@@ -212,6 +220,8 @@ test('Settings` avatar style: the ten, each its name beside the page`s three sam
       // the three where they fit: each one character and its status's mark
       const marks = three.map(one => AV.terminalFace(one, 'robot'))
       expect((await ui.find({ key: 'avatars:chip:robot' }))?.text).toContain(marks.map(face => `${face.glyph}${face.mark}`).join(''))
+      // Bees: a honeycomb cell each, then its mark
+      expect((await ui.find({ key: 'avatars:chip:bee' }))?.text).toContain(three.map(one => `⬢${AV.terminalFace(one, 'bee').mark}`).join(''))
     }
     await press(ui, 'avatars:robot')
     expect(kept.get('prefs')).toEqual({ isBandHidden: false, avatarStyle: 'robot' })

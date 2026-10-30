@@ -1,6 +1,6 @@
 /**
  * The avatar library (web/avatars.mjs), as every surface takes it: each of
- * the ten styles a well-formed, self-contained SVG document for every
+ * the eleven styles a well-formed, self-contained SVG document for every
  * status, its ids its own, the same agent the same look, the status dot
  * where the gallery put it, and the terminal's glyph and mark.
  */
@@ -73,9 +73,10 @@ function checkDocument(svg, size) {
 }
 
 test('every style draws every status as a well-formed, self-contained SVG document, with and without its dot, still or moving, at any size', () => {
-  assert.deepEqual(A.STYLE_IDS, ['robot', 'mood', 'critter', 'pixel', 'mono', 'orbit', 'bauhaus', 'ring', 'glyph', 'blob'])
+  assert.deepEqual(A.STYLE_IDS, ['robot', 'bee', 'mood', 'critter', 'pixel', 'mono', 'orbit', 'bauhaus', 'ring', 'glyph', 'blob'])
   assert.equal(A.DEFAULT_STYLE, 'robot')
   assert.equal(A.styleName('robot'), 'Robots')
+  assert.equal(A.styleName('bee'), 'Bees')
   let count = 0
   for (const style of A.STYLE_IDS) {
     for (const agent of AGENTS) {
@@ -87,7 +88,7 @@ test('every style draws every status as a well-formed, self-contained SVG docume
       }
     }
   }
-  assert.equal(count, 10 * AGENTS.length * STATUSES.length * 4)
+  assert.equal(count, 11 * AGENTS.length * STATUSES.length * 4)
   // a style it does not know draws the default's
   assert.equal(A.avatarSvg('nope', { id: 'x', status: 'done' }), A.avatarSvg('robot', { id: 'x', status: 'done' }))
 })
@@ -123,6 +124,51 @@ test('a robot`s face says its status: eyes at work, eyes up and an amber light w
   assert.notEqual(robot('running'), robot('waiting'))
 })
 
+test('a bee is the app icon in the agent`s colours, and its face says its status as a robot`s does: its eyes by the robot`s seed bit, raised and an amber light waiting, ^ ^ and a green light done, a red visor and ✕ eyes failed, closed eyes dimmed idle', () => {
+  const bee = (status, id = 'a3f9c2e1b7d4058e') => A.avatarSvg('bee', { id, name: 'researcher', status }, { dot: false })
+  const robot = (status, id = 'a3f9c2e1b7d4058e') => A.avatarSvg('robot', { id, name: 'researcher', status }, { dot: false })
+  const [c1, c2] = A.colorsOf({ id: 'a3f9c2e1b7d4058e' })
+  const running = bee('running')
+  // the icon's honeycomb cell in the agent's deep colour, its stalks too; its two antenna lights; its pale wings behind it; its two white stripes clipped to the cell
+  assert.ok(running.includes(`<path d="M20 8.5L31.3 15V28L20 34.5L8.7 28V15Z" fill="${c1}" stroke="${c1}" stroke-width="2.4" stroke-linejoin="round"/>`), 'the cell in c1')
+  assert.ok(running.includes(`<path d="M16.5 10.5L13 3.6M23.5 10.5L27 3.6" stroke="${c1}"`), 'the stalks in c1')
+  assert.equal((running.match(/ r="2.1" fill="/g) ?? []).length, 2, 'two antenna lights')
+  assert.ok(running.indexOf('fill="#e0e7ff"') < running.indexOf('<path d="M20 8.5L31.3 15V28L20 34.5L8.7 28V15Z" fill='), 'the wings behind the body')
+  assert.equal((running.match(/<ellipse [^>]*fill="#e0e7ff" opacity=".95"\/>/g) ?? []).length, 2, 'two pale wings')
+  const clip = /<clipPath id="([^"]+)"><path d="M20 8.5L31.3 15V28L20 34.5L8.7 28V15Z"\/><\/clipPath>/.exec(running)?.[1]
+  assert.ok(clip, 'the cell as a clip')
+  assert.ok(running.includes(`<g clip-path="url(#${clip})"><rect x="5" y="25.2" width="30" height="2.6" fill="#fff" fill-opacity=".9"/><rect x="5" y="29.8" width="30" height="2.6" fill="#fff" fill-opacity=".55"/></g>`), 'the white stripes, as the icon has them')
+  assert.ok(running.includes('<rect x="11" y="14.5" width="18" height="9.5" rx="4.75" fill="#111"/>'), 'the visor')
+  // at work its lights are its own light colour, as a robot's are
+  assert.ok(running.includes(`cx="13" cy="3.6" r="2.1" fill="${c2}"`) && running.includes(`cx="27" cy="3.6" r="2.1" fill="${c2}"`))
+  // the robot's eye rule: the seed's bit 3 picks bars or round lamps (in its light colour), for the bee as for the robot
+  const ids = ['main', 'b81c6f3e2a9d4c17', 'c4d7e8f9a0b1263d', 'd2e3f4a5b6c7089a', 'aa11bb22cc33dd44', 'a3f9c2e1b7d4058e', 'e5f6a7b8c9d0142b', 'f1e2d3c4b5a6978c']
+  const kinds = new Set()
+  for (const id of ids) {
+    const isBar = ((A.pickOf(id) >> 3) & 1) === 1
+    const light = A.colorsOf({ id })[1]
+    kinds.add(isBar)
+    assert.equal(bee('running', id).includes(`<rect x="12.9" y="17.75" width="5.2" height="3" rx="1.5" fill="${light}"/>`), isBar, `${id}: bars`)
+    assert.equal(bee('running', id).includes(`<circle cx="15.5" cy="19.25" r="2.12" fill="${light}"/>`), !isBar, `${id}: round lamps`)
+    assert.equal(robot('running', id).includes('<rect x="13" y="17" width="5" height="3"'), isBar, `${id}: the robot's the same`)
+  }
+  assert.deepEqual(kinds, new Set([true, false]))
+  // the status faces and lights, the robot's
+  assert.ok(bee('waiting').includes('<g transform="translate(0 -1.5)">'), 'eyes up')
+  assert.ok(bee('waiting').includes(`r="2.1" fill="${A.LOOK_HUE.waiting}"`) && bee('waiting').includes(`r="4.3" fill="${A.LOOK_HUE.waiting}" opacity=".3"`), 'amber lights, glowing')
+  assert.ok(bee('done').includes('q2.5-4.4 5 0'), 'arc eyes')
+  assert.ok(bee('done').includes(`r="2.1" fill="${A.LOOK_HUE.done}"`), 'green lights')
+  assert.ok(bee('failed').includes('fill="#4c0d0d" stroke="#ef4444"'), 'a red visor')
+  assert.ok(bee('failed').includes('l3.8 3.8'), '✕ eyes')
+  assert.ok(bee('failed').includes(`r="2.1" fill="${A.LOOK_HUE.failed}"`), 'red lights')
+  assert.ok(bee('idle').includes('M13 19.75h5M22 19.75h5') && bee('idle').includes('opacity=".8"') && bee('idle').includes('r="2.1" fill="#71717a"'), 'closed eyes, dimmed, lights out')
+  assert.equal(bee('stopped'), bee('idle'))
+  assert.equal(bee('starting'), bee('running'))
+  assert.equal(new Set(['running', 'waiting', 'done', 'failed', 'idle'].map(status => bee(status))).size, 5)
+  // its status dot is the robot's: at its foot in its status's hue
+  assert.ok(A.avatarSvg('bee', { id: 'x', status: 'waiting' }).includes(`cx="33" cy="33" r="6" fill="${A.LOOK_HUE.waiting}" stroke="#141414" stroke-width="3"`))
+})
+
 test('an agent keeps its look: seeded by its id (its name only without one), the same document for the same input, its colours the state`s avatar index', () => {
   for (const style of A.STYLE_IDS) {
     const one = A.avatarSvg(style, { id: 'c4d7e8f9a0b1263d', name: 'tester', status: 'done' })
@@ -140,7 +186,7 @@ test('an agent keeps its look: seeded by its id (its name only without one), the
 
 test('ids are each document`s own: two agents, two statuses or two sizes never share one, and `id` names the prefix', () => {
   const idsOf = svg => [...svg.matchAll(/ (?:id|class)="([^"]+)"/g)].map(m => m[1].split('-')[0])
-  for (const style of ['bauhaus', 'blob', 'robot']) {
+  for (const style of ['bauhaus', 'blob', 'robot', 'bee']) {
     const seen = new Map()
     for (const agent of AGENTS.slice(0, 4)) {
       for (const status of ['running', 'done']) {
@@ -226,6 +272,9 @@ test('each style has its own one-character terminal face: mood and a ring follow
   assert.ok(A.BAUHAUS_GLYPHS.includes(of('bauhaus', builder, 'done').glyph))
   // a robot's head, one of four by its seed, in its deep colour
   assert.deepEqual(A.ROBOT_GLYPHS, ['⧇', '⧈', '◫', '⚇'])
+  // a bee a honeycomb cell, the icon's hexagon, in its deep colour, whatever its status (its mark says that)
+  assert.equal(A.BEE_GLYPH, '⬢')
+  for (const id of ['main', 'a1b2c3', 'f9e8d7']) for (const status of ['running', 'waiting', 'done', 'failed', 'idle']) assert.deepEqual(of('bee', { id }, status), { glyph: '⬢', color: A.colorsOf({ id })[0], mark: A.LOOK_MARK[status], markColor: A.LOOK_HUE[status] })
   const heads = Array.from({ length: 40 }, (_, i) => of('robot', { id: `agent-${i}` }, 'running'))
   for (const one of heads) assert.ok(A.ROBOT_GLYPHS.includes(one.glyph))
   assert.deepEqual(new Set(heads.map(one => one.glyph)), new Set(A.ROBOT_GLYPHS))
@@ -274,8 +323,44 @@ test('a robot moves as its status does, only when animated: scanning eyes, a bli
   assert.ok(!styleOf(robot('failed')).includes('infinite'))
 })
 
+test('a bee moves as a robot does, only when animated (its eyes scan and rise less in its smaller visor), and at work its wings flutter too; still under reduced motion', () => {
+  const bee = (status, animated = true) => A.avatarSvg('bee', { id: 'b81c6f3e2a9d4c17', name: 'builder', status }, { size: 22, dot: true, animated })
+  const styleOf = svg => /<style>(.*)<[/]style>/.exec(svg)?.[1] ?? ''
+  const prefix = svg => /^<svg [^>]*class="([^"]+)"/.exec(svg)[1]
+  const rules = {
+    running: ['-bob{animation:', '-scan 2.8s ease-in-out infinite', 'translateX(-1.8px)', 'translateX(1.8px)', '-blink 1.2s linear infinite', '-wl .3s ease-in-out infinite alternate', '-wr .3s ease-in-out infinite alternate', 'rotate(8deg)', 'rotate(-8deg)'],
+    starting: ['-scan 2.8s ease-in-out infinite', '-blink 1.2s linear infinite', '-wl .3s'],
+    waiting: ['-hop 3.2s ease-in-out infinite', '-look 3.2s', 'translateY(-0.8px)', '-pulse 1.6s ease-in-out infinite', '-halo{animation:', '-glow 1.6s'],
+    done: ['-settle .9s ease-out 1 both'],
+    failed: ['-shake .6s ease-in-out 1}'],
+    idle: ['-breathe 4.8s ease-in-out infinite'],
+    stopped: ['-breathe 4.8s ease-in-out infinite'],
+  }
+  for (const [status, wants] of Object.entries(rules)) {
+    const svg = bee(status)
+    const css = styleOf(svg)
+    const u = prefix(svg)
+    for (const want of wants) assert.ok(css.includes(want), `${status}: ${want}`)
+    // the wings flutter only at work; the status dot stays still, as a robot's does
+    assert.equal(css.includes('-wl{'), status === 'running' || status === 'starting', `${status}: wings`)
+    assert.ok(!css.includes('-ping'), `${status}: its dot still`)
+    for (const m of css.matchAll(/(?:^|[{}])[.]([\w-]+)|@keyframes ([\w-]+)/g)) {
+      const name = m[1] ?? m[2]
+      assert.ok(name.startsWith(`${u}-`) || name === u, `${status}: ${name} is under ${u}`)
+    }
+    assert.ok(css.endsWith(`@media (prefers-reduced-motion:reduce){.${u} *{animation:none!important}}`), `${status}: still under reduced motion`)
+    assert.ok(!bee(status, false).includes('<style>'), `${status} still`)
+    const bare = svg => svg.replace(/<style>.*<[/]style>/, '').replace(/(class|id)="av\w+|url\(#av\w+/g, '')
+    assert.equal(bare(bee(status, false)), bare(svg), `${status}: motion is all the difference`)
+  }
+  assert.ok(!styleOf(bee('done')).includes('infinite'))
+  assert.ok(!styleOf(bee('failed')).includes('infinite'))
+  // the robot's own motion is as it was
+  assert.ok(styleOf(A.avatarSvg('robot', { id: 'q', status: 'running' }, { animated: true })).includes('translateX(-2.6px)'))
+})
+
 test('the other styles move lightly, only when animated: their status dot pulses while at work, and a progress ring with no progress to show spins', () => {
-  for (const style of A.STYLE_IDS.filter(one => one !== 'robot')) {
+  for (const style of A.STYLE_IDS.filter(one => one !== 'robot' && one !== 'bee')) {
     for (const status of ['waiting', 'done', 'failed', 'idle']) {
       const svg = A.avatarSvg(style, { id: 'q', name: 'q', status }, { dot: true, animated: true })
       assert.ok(!svg.includes('<style>'), `${style} ${status} is still`)

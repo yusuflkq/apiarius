@@ -1,12 +1,14 @@
 /**
  * The avatars of Apiarius: one library for every surface that draws an agent.
  *
- * Ten styles, each an SVG document on a 40 by 40 grid, as the owner reviewed
- * them (2026-10-21): robot (the default), mood, critter, pixel, mono, orbit,
- * bauhaus, ring, glyph and blob. `avatarSvg(style, agent, opts)` is one whole
- * document: the agent's face, its status dot at its foot (a progress ring
- * says its status with the ring), every id in it its own, nothing outside it
- * referenced. A robot's and a mood face's expression follow the status.
+ * Eleven styles, each an SVG document on a 40 by 40 grid, as the owner reviewed
+ * them (2026-10-21): robot (the default), bee (2026-10-30: the app icon's,
+ * a honeycomb cell with a robot's visor, in the agent's colours), mood,
+ * critter, pixel, mono, orbit, bauhaus, ring, glyph and blob.
+ * `avatarSvg(style, agent, opts)` is one whole document: the agent's face,
+ * its status dot at its foot (a progress ring says its status with the
+ * ring), every id in it its own, nothing outside it referenced. A robot's,
+ * a bee's and a mood face's expression follow the status.
  *
  * With `animated`, a robot moves as its status does (CSS keyframes in the
  * document's own <style>, every name under its own prefix, all of it still
@@ -14,8 +16,9 @@
  * light blinks and it bobs; waiting on you its light pulses amber and it
  * looks up with a little hop every few seconds; done it settles once,
  * happy; failed it shakes once under its red visor; idle it breathes,
- * slow and dim. The other styles pulse their status dot while at work, and
- * a progress ring with no progress to show spins.
+ * slow and dim. A bee's face and motion are a robot's, and at work its
+ * wings flutter too. The other styles pulse their status dot while at
+ * work, and a progress ring with no progress to show spins.
  *
  * Who draws it:
  * - the web page imports this module (web/app.js) and shows each document
@@ -23,8 +26,8 @@
  * - the mod imports it too (hooks/ui/v2/look.tsx): the Desktop pane draws an
  *   Svg element as an image of the same document;
  * - the terminal draws no SVG: `terminalFace` is a character or two in the
- *   style (a ☻ for mood, a sun for the Orchestrator's orbit, a letter on
- *   its colour for mono), then its status mark.
+ *   style (a ☻ for mood, a ⬢ for a bee, a sun for the Orchestrator's orbit,
+ *   a letter on its colour for mono), then its status mark.
  *
  * A plain ES module with no DOM and no Node, so the mod's environment runs
  * it as a browser does (web/avatars.d.mts types it for the mod). Pure: the
@@ -35,6 +38,7 @@
 /** The styles, in the order a picker lists them, each with the name the owner saw it under. */
 export const STYLES = [
   { id: 'robot', name: 'Robots' },
+  { id: 'bee', name: 'Bees' },
   { id: 'mood', name: 'Mood faces' },
   { id: 'critter', name: 'Critters' },
   { id: 'pixel', name: 'Pixel sprites' },
@@ -77,6 +81,9 @@ export const GLYPHS = ['◆', '●', '▲', '■', '✦', '⬢', '★', '◉']
 
 /** Robots on the terminal: a head, one an agent, by its seed (an eye box, a square, a split screen, two eyes). */
 export const ROBOT_GLYPHS = ['⧇', '⧈', '◫', '⚇']
+
+/** A bee on the terminal: a honeycomb cell, the icon's hexagon, in the agent's deep colour. */
+export const BEE_GLYPH = '⬢'
 
 /** Bauhaus on the terminal: a half-filled shape, one an agent, by its seed. */
 export const BAUHAUS_GLYPHS = ['◧', '◩', '◭', '◓', '◨', '◪', '◮', '◒']
@@ -199,8 +206,10 @@ function idOf(value) {
  * A robot's motion for its look: its rules and keyframes, every name under
  * the document's prefix `u` (the classes the robot's groups carry: `-bob`
  * the whole robot, `-eyes`, `-lt` its antenna lights, `-halo` their glow).
+ * `scan` is how far its eyes look aside at work and `rise` how much further
+ * up they look waiting, in px of the 40 grid: a bee's visor is the smaller.
  */
-function robotMotion(u, look) {
+function robotMotion(u, look, scan = 2.6, rise = 1) {
   const at = name => `${u}-${name}`
   if (look === 'running') {
     return [
@@ -208,7 +217,7 @@ function robotMotion(u, look) {
       `.${at('eyes')}{animation:${at('scan')} 2.8s ease-in-out infinite}`,
       `.${at('lt')}{animation:${at('blink')} 1.2s linear infinite}`,
       `@keyframes ${at('bob')}{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.2px)}}`,
-      `@keyframes ${at('scan')}{0%,100%{transform:translateX(0)}25%{transform:translateX(-2.6px)}75%{transform:translateX(2.6px)}}`,
+      `@keyframes ${at('scan')}{0%,100%{transform:translateX(0)}25%{transform:translateX(-${scan}px)}75%{transform:translateX(${scan}px)}}`,
       `@keyframes ${at('blink')}{0%,49%{opacity:1}50%,100%{opacity:.25}}`,
     ].join('')
   }
@@ -219,7 +228,7 @@ function robotMotion(u, look) {
       `.${at('lt')}{animation:${at('pulse')} 1.6s ease-in-out infinite}`,
       `.${at('halo')}{animation:${at('glow')} 1.6s ease-in-out infinite}`,
       `@keyframes ${at('hop')}{0%,70%,100%{transform:translateY(0)}77%{transform:translateY(-2.2px)}84%{transform:translateY(0)}90%{transform:translateY(-1px)}96%{transform:translateY(0)}}`,
-      `@keyframes ${at('look')}{0%,68%,100%{transform:translateY(0)}76%,90%{transform:translateY(-1px)}}`,
+      `@keyframes ${at('look')}{0%,68%,100%{transform:translateY(0)}76%,90%{transform:translateY(-${rise}px)}}`,
       `@keyframes ${at('pulse')}{0%,100%{opacity:1}50%{opacity:.45}}`,
       `@keyframes ${at('glow')}{0%,100%{opacity:.08}50%{opacity:.6}}`,
     ].join('')
@@ -279,6 +288,82 @@ function robot(c) {
     '<rect x="15" y="27" width="10" height="2" rx="1" fill="#111" opacity=".5"/>',
   ].join('')
   return { body: `<g class="${u}-bob"${look === 'idle' ? ' opacity=".8"' : ''}>${parts}</g>`, isDotted: true, css: c.animated ? robotMotion(u, look) : '' }
+}
+
+/** A bee's body: a honeycomb cell, the app icon's hexagon. */
+const HEX = 'M20 8.5L31.3 15V28L20 34.5L8.7 28V15Z'
+
+/**
+ * A bee's motion: a robot's for its look (its eyes scan and rise less, its
+ * visor being the smaller), and at work its wings flutter, each turning a
+ * little about where it meets the body (`-wl` the left, `-wr` the right).
+ */
+function beeMotion(u, look) {
+  const at = name => `${u}-${name}`
+  const flutter =
+    look === 'running'
+      ? [
+          `.${at('wl')}{transform-origin:12px 16px;animation:${at('wl')} .3s ease-in-out infinite alternate}`,
+          `.${at('wr')}{transform-origin:28px 16px;animation:${at('wr')} .3s ease-in-out infinite alternate}`,
+          `@keyframes ${at('wl')}{to{transform:rotate(8deg)}}`,
+          `@keyframes ${at('wr')}{to{transform:rotate(-8deg)}}`,
+        ].join('')
+      : ''
+  return robotMotion(u, look, 1.8, 0.8) + flutter
+}
+
+/** A bee's eyes, open, as a robot's are by its seed (two bars or two round lamps), on the bee's smaller visor. */
+function beeEyes(c2, isBar) {
+  return isBar
+    ? `<rect x="12.9" y="17.75" width="5.2" height="3" rx="1.5" fill="${c2}"/><rect x="21.9" y="17.75" width="5.2" height="3" rx="1.5" fill="${c2}"/>`
+    : `<circle cx="15.5" cy="19.25" r="2.12" fill="${c2}"/><circle cx="24.5" cy="19.25" r="2.12" fill="${c2}"/>`
+}
+
+/**
+ * A bee, the app icon's (a honeycomb cell with a robot's visor) in the
+ * agent's own colours: its body and stalks deep, its eyes light, its wings
+ * pale behind it and its two stripes white, as the icon's are. Its face
+ * says its status as a robot's does, eyes picked by the same seed bit, its
+ * two antenna lights in the same hues.
+ */
+function bee(c) {
+  const { c1, c2, h, look, u } = c
+  const isBar = ((h >> 3) & 1) === 1
+  // the antenna lights: its own colour at work, the status hue when it waits, is done or failed, dim when idle (a robot's)
+  const light = look === 'running' ? c2 : look === 'idle' ? '#71717a' : LOOK_HUE[look]
+  const lamps = [[13, 3.6], [27, 3.6]]
+  const clip = `${u}-clip`
+  const wing = (x, turn) => `<ellipse cx="${x}" cy="17" rx="7.4" ry="4.4" transform="rotate(${turn} ${x} 17)" fill="#e0e7ff" opacity=".95"/>`
+  const halo = look === 'waiting' ? lamps.map(([x, y]) => `<circle class="${u}-halo" cx="${x}" cy="${y}" r="4.3" fill="${light}" opacity=".3"/>`).join('') : ''
+  const bulbs = lamps.map(([x, y]) => `<circle class="${u}-lt" cx="${x}" cy="${y}" r="2.1" fill="${light}"/>`).join('')
+  const visor = `<rect x="11" y="14.5" width="18" height="9.5" rx="4.75" ${look === 'failed' ? 'fill="#4c0d0d" stroke="#ef4444" stroke-width="1"' : `fill="${look === 'idle' ? '#18181b' : '#111'}"`}/>`
+  const eyes =
+    look === 'done'
+      ? `<path d="M13 20.95q2.5-4.4 5 0M22 20.95q2.5-4.4 5 0" stroke="${c2}" stroke-width="2" fill="none" stroke-linecap="round"/>`
+      : look === 'failed'
+        ? '<path d="M13.6 17.35l3.8 3.8M17.4 17.35l-3.8 3.8M22.6 17.35l3.8 3.8M26.4 17.35l-3.8 3.8" stroke="#fca5a5" stroke-width="1.8" stroke-linecap="round"/>'
+        : look === 'idle'
+          ? `<path d="M13 19.75h5M22 19.75h5" stroke="${c2}" stroke-width="1.8" stroke-linecap="round" opacity=".55"/>`
+          : look === 'waiting'
+            ? `<g transform="translate(0 -1.5)">${beeEyes(c2, isBar)}</g>`
+            : beeEyes(c2, isBar)
+  const parts = [
+    `<g class="${u}-wl">${wing(9, -18)}</g>`,
+    `<g class="${u}-wr">${wing(31, 18)}</g>`,
+    `<path d="M16.5 10.5L13 3.6M23.5 10.5L27 3.6" stroke="${c1}" stroke-width="2" stroke-linecap="round"/>`,
+    halo,
+    bulbs,
+    `<path d="${HEX}" fill="${c1}" stroke="${c1}" stroke-width="2.4" stroke-linejoin="round"/>`,
+    `<g clip-path="url(#${clip})"><rect x="5" y="25.2" width="30" height="2.6" fill="#fff" fill-opacity=".9"/><rect x="5" y="29.8" width="30" height="2.6" fill="#fff" fill-opacity=".55"/></g>`,
+    visor,
+    `<g class="${u}-eyes">${eyes}</g>`,
+  ].join('')
+  return {
+    defs: `<clipPath id="${clip}"><path d="${HEX}"/></clipPath>`,
+    body: `<g class="${u}-bob"${look === 'idle' ? ' opacity=".8"' : ''}>${parts}</g>`,
+    isDotted: true,
+    css: c.animated ? beeMotion(u, look) : '',
+  }
 }
 
 function mood(c) {
@@ -412,7 +497,7 @@ function blob(c) {
   }
 }
 
-const DRAW = { robot, mood, critter, pixel, mono, orbit, bauhaus, ring, glyph, blob }
+const DRAW = { robot, bee, mood, critter, pixel, mono, orbit, bauhaus, ring, glyph, blob }
 
 /** What a style draws for `agent` with `opts`: its context, then its parts (see the styles above). */
 function partsOf(style, agent, opts) {
@@ -437,7 +522,8 @@ function partsOf(style, agent, opts) {
   const extra = !animated
     ? ''
     : [
-        dotted && look === 'running' && which !== 'robot' ? `.${u}-dot{animation:${u}-ping 1.8s ease-in-out infinite}@keyframes ${u}-ping{0%,100%{fill-opacity:1}50%{fill-opacity:.4}}` : '',
+        // a robot and a bee move themselves and keep their dot still; the others' dot pulses at work
+        dotted && look === 'running' && which !== 'robot' && which !== 'bee' ? `.${u}-dot{animation:${u}-ping 1.8s ease-in-out infinite}@keyframes ${u}-ping{0%,100%{fill-opacity:1}50%{fill-opacity:.4}}` : '',
         drawn.isSpun ? `.${u}-spin{transform-origin:20px 20px;animation:${u}-spin 1.6s linear infinite}@keyframes ${u}-spin{to{transform:rotate(360deg)}}` : '',
       ].join('')
   const motion = (drawn.css ?? '') + extra
@@ -575,6 +661,7 @@ function initialOf(name, seed) {
  */
 const TERMINAL = {
   robot: c => ({ glyph: ROBOT_GLYPHS[pickOf(`${c.seed}r`) % ROBOT_GLYPHS.length], color: c.c1 }),
+  bee: c => ({ glyph: BEE_GLYPH, color: c.c1 }),
   mood: c => ({ glyph: c.look === 'done' || c.look === 'idle' ? '☺' : c.look === 'failed' ? '☹' : '☻', color: c.c1 }),
   critter: c => ({ glyph: 'ᴥ', color: c.c1 }),
   pixel: c => ({ glyph: brailleSprite(c.seed), color: c.c1 }),

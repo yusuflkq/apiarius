@@ -1656,7 +1656,7 @@ test('a live update keeps what you were doing: a half-typed message, an open fol
 
 // ---- Avatars
 
-test('the avatars are drawn in the state`s style (robots by default; one the page does not know, robots); Settings lists the ten, each with a preview, the one drawn checked, and a pick posts avatarStyle and draws it at once, until the state names it', async () => {
+test('the avatars are drawn in the state`s style (robots by default; one the page does not know, robots); Settings lists the eleven, each with a preview, the one drawn checked, and a pick posts avatarStyle and draws it at once, until the state names it', async () => {
   const p = page()
   const svgOf = v => decodeURIComponent(v.p.src.replace(/^data:image[/]svg[+]xml;charset=utf-8,/, ''))
   const face = () => svgOf(p.view("Avatar(IX.byId.get('main'), 24)"))
@@ -1671,10 +1671,10 @@ test('the avatars are drawn in the state`s style (robots by default; one the pag
   assert.ok(face().includes(MOOD))
   p.load(sample(s => { s.avatarStyle = 'plaid' }))
   assert.ok(face().includes(ROBOT))
-  // Settings: the ten styles, each with its sample faces drawn in it, the one drawn checked
+  // Settings: the eleven styles, each with its sample faces drawn in it, the one drawn checked
   p.load(sample(s => { s.avatarStyle = 'mood' }))
   const picks = () => find(p.view('AvatarSection()'), 'style-pick')
-  assert.deepEqual(picks().map(b => flat(textOf(b))), ['Robots', 'Mood faces', 'Critters', 'Pixel sprites', 'Monogram tiles', 'Orbits', 'Bauhaus', 'Progress rings', 'Terminal glyphs', 'Blob faces'])
+  assert.deepEqual(picks().map(b => flat(textOf(b))), ['Robots', 'Bees', 'Mood faces', 'Critters', 'Pixel sprites', 'Monogram tiles', 'Orbits', 'Bauhaus', 'Progress rings', 'Terminal glyphs', 'Blob faces'])
   const checked = () => picks().filter(b => b.p['aria-checked'] === 'true').map(b => flat(textOf(b)))
   assert.deepEqual(checked(), ['Mood faces'])
   for (const [i, b] of picks().entries()) {
@@ -1682,9 +1682,14 @@ test('the avatars are drawn in the state`s style (robots by default; one the pag
     assert.equal(faces.length, 3)
     assert.equal(svgOf(faces[0]), AVATARS.avatarSvg(AVATARS.STYLE_IDS[i], { id: 'bob', name: 'bob', role: '', status: 'done' }, { size: 30, dot: true, animated: false }))
   }
-  assert.deepEqual(picks().map(b => find(b, 'style-check').length), [0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+  assert.deepEqual(picks().map(b => find(b, 'style-check').length), [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])
+  // Bees: the app icon's honeycomb cell, in each sample's own colours
+  const three = [{ id: 'bob', name: 'bob', role: '', status: 'done' }, { id: 'helper', name: 'helper', role: '', status: 'running' }, { id: 'deck-1', name: 'deck', role: '', status: 'waiting' }]
+  const bees = findAll(picks()[1], v => v.t === 'img').map(svgOf)
+  assert.deepEqual(bees, three.map(a => AVATARS.avatarSvg('bee', a, { size: 30, dot: true, animated: false })))
+  for (const [i, a] of three.entries()) assert.ok(bees[i].includes(`<path d="M20 8.5L31.3 15V28L20 34.5L8.7 28V15Z" fill="${AVATARS.colorsOf(a)[0]}"`))
   // a pick: the command goes, and the page draws it at once
-  click(picks()[2])
+  click(picks()[3])
   await settle()
   const sent = p.commands().at(-1)
   assert.equal(sent.cmd, 'avatarStyle')
@@ -1699,7 +1704,7 @@ test('the avatars are drawn in the state`s style (robots by default; one the pag
   assert.equal(p.run('styleNow()'), 'blob')
   // picking the one drawn sends nothing
   const count = p.commands().length
-  click(picks()[9])
+  click(picks()[10])
   await settle()
   assert.equal(p.commands().length, count)
 })

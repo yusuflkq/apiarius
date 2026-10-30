@@ -2,7 +2,7 @@
  * Settings (key 6): the deck's own choices, top to bottom (the session's
  * depth, Inspect, is a tab of its own: ./inspect):
  *
- * - Avatar style: the ten styles of web/avatars.mjs, each its name beside
+ * - Avatar style: the eleven styles of web/avatars.mjs, each its name beside
  *   the page's three sample agents drawn in it (one done, one at work, one
  *   waiting on you, each with its status dot; one character each on the
  *   terminal), the one drawn marked; a press draws every agent in it from
@@ -70,7 +70,7 @@ const TERMINAL_CHIP_CELLS = 22
 const PICKED = P.runText
 
 /**
- * The avatars' style: the ten, in rows of as many as fit (about 28 cells
+ * The avatars' style: the eleven, in rows of as many as fit (about 28 cells
  * each where Svg draws, 22 on the terminal), the one drawn marked. Where Svg
  * draws, each a bordered chip, the three samples drawn in its style beside
  * its name, the one drawn ringed and ticked; on the terminal, each a radio
