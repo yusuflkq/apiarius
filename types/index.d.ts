@@ -788,11 +788,5 @@ declare module 'claude-code' {
       /** The web deck: on for the session after /apiarius web, its server's token, port and folder, so a reload starts it again where it was. */
       web: DeckWebSaved
     }
-    /** The same values under the mod's name before Apiarius: a session open across the rename reads its own there, while `apiarius` holds none. Never written. */
-    'agent-deck': {
-      snapshot: DeckSnapshot
-      repo: string
-      web: DeckWebSaved
-    }
   }
 }

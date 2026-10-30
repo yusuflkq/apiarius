@@ -58,14 +58,6 @@ import * as W from './web'
 
 const PANE = 'apiarius'
 const SNAPSHOT = { plugin: 'apiarius', key: 'snapshot' } as const
-/**
- * `$.state` keeps a session's values by plugin name, and the mod was
- * `agent-deck` before it was Apiarius: a session open across the rename finds
- * its snapshot, web deck and pin there, read once while `apiarius` holds none.
- */
-const OLD_SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
-const OLD_WEB_STATE = { plugin: 'agent-deck', key: 'web' } as const
-const OLD_REPO_PIN = { plugin: 'agent-deck', key: 'repo' } as const
 
 let data: DeckData = M.emptyData(0)
 let view: DeckView = M.defaultView()
@@ -903,7 +895,7 @@ async function enginePidOf($: EngineInterface): Promise<string> {
  */
 async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
   try {
-    const value = (await $.state.get(WEB_STATE)).value ?? (await $.state.get(OLD_WEB_STATE)).value
+    const { value } = await $.state.get(WEB_STATE)
     if (value && value.isOn === true && typeof value.token === 'string' && value.token !== '' && epoch === web.epoch) {
       web.isOn = true
       web.token = value.token
@@ -1114,38 +1106,6 @@ async function repoFromPage($: EngineInterface, root: string, ackId: string): Pr
 /** Keeps the person's own settings in the store (`prefs`), for every session: the band hidden or not, and the avatar style. */
 function savePrefs($: EngineInterface) {
   void $.store.set('prefs', { isBandHidden: view.isBandHidden, avatarStyle: view.avatarStyle }).catch(() => undefined)
-}
-
-/**
- * The person's prefs (`$.store`), else those the mod kept before it was
- * Apiarius, copied over once. A plugin's store is a file named after it,
- * `<config>/plugins/store/<name>_<source>.json`, so the old prefs lie in an
- * `agent-deck_*.json` there (the newest, when there are several).
- */
-async function prefsOf($: EngineInterface): Promise<unknown> {
-  const prefs = await $.store.get('prefs')
-  if (prefs !== undefined) return prefs
-  try {
-    const read = async (get: () => Promise<string | undefined>) => {
-      try {
-        return await get()
-      } catch {
-        return undefined
-      }
-    }
-    const home = (await read(() => $.env.get('USERPROFILE'))) ?? (await read(() => $.env.get('HOME')))
-    const config = SE.configDirOf({ configDir: await read(() => $.env.get('CLAUDE_CONFIG_DIR')), home })
-    if (config === '') return undefined
-    const dir = `${config}/plugins/store`
-    const old = (await $.fs.list(dir)).filter(one => one.kind === 'file' && /^agent-deck_.+\.json$/.test(one.name)).sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
-    if (!old) return undefined
-    const kept: unknown = (JSON.parse(await $.fs.read(`${dir}/${old.name}`)) as { prefs?: unknown }).prefs
-    if (kept && typeof kept === 'object') await $.store.set('prefs', kept)
-    return kept
-  } catch {
-    // no old store, or one it cannot read: the defaults stand
-    return undefined
-  }
 }
 
 /**
@@ -1537,7 +1497,7 @@ function takeDeckPrompt(text: string): boolean {
 
 async function restore($: EngineInterface, now: number): Promise<boolean> {
   try {
-    const value = (await $.state.get(SNAPSHOT)).value ?? (await $.state.get(OLD_SNAPSHOT)).value
+    const { value } = await $.state.get(SNAPSHOT)
     if (value && value.v === M.SNAPSHOT_VERSION) {
       data = M.healData(M.copyOf(value.data), now)
       B.heal(data)
@@ -1633,7 +1593,7 @@ async function startRepos($: EngineInterface): Promise<void> {
   R.setCwd(book, cwd)
   for (const edit of data.edits) R.noteEdit(book, edit.abs, edit.at)
   try {
-    const value = (await $.state.get(REPO_PIN)).value ?? (await $.state.get(OLD_REPO_PIN)).value
+    const { value } = await $.state.get(REPO_PIN)
     if (typeof value === 'string') {
       book.pinned = value
       savedPin = value
@@ -3317,7 +3277,7 @@ export const register: Register = on => {
     if (startedAs !== '') noteStart(startedAs)
 
     try {
-      const prefs = await prefsOf($)
+      const prefs = await $.store.get('prefs')
       if (prefs && typeof prefs === 'object' && 'isBandHidden' in prefs) view.isBandHidden = Boolean((prefs as { isBandHidden: unknown }).isBandHidden)
       // the avatar style is the person's own: it holds in every session (robots until they pick another)
       if (prefs && typeof prefs === 'object' && 'avatarStyle' in prefs) view.avatarStyle = AV.styleOf((prefs as { avatarStyle: unknown }).avatarStyle)
