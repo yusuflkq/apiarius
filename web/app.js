@@ -3581,11 +3581,11 @@ function OwnEdit(e, own, isNewest, isOneOfMany) {
     open && PatchView(e.id, `agent:${own.a.id}`));
 }
 
-/** "Calls only · With their words": what an agent's Activity lists, kept for every drawer. */
+/** "Calls only · With responses": what an agent's Activity lists, kept for every drawer. */
 function WordsToggle() {
   const set = on => { ui.actWords = on; store.set('actView', on ? 'words' : 'calls'); renderNow(); };
   const Toggle = (on, label) => h('button', { key: label, type: 'button', class: ui.actWords === on ? 'on' : '', 'aria-pressed': ui.actWords === on ? 'true' : 'false', onClick: () => set(on) }, h('span', null, label));
-  return h('div', { class: 'seg-toggle seg-sm', role: 'group', 'aria-label': 'Activity shows' }, Toggle(false, 'Calls only'), Toggle(true, 'With their words'));
+  return h('div', { class: 'seg-toggle seg-sm', role: 'group', 'aria-label': 'Activity shows' }, Toggle(false, 'Calls only'), Toggle(true, 'With responses'));
 }
 
 /**

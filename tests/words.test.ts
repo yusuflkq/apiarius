@@ -350,7 +350,7 @@ async function entriesOf(ui: Drawing): Promise<string[]> {
   return (await ui.findAll({ type: 'Box' })).map(one => one.key ?? '').filter(key => /^page:(call|said|thought):/.test(key))
 }
 
-test('the pane and the terminal: builder`s Activity lays its words and its thought between its calls, newest first, under Calls only · With their words; Calls only leaves them out and the view keeps it', async ($, on) => {
+test('the pane and the terminal: builder`s Activity lays its words and its thought between its calls, newest first, under Calls only · With responses; Calls only leaves them out and the view keeps it', async ($, on) => {
   await demo($, on)
   for (const surface of SURFACES) {
     const ui = (await $.ui.mount(pane(surface))) as unknown as Drawing
@@ -361,7 +361,7 @@ test('the pane and the terminal: builder`s Activity lays its words and its thoug
     expect((await ui.find({ key: 'page:activity' }))?.text).toContain('5 tool calls')
     expect((await entriesOf(ui)).length).toBe(13)
     expect((await ui.find({ key: 'page:words:calls' }))?.props).toMatchObject({ label: 'Calls only', plain: true, dimColor: true })
-    expect((await ui.find({ key: 'page:words:with' }))?.props).toMatchObject({ label: 'With their words', plain: true, dimColor: false })
+    expect((await ui.find({ key: 'page:words:with' }))?.props).toMatchObject({ label: 'With responses', plain: true, dimColor: false })
     const log = (await ui.find({ key: 'page:log' }))?.text ?? ''
     // each call by its own description, else its target
     const order = ['“Nothing there yet.', 'rateLimit.ts', '“The limiter is in.', 'src/app.ts', '“Both stores pass', 'Push the limiter', `${THOUGHT_WORD}  Auto mode refused`, "“I won't push.", 'bench.js', '“Running the limiter tests', 'Run the limiter tests'].reverse()

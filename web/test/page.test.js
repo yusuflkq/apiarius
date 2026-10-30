@@ -1868,9 +1868,9 @@ test('the drawer`s Activity lays an agent`s words and its thinking between its c
   assert.ok(!flat(textOf(drawer())).includes('Thinking, as Claude Code shows it'))
   const notes = () => find(drawer(), 'block-note').map(one => flat(textOf(one)))
   assert.equal(notes().filter(one => one.includes('thinking as Claude Code shows it, which may be a summary')).length, 1)
-  // the switch, at Activity's head: with their words by default
+  // the switch, at Activity's head: with responses by default
   const toggle = () => find(drawer(), 'seg-sm')[0]
-  assert.deepEqual([...toggle().c].map(b => [flat(textOf(b)), b.p.class]), [['Calls only', ''], ['With their words', 'on']])
+  assert.deepEqual([...toggle().c].map(b => [flat(textOf(b)), b.p.class]), [['Calls only', ''], ['With responses', 'on']])
   click(toggle().c[0])
   assert.deepEqual(log(), ['act', 'act', 'act is-fail', 'act', 'act'])
   assert.equal(notes().filter(one => one.includes('may be a summary')).length, 0)

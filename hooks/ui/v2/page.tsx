@@ -437,14 +437,14 @@ function activityPart(kit: Kit, state: WebStateV2, files: V2Files, row: V2AgentR
   )
 }
 
-/** The "Calls only · With their words" switch at Activity's head: two plain Buttons, the one shown lit; the pick stays in the view (`activityView`). */
+/** The "Calls only · With responses" switch at Activity's head: two plain Buttons, the one shown lit; the pick stays in the view (`activityView`). */
 function wordsSwitch(kit: Kit, withWords: boolean, actions: DashActions): RenderElement {
   const { Box, Text, Button } = kit
   return (
     <Box key="page:words" flexDirection="row" columnGap={1}>
       <Button key="page:words:calls" label="Calls only" plain dimColor={withWords} onPress={() => actions.setV2View({ activityView: 'calls' })} />
       <Text color={P.muted3}>·</Text>
-      <Button key="page:words:with" label="With their words" plain dimColor={!withWords} onPress={() => actions.setV2View({ activityView: 'words' })} />
+      <Button key="page:words:with" label="With responses" plain dimColor={!withWords} onPress={() => actions.setV2View({ activityView: 'words' })} />
     </Box>
   )
 }
