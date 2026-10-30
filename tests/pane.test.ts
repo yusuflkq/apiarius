@@ -6,7 +6,7 @@
  * in tests/now.test.ts);
  * an agent's page and Back; Changes; Inspect and help; and the band's one
  * line (Chat's own tests are in tests/chat.test.ts). Drawn by the deck
- * itself (`/deck demo` over the v2 sample, `/deck` over a live session),
+ * itself (`/apiarius demo` over the v2 sample, `/apiarius` over a live session),
  * or a piece by itself (`probe`).
  */
 import type { On } from 'claude-code'
@@ -22,14 +22,14 @@ const SURFACES = ['terminal', 'desktop'] as const
 type Surface = 'terminal' | 'desktop' | 'vscode' | 'mobile'
 
 /** The deck's pane as a surface lays it out, `bodyColumns` across. */
-function pane<S extends Surface>(surface: S, bodyColumns = 84, requestId = 'agent-deck') {
+function pane<S extends Surface>(surface: S, bodyColumns = 84, requestId = 'apiarius') {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
     requestId,
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -41,7 +41,7 @@ async function press(ui: Drawing, key: string) {
   await ui.redraw()
 }
 
-/** The v2 sample as `/deck demo` reads it: the sample session's state and its agent files, patches and cut messages. */
+/** The v2 sample as `/apiarius demo` reads it: the sample session's state and its agent files, patches and cut messages. */
 function sample(on: On) {
   const session = v2Session()
   const v2 = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
@@ -62,7 +62,7 @@ function sample(on: On) {
   return v2
 }
 
-/** The engine, the v2 sample read, and `/deck demo` shown. */
+/** The engine, the v2 sample read, and `/apiarius demo` shown. */
 async function demo($: Engine, on: On, w: World = newWorld()) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const v2 = sample(on)
@@ -310,7 +310,7 @@ test('5 opens Inspect, its sections folded to one line each, and Spend (the cont
     await press(ui, 'tab:settings')
     expect((await ui.find({ key: 'tab:settings' }))?.props.dimColor).toBe(false)
     expect(await ui.find({ key: 'inspect:tile:context' })).toBeUndefined()
-    // the web page: off, a Button starts it (as /deck web)
+    // the web page: off, a Button starts it (as /apiarius web)
     expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Start the web page')
     expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
     // Help: each tab, then the keys that are left
@@ -336,7 +336,7 @@ test('5 opens Inspect, its sections folded to one line each, and Spend (the cont
   }
 })
 
-test('the band: one line while an agent is at work or something needs you, its words the state`s, and /deck opens Now', async ($, on) => {
+test('the band: one line while an agent is at work or something needs you, its words the state`s, and /apiarius opens Now', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -344,14 +344,14 @@ test('the band: one line while an agent is at work or something needs you, its w
   await clock.advance(1000)
   const BAND = { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {} }
   for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'AbovePrompt', props: BAND })
+    const ui = await $.ui.mount({ plugin: 'apiarius', surface, component: 'AbovePrompt', props: BAND })
     expect(JSON.stringify(await ui.drawn())).toContain('1 working')
-    expect((await ui.find({ key: 'band:open' }))?.props).toMatchObject({ label: '/deck', plain: true })
+    expect((await ui.find({ key: 'band:open' }))?.props).toMatchObject({ label: '/apiarius', plain: true })
     expect((await ui.find({ key: 'band:open' }))?.props.hotkey).toBeUndefined()
     await ui.unmount()
   }
   await $.command.run(deck('chat'))
-  const band = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'AbovePrompt', props: BAND })
+  const band = await $.ui.mount({ plugin: 'apiarius', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   await band.press({ key: 'band:open' })
   const ui = await $.ui.mount(pane('terminal'))
   expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(false)

@@ -36,7 +36,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /** Starts a server over `dir` with `args`; resolves with its port and the lines it printed after its ready line. */
 function start(dir, args = []) {
-  const child = spawn(process.execPath, [SERVER, '--dir', dir, ...args], { env: { ...process.env, AGENT_DECK_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(process.execPath, [SERVER, '--dir', dir, ...args], { env: { ...process.env, APIARIUS_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   children.add(child)
   const server = { child, port: 0, lines: [] }
   let buffer = ''
@@ -289,14 +289,14 @@ test('All sessions (#/sessions): "This machine" and what needs you counted, then
   assert.equal(byClass(notes, 'dot-quiet').length, 1)
   assert.equal(flat(textOf(notes)), 'Notes sync Desktop · notes · Last heard 2m ago ≈$0.31 2h')
   // its agents' faces while they work, each as its own deck draws it (its id the seed, its title the name), its agents under them; a fork's spend began at the session it was forked from: "incl. its parent's" under it, as the mod words it
-  const faces = rows.find(row => flat(textOf(row)).includes('Agent Deck terminal faces'))
+  const faces = rows.find(row => flat(textOf(row)).includes('Apiarius terminal faces'))
   assert.match(faces.p.class, /\bis-fork\b/)
   assert.equal(byClass(faces, 'sess-faces').length, 1)
   assert.equal(byClass(faces, 'sess-faces')[0].p.title, '2 agents working')
   assert.equal(flat(textOf(byClass(faces, 'sess-face')[0])), '2 agents')
-  const theirs = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', byTitle('Agent Deck terminal faces').dir, 'state.json'), 'utf8')).agents.filter(a => a.row === 'agent' && a.kind !== 'orchestrator' && a.status === 'running')
+  const theirs = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', byTitle('Apiarius terminal faces').dir, 'state.json'), 'utf8')).agents.filter(a => a.row === 'agent' && a.kind !== 'orchestrator' && a.status === 'running')
   assert.deepEqual(theirs.map(a => a.title), ['builder', 'painter'])
-  assert.deepEqual(JSON.parse(p.run(`JSON.stringify(facesOf(sessionsNow().rows.find(r => r.title === 'Agent Deck terminal faces')))`)), { faces: theirs.map(a => ({ id: a.id, title: a.title, status: 'running' })), more: 0 })
+  assert.deepEqual(JSON.parse(p.run(`JSON.stringify(facesOf(sessionsNow().rows.find(r => r.title === 'Apiarius terminal faces')))`)), { faces: theirs.map(a => ({ id: a.id, title: a.title, status: 'running' })), more: 0 })
   // the Orchestrator at work alone: its word and dot say it works, and no face stands for it
   const ci = rows.find(row => flat(textOf(row)).includes('Fix the flaky CI job'))
   assert.match(flat(textOf(ci)), / Working ≈\$0\.64 /)
@@ -310,12 +310,12 @@ test('All sessions (#/sessions): "This machine" and what needs you counted, then
 
 test('All sessions in Monogram tiles: a row draws only its own agents at work, each with the letters its deck gives it ("Bl", "Pn"); a session whose Orchestrator alone works draws no face, nothing of its title ("lemme see…") made one; an earlier mod`s row that names no agents draws none, whatever it counts', () => {
   const solo = { ...SESSIONS.view.rows.find(r => r.title === 'Fix the flaky CI job'), id: 'solo-1', title: 'lemme see the sessions', faces: [] }
-  const older = { ...SESSIONS.view.rows.find(r => r.title === 'Agent Deck terminal faces'), id: 'older-2', title: 'An earlier mod', faces: undefined }
+  const older = { ...SESSIONS.view.rows.find(r => r.title === 'Apiarius terminal faces'), id: 'older-2', title: 'An earlier mod', faces: undefined }
   const p = page({ hash: '#/sessions' })
   p.load({ ...LIVE, avatarStyle: 'mono', sessions: { ...SESSIONS.view, rows: [...SESSIONS.view.rows, solo, older] } })
   const rows = byClass(p.run('Page()'), 'sess-row')
   const svgOf = row => findAll(row, one => one.t === 'img').map(img => decodeURIComponent(img.p.src.replace(/^data:image[/]svg[+]xml;charset=utf-8,/, '')))
-  const faces = rows.find(row => flat(textOf(row)).includes('Agent Deck terminal faces'))
+  const faces = rows.find(row => flat(textOf(row)).includes('Apiarius terminal faces'))
   const [stack] = svgOf(byClass(faces, 'sess-face')[0])
   assert.deepEqual([...stack.matchAll(/>([^<>]+)<\/text>/g)].map(m => m[1]), ['Bl', 'Pn'])
   for (const title of ['lemme see the sessions', 'An earlier mod']) {
@@ -489,7 +489,7 @@ test('steering another session from the page: every command about it goes with i
   // a deck that reads no inbox (an older build): said before a press, at each control; a press sends nothing
   p.go(`#/s/${NOTES.id}/now`)
   await settle()
-  const why = "Its deck isn't answering: it runs an older Agent Deck."
+  const why = "Its deck isn't answering: it runs an older Apiarius."
   assert.deepEqual(JSON.parse(p.run('JSON.stringify(S.peer)')), { where: 'Desktop · notes', canSteer: false, why })
   assert.equal(p.run('S.needs.some(n => n.isAnswerable)'), false)
   const before = sent().length

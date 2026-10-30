@@ -898,7 +898,7 @@ export function timelineView(kit: Kit, timeline: V2Timeline | null, state: Pick<
       ) : null}
     </Box>
   )
-  const more = layout.more > 0 ? quiet(kit, `and ${plural(layout.more, 'more agent')}, started earlier: /deck web shows them all.`) : null
+  const more = layout.more > 0 ? quiet(kit, `and ${plural(layout.more, 'more agent')}, started earlier: /apiarius web shows them all.`) : null
   const width = Math.floor(kit.columns * CELL_PX) - 4
   const legend = Svg ? legendSvg(keys, width) : null
   return (

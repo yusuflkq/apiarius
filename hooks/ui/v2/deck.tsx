@@ -120,7 +120,7 @@ function header(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
 }
 
 /**
- * The web deck (`/deck web`) in one line, while it is on and has something
+ * The web deck (`/apiarius web`) in one line, while it is on and has something
  * to say: starting, why it could not start, or its link where the Browser
  * pane could not open it. Nothing once the page is open, or while it is off.
  */
@@ -135,7 +135,7 @@ function webLine(kit: Kit, web: WebPane): RenderElement | null {
     )
   }
   if (web.status !== 'running' || web.url === '' || web.opened === 'opened') return null
-  return <Markdown key="web:link" text={`[Open Agent Deck](${web.url}) in the Browser pane`} />
+  return <Markdown key="web:link" text={`[Open the Apiarius deck](${web.url}) in the Browser pane`} />
 }
 
 /** The tabs (1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Inspect · 6 Settings, the open one lit). A tab pressed on a page leaves it for that tab, and closes the list of sessions. */

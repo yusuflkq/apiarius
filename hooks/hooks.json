@@ -1,4 +1,4 @@
 {
-  "description": "Agent Deck: the /deck pane (Agents, Changes, Stats), agent and edit tracking, and the live agents band above the prompt",
+  "description": "Apiarius: the /apiarius pane (Agents, Changes, Stats), agent and edit tracking, and the live agents band above the prompt",
   "modules": ["./register.tsx"]
 }

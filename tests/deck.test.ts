@@ -8,7 +8,7 @@ const HASH = 'a'.repeat(40)
 const NOW = 1_700_000_100_000
 
 const PANE = {
-  title: 'Agent Deck',
+  title: 'Apiarius',
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
@@ -18,9 +18,9 @@ const PANE = {
 
 const VIEWPORT = { columns: 100, rows: 400, isFullscreen: true }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
 /** An Agent tool call's spawn, with the fields the engine fills in. */
@@ -116,7 +116,7 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
-test('/deck opens the pane on the Dashboard; Changes shows git`s files (one opened to git`s own diff) and the commit log; /deck stats lands on Inspect and /deck classic on the Dashboard, on each surface', async ($, on) => {
+test('/apiarius opens the pane on the Dashboard; Changes shows git`s files (one opened to git`s own diff) and the commit log; /apiarius stats lands on Inspect and /apiarius classic on the Dashboard, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)
 
@@ -126,7 +126,7 @@ test('/deck opens the pane on the Dashboard; Changes shows git`s files (one open
   await clock.advance(1000)
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
+    const ui = await $.ui.mount({ plugin: 'apiarius', surface, component: 'Pane', requestId: 'apiarius', viewport: VIEWPORT, props: PANE })
     expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(false)
     // before the first prompt the header says so; the Orchestrator is the tree's one row
     expect((await ui.find({ key: 'deck:header' }))?.text).toContain('No request yet')
@@ -176,7 +176,7 @@ test('a subagent shows as a card, its page has its task and the Orchestrator`s p
   await clock.advance(1000)
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
+    const ui = await $.ui.mount({ plugin: 'apiarius', surface, component: 'Pane', requestId: 'apiarius', viewport: VIEWPORT, props: PANE })
     expect((await ui.find({ key: 'agent:agent-x1' }))?.props).toMatchObject({ label: 'scout', plain: true })
 
     await ui.press({ key: 'agent:main' })
@@ -209,7 +209,7 @@ test('a subagent shows as a card, its page has its task and the Orchestrator`s p
   expect(sent.map(one => one.text)).toEqual(['from the page on terminal', 'hello from terminal', 'from the page on desktop', 'hello from desktop'])
 
   await $.turn.complete({ turnId: 't2', answer: 'Found it: b was 2.', durationMs: 1500, isAborted: false, reason: 'answer', agentId: 'agent-x1' })
-  const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
+  const ui = await $.ui.mount({ plugin: 'apiarius', surface: 'terminal', component: 'Pane', requestId: 'apiarius', viewport: VIEWPORT, props: PANE })
   // done: behind "1 finished ▸", which opens on its card; the card says so and what it handed back, and opens its page
   expect(await ui.find({ key: 'card:agent-x1' })).toBeUndefined()
   expect((await ui.find({ key: 'finished:now:fold' }))?.text).toBe('1 finished ▸')

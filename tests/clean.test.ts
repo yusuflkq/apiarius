@@ -19,9 +19,9 @@ function pasted(id: string, body: string): string {
 /** Five lines of the web deck's activity, pasted. */
 const BLOB = ['Bash', "Record the native deck's state and lessons in project notes", '926ms', '10m', 'SendMessage'].join('\n')
 
-/** What Claude Code records for a local command (`/deck web`), as a transcript holds it. */
+/** What Claude Code records for a local command (`/apiarius web`), as a transcript holds it. */
 const CAVEAT = "<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, and its output goes straight to the user. It's recorded here as context for later messages.</local-command-caveat>"
-const ECHO = '<command-name>/deck</command-name>\n            <command-message>deck</command-message>\n            <command-args>web</command-args>'
+const ECHO = '<command-name>/apiarius</command-name>\n            <command-message>apiarius</command-message>\n            <command-args>web</command-args>'
 const STDOUT = '<local-command-stdout>Dashboard at http://127.0.0.1:54800/?t=x</local-command-stdout>'
 const REMINDER = "<system-reminder>\nThe task tools haven't been used recently.\n</system-reminder>"
 
@@ -141,7 +141,7 @@ test('restored: a snapshot an earlier build kept with the tags reads as you wrot
   expect(data.goals[0]).toMatchObject({ headline: '[pasted text, 2 lines]', text: '[pasted text, 2 lines]\nfix this', followUps: [{ text: 'and [pasted text] too', at: NOW + 1 }] })
   expect(data.messages.map(one => [one.id, one.kind, one.to, one.text])).toEqual([
     ['m1', 'prompt', M.MAIN, 'fix this\n[pasted text, 2 lines]'],
-    ['m2', 'command', '', '/deck web'],
+    ['m2', 'command', '', '/apiarius web'],
     ['m3', 'answer', M.YOU, 'Kept <pasted_content> as it came'],
   ])
 
@@ -157,8 +157,8 @@ test('restored: a snapshot an earlier build kept with the tags reads as you wrot
 test('a slash command run alone is the command you ran, no words of yours: no goal, a `command` row to nobody ("/login"), never a prompt; a command with words of yours around it stays your prompt', () => {
   expect(M.commandLineOf('/login')).toBe('/login')
   expect(M.commandLineOf('  /plugin:skill \n')).toBe('/plugin:skill')
-  expect(M.commandLineOf(`${CAVEAT}\n${ECHO}`)).toBe('/deck web')
-  expect(M.commandLineOf(`${ECHO}\n${STDOUT}`)).toBe('/deck web')
+  expect(M.commandLineOf(`${CAVEAT}\n${ECHO}`)).toBe('/apiarius web')
+  expect(M.commandLineOf(`${ECHO}\n${STDOUT}`)).toBe('/apiarius web')
   for (const words of ['/review the diff', '/tmp/out.txt is empty', 'please /login again', 'login', REMINDER, '']) expect(M.commandLineOf(words), words).toBe('')
   expect(M.commandOf({ name: 'review', args: ' the \n diff ' })).toBe('/review the diff')
   expect(M.commandOf({ name: 'login', args: '' })).toBe('/login')
@@ -173,7 +173,7 @@ test('a slash command run alone is the command you ran, no words of yours: no go
   M.addPrompt(data, { text: 'fix the /login page', at: NOW + 3 })
   expect(data.messages.map(one => [one.from, one.to, one.kind, one.text])).toEqual([
     [M.YOU, '', 'command', '/login'],
-    [M.YOU, '', 'command', '/deck web'],
+    [M.YOU, '', 'command', '/apiarius web'],
     [M.YOU, '', 'command', '/review the diff'],
     [M.YOU, M.MAIN, 'prompt', 'fix the /login page'],
   ])

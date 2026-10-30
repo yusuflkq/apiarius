@@ -7,7 +7,7 @@ const HASH = 'b'.repeat(40)
 const NOW = 1_700_000_100_000
 
 const PANE = {
-  title: 'Agent Deck',
+  title: 'Apiarius',
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
@@ -17,9 +17,9 @@ const PANE = {
 
 const VIEWPORT = { columns: 100, rows: 50, isFullscreen: true }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
 /** The repositories on this make-believe disk, by root as git prints it: branch, and what status and numstat print there. */
@@ -27,7 +27,7 @@ const DISK: Record<string, { branch: string; status: string; numstat: string }> 
   '/repo': { branch: 'main', status: ' M src/app.ts\0?? notes.txt\0', numstat: '1\t1\tsrc/app.ts\0' },
   '/other': { branch: 'dev', status: ' M lib/x.ts\0', numstat: '3\t0\tlib/x.ts\0' },
   'C:/Users/Me/proj': { branch: 'trunk', status: ' M src/app.ts\0', numstat: '1\t1\tsrc/app.ts\0' },
-  'C:/Users/Me/Documents/agent-deck': { branch: 'main', status: ' M hooks/repos.ts\0', numstat: '2\t1\thooks/repos.ts\0' },
+  'C:/Users/Me/Documents/apiarius': { branch: 'main', status: ' M hooks/repos.ts\0', numstat: '2\t1\thooks/repos.ts\0' },
   'C:/Users/Me/Documents/site': { branch: 'main', status: ' M index.html\0', numstat: '1\t1\tindex.html\0' },
 }
 
@@ -119,7 +119,7 @@ function edit(file: string) {
 }
 
 function pane(surface: 'terminal' | 'desktop') {
-  return { plugin: 'agent-deck', surface, component: 'Pane' as const, requestId: 'agent-deck', viewport: VIEWPORT, props: PANE }
+  return { plugin: 'apiarius', surface, component: 'Pane' as const, requestId: 'apiarius', viewport: VIEWPORT, props: PANE }
 }
 
 const isProbe = (run: Run) => run.line.includes('rev-parse --show-toplevel')
@@ -212,7 +212,7 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   const clock = mock.clock(on, { now: NOW })
   const runs: Run[] = []
   const lists: string[] = []
-  const repos = ['agent-deck', 'site', ...Array.from({ length: 8 }, (_, i) => `old${i}`)]
+  const repos = ['apiarius', 'site', ...Array.from({ length: 8 }, (_, i) => `old${i}`)]
   const folder: Folder = {
     dir: 'C:/Users/Me/Documents',
     children: ['notes', ...repos, '.config', 'node_modules', 'todo.md'],
@@ -225,13 +225,13 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   await $.command.run(deck('changes'))
   await clock.advance(1000)
 
-  const offered = ['agent-deck', 'site', 'old0', 'old1', 'old2', 'old3', 'old4', 'old5'].map(name => `changes:pick:C:/Users/Me/Documents/${name}`)
+  const offered = ['apiarius', 'site', 'old0', 'old1', 'old2', 'old3', 'old4', 'old5'].map(name => `changes:pick:C:/Users/Me/Documents/${name}`)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount(pane(surface))
     expect((await ui.find({ key: 'changes:repo' }))?.text).toBe('This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in.')
     expect((await ui.find({ key: 'changes:picks' }))?.text).toContain('REPOSITORIES IN DOCUMENTS')
     expect(await picksOf(ui)).toEqual(offered)
-    expect((await ui.find({ key: offered[0]! }))?.props.label).toBe('agent-deck')
+    expect((await ui.find({ key: offered[0]! }))?.props.label).toBe('apiarius')
     expect(await ui.find({ key: 'changes:follow' })).toBeUndefined()
     await ui.unmount()
   }
@@ -246,12 +246,12 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   await clock.advance(1000)
   await ui.redraw()
   const line = (await ui.find({ key: 'changes:repo' }))?.text ?? ''
-  expect(line).toContain('agent-deck ⎇ main')
+  expect(line).toContain('apiarius ⎇ main')
   expect(line).toContain('· pinned ·')
   expect(await ui.find({ key: 'file:hooks/repos.ts' })).toBeDefined()
   expect((await ui.find({ key: 'changes:follow' }))?.props).toMatchObject({ label: 'Follow the work', plain: true, dimColor: true })
   expect(await picksOf(ui)).toEqual([])
-  expect(runs.some(run => run.cwd === 'C:/Users/Me/Documents/agent-deck' && run.line.includes('status --porcelain'))).toBe(true)
+  expect(runs.some(run => run.cwd === 'C:/Users/Me/Documents/apiarius' && run.line.includes('status --porcelain'))).toBe(true)
 
   // Follow the work: the pin let go, the picks again
   await ui.press({ key: 'changes:follow' })
@@ -282,31 +282,31 @@ test('repos: a session`s directory in no repository is looked into once for the 
 
   // only directories, none hidden, no node_modules
   const entries = [
-    { name: 'agent-deck', kind: 'dir' },
+    { name: 'apiarius', kind: 'dir' },
     { name: '.git', kind: 'dir' },
     { name: 'node_modules', kind: 'dir' },
     { name: 'todo.md', kind: 'file' },
     { name: 'link', kind: 'other' },
     { name: 'site', kind: 'dir' },
   ]
-  expect(R.childDirsOf(entries)).toEqual(['agent-deck', 'site'])
+  expect(R.childDirsOf(entries)).toEqual(['apiarius', 'site'])
   expect(R.childDirsOf(Array.from({ length: 300 }, (_, i) => ({ name: `d${i}`, kind: 'dir' })))).toHaveLength(R.MOST_LOOKED)
 
-  const found = [{ name: 'site', changedAt: 5 }, { name: 'agent-deck', changedAt: 9 }, ...Array.from({ length: 9 }, (_, i) => ({ name: `z${i}`, changedAt: 1 }))]
+  const found = [{ name: 'site', changedAt: 5 }, { name: 'apiarius', changedAt: 9 }, ...Array.from({ length: 9 }, (_, i) => ({ name: `z${i}`, changedAt: 1 }))]
   R.settleNearby(book, book.cwd, found)
   expect(R.needsNearby(book)).toBe(false)
   expect(R.nearbyOf(book)).toHaveLength(R.MOST_NEARBY)
   expect(R.nearbyOf(book).slice(0, 4)).toEqual([
-    { root: 'C:/Users/Me/Documents/agent-deck', name: 'agent-deck' },
+    { root: 'C:/Users/Me/Documents/apiarius', name: 'apiarius' },
     { root: 'C:/Users/Me/Documents/site', name: 'site' },
     { root: 'C:/Users/Me/Documents/z0', name: 'z0' },
     { root: 'C:/Users/Me/Documents/z1', name: 'z1' },
   ])
 
   // another directory is looked into anew; one inside a repository offers none
-  R.setCwd(book, 'C:/Users/Me/Documents/agent-deck')
+  R.setCwd(book, 'C:/Users/Me/Documents/apiarius')
   expect(R.nearbyOf(book)).toEqual([])
-  R.settle(book, R.probesOf(book)[0]!, 'C:/Users/Me/Documents/agent-deck')
+  R.settle(book, R.probesOf(book)[0]!, 'C:/Users/Me/Documents/apiarius')
   expect(R.needsNearby(book)).toBe(false)
   expect(R.nearbyOf(book)).toEqual([])
   // the same directory spelled another way needs no second look

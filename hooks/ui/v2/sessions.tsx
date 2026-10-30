@@ -193,13 +193,13 @@ export function sessionsList(kit: Kit, view: SessionsV2, shownId: string, action
   const shown = view.rows.slice(0, MOST_SESSION_ROWS)
   const more = view.rows.length - shown.length
   const rows = shown.flatMap((row, i) => [i > 0 ? rule(kit) : null, sessionRow(kit, row, row.id === shownId, actions)])
-  if (more > 0) rows.push(rule(kit), <Box key="sessions:more" paddingX={1}><Text color={P.muted2}>{`and ${more} more: /deck web lists them all`}</Text></Box>)
+  if (more > 0) rows.push(rule(kit), <Box key="sessions:more" paddingX={1}><Text color={P.muted2}>{`and ${more} more: /apiarius web lists them all`}</Text></Box>)
   const note =
     view.rows.length > 1
       ? kit.surface === 'terminal'
         ? 'Every session here whose deck runs. Enter shows one; s closes.'
         : 'Every Claude Code session on this machine whose deck runs. A press shows its deck here; s closes the list.'
-      : 'No other session here runs Agent Deck now. Each one that does shows here, Desktop and terminal alike.'
+      : 'No other session here runs Apiarius now. Each one that does shows here, Desktop and terminal alike.'
   return (
     <Box key="sessions" flexDirection="column" gap={isAiry(kit) ? 1 : 0}>
       {listBox(kit, 'sessions:list', rows)}

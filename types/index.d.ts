@@ -653,7 +653,7 @@ export type DeckData = {
 /**
  * The pane's tabs: the Dashboard, the org chart, the Plan and Changes on the
  * tab row; Stats and Classic (`agents`: the summary and the full outline of
- * earlier builds) off it, opened by `/deck stats` and `/deck classic`.
+ * earlier builds) off it, opened by `/apiarius stats` and `/apiarius classic`.
  * Older builds' names (overview, diffs, commits, graph, flow) and `classic`
  * are read as these by `tabNamed`.
  */
@@ -671,7 +671,7 @@ export type DeckMapView = 'tree' | 'wire'
  * 6), the fold rows opened and Chat's filter. The agent page open is `page`.
  */
 export type DeckView2 = {
-  /** The tab open: `now` is the Dashboard (its id from before it was renamed, so `/deck now` and saved views still land). */
+  /** The tab open: `now` is the Dashboard (its id from before it was renamed, so `/apiarius now` and saved views still land). */
   tab: 'now' | 'chat' | 'org' | 'changes' | 'inspect' | 'settings'
   /**
    * The fold rows opened, by their id: a tree's (`fold:` and the parent's
@@ -721,7 +721,7 @@ export type DeckView = {
    * The style the deck draws agents' avatars in (web/avatars.mjs
    * `STYLE_IDS`; robots by default): the person's own, kept in the store's
    * `prefs` beside `isBandHidden`, so it holds in every session. The pane
-   * (its Kit), the web page (the v2 state's `avatarStyle`) and `/deck demo`
+   * (its Kit), the web page (the v2 state's `avatarStyle`) and `/apiarius demo`
    * follow it.
    */
   avatarStyle: string
@@ -742,7 +742,7 @@ export type DeckView = {
   isDetailsOpen: boolean
   /** The agent whose page shows over the tab in view (Back returns to the tab); '' for none. */
   page: string
-  /** The pane shows the sample (`/deck demo`, web/fixtures/state.json) in place of this session. */
+  /** The pane shows the sample (`/apiarius demo`, web/fixtures/state.json) in place of this session. */
   isDemo: boolean
   /**
    * What the Plan tab has open: `step:` and a step's key for its row, `goal`
@@ -768,7 +768,7 @@ export type DeckSnapshot = {
   view: DeckView
 }
 
-/** What `$.state` keeps of the web deck (`/deck web`). */
+/** What `$.state` keeps of the web deck (`/apiarius web`). */
 export type DeckWebSaved = {
   isOn: boolean
   /** The server's access token (the page's `t`). */
@@ -781,11 +781,17 @@ export type DeckWebSaved = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-deck': {
+    apiarius: {
       snapshot: DeckSnapshot
       /** The repository root the person pinned the deck to; '' while it follows the work. */
       repo: string
-      /** The web deck: on for the session after /deck web, its server's token, port and folder, so a reload starts it again where it was. */
+      /** The web deck: on for the session after /apiarius web, its server's token, port and folder, so a reload starts it again where it was. */
+      web: DeckWebSaved
+    }
+    /** The same values under the mod's name before Apiarius: a session open across the rename reads its own there, while `apiarius` holds none. Never written. */
+    'agent-deck': {
+      snapshot: DeckSnapshot
+      repo: string
       web: DeckWebSaved
     }
   }

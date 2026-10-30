@@ -99,7 +99,7 @@ export function backgroundSection(kit: Kit, state: WebStateV2, actions: DashActi
   const shown = background.rows.slice(0, MOST_BG_ROWS)
   const more = background.rows.length - shown.length
   const rows = shown.flatMap((row, i) => [i > 0 ? rule(kit) : null, backgroundRow(kit, state, row, actions)])
-  if (more > 0) rows.push(rule(kit), listRow(kit, 'bg:more', [<Text color={P.muted2} wrap="truncate-end">{`and ${plural(more, 'more')}: /deck web lists them all`}</Text>]))
+  if (more > 0) rows.push(rule(kit), listRow(kit, 'bg:more', [<Text color={P.muted2} wrap="truncate-end">{`and ${plural(more, 'more')}: /apiarius web lists them all`}</Text>]))
   // another session's whose deck takes nothing from here: its Stop and Cancel are offered nowhere, so the list says why, once
   const deaf = state.peer && !state.peer.canSteer && background.rows.some(row => row.stop) ? state.peer.why : ''
   const list = listBox(kit, 'bg:list', rows)

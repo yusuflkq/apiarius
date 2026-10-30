@@ -12,7 +12,7 @@
  * checks; one it cannot read is refused with its ack; a deck that reads no
  * inbox, or has gone quiet, says so at its controls before a press. Only a
  * permission prompt says to answer it in its window. The registry folder is
- * the test's (`AGENT_DECK_SESSIONS`), never the person's.
+ * the test's (`APIARIUS_SESSIONS`), never the person's.
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -47,10 +47,10 @@ function entry(id: string, extra: Partial<S.SessionEntry> = {}): S.SessionEntry 
   return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, agents: 0, faces: [], live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `/x/.web/${id}`, inbox: true, ...extra }
 }
 
-test('the registry folder: AGENT_DECK_SESSIONS, else under CLAUDE_CONFIG_DIR, else ~/.claude; none with no home', () => {
+test('the registry folder: APIARIUS_SESSIONS, else under CLAUDE_CONFIG_DIR, else ~/.claude; none with no home', () => {
   expect(S.registryDirOf({ override: 'D:\\tmp\\reg\\', configDir: 'C:/cfg', home: 'C:/Users/sam' })).toBe('D:\\tmp\\reg')
-  expect(S.registryDirOf({ configDir: 'C:/cfg/', home: 'C:/Users/sam' })).toBe('C:/cfg/agent-deck/sessions')
-  expect(S.registryDirOf({ home: 'C:\\Users\\sam' })).toBe('C:\\Users\\sam/.claude/agent-deck/sessions')
+  expect(S.registryDirOf({ configDir: 'C:/cfg/', home: 'C:/Users/sam' })).toBe('C:/cfg/apiarius/sessions')
+  expect(S.registryDirOf({ home: 'C:\\Users\\sam' })).toBe('C:\\Users\\sam/.claude/apiarius/sessions')
   expect(S.registryDirOf({})).toBe('')
   expect(S.entryPathOf('/reg', 'a1-b2')).toBe('/reg/a1-b2.json')
   expect(S.entryPathOf('/reg', '../x')).toBe('')
@@ -94,7 +94,7 @@ test('what a session is doing, derived from its own rows: its agents at work and
   const sample = sampleSessions()
   const said = Object.fromEntries(sample.decks.map(deck => [deck.state.header.goal?.headline ?? '', S.liveLineOf(deck.state)]))
   expect(said).toEqual({
-    'Agent Deck terminal faces': '2 agents working · builder: Bash npm test',
+    'Apiarius terminal faces': '2 agents working · builder: Bash npm test',
     'Fix the flaky CI job': 'Orchestrator: Bash gh run view 1842 --log',
     'Landing page copy': 'Orchestrator: Bash rm -rf dist',
     'Notes sync': 'Finished: “Synced 14 notebooks.”',
@@ -190,7 +190,7 @@ test('a row`s faces: its agents at work, each drawn as its own deck draws it (it
   const fact = { surface: 'desktop' as const, terminal: '', repo: '', pid: 1, dir: '/x/.web/s', updatedAt: SAMPLE_NOW, heartbeatAt: SAMPLE_NOW }
   const rowOf = (state: W.WebStateV2) => S.sessionsViewOf([S.entryOf(state, fact)], null, SAMPLE_NOW).rows[0]!
   // builder and painter at work: their faces, in Monogram tiles as in their deck ("Bl", "Pn"), and in every other style the same
-  const two = decks.find(deck => deck.state.header.goal?.headline === 'Agent Deck terminal faces')!.state
+  const two = decks.find(deck => deck.state.header.goal?.headline === 'Apiarius terminal faces')!.state
   const atWork = two.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'orchestrator' && row.status === 'running')
   expect(atWork.map(row => row.title)).toEqual(['builder', 'painter'])
   const { faces, more } = S.facesOf(rowOf(two))
@@ -296,14 +296,14 @@ test('why another session`s controls do nothing from here, said before a press: 
   const row = { canSteer: true, isQuiet: false, say: 'Orchestrator: Bash npm test' }
   expect(S.notAnsweringOf(row)).toBe('')
   expect(S.notAnsweringOf({ ...row, isQuiet: true, say: 'Last heard 2m ago' })).toBe("Its deck isn't answering: last heard 2m ago.")
-  expect(S.notAnsweringOf({ ...row, canSteer: false })).toBe("Its deck isn't answering: it runs an older Agent Deck.")
+  expect(S.notAnsweringOf({ ...row, canSteer: false })).toBe("Its deck isn't answering: it runs an older Apiarius.")
   expect(S.notAnsweringOf(null)).toBe("Its deck isn't answering: it is not listed any more.")
   const now = SAMPLE_NOW
   const sent = new Map<string, S.PressSent>([
     ['turn', { id: 'p1', at: now - 4000, doing: 'Stopping…', failed: '' }],
     ['bg:bash_7', { id: 'p2', at: now - 3000, doing: 'Stopping…', failed: '' }],
     ['clear', { id: 'p3', at: now - 2000, doing: 'Clearing…', failed: '' }],
-    ['repo', { id: 'p4', at: now - 1000, doing: 'Asking its deck…', failed: "Its deck isn't answering: it runs an older Agent Deck" }],
+    ['repo', { id: 'p4', at: now - 1000, doing: 'Asking its deck…', failed: "Its deck isn't answering: it runs an older Apiarius" }],
     ['review', { id: 'p5', at: now - S.COMMAND_MS - 1000, doing: 'Sending…', failed: '' }],
     ['show', { id: 'p6', at: now - 60_000, doing: 'Showing them…', failed: '' }],
   ])
@@ -316,7 +316,7 @@ test('why another session`s controls do nothing from here, said before a press: 
     turn: { status: 'done', text: 'Stopped the turn' },
     'bg:bash_7': { status: 'failed', text: 'Claude Code refused TaskStop: not now' },
     clear: { status: 'sending', text: 'Clearing…' },
-    repo: { status: 'failed', text: "Its deck isn't answering: it runs an older Agent Deck" },
+    repo: { status: 'failed', text: "Its deck isn't answering: it runs an older Apiarius" },
     review: { status: 'failed', text: 'Its deck did not answer: it may be busy or gone' },
   })
 })
@@ -379,7 +379,7 @@ function listed(d: Disk, id: string, dir: string, extra: Partial<S.SessionEntry>
 /** The engine with the test's registry and another session listed (`other-1`, its deck the sample's Landing page copy), then the session started (by `begin`: session.start, or the world's `work`). */
 async function started($: Engine, on: On, w: World = newWorld(), d: Disk = { files: new Map() }, begin: ($: Engine) => Promise<void> = async one => void (await one.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' }))) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { AGENT_DECK_SESSIONS: REG })
+  mock.env(on, { APIARIUS_SESSIONS: REG })
   disk(on, d)
   world(on, w)
   listed(d, OTHER, OTHER_DIR)
@@ -398,12 +398,12 @@ function ownEntries(w: World): S.SessionEntry[] {
 
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -413,7 +413,7 @@ test('with no registry folder known (no home, as in every other test) the deck l
   world(on, w)
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await clock.advance(60_000)
-  expect(w.writes.filter(one => /agent-deck[\\/]sessions|[\\/]inbox[\\/]/.test(one.path))).toEqual([])
+  expect(w.writes.filter(one => /apiarius[\\/]sessions|[\\/]inbox[\\/]/.test(one.path))).toEqual([])
 })
 
 test('the deck writes its own file at its start (its state folder, its process, that it reads an inbox), again on its heartbeat, and marks it ended then removes it at session.end; a /clear keeps it', async ($, on) => {
@@ -567,7 +567,7 @@ test('the header`s title is the switcher: "◆ 1 needs you · 2 sessions" at its
     await ui.unmount()
   }
   // the band above the prompt counts it
-  const band = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
+  const band = await $.ui.mount({ plugin: 'apiarius', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
   expect(JSON.stringify(await band.drawn())).toContain('1 other session needs you')
   await band.unmount()
 })
@@ -996,7 +996,7 @@ test('the list dropped over Chat: no drawing under it moves the pane, however mu
   const opened = paneOf(w)
   expect(opened).toMatchObject({ isListOpen: true, follow: { isAtEnd: false }, latest: ['end', 'start'] })
   // the session works on under it, the other session too, and you scroll down the pane: drawing after drawing, nothing moves it
-  const scroll = (offset: number, by: number) => $.ui.scroll({ component: 'Pane', requestId: 'agent-deck', offset, by, bodyRows: 30, contentRows: 90, origin: { kind: 'person' } })
+  const scroll = (offset: number, by: number) => $.ui.scroll({ component: 'Pane', requestId: 'apiarius', offset, by, bodyRows: 30, contentRows: 90, origin: { kind: 'person' } })
   for (let i = 0; i < 5; i++) {
     listed(d, OTHER, OTHER_DIR, { live: `Bash npm test, step ${i}`, updatedAt: NOW + i * 3000 })
     await $.turn.complete({ turnId: 't1', answer: `Step ${i} done.`, durationMs: 1000, isAborted: false, reason: 'answer' })
@@ -1063,7 +1063,7 @@ test('from the page: every command about another session goes into its inbox (it
   await clock.advance(1000)
   const states = w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
   const acks = states.at(-1)?.v2.acks ?? []
-  expect(acks.find(one => one.id === 'x-2')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it runs an older Agent Deck" })
+  expect(acks.find(one => one.id === 'x-2')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it runs an older Apiarius" })
   expect(acks.find(one => one.id === 'x-6')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it has not been heard from lately" })
   expect(acks.find(one => one.id === 'x-5')).toMatchObject({ ok: false, status: 'failed', text: 'Not a command the deck can read' })
   expect(w.writes.some(one => norm(one.path).startsWith(`${OLD_DIR}/`) || norm(one.path).startsWith(`${QUIET_DIR}/inbox/`))).toBe(false)
@@ -1071,7 +1071,7 @@ test('from the page: every command about another session goes into its inbox (it
   expect(states.at(-1)?.v2.sessions?.rows.map(row => row.id)).toEqual(['session-1', OLD, OTHER, QUIET])
 })
 
-test('this session`s inbox: a deck viewing it has its state written (no /deck web), and its message runs here as the page`s own (your next prompt), acked in its state; a stranger`s inbox file is ignored', async ($, on) => {
+test('this session`s inbox: a deck viewing it has its state written (no /apiarius web), and its message runs here as the page`s own (your next prompt), acked in its state; a stranger`s inbox file is ignored', async ($, on) => {
   const d: Disk = { files: new Map() }
   const { clock, w } = await started($, on, newWorld(), d)
   const dir = norm(ownEntries(w)[0]!.dir)
@@ -1084,7 +1084,7 @@ test('this session`s inbox: a deck viewing it has its state written (no /deck we
   // other-1 views this session and sends it a message
   d.files.set(`${dir}/inbox/${OTHER}.json`, file(OTHER, [{ at: NOW, cmd: { cmd: 'chat', id: 'o-1', agentId: 'main', text: 'Also run the linter' } }]))
   await clock.advance(3000)
-  expect(w.submitted.at(-1)).toMatchObject({ text: 'Also run the linter', origin: { kind: 'plugin', name: 'agent-deck', asUser: true } })
+  expect(w.submitted.at(-1)).toMatchObject({ text: 'Also run the linter', origin: { kind: 'plugin', name: 'apiarius', asUser: true } })
   await clock.advance(1000)
   const written = w.writes.filter(one => norm(one.path) === `${dir}/state.json`).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
   expect(written.length).toBeGreaterThan(0)
@@ -1156,7 +1156,7 @@ test('this session`s inbox: every command about it another deck sends runs here 
   expect(v2().cleared).toMatchObject({ count: 0 })
 })
 
-test('/deck demo lists the sample`s sessions (s) and shows one`s deck from the fixtures in its place, under "Sample data": nothing is sent', async ($, on) => {
+test('/apiarius demo lists the sample`s sessions (s) and shows one`s deck from the fixtures in its place, under "Sample data": nothing is sent', async ($, on) => {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const own = sampleState()
   const sample = sampleSessions()
@@ -1206,7 +1206,7 @@ test('another session`s Changes, shown: its agents` edits open on their patches 
   const site = (JSON.parse(d.files.get(`${OTHER_DIR}/state.json`)!) as { v2: W.WebStateV2 }).v2
   const script = 'C:/Users/sam/AppData/Local/Temp/scratchpad/sample.js'
   const edit = { id: 'toolu_01ScrW1', agent: 'main', tool: 'Write', path: script, at: NOW - 60_000, added: 2, removed: 0 }
-  const where = { cwd: 'C:\\Users\\sam\\Documents', name: 'Documents', isRepo: false, pinned: '', picks: [{ name: 'agent-deck', root: 'C:/Users/sam/Documents/agent-deck' }] }
+  const where = { cwd: 'C:\\Users\\sam\\Documents', name: 'Documents', isRepo: false, pinned: '', picks: [{ name: 'apiarius', root: 'C:/Users/sam/Documents/apiarius' }] }
   const state: W.WebStateV2 = { ...site, changes: { repo: null, where, files: [], edits: [edit], commits: [] } }
   d.files.set(`${OTHER_DIR}/state.json`, JSON.stringify({ v: 1, now: NOW, v2: state }))
   d.files.set(`${OTHER_DIR}/patches/toolu_01ScrW1.diff`, '@@ -0,0 +1,2 @@\n+const sample = 1\n+console.log(sample)\n')
@@ -1229,10 +1229,10 @@ test('another session`s Changes, shown: its agents` edits open on their patches 
     expect(JSON.stringify(await one.drawn())).not.toContain('Its patch is not on disk.')
   }
   // a pick there pins its own deck's Changes: into its inbox, "Asking its deck…" under the picks until its ack
-  await ui.press({ key: 'changes:pick:C:/Users/sam/Documents/agent-deck' })
+  await ui.press({ key: 'changes:pick:C:/Users/sam/Documents/apiarius' })
   await clock.advance(500)
   await ui.redraw()
-  expect(inboxCmds(w).at(-1)).toEqual({ cmd: 'selectRepo', root: 'C:/Users/sam/Documents/agent-deck', id: expect.stringMatching(/^deck-/) })
+  expect(inboxCmds(w).at(-1)).toEqual({ cmd: 'selectRepo', root: 'C:/Users/sam/Documents/apiarius', id: expect.stringMatching(/^deck-/) })
   expect((await ui.find({ key: 'changes:picks' }))?.text).toContain('Asking its deck…')
   expect(w.toasts.join(' ')).not.toContain("another session's deck")
   await ui.unmount()

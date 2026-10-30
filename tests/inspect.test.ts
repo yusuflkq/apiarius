@@ -25,12 +25,12 @@ const SURFACES = ['terminal', 'desktop'] as const
 /** The deck's pane as a surface lays it out, `bodyColumns` across. */
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -362,7 +362,7 @@ test('through the hooks, as Claude Code 2.1.311 ends them: a call its check deni
 // ---------------------------------------------------------------------------
 // The tab, as the pane and the terminal draw it.
 
-/** The v2 sample as `/deck demo` reads it. */
+/** The v2 sample as `/apiarius demo` reads it. */
 function sample(on: On, patch: (state: W.WebStateV2) => W.WebStateV2 = state => state) {
   const session = v2Session()
   const built = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
@@ -378,7 +378,7 @@ function sample(on: On, patch: (state: W.WebStateV2) => W.WebStateV2 = state => 
   return v2
 }
 
-/** The engine, the v2 sample read (as `patch` makes it), and `/deck demo` shown. */
+/** The engine, the v2 sample read (as `patch` makes it), and `/apiarius demo` shown. */
 async function demo($: Engine, on: On, patch?: (state: W.WebStateV2) => W.WebStateV2) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const v2 = sample(on, patch)

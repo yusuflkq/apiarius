@@ -6,7 +6,7 @@
  * made, a row a file as the web page's (a chevron, its path, the faces of
  * who edited it, "2 edits", `+a −r`), the newest open the first time;
  * git's files with their chevrons and editors' faces too. On the terminal
- * and the desktop, drawn by `/deck demo` over the v2 sample laid out as a
+ * and the desktop, drawn by `/apiarius demo` over the v2 sample laid out as a
  * chat outside any repository, or live through the hooks.
  */
 import type { On } from 'claude-code'
@@ -22,18 +22,18 @@ import { command, deck, lastState, newWorld, NOW, world } from './world'
 const SURFACES = ['terminal', 'desktop'] as const
 const DOCUMENTS = 'C:\\Users\\sam\\Documents'
 const PICKS = [
-  { root: 'C:/Users/sam/Documents/agent-deck', name: 'agent-deck' },
+  { root: 'C:/Users/sam/Documents/apiarius', name: 'apiarius' },
   { root: 'C:/Users/sam/Documents/notes-app', name: 'notes-app' },
 ]
 
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -65,7 +65,7 @@ function noRepoState(): W.WebStateV2 {
   return W.deckStateOf(session.data, NO_REPO, session.usage, session.now, session.sessionId, DOCUMENTS, session.answerable)
 }
 
-/** `/deck demo` reads `state` as the sample, with the sample's agent files and patches. */
+/** `/apiarius demo` reads `state` as the sample, with the sample's agent files and patches. */
 async function demo($: Engine, on: On, state: W.WebStateV2) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
@@ -102,7 +102,7 @@ test('the state says where the chat runs and how Changes picks its repository: i
   expect(noRepoText({ where: { cwd: DOCUMENTS, name: 'Documents', isRepo: false, pinned: '', picks: [] }, edits: [] })).toBe('This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in.')
   expect(noRepoText(state.changes)).toBe('This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in; the edits agents made outside one are below, exact.')
   expect(noRepoText({ where: { cwd: DOCUMENTS, name: 'Documents', isRepo: null, pinned: '', picks: [] }, edits: [] })).toBe('Looking for a git repository…')
-  expect(noRepoText({ where: { cwd: DOCUMENTS, name: 'Documents', isRepo: false, pinned: 'C:/Users/sam/Documents/agent-deck', picks: [] }, edits: [] })).toBe('Changes is pinned to agent-deck, which git can’t read now.')
+  expect(noRepoText({ where: { cwd: DOCUMENTS, name: 'Documents', isRepo: false, pinned: 'C:/Users/sam/Documents/apiarius', picks: [] }, edits: [] })).toBe('Changes is pinned to apiarius, which git can’t read now.')
   expect(noRepoText({ edits: [] })).toBe('No git repository here.')
   // the edits by file, the one edited last first, each file's as listed
   const groups = editGroupsOf(state.changes.edits)

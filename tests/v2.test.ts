@@ -677,7 +677,7 @@ test('the lazy files as the pane opens them: an agent`s file, a patch and a cut 
   expect([read.agent('constructor'), read.patch('p1'), read.patch('toString'), read.message('m1')]).toEqual([null, '@@ -1 +1 @@\n', null, null])
 })
 
-test('/deck demo reads the v2 sample beside v1: web/fixtures/state.v2.json, then each agent`s file, patch and cut message its state names under web/fixtures/v2', async ($, on) => {
+test('/apiarius demo reads the v2 sample beside v1: web/fixtures/state.v2.json, then each agent`s file, patch and cut message its state names under web/fixtures/v2', async ($, on) => {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
   const v2 = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
@@ -742,7 +742,7 @@ test('stopAgent and abortTurn from the page are checked and acked, never left wa
 })
 
 // ---------------------------------------------------------------------------
-// The pane's focus (j, k, n), the band's line, /deck's tabs, and an answer in the sample.
+// The pane's focus (j, k, n), the band's line, /apiarius's tabs, and an answer in the sample.
 
 test('j and k move among the rows a v2 screen draws, by their Buttons` keys: Now`s needs then its tree (a fold`s members while it is open), Changes` files; none on Chat, a page or Inspect', () => {
   const session = v2Session()
@@ -829,7 +829,7 @@ test('an answer in the sample stays there: its need goes, a choice row from you 
   expect([done.state.header.state, done.state.header.stateText, rowOf(done.state, M.MAIN).status, done.state.needs]).toEqual(['working', 'Working', 'running', []])
 })
 
-test('/deck`s v2 tabs: dashboard (or now), chat, org, changes, inspect and settings (or help), or the start of one; an earlier build`s tab lands on the one it folded into', () => {
+test('/apiarius`s v2 tabs: dashboard (or now), chat, org, changes, inspect and settings (or help), or the start of one; an earlier build`s tab lands on the one it folded into', () => {
   expect(M.V2_TABS).toEqual(['now', 'chat', 'org', 'changes', 'inspect', 'settings'])
   expect([M.v2TabFor('now'), M.v2TabFor('n'), M.v2TabFor('c'), M.v2TabFor('chat'), M.v2TabFor('chan'), M.v2TabFor(' Changes '), M.v2TabFor('o'), M.v2TabFor('Org')]).toEqual(['now', 'now', 'chat', 'chat', 'changes', 'changes', 'org', 'org'])
   expect([M.v2TabFor('dashboard'), M.v2TabFor('Dashboard'), M.v2TabFor('dash'), M.v2TabFor('d')]).toEqual(['now', 'now', 'now', 'now'])
@@ -841,12 +841,12 @@ test('/deck`s v2 tabs: dashboard (or now), chat, org, changes, inspect and setti
   expect([M.view2With(M.defaultView2(), { tab: 'org' }).tab, M.view2With(M.defaultView2(), { tab: 'plan' }).tab]).toEqual(['org', 'now'])
 })
 
-test('/deck dashboard (or now), chat, org, changes, inspect and settings open the pane on that v2 tab, /deck stats on Inspect, /deck help on Settings, and /deck alone on the Dashboard; each choice is kept', async ($, on) => {
+test('/apiarius dashboard (or now), chat, org, changes, inspect and settings open the pane on that v2 tab, /apiarius stats on Inspect, /apiarius help on Settings, and /apiarius alone on the Dashboard; each choice is kept', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
   const saved: unknown[] = []
-  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+  on('state.set', { plugin: 'apiarius', key: 'snapshot' }, ($, e) => {
     saved.push(JSON.parse(JSON.stringify(e.value)))
     return { value: { isSet: true as const, version: saved.length } }
   })

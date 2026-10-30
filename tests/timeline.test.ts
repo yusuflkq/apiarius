@@ -613,12 +613,12 @@ test('the terminal`s cells: a call a run on its colour (its tool`s name where it
 /** The deck's pane, `bodyColumns` across, on `surface`. */
 function pane<S extends 'terminal' | 'desktop' | 'vscode' | 'mobile'>(surface: S, bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -636,7 +636,7 @@ async function press(ui: Drawing, key: string) {
   await ui.redraw()
 }
 
-/** `/deck demo` over the v2 sample, its timeline.json `timeline`. */
+/** `/apiarius demo` over the v2 sample, its timeline.json `timeline`. */
 async function demo($: Engine, on: On, timeline: T.V2Timeline | null = null): Promise<World> {
   mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
@@ -749,7 +749,7 @@ test('the desktop`s Timeline of a run too large keeps under the Desktop`s bounds
   const names = (await ui.findAll({ type: 'Button' })).filter(one => (one.key ?? '').startsWith('agent:')).map(one => one.props.label)
   expect(names).toHaveLength(MOST_LANES)
   expect(names.slice(0, 2)).toEqual(['Orchestrator', 'agent number 61 with a long name'])
-  expect(JSON.stringify(drawn)).toContain('and 60 more agents, started earlier: /deck web shows them all.')
+  expect(JSON.stringify(drawn)).toContain('and 60 more agents, started earlier: /apiarius web shows them all.')
   // 19 messages between the lanes drawn, numbered; the newest 12 listed
   expect(await ui.find({ key: 'tl:msg:7' })).toBeUndefined()
   for (const n of [8, 19]) expect(await ui.find({ key: `tl:msg:${n}` })).toBeDefined()

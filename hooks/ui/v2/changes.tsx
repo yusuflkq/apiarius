@@ -254,7 +254,7 @@ function filesList(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel
           </Box>
         )
       })}
-      {list.length > MOST_FILES ? quiet(kit, `${plural(list.length - MOST_FILES, 'more file')}: more than the pane holds; /deck web lists them all.`) : null}
+      {list.length > MOST_FILES ? quiet(kit, `${plural(list.length - MOST_FILES, 'more file')}: more than the pane holds; /apiarius web lists them all.`) : null}
     </Box>
   )
 }
@@ -403,7 +403,7 @@ function editsList(kit: Kit, state: WebStateV2, files: V2Files, edits: readonly 
           </Box>
         )
       })}
-      {groups.length > MOST_EDITED ? quiet(kit, `${plural(groups.length - MOST_EDITED, 'more file')}: more than the pane holds; /deck web lists them all.`) : null}
+      {groups.length > MOST_EDITED ? quiet(kit, `${plural(groups.length - MOST_EDITED, 'more file')}: more than the pane holds; /apiarius web lists them all.`) : null}
     </Box>
   )
 }

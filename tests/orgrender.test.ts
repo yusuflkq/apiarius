@@ -351,12 +351,12 @@ describe('org chart connectors', () => {
 /** The deck's pane as a surface lays it out, `bodyColumns` across. */
 function pane<S extends 'terminal' | 'desktop'>(surface: S, bodyColumns = 96) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 

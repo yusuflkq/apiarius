@@ -267,12 +267,12 @@ const SURFACES = ['terminal', 'desktop'] as const
 
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -313,7 +313,7 @@ function sizeOf(node: unknown): { nodes: number; depth: number; chars: number } 
   return { nodes: 1 + kids.reduce((sum, one) => sum + one.nodes, 0), depth: 1 + Math.max(0, ...kids.map(one => one.depth)), chars: JSON.stringify(node).length }
 }
 
-/** `/deck demo` over the sample as the engine builds it, `change` laid over its state and `files` over its agent files. */
+/** `/apiarius demo` over the sample as the engine builds it, `change` laid over its state and `files` over its agent files. */
 async function demo($: Engine, on: On, change: (state: W.WebStateV2) => W.WebStateV2 = state => state, files: Record<string, W.V2AgentFile> = {}) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()

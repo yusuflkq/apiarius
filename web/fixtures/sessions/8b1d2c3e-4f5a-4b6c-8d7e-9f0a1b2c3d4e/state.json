@@ -3,7 +3,7 @@
   "now": 1792013580000,
   "session": {
     "id": "8b1d2c3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e",
-    "cwd": "C:\\Users\\sam\\code\\agent-deck",
+    "cwd": "C:\\Users\\sam\\code\\apiarius",
     "startedAt": 1792012080000,
     "isFork": true
   },
@@ -12,8 +12,8 @@
     "state": "working",
     "stateText": "Working",
     "goal": {
-      "text": "Agent Deck terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it.",
-      "headline": "Agent Deck terminal faces",
+      "text": "Apiarius terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it.",
+      "headline": "Apiarius terminal faces",
       "at": 1792012140000,
       "messageId": "m1792012140000_you_main"
     },
@@ -185,7 +185,7 @@
       "to": "main",
       "who": "You → Orchestrator",
       "kind": "prompt",
-      "text": "Agent Deck terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it."
+      "text": "Apiarius terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it."
     },
     {
       "id": "m1792012380000_main_c1a2b3c4d5e6f708",
@@ -209,8 +209,8 @@
   "changes": {
     "repo": null,
     "where": {
-      "cwd": "C:\\Users\\sam\\code\\agent-deck",
-      "name": "agent-deck",
+      "cwd": "C:\\Users\\sam\\code\\apiarius",
+      "name": "apiarius",
       "isRepo": true,
       "pinned": "",
       "picks": []

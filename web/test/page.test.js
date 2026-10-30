@@ -324,13 +324,13 @@ test('Now is the dashboard: needs, a run card per agent, the figures, the plan, 
   assert.equal(fold('activity').p['aria-expanded'], 'false')
   assert.ok(sec('activity').p.class.includes('shut'))
   assert.equal(flat(textOf(sec('activity'))), 'Recent activity')
-  assert.deepEqual(JSON.parse(p.storage['agent-deck:shut']), ['activity'])
+  assert.deepEqual(JSON.parse(p.storage['apiarius:shut']), ['activity'])
   const again = page({ storage: p.storage })
   again.load(dash())
   assert.equal(find(find(again.view('NowPage()'), 'sec-activity')[0], 'ra-row').length, 0)
   click(fold('activity'))
   assert.ok(find(sec('activity'), 'ra-row').length > 0)
-  assert.deepEqual(JSON.parse(p.storage['agent-deck:shut']), [])
+  assert.deepEqual(JSON.parse(p.storage['apiarius:shut']), [])
   // Needs folded: n opens it again, on the need
   click(fold('needs'))
   assert.equal(find(sec('needs'), 'need').length, 0)
@@ -563,7 +563,7 @@ test('Org`s list: the state`s rows in its order, each a status dot, its name, it
   assert.equal(p.run('route.tab'), 'org')
   click(byText(p.view('OrgPage()'), 'seg-toggle', 'List').c.filter(Boolean)[1])
   assert.equal(p.run('ui.orgView'), 'list')
-  assert.equal(p.storage['agent-deck:orgView'], '"list"')
+  assert.equal(p.storage['apiarius:orgView'], '"list"')
   const rows = () => [...find(p.view('OrgPage()'), 'tree')[0].c].filter(Boolean)
   assert.deepEqual(rows().map(r => r.k), ['main', BUILDER, `fold:${BUILDER}`, REVIEWER, 'fold:main'])
   assert.deepEqual(rows().map(r => flat(textOf(r))), [
@@ -632,7 +632,7 @@ test('Org`s Timeline, its third view (kept): from /timeline a row an agent (its 
   p.load(SAMPLE)
   click(byText(p.view('OrgPage()'), 'seg-toggle', 'Timeline').c.filter(Boolean)[2])
   assert.equal(p.run('ui.orgView'), 'timeline')
-  assert.equal(p.storage['agent-deck:orgView'], '"timeline"')
+  assert.equal(p.storage['apiarius:orgView'], '"timeline"')
   assert.match(flat(textOf(p.view('OrgPage()'))), /Reading the timeline…/)
   await settle()
   const timelines = () => p.calls.filter(one => one.url.startsWith('/timeline')).length
@@ -709,7 +709,7 @@ test('Org`s Timeline folds every stretch of 20 minutes or more where nobody work
     marks: [], messages: [],
     background: [{ id: 'bash_9', title: 'Start the web dev server', what: 'Shell · node web/dev.js', by: BUILDER, start: 186 * MIN, end: 222 * MIN }],
   }
-  const p = page({ hash: '#/org', storage: { 'agent-deck:orgView': '"timeline"' }, files: { ...FILES, timeline: JSON.stringify(long) } })
+  const p = page({ hash: '#/org', storage: { 'apiarius:orgView': '"timeline"' }, files: { ...FILES, timeline: JSON.stringify(long) } })
   p.load(SAMPLE)
   p.view('OrgPage()')
   await settle()
@@ -1227,7 +1227,7 @@ test('Changes: git`s diff comes from /gitdiff/<diffId>, fetched again when the i
 })
 
 test('Changes with no repository: it says where the chat runs and what Changes follows, offers the repositories inside its folder (a press sends selectRepo), and the agents` edits by file, the one edited last first and open; pinned, "pinned" and Follow the work', async () => {
-  const where = { cwd: 'C:\\Users\\sam\\Documents', name: 'Documents', isRepo: false, pinned: '', picks: [{ name: 'agent-deck', root: 'C:/Users/sam/Documents/agent-deck' }, { name: 'notes-app', root: 'C:/Users/sam/Documents/notes-app' }] }
+  const where = { cwd: 'C:\\Users\\sam\\Documents', name: 'Documents', isRepo: false, pinned: '', picks: [{ name: 'apiarius', root: 'C:/Users/sam/Documents/apiarius' }, { name: 'notes-app', root: 'C:/Users/sam/Documents/notes-app' }] }
   // as the mod writes it with no repository: every path absolute, none outside it, no git files or commits
   const noRepo = s => {
     s.changes = { repo: null, where, files: [], commits: [], edits: s.changes.edits.map(({ isOutside, ...e }) => ({ ...e, path: /^[A-Za-z]:/.test(e.path) ? e.path : `C:/Users/sam/code/acme-api/${e.path}` })) }
@@ -1238,12 +1238,12 @@ test('Changes with no repository: it says where the chat runs and what Changes f
   assert.equal(flat(textOf(find(view(), 'chg-sum')[0])), 'No repository This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in; the edits agents made outside one are below, exact.')
   const picks = () => find(view(), 'chg-pick')
   assert.equal(flat(textOf(find(view(), 'sec-picks')[0].c[0])), 'Repositories in Documents 2')
-  assert.deepEqual(picks().map(b => flat(textOf(b))), ['agent-deck', 'notes-app'])
-  assert.equal(picks()[0].p.title, 'C:/Users/sam/Documents/agent-deck')
+  assert.deepEqual(picks().map(b => flat(textOf(b))), ['apiarius', 'notes-app'])
+  assert.equal(picks()[0].p.title, 'C:/Users/sam/Documents/apiarius')
   click(picks()[0])
   await settle()
   const [sent] = p.commands()
-  assert.deepEqual(sent, { cmd: 'selectRepo', id: sent.id, root: 'C:/Users/sam/Documents/agent-deck' })
+  assert.deepEqual(sent, { cmd: 'selectRepo', id: sent.id, root: 'C:/Users/sam/Documents/apiarius' })
   // the agents' edits by file, the one edited last first, the newest open with its patch, the rest shut
   const groups = () => find(view(), 'fgroup')
   assert.deepEqual(groups().map(g => g.k), ['C:\\Users\\sam\\AppData\\Local\\Temp\\bench.js', 'C:/Users/sam/code/acme-api/src/rateLimit.ts', 'C:/Users/sam/code/acme-api/tests/rateLimit.test.ts', 'C:/Users/sam/code/acme-api/docs/api.md', 'C:/Users/sam/code/acme-api/src/app.ts'])
@@ -1254,10 +1254,10 @@ test('Changes with no repository: it says where the chat runs and what Changes f
   p.load(sample(s => { noRepo(s); s.now += 1000; s.changes.edits.push({ id: 'toolu_01Late', agent: BUILDER, tool: 'Edit', path: 'C:/Users/sam/code/acme-api/README.md', at: s.now, added: 1, removed: 0 }) }))
   assert.deepEqual(groups().map(g => [g.k.split(/[\\/]/).pop(), g.p.class.includes('open')]).slice(0, 2), [['README.md', false], ['bench.js', true]])
   // pinned (the pick's ack with it): the usual git view, "pinned", what came of the pick, and Follow the work, which sends the empty root
-  p.load(sample(s => { s.now += 2000; s.changes.where = { ...where, pinned: s.changes.repo.root }; s.acks.push({ id: sent.id, ok: true, status: 'delivered', text: 'Changes shows agent-deck', at: s.now }) }))
+  p.load(sample(s => { s.now += 2000; s.changes.where = { ...where, pinned: s.changes.repo.root }; s.acks.push({ id: sent.id, ok: true, status: 'delivered', text: 'Changes shows apiarius', at: s.now }) }))
   assert.match(flat(textOf(find(view(), 'chg-repo')[0])), /· acme-api · pinned$/)
   assert.equal(picks().length, 0)
-  assert.equal(flat(textOf(find(view(), 'press-note')[0])), '✓ Changes shows agent-deck')
+  assert.equal(flat(textOf(find(view(), 'press-note')[0])), '✓ Changes shows apiarius')
   click(byText(view(), 'chg-follow', 'Follow the work'))
   await settle()
   assert.deepEqual(p.commands().at(-1), { cmd: 'selectRepo', id: p.commands().at(-1).id, root: '' })
@@ -1396,7 +1396,7 @@ test('the drawer resizes: its left edge a separator, focusable, saying its width
   const key = (k, shiftKey = false) => { const e = { key: k, shiftKey, defaultPrevented: false, preventDefault() { this.defaultPrevented = true }, stopPropagation() {} }; grip().p.onKeyDown(e); return e.defaultPrevented }
   assert.equal(key('ArrowLeft'), true)
   assert.equal(p.run('ui.drawerW'), 536)
-  assert.equal(p.storage['agent-deck:drawerW'], '536')
+  assert.equal(p.storage['apiarius:drawerW'], '536')
   assert.equal(key('ArrowRight', true), true)
   assert.equal(p.run('ui.drawerW'), 472)
   assert.deepEqual({ ...p.view('App()').p.style }, { '--drawer-w': '472px' })
@@ -1413,12 +1413,12 @@ test('the drawer resizes: its left edge a separator, focusable, saying its width
   on.pointermove({ clientX: -900 })
   assert.equal(p.run('ui.drawerW'), 860)
   on.pointerup({})
-  assert.deepEqual([on.pointermove, p.storage['agent-deck:drawerW']], [undefined, '860'])
+  assert.deepEqual([on.pointermove, p.storage['apiarius:drawerW']], [undefined, '860'])
   // a double click: the default again, forgotten
   grip().p.onDblClick({})
-  assert.deepEqual([p.run('ui.drawerW'), p.storage['agent-deck:drawerW'], p.view('App()').p.style], [null, undefined, null])
+  assert.deepEqual([p.run('ui.drawerW'), p.storage['apiarius:drawerW'], p.view('App()').p.style], [null, undefined, null])
   // a viewer's width comes back on their next visit
-  const again = page({ hash: `#/now/agent/${BUILDER}`, storage: { 'agent-deck:drawerW': '700' } })
+  const again = page({ hash: `#/now/agent/${BUILDER}`, storage: { 'apiarius:drawerW': '700' } })
   again.load(SAMPLE)
   assert.deepEqual({ ...again.view('App()').p.style }, { '--drawer-w': '700px' })
   // storage refused (a private window): the page draws, and the width lasts the visit
@@ -1652,7 +1652,7 @@ test('the avatars are drawn in the state`s style (robots by default; one the pag
   assert.match(sent.id, /^av-/)
   assert.equal(p.run('styleNow()'), 'critter')
   assert.deepEqual(checked(), ['Critters'])
-  // the state names it; from then on the state's is drawn, whoever picks next (the pane, /deck avatars)
+  // the state names it; from then on the state's is drawn, whoever picks next (the pane, /apiarius avatars)
   p.load(sample(s => { s.avatarStyle = 'critter' }))
   assert.equal(p.run('styleNow()'), 'critter')
   p.load(sample(s => { s.avatarStyle = 'blob' }))
@@ -1835,7 +1835,7 @@ test('the drawer`s Activity lays an agent`s words and its thinking between its c
   click(toggle().c[0])
   assert.deepEqual(log(), ['act', 'act', 'act is-fail', 'act', 'act'])
   assert.equal(notes().filter(one => one.includes('may be a summary')).length, 0)
-  assert.equal(storage['agent-deck:actView'], '"calls"')
+  assert.equal(storage['apiarius:actView'], '"calls"')
   // kept: another page starts on Calls only
   const again = page({ hash: `#/now/agent/${BUILDER}`, storage })
   again.load(SAMPLE)

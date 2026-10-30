@@ -11,7 +11,7 @@ const HASH = 'c'.repeat(40)
 const NOW = 1_700_000_100_000
 
 const PANE = {
-  title: 'Agent Deck',
+  title: 'Apiarius',
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
@@ -21,9 +21,9 @@ const PANE = {
 
 const VIEWPORT = { columns: 100, rows: 50, isFullscreen: true }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
 function spawn(name: string, description: string, prompt: string) {
@@ -93,8 +93,8 @@ function world(on: On, clock: MockClock, options: { bashMs?: number; saved?: Dec
   const saved = options.saved
   if (saved) {
     let version = options.restored === undefined ? 0 : 1
-    on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: options.restored as DeckSnapshot | undefined, version } }))
-    on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+    on('state.get', { plugin: 'apiarius', key: 'snapshot' }, () => ({ value: { value: options.restored as DeckSnapshot | undefined, version } }))
+    on('state.set', { plugin: 'apiarius', key: 'snapshot' }, ($, e) => {
       saved.push(JSON.parse(JSON.stringify(e.value)) as DeckSnapshot)
       version += 1
       return { value: { isSet: true as const, version } }
@@ -303,7 +303,7 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   await clock.advance(2000)
   const kept = lastOf(saved)
   expect(kept.v).toBe(M.SNAPSHOT_VERSION)
-  // its graph tab is the Agents tab now (Classic); /deck opens v2's Now, the earlier build's fields left as they were
+  // its graph tab is the Agents tab now (Classic); /apiarius opens v2's Now, the earlier build's fields left as they were
   expect(M.healView(older.view, kept.data).tab).toBe('agents')
   expect(kept.view).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'activity', showFiles: false })
   expect(kept.data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-old'])
@@ -324,7 +324,7 @@ test('no redraw while nothing changes: idle ticks raise no ui.invalidate, a tool
   await $.command.run(deck('agents'))
   await $.agent.spawn(spawn('scout', 'look around', 'Look around src/'))
   await $.tool.call(bash({ command: 'npm test', description: 'Run the unit tests' }))
-  const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'desktop', component: 'Pane', requestId: 'agent-deck', viewport: VIEWPORT, props: PANE })
+  const ui = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'Pane', requestId: 'apiarius', viewport: VIEWPORT, props: PANE })
   expect(await ui.drawn()).toBeDefined()
   await clock.advance(10_000)
 
@@ -517,8 +517,8 @@ function qaWorld(on: On, saved: DeckSnapshot[], options: { root?: string; short?
     }
   })
   let version = 0
-  on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
-  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+  on('state.get', { plugin: 'apiarius', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
+  on('state.set', { plugin: 'apiarius', key: 'snapshot' }, ($, e) => {
     saved.push(JSON.parse(JSON.stringify(e.value)) as DeckSnapshot)
     version += 1
     return { value: { isSet: true as const, version } }

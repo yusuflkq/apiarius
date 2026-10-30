@@ -24,7 +24,7 @@ const SURFACES = ['terminal', 'desktop'] as const
 type Surface = (typeof SURFACES)[number]
 
 const PANE = {
-  title: 'Agent Deck',
+  title: 'Apiarius',
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
@@ -195,12 +195,12 @@ function world(on: On): { disk: Disk } {
 }
 
 function pane(surface: Surface) {
-  return { plugin: 'agent-deck', surface, component: 'Pane' as const, requestId: 'agent-deck', viewport: VIEWPORT, props: PANE }
+  return { plugin: 'apiarius', surface, component: 'Pane' as const, requestId: 'apiarius', viewport: VIEWPORT, props: PANE }
 }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
 /** An Agent call's spawn, named, with the fields the engine fills in; `parent` is the agent whose loop spawns it (the Orchestrator's when absent). */

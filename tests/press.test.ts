@@ -17,16 +17,16 @@ import { deck, newWorld, NOW, world } from './world'
 const SURFACES = ['desktop', 'terminal'] as const
 type Surface = (typeof SURFACES)[number]
 
-const PANE = { title: 'Agent Deck', isFocused: false, bodyColumns: 96, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 60 }, view: {} }
+const PANE = { title: 'Apiarius', isFocused: false, bodyColumns: 96, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 60 }, view: {} }
 const BAND = { hasSurvey: false, isWorking: true, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} }
 const VIEWPORT = { columns: 100, rows: 60, isFullscreen: true }
 
 function pane(surface: Surface) {
-  return { plugin: 'agent-deck', surface, component: 'Pane' as const, requestId: 'agent-deck', viewport: VIEWPORT, props: PANE }
+  return { plugin: 'apiarius', surface, component: 'Pane' as const, requestId: 'apiarius', viewport: VIEWPORT, props: PANE }
 }
 
 function band(surface: Surface) {
-  return { plugin: 'agent-deck', surface, component: 'AbovePrompt' as const, viewport: VIEWPORT, props: BAND }
+  return { plugin: 'apiarius', surface, component: 'AbovePrompt' as const, viewport: VIEWPORT, props: BAND }
 }
 
 type Node = { type?: string; props?: Record<string, unknown>; press?: { handle?: unknown }; children?: unknown[] }
@@ -40,7 +40,7 @@ function handles(tree: unknown, out: Record<string, unknown> = {}): Record<strin
   return out
 }
 
-/** A fresh session, the pane opened with /deck. */
+/** A fresh session, the pane opened with /apiarius. */
 async function opened($: Engine, on: On) {
   const clock = mock.clock(on, { now: NOW })
   on('ui.message', () => ({}))

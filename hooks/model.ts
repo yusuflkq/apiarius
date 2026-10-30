@@ -60,8 +60,8 @@ export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'plan', 'changes']
 
 /**
  * The views off the tab row, kept so nothing is lost: Stats, and Classic
- * (`agents`: the summary and outline of earlier builds). `/deck stats` and
- * `/deck classic` still open them, and a saved view on one keeps it.
+ * (`agents`: the summary and outline of earlier builds). `/apiarius stats` and
+ * `/apiarius classic` still open them, and a saved view on one keeps it.
  */
 export const UNLISTED_TABS: readonly DeckTab[] = ['stats', 'agents']
 
@@ -72,7 +72,7 @@ export const MAP_VIEWS: readonly DeckMapView[] = ['tree', 'wire']
 
 /**
  * Earlier builds' tabs, by the tab that took each one's place, so a saved
- * view or a typed `/deck overview` still lands; and `classic`, the name the
+ * view or a typed `/apiarius overview` still lands; and `classic`, the name the
  * Agents tab went by on the tab row.
  */
 export const OLD_TABS: ReadonlyMap<string, DeckTab> = new Map<string, DeckTab>([
@@ -90,7 +90,7 @@ export function tabNamed(name: unknown): DeckTab | undefined {
   return ALL_TABS.find(tab => tab === name) ?? OLD_TABS.get(name)
 }
 
-/** The tab a `/deck` argument asks for: a tab's name or its start (`c`), the tab row's before the unlisted, today's names before earlier builds'. */
+/** The tab a `/apiarius` argument asks for: a tab's name or its start (`c`), the tab row's before the unlisted, today's names before earlier builds'. */
 export function tabFor(arg: string): DeckTab | undefined {
   const wanted = arg.trim().toLowerCase()
   if (wanted === '') return undefined
@@ -282,14 +282,14 @@ export function v2TabOf(tab: DeckTab | DeckView2['tab']): DeckView2['tab'] {
   return tab === 'changes' || tab === 'chat' || tab === 'org' || tab === 'inspect' || tab === 'settings' ? tab : 'now'
 }
 
-/** The names `/deck` takes for a v2 tab beside the tabs' own ids: the Dashboard's (its id is `now`), and Help, which Settings holds. */
+/** The names `/apiarius` takes for a v2 tab beside the tabs' own ids: the Dashboard's (its id is `now`), and Help, which Settings holds. */
 export const V2_TAB_NAMES: ReadonlyMap<string, DeckView2['tab']> = new Map<string, DeckView2['tab']>([
   ['dashboard', 'now'],
   ['help', 'settings'],
 ])
 
 /**
- * The v2 tab a `/deck` argument asks for: `now` (or `dashboard`), `chat`,
+ * The v2 tab a `/apiarius` argument asks for: `now` (or `dashboard`), `chat`,
  * `org`, `changes`, `inspect` or `settings` (or `help`), or the start of
  * one (`c` is Chat, `i` Inspect); else an earlier build's tab, where it went
  * (`v2TabOf` of `tabFor`: `stats` is Inspect). Undefined for anything else.

@@ -4,7 +4,7 @@
  * every deck reads the others' to list them.
  *
  * - **The registry.** `<registry>/<sessionId>.json` (`SessionEntry`), where
- *   the registry is `~/.claude/agent-deck/sessions` (`registryDirOf`). A deck
+ *   the registry is `~/.claude/apiarius/sessions` (`registryDirOf`). A deck
  *   writes its own when what it shows changes (at most every 2 s) and on a
  *   heartbeat (every 30 s), and lets it go on `session.end`. A file whose
  *   heartbeat stopped is no session's any more: left out at once, and cleaned
@@ -19,7 +19,7 @@
  *   The session the deck belongs to first ("here"), then the others, the
  *   newest started first, so rows stay put whatever their states do.
  * - **Showing one.** A session's deck shows from its state folder (the
- *   `state.json` and lazy files `/deck web` writes). A deck writes them only
+ *   `state.json` and lazy files `/apiarius web` writes). A deck writes them only
  *   while it is asked to: another deck showing it says so in its inbox
  *   (`InboxFile.viewUntil`), as long as it looks. Its controls are its own
  *   window's; a permission prompt alone, which Claude Code takes only in its
@@ -268,7 +268,7 @@ export const NOT_ANSWERING = "Its deck isn't answering"
 export function notAnsweringOf(row: Pick<SessionRowV2, 'canSteer' | 'isQuiet' | 'say'> | null): string {
   if (!row) return `${NOT_ANSWERING}: it is not listed any more.`
   if (row.isQuiet) return `${NOT_ANSWERING}: ${row.say !== '' ? `${row.say.charAt(0).toLowerCase()}${row.say.slice(1)}` : 'not heard from lately'}.`
-  if (!row.canSteer) return `${NOT_ANSWERING}: it runs an older Agent Deck.`
+  if (!row.canSteer) return `${NOT_ANSWERING}: it runs an older Apiarius.`
   return ''
 }
 
@@ -303,16 +303,22 @@ export function sessionFileOf(id: string): string {
 }
 
 /**
- * The registry folder: `AGENT_DECK_SESSIONS` when set (the tests', and a
- * person's own choice), else `agent-deck/sessions` under Claude Code's
+ * The registry folder: `APIARIUS_SESSIONS` when set (the tests', and a
+ * person's own choice), else `apiarius/sessions` under Claude Code's
  * configuration folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`); '' when no
  * home is known.
  */
 export function registryDirOf(env: { override?: string | undefined; configDir?: string | undefined; home?: string | undefined }): string {
+  if (env.override && env.override.trim() !== '') return env.override.trim().replace(/[\\/]+$/, '')
+  const config = configDirOf(env)
+  return config === '' ? '' : `${config}/apiarius/sessions`
+}
+
+/** Claude Code's configuration folder: `CLAUDE_CONFIG_DIR`, else `~/.claude`; '' when no home is known. */
+export function configDirOf(env: { configDir?: string | undefined; home?: string | undefined }): string {
   const trim = (path: string) => path.replace(/[\\/]+$/, '')
-  if (env.override && env.override.trim() !== '') return trim(env.override.trim())
-  if (env.configDir && env.configDir.trim() !== '') return `${trim(env.configDir.trim())}/agent-deck/sessions`
-  if (env.home && env.home.trim() !== '') return `${trim(env.home.trim())}/.claude/agent-deck/sessions`
+  if (env.configDir && env.configDir.trim() !== '') return trim(env.configDir.trim())
+  if (env.home && env.home.trim() !== '') return `${trim(env.home.trim())}/.claude`
   return ''
 }
 

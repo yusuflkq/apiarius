@@ -26,12 +26,12 @@ type Surface = 'terminal' | 'desktop' | 'vscode' | 'mobile'
 
 function pane<S extends Surface>(surface: S, bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -48,7 +48,7 @@ function sampleState(): W.WebStateV2 {
   return W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
 }
 
-/** The engine, the sample served, `/deck demo` shown. */
+/** The engine, the sample served, `/apiarius demo` shown. */
 async function demo($: Engine, on: On, state: W.WebStateV2) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
@@ -209,7 +209,7 @@ test('the terminal, VS Code and the mobile app list Org as a tree: each under th
   }
 })
 
-test('where the chart`s Client failed (ui.fault) that surface`s Org lists the agents as a tree and says why; leaving Org, or /deck, tries the Client again; a pane wide enough draws its own chart all the while', async ($, on) => {
+test('where the chart`s Client failed (ui.fault) that surface`s Org lists the agents as a tree and says why; leaving Org, or /apiarius, tries the Client again; a pane wide enough draws its own chart all the while', async ($, on) => {
   await demo($, on, sampleState())
   const ui = await $.ui.mount(pane('desktop', 24))
   await press(ui, 'tab:org')

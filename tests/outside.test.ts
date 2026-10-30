@@ -14,7 +14,7 @@ import type { DeckData } from '../types'
  */
 
 const NOW = 1_700_000_100_000
-const ROOT = 'C:/Users/developer/Documents/agent-deck'
+const ROOT = 'C:/Users/developer/Documents/apiarius'
 const SCRATCH = 'C:/Users/developer/AppData/Local/Temp/claude/C--Users-developer-Documents/0d3f5b7a-1c2e-4a6b-9d8f-2e4a6c8b0f13/scratchpad/talk'
 
 function fileRow(path: string): FileRow {
@@ -37,7 +37,7 @@ function session(root: string = ROOT): DeckData {
   edited(data, `${SCRATCH}/msg2.txt`, 20, root)
   edited(data, `${ROOT}/README.md`, 10, root)
   // a drive letter in another case, as a tool may spell it, is still the repository
-  edited(data, `c:/users/developer/documents/agent-deck/web/app.js`, 50, root)
+  edited(data, `c:/users/developer/documents/apiarius/web/app.js`, 50, root)
   return data
 }
 

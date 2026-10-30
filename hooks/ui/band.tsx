@@ -2,7 +2,7 @@
  * The band above the prompt: one line, shown only while an agent is at
  * work, something needs you, or something runs in the background or is
  * scheduled, "● 3 working · ? 1 question · ◐ 2 in the background · ◷ 1
- * scheduled", then `/deck`, which opens the deck on Now. Its words are the
+ * scheduled", then `/apiarius`, which opens the deck on Now. Its words are the
  * v2 state's (`W.bandOf`, handed in as `DeckModel.band`); the glyphs carry
  * the status hues (blue at work and in the background, amber what needs
  * you, grey what is scheduled). No hotkeys: a bare digit in an empty prompt
@@ -34,7 +34,7 @@ export function bandView(kit: Kit, band: V2Band | null | undefined, actions: Pic
           </Text>
         </Box>
         <Box flexShrink={0}>
-          <Button key="band:open" label="/deck" plain onPress={() => actions.open('now')} />
+          <Button key="band:open" label="/apiarius" plain onPress={() => actions.open('now')} />
         </Box>
       </Box>
       {theirs}

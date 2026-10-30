@@ -45,7 +45,7 @@ import { ago, num, plural, usd } from './text'
 /** Inspect's sections' fold ids, in `DeckView2.openFolds`. */
 export const INSPECT_FOLDS = { context: 'inspect:context', permissions: 'inspect:permissions', loaded: 'inspect:loaded', spend: 'inspect:spend' } as const
 
-/** The decisions the pane lists at most, so it keeps inside the elements a desktop draws; /deck web lists the newest 100. */
+/** The decisions the pane lists at most, so it keeps inside the elements a desktop draws; /apiarius web lists the newest 100. */
 export const MOST_DECISIONS = 20
 
 /** Inspect's part of a state, its newer fields filled where a state of an earlier build lacks them. */
@@ -369,7 +369,7 @@ function permissionsSection(kit: Kit, state: WebStateV2, more: V2InspectMore, fo
       'perm:list',
       shown.flatMap((d, i) => [i > 0 ? rule(kit) : null, decisionRow(kit, state, d, actions)]),
     ),
-    left > 0 ? quiet(kit, `${plural(left, 'older decision')}: /deck web lists the newest 100.`) : null,
+    left > 0 ? quiet(kit, `${plural(left, 'older decision')}: /apiarius web lists the newest 100.`) : null,
   ])
 }
 
@@ -524,7 +524,7 @@ function spendSection(kit: Kit, state: WebStateV2, fold: Fold, actions: DashActi
         {listBox(kit, 'inspect:agents', [isTable ? tableHead(kit, columns) : null, ...rows.flatMap((row, i) => [i > 0 || isTable ? rule(kit) : null, row])])}
       </Box>
     ),
-    more > 0 ? quiet(kit, `${plural(more, 'more agent')}: more than Inspect lists. /deck web lists them all.`) : null,
+    more > 0 ? quiet(kit, `${plural(more, 'more agent')}: more than Inspect lists. /apiarius web lists them all.`) : null,
   ])
 }
 

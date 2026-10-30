@@ -1,4 +1,4 @@
-/* Agent Deck: the web page.
+/* Apiarius: the web page.
  *
  * What Claude Code is doing, who is working on what, and whether anything
  * needs you, live over SSE. It draws the mod's v2 view model (hooks/web.ts,
@@ -102,8 +102,8 @@ function firstLine(text, max = 180) {
   return bare.length > max ? `${bare.slice(0, max - 1)}…` : bare;
 }
 const store = {
-  get(k, d) { try { const v = localStorage.getItem(`agent-deck:${k}`); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(`agent-deck:${k}`, JSON.stringify(v)); } catch { /* private mode */ } },
+  get(k, d) { try { const v = localStorage.getItem(`apiarius:${k}`); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`apiarius:${k}`, JSON.stringify(v)); } catch { /* private mode */ } },
 };
 
 const STATUS = {
@@ -1622,7 +1622,7 @@ function Header() {
   const pending = !S && route.session ? PendingHead(sessionRow(route.session)) : null;
   return h('header', { class: 'hd' },
     h('div', { class: 'hd-top' },
-      h('span', { class: 'brand-mark', title: 'Agent Deck', 'aria-hidden': 'true' }),
+      h('span', { class: 'brand-mark', title: 'Apiarius', 'aria-hidden': 'true' }),
       hd ? StateWord() : pending ? pending[0] : h('span', { class: 'state is-idle' }, Dot('idle'), S ? 'Idle' : 'Connecting'),
       h('span', { class: 'hd-title' },
         hd ? GoalButton() : pending ? pending[1] : h('span', { class: 'goal goal-none' }),
@@ -3683,7 +3683,7 @@ function drawerWidthOf(w, vw) {
 /** The width this browser keeps for the drawer; null for none (the default), and where its storage is refused. */
 function keptDrawerW() {
   try {
-    const n = Number(JSON.parse(localStorage.getItem('agent-deck:drawerW')));
+    const n = Number(JSON.parse(localStorage.getItem('apiarius:drawerW')));
     return Number.isFinite(n) && n > 0 ? n : null;
   } catch {
     return null;
@@ -3693,8 +3693,8 @@ function keptDrawerW() {
 /** Keeps the drawer's width in this browser (null: forgets it); storage refused, it lasts this visit. */
 function keepDrawerW(w) {
   try {
-    if (w == null) localStorage.removeItem('agent-deck:drawerW');
-    else localStorage.setItem('agent-deck:drawerW', JSON.stringify(w));
+    if (w == null) localStorage.removeItem('apiarius:drawerW');
+    else localStorage.setItem('apiarius:drawerW', JSON.stringify(w));
   } catch { /* private mode, or storage off: the width lasts this visit */ }
 }
 
@@ -3958,7 +3958,7 @@ function SettingsPage() {
 function AvatarSection() {
   const now = styleNow();
   return Section('avatars', 'Avatar style', null, null, () => h('div', { class: 'avatars' },
-    h('p', { class: 'sec-text' }, 'How the agents look here, in the Desktop pane and in /deck demo, in every session. /deck avatars <style> picks one too.'),
+    h('p', { class: 'sec-text' }, 'How the agents look here, in the Desktop pane and in /apiarius demo, in every session. /apiarius avatars <style> picks one too.'),
     h('div', { class: 'styles', role: 'radiogroup', 'aria-label': 'Avatar style' },
       AV.STYLES.map(s => h('button', {
         key: s.id, type: 'button', role: 'radio', class: `style-pick${s.id === now ? ' on' : ''}`, 'aria-checked': s.id === now ? 'true' : 'false',
@@ -4023,12 +4023,12 @@ function ConnBanner() {
   if (st === 'ended') {
     const at = S && S.now ? new Date(S.now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     return h('div', { class: 'connbar connbar-idle', role: 'status' }, icon('power'),
-      h('span', null, h('strong', null, 'The session ended.'), ` This is its last state${at ? ` (${at})` : ''}. Run /deck web in a new session to follow it live.`),
+      h('span', null, h('strong', null, 'The session ended.'), ` This is its last state${at ? ` (${at})` : ''}. Run /apiarius web in a new session to follow it live.`),
       h('button', { class: 'btn btn-xs', type: 'button', onClick: retryNow }, 'Try again'));
   }
   if (st === 'denied' && S) {
     return h('div', { class: 'connbar connbar-idle', role: 'status' }, icon('octagon'),
-      h('span', null, h('strong', null, 'This page lost access.'), ' The deck\'s link changed; run /deck web in Claude Code to open it again.'));
+      h('span', null, h('strong', null, 'This page lost access.'), ' The deck\'s link changed; run /apiarius web in Claude Code to open it again.'));
   }
   return null;
 }
@@ -4045,7 +4045,7 @@ function Unreachable() {
   return h('div', { key: 'unreachable', class: 'page' },
     h('div', { class: 'card' }, Empty(denied ? 'octagon' : 'wifiOff',
       denied ? 'This link no longer works' : 'Can\'t reach the deck',
-      denied ? 'The deck needs the link it opened with. Run /deck web in Claude Code to open it again.' : 'The deck server is not answering. If the Claude Code session ended, run /deck web in a new one.',
+      denied ? 'The deck needs the link it opened with. Run /apiarius web in Claude Code to open it again.' : 'The deck server is not answering. If the Claude Code session ended, run /apiarius web in a new one.',
       denied ? null : h('button', { class: 'btn btn-sm', type: 'button', onClick: retryNow }, icon('refresh'), 'Try again'))));
 }
 
@@ -4064,7 +4064,7 @@ function Welcome() {
         WELCOME.map((a, n) => h('span', { key: n, class: `welcome-av w${n}` }, Avatar(a, n === 1 ? 44 : 34, { live: true })))),
       h('p', { class: 'welcome-title' }, old ? 'Waiting for the deck\'s state' : 'Nothing yet'),
       h('p', { class: 'welcome-text' }, old
-        ? 'The mod writing this session\'s state is older than this page. Start a new session (or reload the mod) and run /deck web again.'
+        ? 'The mod writing this session\'s state is older than this page. Start a new session (or reload the mod) and run /apiarius web again.'
         : 'Prompt Claude Code and this page fills in live: what Claude is doing, every agent it starts, what needs you, and the files they change.'),
       h('p', { class: 'welcome-live' }, Dot(conn.status === 'live' ? 'run' : 'idle', conn.status === 'live'), conn.status === 'live' ? 'Connected and listening' : 'Waiting for the session')));
 }
@@ -4282,11 +4282,11 @@ function afterRender(pin) {
     if (!org.touched && (org.sig !== lastLayout.sig || org.size !== size)) fitOrg(lastLayout);
     org.sig = lastLayout.sig; org.size = size;
   }
-  document.title = S && !S.empty ? `${S.needs.length ? '● ' : ''}${S.header.stateText} · Agent Deck` : 'Agent Deck';
+  document.title = S && !S.empty ? `${S.needs.length ? '● ' : ''}${S.header.stateText} · Apiarius` : 'Apiarius';
 }
 
 // ============================================================== all sessions
-// Every Claude Code session on this machine whose Agent Deck runs (the mod's
+// Every Claude Code session on this machine that runs Apiarius (the mod's
 // `sessions`, hooks/sessions.ts), as peers of one deck: All sessions
 // (#/sessions, the header's link and `s`) lists them, here's first, in an
 // order their states never move (what needs you is counted, not moved up),
@@ -4362,7 +4362,7 @@ const NOT_ANSWERING = 'Its deck isn\'t answering';
 function notAnswering(row) {
   if (!row) return `${NOT_ANSWERING}: it is not listed any more.`;
   if (row.isQuiet) return `${NOT_ANSWERING}: ${row.heardAt ? heardText(row.heardAt).replace(/^L/, 'l') : 'not heard from lately'}.`;
-  if (!row.canSteer) return `${NOT_ANSWERING}: it runs an older Agent Deck.`;
+  if (!row.canSteer) return `${NOT_ANSWERING}: it runs an older Apiarius.`;
   return '';
 }
 /** On another session's deck that takes nothing from here, why, said at its controls in their place; '' on this deck's own, and while it does. */
@@ -4558,8 +4558,8 @@ function SessionsPage() {
       ? h('div', { key: 'none', class: 'card' }, Empty('layers', 'No sessions listed', HOME && !HOME.empty ? 'This deck lists the sessions on this machine once it has read them.' : 'Waiting for this session\'s deck.'))
       : h('div', { key: 'list', class: 'card list sess-list' }, list.rows.map(r => SessionRow(r, r.id === lit))),
     list && h('p', { key: 'note', class: 'sess-note' }, list.rows.length > 1
-      ? 'Every Claude Code session here whose Agent Deck runs, Desktop and terminal alike. A press shows its deck: its Dashboard, Chat and Changes. What you do there goes through its own deck; only a permission prompt is answered in its window. '
-      : 'No other session here runs Agent Deck now. Each one that does shows here, Desktop and terminal alike. ',
+      ? 'Every Claude Code session here that runs Apiarius, Desktop and terminal alike. A press shows its deck: its Dashboard, Chat and Changes. What you do there goes through its own deck; only a permission prompt is answered in its window. '
+      : 'No other session here runs Apiarius now. Each one that does shows here, Desktop and terminal alike. ',
     h('kbd', { key: 'up' }, '↑'), h('kbd', { key: 'down' }, '↓'), ' pick one, ', h('kbd', { key: 'enter' }, 'Enter'), ' shows its deck, ', h('kbd', { key: 's' }, 's'), ' goes back.'));
 }
 

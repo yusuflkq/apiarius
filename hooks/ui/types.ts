@@ -45,7 +45,7 @@ export type UsageInfo = {
 }
 
 
-/** The web deck (`/deck web`) as the pane shows it under its Open dashboard button. */
+/** The web deck (`/apiarius web`) as the pane shows it under its Open dashboard button. */
 export type WebPane = {
   /** `off` until it is asked for, `starting` until the server says it is ready, `failed` when it could not start or stopped by itself. */
   status: 'off' | 'starting' | 'running' | 'failed'
@@ -84,7 +84,7 @@ export type Actions = {
   selectFile: (path: string) => void
   /** Opens commit `hash`'s files, or closes them when it is the one open. */
   selectCommit: (hash: string) => void
-  /** Hides the band above the prompt, or shows it again, as `/deck band` does; the choice stays. */
+  /** Hides the band above the prompt, or shows it again, as `/apiarius band` does; the choice stays. */
   toggleBand: () => void
   /**
    * Sends `text` to agent `agentId` (to the Orchestrator: your next prompt).
@@ -98,7 +98,7 @@ export type Actions = {
   open: (tab: DeckTab | DeckView2['tab']) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
   selectRepo: (root: string) => void
-  /** What `/deck web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
+  /** What `/apiarius web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
   openWeb: () => void
 }
 
@@ -134,7 +134,7 @@ export type DashActions = Actions & {
    * least that shows it.
    */
   reveal: (key: string, block?: 'start' | 'nearest') => void
-  /** Leaves the sample (`/deck demo`) for this session's own deck. */
+  /** Leaves the sample (`/apiarius demo`) for this session's own deck. */
   exitDemo: () => void
   /**
    * Sets the v2 screens' own state (`DeckView.v2`: the tab, the open folds,
@@ -155,18 +155,18 @@ export type DashActions = Actions & {
   focusNeed: () => void
   /**
    * Draws the agents' avatars in `style` (web/avatars.mjs `STYLE_IDS`) from
-   * now on, as `/deck avatars <style>` does: kept in the person's prefs, for
+   * now on, as `/apiarius avatars <style>` does: kept in the person's prefs, for
    * every session; the pane draws again and the web page follows.
    */
   setAvatarStyle: (style: string) => void
   /**
-   * "Clear finished" (as `/deck clear`): every agent shown that is finished
+   * "Clear finished" (as `/apiarius clear`): every agent shown that is finished
    * (done, failed, stopped or idle) hidden from the Dashboard, Chat's members
    * and Everyone, and Org, kept in the view through reloads. The deck's own
    * tidying: nothing in Claude Code changes.
    */
   clearFinished: () => void
-  /** "Show N cleared" (as `/deck clear show`): the agents "Clear finished" hid shown again. */
+  /** "Show N cleared" (as `/apiarius clear show`): the agents "Clear finished" hid shown again. */
   showCleared: () => void
   /**
    * Stop on a background agent or a teammate at work (as the page's
@@ -197,11 +197,11 @@ export type DashModel = {
   v2: WebStateV2 | null
   /** The v2 state's lazy files (an agent's file, a patch, a cut message's whole text): the live deck's, or the sample's (web/fixtures/v2/). */
   v2Files: V2Files
-  /** The sample (`/deck demo`) is shown, not this session. */
+  /** The sample (`/apiarius demo`) is shown, not this session. */
   isDemo: boolean
   /** Why the sample could not be read; '' otherwise. */
   demoNote: string
-  /** Org's chart Client failed on this surface: Org lists the agents as a tree instead, until Org is left (or /deck opens). */
+  /** Org's chart Client failed on this surface: Org lists the agents as a tree instead, until Org is left (or /apiarius opens). */
   isOrgDown: boolean
   /** The agent Org's chart marks: the one whose page was opened last; null for none. */
   selected: string | null

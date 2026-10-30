@@ -42,7 +42,7 @@ test('Talk to the Orchestrator: your words are logged at once and queued as your
   // its turn runs: your words wait for it to end
   command(child, { cmd: 'chat', id: 'c1', agentId: 'main', text: '  Also add a test for it  ' })
   await clock.settle()
-  expect(w.submitted[w.submitted.length - 1]).toMatchObject({ text: 'Also add a test for it', origin: { kind: 'plugin', name: 'agent-deck', asUser: true } })
+  expect(w.submitted[w.submitted.length - 1]).toMatchObject({ text: 'Also add a test for it', origin: { kind: 'plugin', name: 'apiarius', asUser: true } })
   await clock.advance(400)
   let state = lastState(w)
   const sent = state.messages.find(one => one.kind === 'chat' && one.to === M.MAIN)

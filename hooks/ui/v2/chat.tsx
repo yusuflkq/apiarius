@@ -592,7 +592,7 @@ export function chatTab(kit: Kit, state: WebStateV2, files: V2Files, view2: Deck
           {pages}
         </Box>
       ) : null}
-      {earlier > 0 && !isPaged && isFull ? quiet(kit, `${earlier} earlier: more than the pane holds. Pick an agent above, or read them all with /deck web.`) : null}
+      {earlier > 0 && !isPaged && isFull ? quiet(kit, `${earlier} earlier: more than the pane holds. Pick an agent above, or read them all with /apiarius web.`) : null}
       {earlier > 0 && !isPaged && !isFull ? (
         <Box flexDirection="row" justifyContent="center">
           <Button

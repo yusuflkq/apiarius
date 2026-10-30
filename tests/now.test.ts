@@ -9,7 +9,7 @@
  * the rows `j` and `k` move over (the needs, then the cards); and the
  * drawing well inside what a desktop draws.
  *
- * Drawn by `/deck demo` over the v2 sample (tests/v2session.ts), with the
+ * Drawn by `/apiarius demo` over the v2 sample (tests/v2session.ts), with the
  * calls, files and figures the engine builds laid over it here, so each
  * test says exactly what it draws from.
  */
@@ -28,12 +28,12 @@ type Surface = 'terminal' | 'desktop' | 'vscode' | 'mobile'
 
 function pane<S extends Surface>(surface: S, bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -53,7 +53,7 @@ function sampleState(extra: (v2: W.WebStateV2) => Partial<Extras> & Partial<W.We
   return { ...v2, ...extra(v2) } as W.WebStateV2
 }
 
-/** `/deck demo` reads `state` as the sample, with the sample's agent files and patches. */
+/** `/apiarius demo` reads `state` as the sample, with the sample's agent files and patches. */
 function serve(on: On, state: W.WebStateV2) {
   const session = v2Session()
   const agentFiles = new Map(W.agentFilesOf(session.data).map(one => [one.id, one.text]))
@@ -69,7 +69,7 @@ function serve(on: On, state: W.WebStateV2) {
   })
 }
 
-/** The engine, `state` served as the sample, `/deck demo` shown. */
+/** The engine, `state` served as the sample, `/apiarius demo` shown. */
 async function demo($: Engine, on: On, state: W.WebStateV2) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   serve(on, state)

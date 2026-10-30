@@ -3,5 +3,5 @@
 node_modules/
 # The debug dump (hooks/register.tsx): <sessionId>.json is written while this folder exists
 .debug/
-# The web deck (/deck web): each session's state.json and patches, for web/server.js to serve
+# The web deck (/apiarius web): each session's state.json and patches, for web/server.js to serve
 .web/

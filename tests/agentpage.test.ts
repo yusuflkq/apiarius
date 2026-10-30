@@ -5,7 +5,7 @@
  * its own description else its target, how it went, when; each opening on
  * all of it), its Edits by file (the newest open on its newest edit, its
  * diff numbered on a desktop), each edit and the call that made it a press
- * apart, and the composer at its foot. Drawn by `/deck demo` over the v2
+ * apart, and the composer at its foot. Drawn by `/apiarius demo` over the v2
  * sample, and the pieces by themselves.
  */
 import type { On } from 'claude-code'
@@ -27,12 +27,12 @@ type Surface = (typeof SURFACES)[number]
 /** The deck's pane as a surface lays it out, `bodyColumns` across. */
 function pane(surface: Surface, bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -75,7 +75,7 @@ function sizeOf(node: unknown): { nodes: number; depth: number } {
 /** What a test lays over the sample: its state changed, agent files and patches of its own. */
 type Over = { change?: (state: W.WebStateV2) => W.WebStateV2; agents?: Record<string, W.V2AgentFile>; patches?: Record<string, string> }
 
-/** `/deck demo` over the v2 sample as the engine builds it: its state, its agent files and its patches, `over` laid over them. */
+/** `/apiarius demo` over the v2 sample as the engine builds it: its state, its agent files and its patches, `over` laid over them. */
 async function demo($: Engine, on: On, w: World = newWorld(), over: Over = {}) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()

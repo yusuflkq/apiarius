@@ -10,8 +10,8 @@
  * messages stacked under one name; Claude Code's notices centred; a question
  * held on you amber with "Answer on Dashboard →"; a long message folded with Show
  * more; the window that keeps inside the pane's bounds; and "Did you mean"
- * for a name several agents answer to. Drawn by the deck itself (`/deck
- * demo` over the v2 sample, `/deck` over a live session).
+ * for a name several agents answer to. Drawn by the deck itself (`/apiarius
+ * demo` over the v2 sample, `/apiarius` over a live session).
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine, type FoundElement } from 'claude-code/testing'
@@ -32,12 +32,12 @@ type Surface = 'terminal' | 'desktop'
 /** The deck's pane as a surface lays it out, `bodyColumns` across, on a terminal `rows` tall. */
 function pane(surface: Surface, bodyColumns = 84, rows = 400) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: rows }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: rows }, view: {} },
   }
 }
 
@@ -49,7 +49,7 @@ async function press(ui: Drawing, key: string) {
   await ui.redraw()
 }
 
-/** The v2 sample as `/deck demo` reads it: the sample session's state and its agent files, patches and cut messages. */
+/** The v2 sample as `/apiarius demo` reads it: the sample session's state and its agent files, patches and cut messages. */
 function sample(on: On, patch: (state: W.WebStateV2) => W.WebStateV2 = state => state) {
   const session = v2Session()
   const v2 = patch(W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable))
@@ -70,7 +70,7 @@ function sample(on: On, patch: (state: W.WebStateV2) => W.WebStateV2 = state => 
   return v2
 }
 
-/** The engine, the v2 sample read, and `/deck demo` shown. */
+/** The engine, the v2 sample read, and `/apiarius demo` shown. */
 async function demo($: Engine, on: On, w: World = newWorld(), patch?: (state: W.WebStateV2) => W.WebStateV2) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const v2 = sample(on, patch)
@@ -834,7 +834,7 @@ test('what Chat ends with changes with a new message, the ack under its last one
   expect(chatEndOf({ ...v2, chat: upTo, acks: [...v2.acks, { id: 'c-3', ok: true, status: 'answered', text: 'Claude carries on', at: v2.now }] }, '')).not.toBe(queued)
 })
 
-test('the pane follows Chat through the engine: your scrolling passes through the deck`s ui.scroll hook untouched, and Chat opened by its tab, /deck chat and a new message draws on', async ($, on) => {
+test('the pane follows Chat through the engine: your scrolling passes through the deck`s ui.scroll hook untouched, and Chat opened by its tab, /apiarius chat and a new message draws on', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   on('ui.focus', () => ({}))
   const moves: { offset: number; by: number }[] = []
@@ -849,7 +849,7 @@ test('the pane follows Chat through the engine: your scrolling passes through th
   await press(ui, 'tab:chat')
   await clock.advance(200)
   // you scroll up, then back to the end: the deck lets each move through as you made it
-  const scroll = (offset: number) => $.ui.scroll({ component: 'Pane', requestId: 'agent-deck', offset, by: offset === 0 ? -50 : 50, bodyRows: 30, contentRows: 80, origin: { kind: 'person' } })
+  const scroll = (offset: number) => $.ui.scroll({ component: 'Pane', requestId: 'apiarius', offset, by: offset === 0 ? -50 : 50, bodyRows: 30, contentRows: 80, origin: { kind: 'person' } })
   expect(await scroll(0)).toEqual({})
   expect(moves).toEqual([{ offset: 0, by: -50 }])
   await $.turn.complete({ turnId: 't1', answer: 'Fixed: the loop now stops at `length - 1`.', durationMs: 1000, isAborted: false, reason: 'answer' })

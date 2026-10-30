@@ -5,10 +5,10 @@
  * web/fixtures/make-v2.mjs writes them as the sample's registry
  * (web/fixtures/sessions.v2.json: each session's file as its deck writes it,
  * `dir` under web/fixtures) and the other sessions' decks
- * (web/fixtures/sessions/<id>/state.json and agents/), for `/deck demo`,
+ * (web/fixtures/sessions/<id>/state.json and agents/), for `/apiarius demo`,
  * `web/dev.js` and the tests.
  *
- * - Agent Deck terminal faces (the Desktop, agent-deck): two agents at work;
+ * - Apiarius terminal faces (the Desktop, apiarius): two agents at work;
  *   a fork of another session, so its spend counts its parent's.
  * - Fix the flaky CI job (Windows Terminal, api-server): the Orchestrator's
  *   own `gh run view` in flight.
@@ -55,14 +55,14 @@ function deckOf(id: string, data: DeckData, cwd: string, costUsd: number, contex
   return { id, dir: `sessions/${id}`, state, agentFiles: W.agentFilesOf(data) }
 }
 
-const FACES = 'C:\\Users\\sam\\code\\agent-deck'
+const FACES = 'C:\\Users\\sam\\code\\apiarius'
 const CI = 'C:\\Users\\sam\\code\\api-server'
 const SITE = 'C:\\Users\\sam\\code\\site'
 const NOTES = 'C:\\Users\\sam\\notes'
 
-/** Agent Deck terminal faces: on the Desktop, builder's tests and painter's edit in flight; begun as a fork of another session (`claude --resume … --fork-session`). */
+/** Apiarius terminal faces: on the Desktop, builder's tests and painter's edit in flight; begun as a fork of another session (`claude --resume … --fork-session`). */
 function faces(): SampleDeck {
-  const { data } = begun(25, 'Agent Deck terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it.')
+  const { data } = begun(25, 'Apiarius terminal faces\n\nGive each agent a glyph of its own in the terminal, in its avatar colour, with its status mark beside it.')
   data.isFork = true
   const builder = started(data, { id: 'c1a2b3c4d5e6f708', name: 'builder', description: 'Build and test the faces', prompt: 'Add terminalFace to web/avatars.mjs and run the tests.', at: ago(20) })
   M.beginTool(data, builder, M.activityOf('toolu_fc_b1', 'Bash', { command: 'npm test', description: 'Run the tests' }, FACES, ago(0.6)))
@@ -102,7 +102,7 @@ export function sampleSessions(): SampleSessions {
   const own = v2Session()
   const me = W.deckStateOf(own.data, own.git, own.usage, own.now, own.sessionId, own.cwd, own.answerable, own.gitDiffs)
   const decks = [faces(), ci(), site(), notes()]
-  const facts = { faces: { surface: 'desktop', terminal: '', repo: 'agent-deck', at: ago(0.3) }, ci: { surface: 'terminal', terminal: 'Windows Terminal', repo: 'api-server', at: ago(0.4) }, site: { surface: 'terminal', terminal: '', repo: 'site', at: ago(9) }, notes: { surface: 'desktop', terminal: '', repo: '', at: ago(120) } } as const
+  const facts = { faces: { surface: 'desktop', terminal: '', repo: 'apiarius', at: ago(0.3) }, ci: { surface: 'terminal', terminal: 'Windows Terminal', repo: 'api-server', at: ago(0.4) }, site: { surface: 'terminal', terminal: '', repo: 'site', at: ago(9) }, notes: { surface: 'desktop', terminal: '', repo: '', at: ago(120) } } as const
   const entryOf = (deck: SampleDeck, fact: { surface: S.SessionSurface; terminal: string; repo: string; at: number }, pid: number, inbox = true): S.SessionEntry => ({
     ...S.entryOf(deck.state, { surface: fact.surface, terminal: fact.terminal, repo: fact.repo, pid, dir: deck.dir, updatedAt: fact.at, heartbeatAt: SAMPLE_NOW }),
     inbox,

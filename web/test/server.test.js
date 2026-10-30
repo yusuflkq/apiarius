@@ -49,9 +49,9 @@ function waitFor(subscribe, check, ms, what) {
  * what it prints after. `stdin`: 'pipe' kept open, 'closed' (a pipe ended at
  * once, as the mod's $.process.spawn gives it), or 'ignore'.
  */
-function start({ dir, args = [], stdin = 'pipe', env = { AGENT_DECK_TOKEN: TOKEN } } = {}) {
+function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_TOKEN: TOKEN } } = {}) {
   const argv = [SERVER, '--dir', dir, ...args]
-  const child = spawn(process.execPath, argv, { env: { ...process.env, AGENT_DECK_TOKEN: '', ...env }, stdio: [stdin === 'closed' ? 'pipe' : stdin, 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(process.execPath, argv, { env: { ...process.env, APIARIUS_TOKEN: '', ...env }, stdio: [stdin === 'closed' ? 'pipe' : stdin, 'pipe', 'pipe'], windowsHide: true })
   if (stdin === 'closed') child.stdin.end()
   children.add(child)
   const server = { child, lines: [], first: null, port: 0, stderr: '', exited: false, listeners: new Set() }
@@ -164,7 +164,7 @@ after(async () => {
 
 test('refuses to start without a token, or with bad arguments', async () => {
   await assert.rejects(start({ dir: tempDir(), env: {} }), /exited with 2/)
-  await assert.rejects(start({ dir: tempDir(), env: { AGENT_DECK_TOKEN: 'short' } }), /exited with 2/)
+  await assert.rejects(start({ dir: tempDir(), env: { APIARIUS_TOKEN: 'short' } }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--parent', 'abc'] }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--port', '70000'] }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--verbose', '1'] }), /exited with 2/)
@@ -454,7 +454,7 @@ test('POST /cmd passes avatarStyle on in exactly its shape: a style`s id, lowerc
 
 test('POST /cmd passes selectRepo on in exactly its shape: a root on one line ("" follows the work), with the page`s id', async () => {
   const count = main.lines.length
-  const good = [{ cmd: 'selectRepo', id: 'rp-1', root: 'C:/Users/sam/Documents/agent-deck' }, { root: '', cmd: 'selectRepo' }]
+  const good = [{ cmd: 'selectRepo', id: 'rp-1', root: 'C:/Users/sam/Documents/apiarius' }, { root: '', cmd: 'selectRepo' }]
   for (const body of good) assert.equal((await post(main.port, body)).status, 200, JSON.stringify(body))
   const bad = [
     { cmd: 'selectRepo' },
@@ -466,7 +466,7 @@ test('POST /cmd passes selectRepo on in exactly its shape: a root on one line ("
   ]
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
   await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"selectRepo","id":"rp-1","root":"C:/Users/sam/Documents/agent-deck"}', '{"cmd":"selectRepo","root":""}'])
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"selectRepo","id":"rp-1","root":"C:/Users/sam/Documents/apiarius"}', '{"cmd":"selectRepo","root":""}'])
 })
 
 test('POST /cmd: every command may carry the page`s id, which is printed with it; a bad id is refused', async () => {

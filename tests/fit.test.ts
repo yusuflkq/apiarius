@@ -5,7 +5,7 @@
  * terminal less what Claude Code needs beside it) and asks for as it opens
  * (`openRowsFor`); and the screens that grow cut to them on the terminal:
  * Chat to its newest messages, the Dashboard's sections folded from the
- * bottom, needs as lines and cards cut. Drawn by `/deck demo` over the v2
+ * bottom, needs as lines and cards cut. Drawn by `/apiarius demo` over the v2
  * sample.
  */
 import type { On } from 'claude-code'
@@ -20,12 +20,12 @@ import { deck, newWorld, world, type World } from './world'
 /** The deck's pane on a terminal `screen` rows tall, its room as tall, `bodyColumns` across. */
 function terminal(screen: number, bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface: 'terminal' as const,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: screen, isFullscreen: false },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'inline' as const, scroll: { offset: 0, bodyRows: screen }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'inline' as const, scroll: { offset: 0, bodyRows: screen }, view: {} },
   }
 }
 
@@ -48,7 +48,7 @@ async function keysOf(ui: Drawing, type: 'Box' | 'Button', prefix: string): Prom
   return (await ui.findAll({ type })).map(one => one.key ?? '').filter(key => key.startsWith(prefix))
 }
 
-/** `/deck demo` over the v2 sample. */
+/** `/apiarius demo` over the v2 sample. */
 async function demo($: Engine, on: On, w: World = newWorld()) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
@@ -106,16 +106,16 @@ test('the rows the pane may take on the terminal: its room, never past the termi
   expect(openRowsFor(18)).toBe(FEWEST_ROWS)
 })
 
-test('/deck asks for an inline pane no taller than the terminal its last drawing measured; nothing asked before one has', async ($, on) => {
+test('/apiarius asks for an inline pane no taller than the terminal its last drawing measured; nothing asked before one has', async ($, on) => {
   const w = newWorld()
   const { clock } = await demo($, on, w)
-  // /deck demo opened it before any drawing measured the terminal: no rows asked
-  expect(w.opens.at(-1)).toEqual({ id: 'agent-deck' })
+  // /apiarius demo opened it before any drawing measured the terminal: no rows asked
+  expect(w.opens.at(-1)).toEqual({ id: 'apiarius' })
   const ui = (await $.ui.mount(terminal(45))) as unknown as Drawing
   await ui.unmount()
   await $.command.run(deck(''))
   await clock.advance(500)
-  expect(w.opens.at(-1)).toEqual({ id: 'agent-deck', rows: openRowsFor(45) })
+  expect(w.opens.at(-1)).toEqual({ id: 'apiarius', rows: openRowsFor(45) })
 })
 
 /** The lines a long draft's field takes on each terminal: what the newest message leaves it, three at most. */

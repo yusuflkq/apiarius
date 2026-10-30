@@ -1854,7 +1854,7 @@ export function bandOf(state: Pick<WebStateV2, 'agents' | 'needs' | 'sessions'> 
   return { parts, text: parts.map(part => `${part.glyph} ${part.text}`).join(' · ') }
 }
 
-// The sample (`/deck demo`): an answer given in it, there alone.
+// The sample (`/apiarius demo`): an answer given in it, there alone.
 
 /**
  * The sample's state with its question `callId` (a need's id) answered in

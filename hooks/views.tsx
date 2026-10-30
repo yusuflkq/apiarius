@@ -2,7 +2,7 @@
  * The deck's pane and its band, on the v2 view model,
  * the one state the web page, the Desktop pane and the terminal draw:
  *
- * - the pane (`deckView`): in the sample (`/deck demo`) a header saying so,
+ * - the pane (`deckView`): in the sample (`/apiarius demo`) a header saying so,
  *   then ./ui/v2: the header, the tabs (1 Dashboard · 2 Chat · 3 Org ·
  *   4 Changes · 5 Inspect · 6 Settings) and the open tab, or an agent's page
  *   over it; Org's chart as the surface allows (`dash.isOrgDown`,

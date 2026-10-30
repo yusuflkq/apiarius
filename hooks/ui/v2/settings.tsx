@@ -7,8 +7,8 @@
  *   waiting on you, each with its status dot; one character each on the
  *   terminal), the one drawn marked; a press draws every agent in it from
  *   now on, in every session and on the web page (`setAvatarStyle`, as
- *   `/deck avatars`);
- * - Web page: "Start the web page" (`/deck web`), then "Open in browser", a
+ *   `/apiarius avatars`);
+ * - Web page: "Start the web page" (`/apiarius web`), then "Open in browser", a
  *   link to it, and how the page stands;
  * - Help: what each tab shows, and the few keys there are.
  *
@@ -94,7 +94,7 @@ function avatarsSection(kit: Kit, actions: DashActions): RenderElement {
         {row.map(one => styleChip(kit, one.id, one.name, one.id === style, width, actions))}
       </Box>
     )),
-    quiet(kit, 'Yours in every session, on the web page and in /deck demo. /deck avatars <style> picks one by name too.'),
+    quiet(kit, 'Yours in every session, on the web page and in /apiarius demo. /apiarius avatars <style> picks one by name too.'),
   ])
 }
 
@@ -173,7 +173,7 @@ function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, wi
 
 /** What the web page's line says, by how it stands. */
 function webNote(web: WebPane | undefined): { text: string; color: string } {
-  if (!web || web.status === 'off') return { text: 'The same deck as a live page in your browser (/deck web).', color: P.muted2 }
+  if (!web || web.status === 'off') return { text: 'The same deck as a live page in your browser (/apiarius web).', color: P.muted2 }
   if (web.status === 'starting') return { text: 'Starting the web page…', color: P.muted2 }
   if (web.status === 'failed') return { text: web.note || 'The web page could not start.', color: P.failText }
   return { text: 'Live, on this machine only.', color: P.muted }
@@ -183,7 +183,7 @@ function webNote(web: WebPane | undefined): { text: string; color: string } {
  * The web page and how it stands. While it runs, "Open in browser" is a link
  * to it, which the surface opens itself (as the deck's top line is): the
  * Browser pane refuses a mod's preview_start. Until then a Button starts it
- * (as /deck web), and the link takes its place.
+ * (as /apiarius web), and the link takes its place.
  */
 function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): RenderElement {
   const { Box, Button, Markdown, Text } = kit

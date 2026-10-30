@@ -29,12 +29,12 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const TOKEN = 'agent-deck-dev-token'
+const TOKEN = 'apiarius-dev-token'
 const FIXTURES = path.join(__dirname, 'fixtures')
 const SAMPLE = path.join(FIXTURES, 'state.v2.json')
 const LAZY = path.join(FIXTURES, 'v2')
 const isStatic = process.argv.includes('--static')
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-deck-dev-'))
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apiarius-dev-'))
 const stateFile = path.join(dir, 'state.json')
 let state = null // the v2 state
 
@@ -114,7 +114,7 @@ function playOther(cmd) {
   if (cmd.cmd === 'view' || !others) return
   const entry = others.entries.find(one => one.id === cmd.session)
   const theirs = others.states.get(cmd.session)
-  if (!entry || !theirs || !entry.inbox) return later(300, () => ack(cmd.id, false, 'failed', "Its deck isn't answering: it runs an older Agent Deck"))
+  if (!entry || !theirs || !entry.inbox) return later(300, () => ack(cmd.id, false, 'failed', "Its deck isn't answering: it runs an older Apiarius"))
   const { session: _session, ...own } = cmd
   // a beat for its deck to read its inbox, as a tick would
   target = theirs
@@ -294,7 +294,7 @@ function play(cmd) {
 const args = [path.join(__dirname, 'server.js'), '--dir', dir, '--parent', String(process.pid), '--sessions', registry]
 reset()
 // stdin stays a pipe: the server leaves when it closes, so it goes when this process does
-const server = spawn(process.execPath, args, { env: { ...process.env, AGENT_DECK_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'inherit'] })
+const server = spawn(process.execPath, args, { env: { ...process.env, APIARIUS_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'inherit'] })
 
 let buffer = ''
 server.stdout.setEncoding('utf8').on('data', chunk => {
@@ -304,7 +304,7 @@ server.stdout.setEncoding('utf8').on('data', chunk => {
     const line = buffer.slice(0, at)
     buffer = buffer.slice(at + 1)
     const ready = /^\{"ready":(\d+)\}$/.exec(line)
-    if (ready) { console.log(`Agent Deck (dev${isStatic ? ', static' : ''}): http://127.0.0.1:${ready[1]}/?t=${TOKEN}`); continue }
+    if (ready) { console.log(`Apiarius (dev${isStatic ? ', static' : ''}): http://127.0.0.1:${ready[1]}/?t=${TOKEN}`); continue }
     console.log(`command: ${line}`)
     if (!isStatic) { try { play(JSON.parse(line)) } catch (err) { console.error(`dev: ${err.message}`) } }
   }

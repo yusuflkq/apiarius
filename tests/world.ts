@@ -244,7 +244,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     return e.tool.startsWith('mcp__') ? { deny: 'no such tool' } : { result: 'ok' }
   })
   on('mcp.call', () => ({ value: { content: [{ type: 'text', text: 'Browser pane opened.' }], isError: false } }))
-  if (restored) on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: restored, version: 1 } }))
+  if (restored) on('state.get', { plugin: 'apiarius', key: 'snapshot' }, () => ({ value: { value: restored, version: 1 } }))
   on('process.spawn', async function* ($, e, next): AsyncGenerator<ProcessSpawnChunk, { value: ProcessSpawnResult } | { deny: string }> {
     const queue: string[] = [`{"ready":${PORT}}\n`]
     let wake: (() => void) | undefined
@@ -282,12 +282,12 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   })
 }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 export function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
-/** The session starts, you ask, the Orchestrator's turn starts and it starts scout (`agent-x1`); then `/deck web`. */
+/** The session starts, you ask, the Orchestrator's turn starts and it starts scout (`agent-x1`); then `/apiarius web`. */
 export async function work($: Engine): Promise<void> {
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await $.prompt.submit({ text: 'Fix the off-by-one in src/range.js', origin: { kind: 'composer' }, wait: false })

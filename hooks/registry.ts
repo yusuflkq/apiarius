@@ -12,7 +12,7 @@
  *   there?) and removed once it is not, or long after.
  * - **Its inbox** (`<state folder>/inbox/<viewer>.json`), read on every tick:
  *   while a deck shows this session, this one writes its state folder as
- *   for `/deck web` (`isViewed`); each command in it (`S.STEERING`: an
+ *   for `/apiarius web` (`isViewed`); each command in it (`S.STEERING`: an
  *   answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick of
  *   Changes, Review) runs as the page's own would (the host's `steer`),
  *   through Claude Code's channels and its own checks, its ack in this
@@ -47,7 +47,7 @@ export type RegistryEnv = { override?: string | undefined; configDir?: string | 
 
 /** What the deck's hooks module hands the registry: what it holds, and the engine's calls (the clock, the files, node, the session's surfaces and repository). */
 export type RegistryHost = {
-  /** `AGENT_DECK_SESSIONS`, `CLAUDE_CONFIG_DIR`, the home folder, `WT_SESSION` and `TERM_PROGRAM`, as the environment holds them. */
+  /** `APIARIUS_SESSIONS`, `CLAUDE_CONFIG_DIR`, the home folder, `WT_SESSION` and `TERM_PROGRAM`, as the environment holds them. */
   env: () => Promise<RegistryEnv>
   now: () => Promise<number>
   read: (path: string) => Promise<string>
@@ -172,7 +172,7 @@ const reg = {
   looks: new Map<string, number>(),
   /** The commands written into each session's inbox, by its id. */
   outbox: new Map<string, S.InboxCommand[]>(),
-  /** The sample's sessions (`/deck demo`), as read; null until they are. */
+  /** The sample's sessions (`/apiarius demo`), as read; null until they are. */
   sample: null as { entries: S.SessionEntry[]; me: string; root: string } | null,
 }
 
@@ -189,7 +189,7 @@ function io(): RegistryHost {
 
 /**
  * Starts the registry for this session.start: its folder from the
- * environment (`AGENT_DECK_SESSIONS`, else under `CLAUDE_CONFIG_DIR` or the
+ * environment (`APIARIUS_SESSIONS`, else under `CLAUDE_CONFIG_DIR` or the
  * home folder; off when none is known), what it says of where the session
  * runs, then the heartbeat, this deck's file and a first read of the others'.
  */
@@ -400,7 +400,7 @@ export async function endRegistry(reason: string): Promise<void> {
   if (path !== '') await removeFiles([path])
 }
 
-/** Whether a deck views this session at `now`: it writes its state folder meanwhile, as for `/deck web`. */
+/** Whether a deck views this session at `now`: it writes its state folder meanwhile, as for `/apiarius web`. */
 export function isViewed(now: number): boolean {
   for (const until of reg.viewers.values()) if (until > now) return true
   return false
@@ -555,7 +555,7 @@ export function closeList(): void {
   reg.host?.changed()
 }
 
-/** The sample's sessions (`/deck demo`): `web/fixtures/sessions.v2.json` under the mod, their times moved to now; their decks under `web/fixtures/sessions/`. */
+/** The sample's sessions (`/apiarius demo`): `web/fixtures/sessions.v2.json` under the mod, their times moved to now; their decks under `web/fixtures/sessions/`. */
 export async function readSample(root: string, now: number): Promise<void> {
   try {
     const value = JSON.parse(await io().read(`${root}/web/fixtures/sessions.v2.json`)) as { now?: unknown; me?: unknown; entries?: unknown }
@@ -601,7 +601,7 @@ export async function openSession(id: string, isSample = false): Promise<void> {
   }
   const dir = sample ? `${sample.root}/web/fixtures/${entry.dir}` : entry.dir
   if (!sample && !S.isStateDirOf(dir, id)) {
-    host.toast('Its deck names a folder Agent Deck does not read: open it in its window.')
+    host.toast('Its deck names a folder Apiarius does not read: open it in its window.')
     return
   }
   const shown = reg.viewing
@@ -693,7 +693,7 @@ async function readViewed(now: number): Promise<void> {
     const text = S.stateFileV2Of(await io().read(`${v.dir}/state.json`))
     const built = text === null ? null : (JSON.parse(text) as { now?: unknown }).now
     const at = typeof built === 'number' ? built : now
-    // the sample's times move to now, as `/deck demo`'s own; a live state's stay as its deck wrote them
+    // the sample's times move to now, as `/apiarius demo`'s own; a live state's stay as its deck wrote them
     const state = text === null ? null : W.v2StateFromText(text, v.isSample ? now : at)
     if (!state || reg.viewing !== v) return
     v.stamp = stamp
@@ -917,7 +917,7 @@ async function sendToSession(id: string, cmd: Record<string, unknown>): Promise<
     return why
   }
   if (!host || !entry || !S.isLiveEntry(entry, now)) return fail('That session is not running any more')
-  if (!entry.inbox || !S.isStateDirOf(entry.dir, id)) return fail(`${S.NOT_ANSWERING}: it runs an older Agent Deck`)
+  if (!entry.inbox || !S.isStateDirOf(entry.dir, id)) return fail(`${S.NOT_ANSWERING}: it runs an older Apiarius`)
   if (S.isQuietEntry(entry, now)) return fail(`${S.NOT_ANSWERING}: it has not been heard from lately`)
   const said = S.steeringCmdOf(cmd)
   if (!said) return fail(S.steeringRefusalOf(cmd))

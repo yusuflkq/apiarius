@@ -18,7 +18,7 @@
  * - On the terminal, VS Code and the mobile app, and where the Client failed,
  *   the agents as an indented tree (./orgTree), the terminal's avatars its
  *   coloured glyphs; the Client is tried again the next time Org shows, and
- *   whenever /deck opens.
+ *   whenever /apiarius opens.
  *
  * The agents "Clear finished" hid are left out (W.shownStateOf): their
  * pages, Changes and Inspect keep them.
@@ -125,7 +125,7 @@ export function orgTab(kit: Kit, whole: WebStateV2, actions: DashActions, org: O
       <Box key="org:tab" flexDirection="column" gap={1}>
         {head}
         {orgChart(kit, state, plan, org.selected, actions)}
-        {hidden > 0 ? quiet(kit, `${plural(hidden, 'more agent')}: more than the chart holds. /deck web shows them all.`) : null}
+        {hidden > 0 ? quiet(kit, `${plural(hidden, 'more agent')}: more than the chart holds. /apiarius web shows them all.`) : null}
       </Box>
     )
   }
@@ -141,7 +141,7 @@ export function orgTab(kit: Kit, whole: WebStateV2, actions: DashActions, org: O
   return (
     <Box key="org:tab" flexDirection="column" gap={1}>
       {head}
-      {kit.surface === 'desktop' && org.isDown ? quiet(kit, 'The chart could not draw here, so the agents are listed instead. Org tries the chart again when you come back to it, as /deck does.') : null}
+      {kit.surface === 'desktop' && org.isDown ? quiet(kit, 'The chart could not draw here, so the agents are listed instead. Org tries the chart again when you come back to it, as /apiarius does.') : null}
       {orgTree(kit, state, actions, org.selected)}
     </Box>
   )

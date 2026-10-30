@@ -106,7 +106,7 @@ export function orgTree(kit: Kit, state: WebStateV2, actions: DashActions, selec
           </Box>
         )
       })}
-      {rows.length > MOST_ROWS ? quiet(kit, `${plural(rows.length - MOST_ROWS, 'more agent')}: more than the pane holds. /deck web lists them all.`) : null}
+      {rows.length > MOST_ROWS ? quiet(kit, `${plural(rows.length - MOST_ROWS, 'more agent')}: more than the pane holds. /apiarius web lists them all.`) : null}
     </Box>
   )
 }

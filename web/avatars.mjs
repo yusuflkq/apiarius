@@ -1,5 +1,5 @@
 /**
- * Agent Deck's avatars: one library for every surface that draws an agent.
+ * The avatars of Apiarius: one library for every surface that draws an agent.
  *
  * Ten styles, each an SVG document on a 40 by 40 grid, as the owner reviewed
  * them (2026-10-21): robot (the default), mood, critter, pixel, mono, orbit,

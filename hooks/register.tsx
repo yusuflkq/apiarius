@@ -1,10 +1,10 @@
 /**
- * Agent Deck: a pane (`/deck`) that shows the session's git state and every
+ * Apiarius: a pane (`/apiarius`) that shows the session's git state and every
  * agent's work, and a band above the prompt while subagents run.
  *
  * The hooks here record what the engine reports (tool calls, spawns, turns,
  * messages between agents) into one live model, run git in the background,
- * and draw the views from `./views`. `/deck web` serves the same model as a
+ * and draw the views from `./views`. `/apiarius web` serves the same model as a
  * live dashboard in the Desktop's Browser pane (`./web`).
  * Every `$` call lives in this file.
  */
@@ -56,8 +56,16 @@ import * as T from './timeline'
 import { bandOf, deckView, type DeckActions } from './views'
 import * as W from './web'
 
-const PANE = 'agent-deck'
-const SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
+const PANE = 'apiarius'
+const SNAPSHOT = { plugin: 'apiarius', key: 'snapshot' } as const
+/**
+ * `$.state` keeps a session's values by plugin name, and the mod was
+ * `agent-deck` before it was Apiarius: a session open across the rename finds
+ * its snapshot, web deck and pin there, read once while `apiarius` holds none.
+ */
+const OLD_SNAPSHOT = { plugin: 'agent-deck', key: 'snapshot' } as const
+const OLD_WEB_STATE = { plugin: 'agent-deck', key: 'web' } as const
+const OLD_REPO_PIN = { plugin: 'agent-deck', key: 'repo' } as const
 
 let data: DeckData = M.emptyData(0)
 let view: DeckView = M.defaultView()
@@ -84,7 +92,7 @@ let shownKey = ''
 let gitKeyMemo: { of: G.GitState; key: string } | null = null
 
 /**
- * The sample `/deck demo` shows: `v2` the v2 sample (web/fixtures/state.v2.json,
+ * The sample `/apiarius demo` shows: `v2` the v2 sample (web/fixtures/state.v2.json,
  * `W.v2StateFromText`, its times moved to the moment it was read), null
  * while it is read or when it could not be; `v2Files` its lazy files
  * (web/fixtures/v2/), as read. `note` says why it could not be read;
@@ -173,7 +181,7 @@ async function clearFinished($: EngineInterface, ackId = ''): Promise<string> {
   changed($)
   const said = `Cleared ${ids.length} finished ${ids.length === 1 ? 'agent' : 'agents'} from the deck`
   await ack($, ackId, 'delivered', said)
-  return `${said} (Claude Code keeps them). /deck clear show brings them back.`
+  return `${said} (Claude Code keeps them). /apiarius clear show brings them back.`
 }
 
 /** "Show N cleared": the agents "Clear finished" hid shown again everywhere; acks `ackId`. */
@@ -214,7 +222,7 @@ function noteMove(to: string) {
  * The surfaces whose Org chart Client failed (`ui.fault`): their Org lists
  * the agents as a tree while it stays open. A drawing of anything else
  * (another tab, an agent's page, Inspect) clears its surface, so the chart
- * is tried again the next time Org shows; /deck clears them all.
+ * is tried again the next time Org shows; /apiarius clears them all.
  */
 const orgDown = new Set<RenderSurface>()
 
@@ -694,7 +702,7 @@ function debugStateOf(now: number) {
 }
 
 /**
- * The web deck. `/deck web`, or the pane's Open dashboard,
+ * The web deck. `/apiarius web`, or the pane's Open dashboard,
  * starts `web/server.js` for the session, answers with the page's link and
  * tries to open it in the Desktop's Browser pane. While it is on, what the
  * deck holds goes to `.web/<sessionId>/state.json` at most every 300 ms after
@@ -704,17 +712,17 @@ function debugStateOf(now: number) {
  *
  * The child is the session's: `superviseWeb` runs from session.start, whose
  * `$` outlives every hook, and spawns it each time it is asked. Leaving its
- * loop (`/deck web stop`) or a reload of this module kills it, and its
+ * loop (`/apiarius web stop`) or a reload of this module kills it, and its
  * `--parent` check ends it with the session's process (its stdin is closed
  * from the start, so stdin cannot tell it). A reload starts it again with
  * the token and port `$.state` kept: the open page reconnects by itself.
  */
-const WEB_STATE = { plugin: 'agent-deck', key: 'web' } as const
+const WEB_STATE = { plugin: 'apiarius', key: 'web' } as const
 /** How long a start waits for the server's ready line. */
 const WEB_START_MS = 10_000
 
 const web: {
-  /** On for this session, from the first /deck web until /deck web stop, as `$.state` keeps it. */
+  /** On for this session, from the first /apiarius web until /apiarius web stop, as `$.state` keeps it. */
   isOn: boolean
   /** The server's access token, the page's `t`. */
   token: string
@@ -725,7 +733,7 @@ const web: {
   /** The folder it serves (`<mod>/.web/<sessionId>`), fixed for the server's life. */
   dir: string
   status: WebPane['status']
-  /** Why it is not running, as the pane and `/deck web` say it; '' while it runs. */
+  /** Why it is not running, as the pane and `/apiarius web` say it; '' while it runs. */
   note: string
   /** How the last try to open it in the Browser pane went. */
   opened: WebPane['opened']
@@ -895,7 +903,7 @@ async function enginePidOf($: EngineInterface): Promise<string> {
  */
 async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
   try {
-    const { value } = await $.state.get(WEB_STATE)
+    const value = (await $.state.get(WEB_STATE)).value ?? (await $.state.get(OLD_WEB_STATE)).value
     if (value && value.isOn === true && typeof value.token === 'string' && value.token !== '' && epoch === web.epoch) {
       web.isOn = true
       web.token = value.token
@@ -905,7 +913,7 @@ async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
       web.isAsked = true
     }
   } catch {
-    // nothing kept: the web deck waits for /deck web
+    // nothing kept: the web deck waits for /apiarius web
   }
   while (epoch === web.epoch) {
     if (!web.isAsked) {
@@ -968,7 +976,7 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
     web.status = 'failed'
     web.note = 'Node.js was not found on PATH, so the dashboard cannot start.'
     saveWeb($)
-    $.ui.toast('Agent Deck web needs Node.js on PATH; the deck stays in its pane.')
+    $.ui.toast('Apiarius web needs Node.js on PATH; the deck stays in its pane.')
   } else {
     web.status = 'failed'
     web.note = ran.isReady
@@ -1000,7 +1008,7 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
   let errors = ''
   let stop: (() => void) | undefined
   try {
-    const child = $.process.spawn({ argv, env: { AGENT_DECK_TOKEN: web.token } })
+    const child = $.process.spawn({ argv, env: { APIARIUS_TOKEN: web.token } })
     stop = () => {
       void child.return({ code: null, signal: null }).catch(() => undefined)
     }
@@ -1050,7 +1058,7 @@ function onWebLine($: EngineInterface, line: string): boolean {
     saveWeb($)
     settleWeb(true)
     // the page open before a reload knows the old port only
-    if (kept > 0 && kept !== said.port) $.ui.toast('Agent Deck web started again on another port: /deck web gives its new link.')
+    if (kept > 0 && kept !== said.port) $.ui.toast('Apiarius web started again on another port: /apiarius web gives its new link.')
     redraw($)
     return true
   }
@@ -1109,6 +1117,38 @@ function savePrefs($: EngineInterface) {
 }
 
 /**
+ * The person's prefs (`$.store`), else those the mod kept before it was
+ * Apiarius, copied over once. A plugin's store is a file named after it,
+ * `<config>/plugins/store/<name>_<source>.json`, so the old prefs lie in an
+ * `agent-deck_*.json` there (the newest, when there are several).
+ */
+async function prefsOf($: EngineInterface): Promise<unknown> {
+  const prefs = await $.store.get('prefs')
+  if (prefs !== undefined) return prefs
+  try {
+    const read = async (get: () => Promise<string | undefined>) => {
+      try {
+        return await get()
+      } catch {
+        return undefined
+      }
+    }
+    const home = (await read(() => $.env.get('USERPROFILE'))) ?? (await read(() => $.env.get('HOME')))
+    const config = SE.configDirOf({ configDir: await read(() => $.env.get('CLAUDE_CONFIG_DIR')), home })
+    if (config === '') return undefined
+    const dir = `${config}/plugins/store`
+    const old = (await $.fs.list(dir)).filter(one => one.kind === 'file' && /^agent-deck_.+\.json$/.test(one.name)).sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+    if (!old) return undefined
+    const kept: unknown = (JSON.parse(await $.fs.read(`${dir}/${old.name}`)) as { prefs?: unknown }).prefs
+    if (kept && typeof kept === 'object') await $.store.set('prefs', kept)
+    return kept
+  } catch {
+    // no old store, or one it cannot read: the defaults stand
+    return undefined
+  }
+}
+
+/**
  * Draws the agents' avatars in `style` (web/avatars.mjs `STYLE_IDS`; one it
  * does not know is let go): kept in the person's prefs, so it holds in every
  * session; the pane draws again, and the web page follows with the state it
@@ -1121,7 +1161,7 @@ function setAvatarStyle($: EngineInterface, style: string) {
   changed($)
 }
 
-/** The style `/deck avatars <words>` names: by its id or its name, any case, spaces or not, or the start of one alone ("crit"); undefined for none. */
+/** The style `/apiarius avatars <words>` names: by its id or its name, any case, spaces or not, or the start of one alone ("crit"); undefined for none. */
 function avatarStyleNamed(words: string): AV.AvatarStyle | undefined {
   const said = words.toLowerCase().replace(/[\s_-]+/g, '')
   if (said === '') return undefined
@@ -1131,14 +1171,14 @@ function avatarStyleNamed(words: string): AV.AvatarStyle | undefined {
   return starts.length === 1 ? starts[0]?.id : undefined
 }
 
-/** `/deck avatars`: the styles, the one drawn marked; `/deck avatars <style>` draws that one from now on, in every session. */
+/** `/apiarius avatars`: the styles, the one drawn marked; `/apiarius avatars <style>` draws that one from now on, in every session. */
 function avatarsCommand($: EngineInterface, words: string): CommandRunResult {
   const list = AV.STYLES.map(one => `${one.id === view.avatarStyle ? '▸' : ' '} ${one.id.padEnd(8)} ${one.name}`).join('\n')
-  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/deck avatars <style> draws another, here and on the web page, in every session. The pane's Settings (5) picks one too.` }
+  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/apiarius avatars <style> draws another, here and on the web page, in every session. The pane's Settings (5) picks one too.` }
   const style = avatarStyleNamed(words)
   if (style === undefined) return { text: `No avatar style called "${F.trunc(F.oneLine(words), 40)}". One of: ${AV.STYLE_IDS.join(', ')}.` }
   setAvatarStyle($, style)
-  return { text: `Avatars: ${AV.styleName(style)}, in every session: the pane, the web page and /deck demo draw them (the terminal as one character each); /deck avatars lists the others.` }
+  return { text: `Avatars: ${AV.styleName(style)}, in every session: the pane, the web page and /apiarius demo draw them (the terminal as one character each); /apiarius avatars lists the others.` }
 }
 
 /** Says what came of the page's command `id` in the state it reads (`acks`); a command with no id is told nothing. */
@@ -1361,7 +1401,7 @@ async function showWeb($: EngineInterface, url: string): Promise<void> {
 }
 
 /**
- * `/deck web` and the pane's Open dashboard: starts the web deck if it is
+ * `/apiarius web` and the pane's Open dashboard: starts the web deck if it is
  * not running, then tries to open the page in the Browser pane (left to run:
  * the answer carries the link either way, and the model's context too, so
  * Claude can open it when asked). Without node the deck stays native.
@@ -1370,18 +1410,18 @@ async function openWeb($: EngineInterface): Promise<CommandRunResult> {
   const isUp = await ensureWeb($)
   if (!isUp) {
     const why = web.status === 'starting' ? "The dashboard's server did not answer within 10 s." : web.note || "The dashboard's server did not start."
-    $.ui.toast(`Agent Deck web: ${why}`)
-    return { text: `${why} The deck stays in its pane: /deck.` }
+    $.ui.toast(`Apiarius web: ${why}`)
+    return { text: `${why} The deck stays in its pane: /apiarius.` }
   }
   const url = W.webUrlOf(web.port, web.token)
   void showWeb($, url)
   return {
-    text: `[Open Agent Deck](${url}) in the Browser pane`,
-    context: [`The Agent Deck dashboard of this session runs at ${url} (on this machine only; t is its access token). When the user asks to see it, open that URL in the Browser pane (preview_start with url).`],
+    text: `[Open the Apiarius deck](${url}) in the Browser pane`,
+    context: [`The Apiarius dashboard of this session runs at ${url} (on this machine only; t is its access token). When the user asks to see it, open that URL in the Browser pane (preview_start with url).`],
   }
 }
 
-/** `/deck web stop`: the server ends, the state is no longer written, and the next start makes a new link. Answers whether it was on. */
+/** `/apiarius web stop`: the server ends, the state is no longer written, and the next start makes a new link. Answers whether it was on. */
 function stopWeb($: EngineInterface): boolean {
   const wasOn = web.isOn || web.status === 'running' || web.status === 'starting'
   web.isOn = false
@@ -1497,7 +1537,7 @@ function takeDeckPrompt(text: string): boolean {
 
 async function restore($: EngineInterface, now: number): Promise<boolean> {
   try {
-    const { value } = await $.state.get(SNAPSHOT)
+    const value = (await $.state.get(SNAPSHOT)).value ?? (await $.state.get(OLD_SNAPSHOT)).value
     if (value && value.v === M.SNAPSHOT_VERSION) {
       data = M.healData(M.copyOf(value.data), now)
       B.heal(data)
@@ -1511,7 +1551,7 @@ async function restore($: EngineInterface, now: number): Promise<boolean> {
   return false
 }
 
-const REPO_PIN = { plugin: 'agent-deck', key: 'repo' } as const
+const REPO_PIN = { plugin: 'apiarius', key: 'repo' } as const
 
 /** Which repository each directory agents edit in belongs to, and the one the deck follows. */
 let book: R.RepoBook = R.emptyBook()
@@ -1593,7 +1633,7 @@ async function startRepos($: EngineInterface): Promise<void> {
   R.setCwd(book, cwd)
   for (const edit of data.edits) R.noteEdit(book, edit.abs, edit.at)
   try {
-    const { value } = await $.state.get(REPO_PIN)
+    const value = (await $.state.get(REPO_PIN)).value ?? (await $.state.get(OLD_REPO_PIN)).value
     if (typeof value === 'string') {
       book.pinned = value
       savedPin = value
@@ -2273,7 +2313,7 @@ function noteScreen(surface: RenderSurface, viewport: { rows: number } | undefin
 async function openPane($: EngineInterface): Promise<boolean> {
   // on a terminal of known height, an inline pane no taller than it leaves room for (`openRowsFor`): past the terminal's height, every redraw leaves stray lines
   const rows = openRowsFor(screenRows)
-  const opened = await $.ui.open({ id: PANE, title: 'Agent Deck', focus: true, columns: 84, ...(rows !== undefined ? { rows } : {}) })
+  const opened = await $.ui.open({ id: PANE, title: 'Apiarius', focus: true, columns: 84, ...(rows !== undefined ? { rows } : {}) })
   isPaneOpen = true
   void refreshGit($, true)
   void loadUsage($)
@@ -2317,7 +2357,7 @@ function scrollTo($: EngineInterface, key: string, block: 'start' | 'nearest' = 
  * Chat keeps to its newest message while you are at the pane's end, as a
  * chat does (./ui/v2/chat's `followStep`): whether Chat showed at the last
  * drawing, what it ended with then, and whether you are at the end. You
- * are there once Chat comes into view (its tab, `/deck chat`, `m`, Back to
+ * are there once Chat comes into view (its tab, `/apiarius chat`, `m`, Back to
  * it, a new filter) or you send from it, and while your own scrolling
  * (`ui.scroll`) leaves you there; not once you scroll up, by a row or more.
  */
@@ -2374,7 +2414,7 @@ function keepChat($: EngineInterface, now: number) {
 }
 
 /**
- * `s`, the header's title or its count of sessions, `/deck sessions`: the
+ * `s`, the header's title or its count of sessions, `/apiarius sessions`: the
  * list of sessions dropped over the tabs (./registry), or shut. As it
  * drops, Chat's end is let go (./ui/v2/chat's `listStep`): you are up at
  * the list, and no drawing moves the pane while it shows. A pane kept at
@@ -2666,7 +2706,7 @@ async function readV2Sample($: EngineInterface, dir: string, state: W.WebStateV2
 }
 
 /**
- * `/deck demo`, or a reload while the sample showed: reads the v2 sample
+ * `/apiarius demo`, or a reload while the sample showed: reads the v2 sample
  * under the mod's folder (web/fixtures/state.v2.json, then the lazy files
  * its state names under web/fixtures/v2) and shows it, its times moved to
  * now. `isFresh` opens it on Now; a reload keeps the tab and page it was on.
@@ -2747,7 +2787,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
   }
   return {
     env: async () => ({
-      override: await read(() => $.env.get('AGENT_DECK_SESSIONS')),
+      override: await read(() => $.env.get('APIARIUS_SESSIONS')),
       configDir: await read(() => $.env.get('CLAUDE_CONFIG_DIR')),
       home: (await read(() => $.env.get('USERPROFILE'))) ?? (await read(() => $.env.get('HOME'))),
       wtSession: await read(() => $.env.get('WT_SESSION')),
@@ -2776,7 +2816,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
     changed: () => changed($),
     refresh: now => redrawIfChanged($, now),
     share: () => {
-      // a deck views this session: its folder written from now, as for /deck web
+      // a deck views this session: its folder written from now, as for /apiarius web
       if (web.dir === '' && pluginRoot !== '' && sessionId !== '') web.dir = W.webDirOf(pluginRoot, sessionId)
       web.lastKey = ''
       web.agentFiles.clear()
@@ -3000,7 +3040,7 @@ async function raceDeck($: EngineInterface, e: ToolCallEvent, next: ToolCallNext
   }
   if (web.isOn) {
     try {
-      $.ui.notice(id, 'Also answerable in Agent Deck')
+      $.ui.notice(id, 'Also answerable in Apiarius')
     } catch {
       // a dialog that takes no line: the page answers all the same
     }
@@ -3144,11 +3184,11 @@ async function attributeCommits($: EngineInterface, agentId: string, before: str
 }
 
 /**
- * `/deck probe`: a pane of its own that settles in one look what a surface
+ * `/apiarius probe`: a pane of its own that settles in one look what a surface
  * does with a `Client` (./ui/probe.client.tsx) beside native Text and an
  * Svg. A diagnostic; the deck's screens read none of it.
  */
-const PROBE = 'agent-deck-probe'
+const PROBE = 'apiarius-probe'
 
 const probe: {
   /** Bumped every 1500 ms while the pane is open; each bump redraws it, handing the Client new props. */
@@ -3177,7 +3217,7 @@ function stopProbe() {
 }
 
 /**
- * `/deck probe`: opens the probe afresh with the keyboard (Esc closes it),
+ * `/apiarius probe`: opens the probe afresh with the keyboard (Esc closes it),
  * or closes it while it is open; the `ui.close` hook stops the tick.
  */
 async function toggleProbe($: EngineInterface): Promise<CommandRunResult> {
@@ -3240,7 +3280,7 @@ function probeView(
   const fault = probe.fault
   let client: RenderElement
   if (!Client) client = <Text dimColor>{`No Client on ${e.surface}: its element table has none.`}</Text>
-  else if (probe.failedOn.has(e.surface)) client = <Text dimColor>{`The Client is left out here after its fault; /deck probe twice draws it again.`}</Text>
+  else if (probe.failedOn.has(e.surface)) client = <Text dimColor>{`The Client is left out here after its fault; /apiarius probe twice draws it again.`}</Text>
   else client = <Client key="probe" module="./ui/probe.client.tsx" width="100%" props={{ tick: probe.tick, cols: e.props.bodyColumns }} />
   return (
     <Box flexDirection="column" gap={1}>
@@ -3277,7 +3317,7 @@ export const register: Register = on => {
     if (startedAs !== '') noteStart(startedAs)
 
     try {
-      const prefs = await $.store.get('prefs')
+      const prefs = await prefsOf($)
       if (prefs && typeof prefs === 'object' && 'isBandHidden' in prefs) view.isBandHidden = Boolean((prefs as { isBandHidden: unknown }).isBandHidden)
       // the avatar style is the person's own: it holds in every session (robots until they pick another)
       if (prefs && typeof prefs === 'object' && 'avatarStyle' in prefs) view.avatarStyle = AV.styleOf((prefs as { avatarStyle: unknown }).avatarStyle)
@@ -3342,13 +3382,13 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'deck',
-        description: 'Open Agent Deck: what Claude is doing, who is working on what, and what needs you (/deck dashboard, chat, org, changes, inspect or settings; /deck demo: sample data; /deck web: in the Browser pane)',
+        description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in the Browser pane)',
         // now (the Dashboard's id), help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
         argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
         immediate: true,
       })
     } catch (error) {
-      $.ui.log(`could not add /deck: ${error instanceof Error ? error.message : String(error)}`)
+      $.ui.log(`could not add /apiarius: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     return next(e)
@@ -3371,19 +3411,19 @@ export const register: Register = on => {
     return result
   })
 
-  on('command.run', { command: 'deck' }, async ($, e) => {
+  on('command.run', { command: 'apiarius' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'close' || arg === 'off' || arg === 'hide') {
       await $.ui.close({ id: PANE })
       isPaneOpen = false
       chatFollow.isShown = false
-      return { text: 'Agent Deck closed.' }
+      return { text: 'Apiarius closed.' }
     }
     if (arg === 'band') {
       view.isBandHidden = !view.isBandHidden
       savePrefs($)
       changed($)
-      return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /deck band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
+      return { text: view.isBandHidden ? 'The agents band above the prompt is hidden. /apiarius band shows it again.' : 'The agents band shows above the prompt while subagents run.' }
     }
     if (arg === 'avatars' || arg.startsWith('avatars ')) return avatarsCommand($, arg.slice('avatars'.length).trim())
     // the deck's own tidying: finished agents hidden from the Dashboard, Chat and Org (nothing in Claude Code), or shown again
@@ -3393,17 +3433,17 @@ export const register: Register = on => {
     // the live dashboard: started if need be, its link answered, opened in the Browser pane when it can be
     const words = arg.split(/\s+/)
     if (words[0] === 'web') {
-      if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Agent Deck web stopped.' : 'Agent Deck web was not running.' }
+      if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Apiarius web stopped.' : 'Apiarius web was not running.' }
       return openWeb($)
     }
-    // an Org chart Client that failed is tried again whenever /deck opens
+    // an Org chart Client that failed is tried again whenever /apiarius opens
     orgDown.clear()
     // every session on this machine, dropped over the tabs
     if (arg === 'sessions' || arg === 'all') {
       if (!SR.isListOpen()) toggleSessions($)
       const isShown = await openPane($)
       changed($)
-      return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+      return isShown ? {} : { text: 'Apiarius is open and waiting for room: widen the window, or press ctrl+x then tab.' }
     }
     // the sample: the deck drawn from the v2 sample
     if (arg === 'demo' || arg === 'sample') {
@@ -3411,18 +3451,18 @@ export const register: Register = on => {
       const isShown = await openPane($)
       changed($)
       if (why) return { text: why }
-      return isShown ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+      return isShown ? {} : { text: 'Apiarius is open and waiting for room: widen the window, or press ctrl+x then tab.' }
     }
-    // anything else is this session's deck: /deck alone the Dashboard; dashboard (or now), chat, org, changes or settings (inspect, help and stats too), or an earlier build's tab, on the one it folded into
+    // anything else is this session's deck: /apiarius alone the Dashboard; dashboard (or now), chat, org, changes or settings (inspect, help and stats too), or an earlier build's tab, on the one it folded into
     leaveDemo()
     view.page = ''
-    // /deck chat takes the pane to Chat's newest message, though Chat showed already
+    // /apiarius chat takes the pane to Chat's newest message, though Chat showed already
     chatFollow.isShown = false
     const tab = arg === '' ? 'now' : M.v2TabFor(words[0] ?? '')
     if (tab) view.v2 = M.view2With(view.v2, { tab })
     const isPlaced = await openPane($)
     changed($)
-    return isPlaced ? {} : { text: 'Agent Deck is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+    return isPlaced ? {} : { text: 'Apiarius is open and waiting for room: widen the window, or press ctrl+x then tab.' }
   })
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
@@ -3433,7 +3473,7 @@ export const register: Register = on => {
     return result
   })
 
-  // the probe closes by /deck probe, Esc or its close mark: its tick stops
+  // the probe closes by /apiarius probe, Esc or its close mark: its tick stops
   on('ui.close', { id: PROBE }, async ($, e, next) => {
     const result = await next(e)
     stopProbe()
@@ -4169,7 +4209,7 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Org's chart Client failed: that surface's Org lists the agents as a tree until Org is left (or /deck opens)
+  // Org's chart Client failed: that surface's Org lists the agents as a tree until Org is left (or /apiarius opens)
   on('ui.fault', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
     orgDown.add(e.surface)
     redraw($)

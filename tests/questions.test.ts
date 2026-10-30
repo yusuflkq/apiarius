@@ -67,7 +67,7 @@ test('the deck answers first: the dialog beneath is abandoned, the call returns 
   expect(state.agents.find(one => one.id === 'main')).toMatchObject({ status: 'waiting', needsYou: `asks: ${QUESTION}`, now: `Asks: ${QUESTION}` })
   expect(state.activity[state.activity.length - 1]).toMatchObject({ agent: 'main', tool: 'AskUserQuestion', target: QUESTION, ok: null })
   expect(w.held.map(one => one.id)).toEqual(['toolu_q1'])
-  expect(w.notices).toEqual([{ id: 'toolu_q1', text: 'Also answerable in Agent Deck' }])
+  expect(w.notices).toEqual([{ id: 'toolu_q1', text: 'Also answerable in Apiarius' }])
   expect(asked(w)).toEqual([['main', 'you', 'question', QUESTION]])
 
   // the page answers (a label in any case is the option's own)

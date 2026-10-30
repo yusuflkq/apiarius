@@ -31,7 +31,7 @@ const SCRIPT = [
 ].join('\n')
 
 const PLAN = [
-  '# Agent Deck v3',
+  '# Apiarius v3',
   '',
   '## Context',
   '- The tree is hard to read',
@@ -166,8 +166,8 @@ function world(on: On, clock: MockClock, saved: DeckSnapshot[], options: WorldOp
     return { result: 'ok' }
   })
   let version = 0
-  on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
-  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+  on('state.get', { plugin: 'apiarius', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
+  on('state.set', { plugin: 'apiarius', key: 'snapshot' }, ($, e) => {
     saved.push(JSON.parse(JSON.stringify(e.value)) as DeckSnapshot)
     version += 1
     return { value: { isSet: true as const, version } }
@@ -286,7 +286,7 @@ test('goals: the person`s own words start a goal while the session is idle with 
   await $.agent.spawn(spawnOf({ toolUseId: 'toolu_fixer', description: 'Fix the bug', name: 'fixer' }))
   await $.turn.complete({ turnId: 't1', answer: 'Started fixer.', durationMs: 1000, isAborted: false, reason: 'answer' })
   // idle, but fixer still runs: a follow-up (a plugin's prompt sent as the person's words counts)
-  await $.prompt.submit({ text: 'make it quick', origin: { kind: 'plugin', name: 'agent-deck', asUser: true }, wait: false })
+  await $.prompt.submit({ text: 'make it quick', origin: { kind: 'plugin', name: 'apiarius', asUser: true }, wait: false })
   await $.turn.complete({ turnId: 'turn-fixer', answer: 'Fixed.', durationMs: 1000, isAborted: false, reason: 'answer', agentId: 'agent-fixer' })
   // idle with nothing live: a new goal, from a Remote Control client
   await $.prompt.submit({ text: 'Now update the README', origin: { kind: 'bridge' }, wait: false })

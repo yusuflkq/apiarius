@@ -8,7 +8,7 @@ import type { DeckAgent, DeckData, DeckWebSaved } from '../types'
 
 /**
  * The web deck: what `.web/<sessionId>/state.json` holds (v1),
- * the patches written beside it once each, and `/deck web`: the server
+ * the patches written beside it once each, and `/apiarius web`: the server
  * started through `$.process.spawn` (stubbed here as a child the test
  * drives), its link answered, the Browser pane asked to open it, and the
  * page's commands read back off the child's stdout.
@@ -324,7 +324,7 @@ test("the server's lines: split chunks are buffered into whole lines, and only v
 })
 
 // ---------------------------------------------------------------------------
-// Through the hooks: /deck web, the child, the files, the commands.
+// Through the hooks: /apiarius web, the child, the files, the commands.
 
 /** A child the test drives: what it prints, and when it ends. */
 type Child = { request: ProcessSpawnRequest; print: (text: string) => void; end: () => void; isRead: boolean }
@@ -406,11 +406,11 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
     w.opened.push({ server: e.server, tool: e.tool, url: e.args.url })
     return { value: { content: [{ type: 'text', text: w.hasBrowser ? 'Browser pane opened.' : 'no Browser pane' }], isError: !w.hasBrowser } }
   })
-  on('state.set', { plugin: 'agent-deck', key: 'web' }, ($, e) => {
+  on('state.set', { plugin: 'apiarius', key: 'web' }, ($, e) => {
     w.saved.push(JSON.parse(JSON.stringify(e.value)) as DeckWebSaved)
     return { value: { isSet: true as const, version: w.saved.length } }
   })
-  if (saved) on('state.get', { plugin: 'agent-deck', key: 'web' }, () => ({ value: { value: saved, version: 1 } }))
+  if (saved) on('state.get', { plugin: 'apiarius', key: 'web' }, () => ({ value: { value: saved, version: 1 } }))
   on('process.spawn', async function* ($, e, next): AsyncGenerator<ProcessSpawnChunk, { value: ProcessSpawnResult } | { deny: string }> {
     // no node: the start fails, as the engine's ENOENT does
     if (w.isMissing) return { deny: "failed to start: ENOENT: Command 'node' not found or is in an unsafe location" }
@@ -452,9 +452,9 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
   })
 }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
 /** The session starts, you ask, and the Orchestrator starts scout (`agent-x1`). */
@@ -485,22 +485,22 @@ function patchesOf(w: World): string[] {
 
 /** The page's link in an answer, and its token. */
 function linkOf(text: string | undefined): { url: string; token: string } {
-  const found = /\[Open Agent Deck\]\((http:\/\/127\.0\.0\.1:(\d+)\/\?t=([^)]+))\) in the Browser pane/.exec(text ?? '')
+  const found = /\[Open the Apiarius deck\]\((http:\/\/127\.0\.0\.1:(\d+)\/\?t=([^)]+))\) in the Browser pane/.exec(text ?? '')
   return { url: found?.[1] ?? '', token: decodeURIComponent(found?.[3] ?? '') }
 }
 
-test('/deck web starts the server once (node, web/server.js, its folder, the session pid, the token in its env), answers its link and opens it in the Browser pane', async ($, on) => {
+test('/apiarius web starts the server once (node, web/server.js, its folder, the session pid, the token in its env), answers its link and opens it in the Browser pane', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
   await work($)
-  // nothing is written for the web before /deck web
+  // nothing is written for the web before /apiarius web
   await clock.advance(3000)
   expect(statesOf(w)).toEqual([])
 
   const answer = await $.command.run(deck('web'))
   const { url, token } = linkOf(answer.text)
-  expect(answer.text).toBe(`[Open Agent Deck](${url}) in the Browser pane`)
+  expect(answer.text).toBe(`[Open the Apiarius deck](${url}) in the Browser pane`)
   expect(url).toBe(`http://127.0.0.1:${PORT}/?t=${encodeURIComponent(token)}`)
   expect(token).toMatch(/^[0-9a-f-]{36}$/)
   expect(answer.context?.some(line => line.includes(url))).toBe(true)
@@ -511,7 +511,7 @@ test('/deck web starts the server once (node, web/server.js, its folder, the ses
   expect(argv[1]).toMatch(/[\\/]web[\\/]server\.js$/)
   expect(argv.slice(2, 4)).toEqual(['--dir', expect.stringMatching(/[\\/]\.web[\\/]session-1$/)])
   expect(argv.slice(4)).toEqual(['--parent', PID])
-  expect(env).toEqual({ AGENT_DECK_TOKEN: token })
+  expect(env).toEqual({ APIARIUS_TOKEN: token })
   // the state was there before the server started, and $.state keeps the switch, token, port and folder
   expect(statesOf(w).length).toBeGreaterThan(0)
   expect(w.saved[w.saved.length - 1]).toEqual({ isOn: true, token, port: PORT, dir: argv[3] })
@@ -652,7 +652,7 @@ test('without node the first read rejects: a toast, a text answer, and the deck 
   expect(statesOf(w).length).toBe(written)
 })
 
-test('/deck web stop ends the child and the writes; a reload starts the server again with the same token on the same port', async ($, on) => {
+test('/apiarius web stop ends the child and the writes; a reload starts the server again with the same token on the same port', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ ready: [PORT] })
   const kept: DeckWebSaved = { isOn: true, token: 'token-kept', port: PORT, dir: '/mod/.web/session-1' }
@@ -663,14 +663,14 @@ test('/deck web stop ends the child and the writes; a reload starts the server a
   expect(w.children).toHaveLength(1)
   const { argv, env } = w.children[0]!.request
   expect(argv.slice(2)).toEqual(['--dir', '/mod/.web/session-1', '--parent', PID, '--port', String(PORT)])
-  expect(env).toEqual({ AGENT_DECK_TOKEN: 'token-kept' })
+  expect(env).toEqual({ APIARIUS_TOKEN: 'token-kept' })
   const answer = await $.command.run(deck('web'))
   expect(linkOf(answer.text)).toEqual({ url: `http://127.0.0.1:${PORT}/?t=token-kept`, token: 'token-kept' })
   expect(w.children).toHaveLength(1)
   expect(w.toasts.some(text => text.includes('another port'))).toBe(false)
 
   const stopped = await $.command.run(deck('web stop'))
-  expect(stopped.text).toBe('Agent Deck web stopped.')
+  expect(stopped.text).toBe('Apiarius web stopped.')
   await clock.settle()
   expect(w.children[0]?.isRead).toBe(false)
   expect(w.saved[w.saved.length - 1]).toMatchObject({ isOn: false })
@@ -678,7 +678,7 @@ test('/deck web stop ends the child and the writes; a reload starts the server a
   await $.tool.call({ tool: 'Read', file_path: '/work/a.md', agentId: 'agent-x1' } as never)
   await clock.advance(3000)
   expect(statesOf(w).length).toBe(written)
-  expect((await $.command.run(deck('web stop'))).text).toBe('Agent Deck web was not running.')
+  expect((await $.command.run(deck('web stop'))).text).toBe('Apiarius web was not running.')
 })
 
 test('a restart that cannot take its old port again takes another and says so; one that never comes up on it tries a port the OS picks', async ($, on) => {
@@ -711,11 +711,11 @@ test('the pane: with no Browser pane to open the web deck in, its link shows as 
   expect(w.opened.map(one => one.server)).toEqual(['Claude_Browser', 'Claude Browser'])
   await $.command.run(deck(''))
   await clock.advance(500)
-  const pane = { plugin: 'agent-deck', surface: 'desktop' as const, component: 'Pane' as const, requestId: 'agent-deck', viewport: { columns: 100, rows: 50, isFullscreen: true }, props: { title: 'Agent Deck', isFocused: true, bodyColumns: 96, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const }
+  const pane = { plugin: 'apiarius', surface: 'desktop' as const, component: 'Pane' as const, requestId: 'apiarius', viewport: { columns: 100, rows: 50, isFullscreen: true }, props: { title: 'Apiarius', isFocused: true, bodyColumns: 96, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const }
   const ui = await $.ui.mount(pane)
   const link = await ui.find({ key: 'web:link' })
   expect(link?.type).toBe('Markdown')
-  expect(link?.text).toContain(`[Open Agent Deck](http://127.0.0.1:${PORT}/?t=`)
+  expect(link?.text).toContain(`[Open the Apiarius deck](http://127.0.0.1:${PORT}/?t=`)
   expect(link?.text).toMatch(/\) in the Browser pane$/)
   // Settings' Open in browser is that link too, which the surface opens itself: no Button that asks the Browser pane
   await ui.press({ key: 'tab:settings' })

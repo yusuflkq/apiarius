@@ -1,5 +1,5 @@
 /**
- * The surface module of `/deck probe`: a Client drawn with the surface's own
+ * The surface module of `/apiarius probe`: a Client drawn with the surface's own
  * elements, to show in one look whether a surface runs one, and whether its
  * cells, pointer and keys line up.
  *

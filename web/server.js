@@ -1,10 +1,10 @@
 /**
- * The Agent Deck web server: serves the page, the session's state, its
+ * The Apiarius web server: serves the page, the session's state, its
  * patches, git's own diffs of the uncommitted files, the whole text of
  * messages cut for the state and the agents' page files, live updates over
  * SSE, and turns the page's commands into stdout lines for the mod.
  *
- *   AGENT_DECK_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid> [--sessions <registry>]
+ *   APIARIUS_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid> [--sessions <registry>]
  *
  * With `--sessions` (the registry of every session on this machine,
  * hooks/sessions.ts) it also serves another session's state and lazy files
@@ -56,7 +56,7 @@ const HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosnif
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
 
 // ---- the command line, and the token (from the environment, never argv)
-const log = message => process.stderr.write(`agent-deck server: ${message}\n`)
+const log = message => process.stderr.write(`apiarius server: ${message}\n`)
 const fail = message => { log(message); process.exit(2) }
 
 const args = {}
@@ -74,8 +74,8 @@ if (parent !== null && !(Number.isInteger(parent) && parent > 0)) fail('--parent
 // A restart asks for its last port again, so the open page reconnects; when it is taken the OS picks one.
 let wanted = args.port === undefined ? 0 : Number(args.port)
 if (!(Number.isInteger(wanted) && wanted >= 0 && wanted < 65536)) fail('--port must be a port number')
-const token = process.env.AGENT_DECK_TOKEN ?? ''
-if (token.length < 16) fail('AGENT_DECK_TOKEN must be set (16 characters or more)')
+const token = process.env.APIARIUS_TOKEN ?? ''
+if (token.length < 16) fail('APIARIUS_TOKEN must be set (16 characters or more)')
 
 // Compares digests, so a check takes the same time whatever the guess.
 const digest = text => crypto.createHash('sha256').update(text).digest()

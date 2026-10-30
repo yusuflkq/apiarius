@@ -203,7 +203,7 @@ export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions,
           {front.map(row => row.el)}
           {fin}
           {behind.map(row => row.el)}
-          {hidden > 0 && !openOrg ? quiet(kit, `${plural(hidden, 'more agent')}: more than the Dashboard shows. /deck web lists them all.`) : null}
+          {hidden > 0 && !openOrg ? quiet(kit, `${plural(hidden, 'more agent')}: more than the Dashboard shows. /apiarius web lists them all.`) : null}
         </Box>
       )}
     </Box>

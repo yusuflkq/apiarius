@@ -21,12 +21,12 @@ const SURFACES = ['terminal', 'desktop'] as const
 /** The deck's pane as a surface lays it out, `bodyColumns` across. */
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -59,7 +59,7 @@ function rowsOf(state: W.WebStateV2): W.V2AgentRow[] {
   return state.agents.filter((row): row is W.V2AgentRow => row.row === 'agent')
 }
 
-/** `/deck demo` over the v2 sample, its reads answered; each snapshot the deck keeps is pushed on `saved`, and a reload reads the last back. */
+/** `/apiarius demo` over the v2 sample, its reads answered; each snapshot the deck keeps is pushed on `saved`, and a reload reads the last back. */
 async function demo($: Engine, on: On, saved: DeckSnapshot[]) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
@@ -72,8 +72,8 @@ async function demo($: Engine, on: On, saved: DeckSnapshot[]) {
     return { deny: 'no such file' }
   })
   on('ui.focus', () => ({}))
-  on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: saved[saved.length - 1], version: saved.length } }))
-  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+  on('state.get', { plugin: 'apiarius', key: 'snapshot' }, () => ({ value: { value: saved[saved.length - 1], version: saved.length } }))
+  on('state.set', { plugin: 'apiarius', key: 'snapshot' }, ($, e) => {
     saved.push(JSON.parse(JSON.stringify(e.value)) as DeckSnapshot)
     return { value: { isSet: true as const, version: saved.length } }
   })
@@ -189,10 +189,10 @@ function gone(row: W.V2ChatRow, ids: readonly string[]): boolean {
   return ids.includes(row.from) || (row.to !== null && ids.includes(row.to)) || (row.agent !== undefined && ids.includes(row.agent))
 }
 
-test('/deck clear and /deck clear show say what they did; with nothing to do they say so', async ($, on) => {
+test('/apiarius clear and /apiarius clear show say what they did; with nothing to do they say so', async ($, on) => {
   const saved: DeckSnapshot[] = []
   const { clock } = await demo($, on, saved)
-  expect(await $.command.run(deck('clear'))).toMatchObject({ text: 'Cleared 5 finished agents from the deck (Claude Code keeps them). /deck clear show brings them back.' })
+  expect(await $.command.run(deck('clear'))).toMatchObject({ text: 'Cleared 5 finished agents from the deck (Claude Code keeps them). /apiarius clear show brings them back.' })
   await clock.advance(1000)
   expect(await $.command.run(deck('clear'))).toMatchObject({ text: 'Nothing finished to clear.' })
   expect(await $.command.run(deck('clear show'))).toMatchObject({ text: 'Showing 5 cleared agents again.' })

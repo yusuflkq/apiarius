@@ -2,7 +2,7 @@ import type { On, PaneOpenArgs } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 const NOW = 1_700_000_100_000
-const PROBE = 'agent-deck-probe'
+const PROBE = 'apiarius-probe'
 const COPPER = '#c9824f'
 
 const PROBE_PANE = {
@@ -16,9 +16,9 @@ const PROBE_PANE = {
 
 const VIEWPORT = { columns: 100, rows: 50, isFullscreen: true }
 
-/** /deck as typed at the prompt, with what the engine stamps on it. */
+/** /apiarius as typed at the prompt, with what the engine stamps on it. */
 function deck(args: string) {
-  return { command: 'deck', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
+  return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
 /**
@@ -76,7 +76,7 @@ function textOf(tree: unknown): string {
   return ((tree as Node).children ?? []).map(textOf).join('\n')
 }
 
-test('/deck probe opens a pane of its own with the keyboard (Esc closes it); /deck probe again closes it, and its ui.close stops the tick', async ($, on) => {
+test('/apiarius probe opens a pane of its own with the keyboard (Esc closes it); /apiarius probe again closes it, and its ui.close stops the tick', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const opened: PaneOpenArgs[] = []
   const closed: string[] = []
@@ -86,7 +86,7 @@ test('/deck probe opens a pane of its own with the keyboard (Esc closes it); /de
   expect((await $.command.run(deck('probe'))).text).toBeUndefined()
   expect(opened).toEqual([{ id: PROBE, title: 'Deck probe', focus: true, closeOnEscape: true, rows: 24 }])
 
-  const ui = await $.ui.mount({ plugin: 'agent-deck', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
+  const ui = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
   const clientProps = async () => (await ui.find({ type: 'Client', key: 'probe' }))?.props.props
   expect(await clientProps()).toEqual({ tick: 0, cols: 96 })
   await clock.advance(1500)
@@ -118,7 +118,7 @@ test('the probe on each surface: its numbers and a hex colour in native Text, a 
   await $.command.run(deck('probe'))
 
   for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ plugin: 'agent-deck', surface, component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
+    const ui = await $.ui.mount({ plugin: 'apiarius', surface, component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
 
     // (a) the site's numbers, then copper as a raw hex colour
     expect(await ui.find({ type: 'Text', text: `bodyColumns=96  viewport=100×50  placement=dock  bodyRows=40  surface=${surface}` })).toBeDefined()
@@ -177,13 +177,13 @@ test('the probe on each surface: its numbers and a hex colour in native Text, a 
   }
 })
 
-test('a fault: its dim line says when and why, the surface it failed on leaves the Client out, and /deck probe twice draws it again', async ($, on) => {
+test('a fault: its dim line says when and why, the surface it failed on leaves the Client out, and /apiarius probe twice draws it again', async ($, on) => {
   mock.clock(on, { now: NOW })
   world(on)
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await $.command.run(deck('probe'))
 
-  const desktop = await $.ui.mount({ plugin: 'agent-deck', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
+  const desktop = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
   expect(await desktop.find({ type: 'Text', text: 'ui.message: none yet' })).toBeDefined()
   expect(await desktop.find({ type: 'Text', text: 'ui.fault: none' })).toBeDefined()
 
@@ -195,14 +195,14 @@ test('a fault: its dim line says when and why, the surface it failed on leaves t
   await desktop.unmount()
 
   // the terminal's Client did not fail: it still draws there
-  const terminal = await $.ui.mount({ plugin: 'agent-deck', surface: 'terminal', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
+  const terminal = await $.ui.mount({ plugin: 'apiarius', surface: 'terminal', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
   expect(await terminal.find({ type: 'Client', key: 'probe' })).toBeDefined()
   await terminal.unmount()
 
   // closed and opened again: the Client is back, the fault forgotten
   await $.command.run(deck('probe'))
   await $.command.run(deck('probe'))
-  const again = await $.ui.mount({ plugin: 'agent-deck', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
+  const again = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
   expect(await again.find({ type: 'Client', key: 'probe' })).toBeDefined()
   expect(await again.find({ type: 'Text', text: 'ui.fault: none' })).toBeDefined()
   await again.unmount()

@@ -69,8 +69,8 @@ function world(on: On, saved: DeckSnapshot[]) {
     return { result: 'ok' }
   })
   let version = 0
-  on('state.get', { plugin: 'agent-deck', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
-  on('state.set', { plugin: 'agent-deck', key: 'snapshot' }, ($, e) => {
+  on('state.get', { plugin: 'apiarius', key: 'snapshot' }, () => ({ value: { value: undefined, version } }))
+  on('state.set', { plugin: 'apiarius', key: 'snapshot' }, ($, e) => {
     saved.push(JSON.parse(JSON.stringify(e.value)) as DeckSnapshot)
     version += 1
     return { value: { isSet: true as const, version } }

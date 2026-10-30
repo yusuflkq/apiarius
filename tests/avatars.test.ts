@@ -7,7 +7,7 @@
  * list and a stack; on the terminal the agent's glyph in its colour and its
  * status's mark.
  *
- * Drawn by `/deck demo` over the v2 sample (tests/v2session.ts).
+ * Drawn by `/apiarius demo` over the v2 sample (tests/v2session.ts).
  */
 import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
@@ -22,12 +22,12 @@ import { NOW, command, deck, lastState, newWorld, work, world } from './world'
 
 function pane<S extends 'terminal' | 'desktop'>(surface: S, bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
@@ -43,7 +43,7 @@ function sampleState(): W.WebStateV2 {
   return W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
 }
 
-/** The engine with `state` served as the sample and `/deck demo` shown; `store` the plugin's own store, where the deck keeps the person's prefs, when the test reads it back. */
+/** The engine with `state` served as the sample and `/apiarius demo` shown; `store` the plugin's own store, where the deck keeps the person's prefs, when the test reads it back. */
 async function demo($: Engine, on: On, state: W.WebStateV2, store?: Map<string, unknown>) {
   const session = v2Session()
   const agentFiles = new Map(W.agentFilesOf(session.data).map(one => [one.id, one.text]))
@@ -147,7 +147,7 @@ test('the state`s avatar index is the library`s palette index: the same id, the 
   }
 })
 
-test('the avatar style is the person`s own: read from the store`s prefs as a session starts, /deck avatars <style> keeps another there beside the band`s, and the pane (/deck demo too) draws it at once', async ($, on) => {
+test('the avatar style is the person`s own: read from the store`s prefs as a session starts, /apiarius avatars <style> keeps another there beside the band`s, and the pane (/apiarius demo too) draws it at once', async ($, on) => {
   const kept = new Map<string, unknown>([['prefs', { isBandHidden: false, avatarStyle: 'mood' }]])
   const state = sampleState()
   await demo($, on, state, kept)
@@ -155,7 +155,7 @@ test('the avatar style is the person`s own: read from the store`s prefs as a ses
   const ui = await $.ui.mount(pane('desktop'))
   const cardFaces = async () => (await ui.findAll({ type: 'Svg' })).filter(svg => String(svg.props.alt).endsWith('avatar')).slice(0, order.length).map(svg => svg.props.source)
   expect(await cardFaces()).toEqual(order.map(row => faceOf(row, 22, { dot: true, animated: true }, 'mood')))
-  // /deck avatars lists the ten, the one drawn marked
+  // /apiarius avatars lists the ten, the one drawn marked
   const listed = await $.command.run(deck('avatars'))
   expect(listed.text).toContain('Avatar styles (now Mood faces)')
   expect(listed.text).toContain('▸ mood     Mood faces')
@@ -176,7 +176,7 @@ test('the avatar style is the person`s own: read from the store`s prefs as a ses
   await ui.unmount()
 })
 
-test('Settings` avatar style: the ten, each its name beside the page`s three sample agents drawn in it (done, at work, waiting on you, each with its dot), the one drawn marked; a press draws that one, kept as /deck avatars keeps one', async ($, on) => {
+test('Settings` avatar style: the ten, each its name beside the page`s three sample agents drawn in it (done, at work, waiting on you, each with its dot), the one drawn marked; a press draws that one, kept as /apiarius avatars keeps one', async ($, on) => {
   const kept = new Map<string, unknown>()
   await demo($, on, sampleState(), kept)
   for (const surface of ['desktop', 'terminal'] as const) {

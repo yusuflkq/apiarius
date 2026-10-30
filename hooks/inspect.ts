@@ -589,7 +589,7 @@ export type V2ChatCompaction = {
 /** One instruction or memory file as Loaded lists it. */
 export type V2LoadedFile = {
   path: string
-  /** "~/.claude/CLAUDE.md", "agent-deck/CLAUDE.md"; a memory file its name. */
+  /** "~/.claude/CLAUDE.md", "apiarius/CLAUDE.md"; a memory file its name. */
   name: string
   /** Its tier as the engine said it (`user`, `project`, `local`, `managed`, `memory`, `AutoMem`). */
   kind: string

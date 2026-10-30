@@ -319,16 +319,16 @@ const SURFACES = ['terminal', 'desktop'] as const
 
 function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   return {
-    plugin: 'agent-deck',
+    plugin: 'apiarius',
     surface,
     component: 'Pane' as const,
-    requestId: 'agent-deck',
+    requestId: 'apiarius',
     viewport: { columns: bodyColumns + 4, rows: 400, isFullscreen: true },
-    props: { title: 'Agent Deck', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
+    props: { title: 'Apiarius', isFocused: true, bodyColumns, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 400 }, view: {} },
   }
 }
 
-/** `/deck demo` over the v2 sample as the engine builds it, `change` laid over it. */
+/** `/apiarius demo` over the v2 sample as the engine builds it, `change` laid over it. */
 async function demo($: Engine, on: On, change: (state: W.WebStateV2) => W.WebStateV2 = state => state) {
   const clock = mock.clock(on, { now: SAMPLE_NOW + 3_600_000 })
   const session = v2Session()
@@ -447,7 +447,7 @@ test('between turns no Stop turn; Chat draws what you stopped as a line of its o
 test('a background shell is titled by its own description, else by its command from the real command on: leading environment assignments and changes of directory cut, for Background, the Timeline and "You stopped"', () => {
   expect(B.realCommandOf('L="C:/Users/developer/AppData/Local/Temp/log.txt"; node web/server.js > "$L" 2>&1')).toBe('node web/server.js > "$L" 2>&1')
   expect(B.realCommandOf('L="C:/Users/me/x y.txt" node a.js')).toBe('node a.js')
-  expect(B.realCommandOf('cd "C:/Users/me/agent-deck" && npm run dev')).toBe('npm run dev')
+  expect(B.realCommandOf('cd "C:/Users/me/apiarius" && npm run dev')).toBe('npm run dev')
   expect(B.realCommandOf("FOO=bar BAZ='q u' npm test -- --watch")).toBe('npm test -- --watch')
   expect(B.realCommandOf('export NODE_ENV=production && cd api; node x.js')).toBe('node x.js')
   expect(B.realCommandOf('$env:DEBUG = "1"; npm run dev')).toBe('npm run dev')
