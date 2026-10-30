@@ -1,13 +1,13 @@
 # Apiarius
 
-See and steer every agent in your Claude Code session, live.
+See what every agent and subagent in your Claude Code session is doing, live.
 
 [![tests](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml/badge.svg)](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ![Apiarius](assets/hero.png)
 
-Apiarius is a Claude Code mod for people who run several agents at once. `/apiarius` opens the deck: every agent in the session, what each one is doing, what it changed and what is waiting on you, updated as they work. The deck shows in the Claude Desktop side pane, in the terminal, or in your browser.
+Apiarius is a Claude Code mod for people who hand work to agents and subagents. `/apiarius` opens the deck: every agent in the session, what each one is doing, who started whom, what they tell each other and what they changed, updated as they work. It shows you how your orchestration actually plays out. The deck opens in the Claude Desktop side pane, in the terminal, or in your browser.
 
 ## Install
 
@@ -26,17 +26,19 @@ It needs Claude Code 2.1.287 or later in the terminal, or the Code tab of the Cl
 
 Then run `/apiarius`.
 
-## What you can do
+## What you see
 
-The Dashboard puts what needs you first, so you can answer Claude's questions there. Below it are a card for each agent with what it is doing now, the session's figures, the plan, recent activity and the files the agents touched.
+The Dashboard has a card for each agent with what it is doing right now, then the session's figures, the plan, recent activity and the files the agents touched. When an agent asks you something, it shows at the top.
 
-- Chat shows the session as a group chat, messages between agents included, and you can write to any agent from it.
+- Chat shows the session as a group chat, including the messages agents send each other.
 - Org shows who started whom. Its Timeline gives each agent a row across the run with its work, its waits on you and its idle time.
 - Changes shows git's diff of each uncommitted file next to each agent's own edits of it.
 - Each agent has a page with its task, to-do list, result, tool calls and edits.
 - Inspect shows what fills the context, every permission decision and who made it, what is loaded and the spend per agent.
-- Background lists background shells, agents and schedules, with Stop or Cancel. Stop turn ends Claude's turn, as Esc does.
-- All sessions lists every Claude Code session on this machine that runs Apiarius, and you can steer any of them from any deck. Only permission prompts stay in their own window.
+- Background lists the background shells, agents and schedules still running.
+- All sessions lists every Claude Code session on this machine that runs Apiarius, so one deck can check on all of them.
+
+When you do need to step in, you can answer Claude's questions, message an agent, or stop an agent, a background task or the turn, from the deck.
 
 | Chat | Changes |
 | :-: | :-: |
@@ -69,7 +71,7 @@ Keys work while the pane has the keyboard (click it, or press ctrl+x then tab): 
 
 Apiarius hooks Claude Code's events (tool calls, agent spawns, turns, messages, permission checks and notifications) into one model of the session, which the pane, the terminal and the web page all draw from. Everything it shows comes from what Claude Code and git report. Changes never credits a git hunk to an agent: the edits beside git's diff are the patches from each agent's own Edit and Write calls.
 
-It steers only through Claude Code's own channels: answering the questions Claude asks you, delivering your messages, TaskStop for background agents and tasks, CronDelete for schedules, and the same abort as Esc for the turn. Stop and Cancel appear only where Claude Code's permission check allows that call, and the check runs again before each press. Apiarius never grants itself a permission and never answers a permission prompt. In auto mode, where Claude Code refuses a plugin's message to a subagent, the deck asks the Orchestrator to pass yours on, and that request shows in the chat.
+When you step in, it acts only through Claude Code's own channels: answering the questions Claude asks you, delivering your messages, TaskStop for background agents and tasks, CronDelete for schedules, and the same abort as Esc for the turn. Stop and Cancel appear only where Claude Code's permission check allows that call, and the check runs again before each press. Apiarius never grants itself a permission and never answers a permission prompt. In auto mode, where Claude Code refuses a plugin's message to a subagent, the deck asks the Orchestrator to pass yours on, and that request shows in the chat.
 
 ## What it runs and stores
 
