@@ -1,0 +1,8 @@
+{
+  "name": "apiarius",
+  "description": "Apiarius, a Claude Code mod that shows every agent in a session as it works and lets you steer them.",
+  "owner": { "name": "Yusuf", "url": "https://github.com/yusuflkq" },
+  "plugins": [
+    { "name": "apiarius", "source": "./" }
+  ]
+}

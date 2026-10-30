@@ -1,8 +1,12 @@
 {
   "name": "apiarius",
   "displayName": "Apiarius",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "See and steer every agent in your Claude Code session, live: a deck in the side pane, the terminal or your browser.",
-  "author": { "name": "Yusuf" },
+  "author": { "name": "Yusuf", "url": "https://github.com/yusuflkq" },
+  "homepage": "https://github.com/yusuflkq/apiarius",
+  "repository": "https://github.com/yusuflkq/apiarius",
+  "license": "MIT",
+  "keywords": ["claude-code", "mod", "agents", "subagents", "multi-agent", "dashboard", "observability", "diffs"],
   "types": "./types/index.d.ts"
 }
