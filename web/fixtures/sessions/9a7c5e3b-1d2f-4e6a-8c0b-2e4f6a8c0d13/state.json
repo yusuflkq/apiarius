@@ -50,7 +50,7 @@
       "needs": 0,
       "fold": null,
       "task": "",
-      "result": "Synced 14 notebooks.\n\nEach is a Markdown file under `notes/remarkable/`, its pages in order.",
+      "result": "Synced 14 notebooks.\n\nEach is a Markdown file under `notes/notebooks/`, its pages in order.",
       "todos": [],
       "tokens": 0
     }
@@ -94,7 +94,7 @@
       "to": "you",
       "who": "Orchestrator → you",
       "kind": "answer",
-      "text": "Synced 14 notebooks.\n\nEach is a Markdown file under `notes/remarkable/`, its pages in order."
+      "text": "Synced 14 notebooks.\n\nEach is a Markdown file under `notes/notebooks/`, its pages in order."
     }
   ],
   "changes": {

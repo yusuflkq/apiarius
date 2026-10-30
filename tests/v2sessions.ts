@@ -90,7 +90,7 @@ function site(): SampleDeck {
 /** Notes sync: on the Desktop, idle, its answer given. */
 function notes(): SampleDeck {
   const { data, main } = begun(150, 'Notes sync\n\nSync my notebooks into the notes folder as Markdown.', 'claude-sonnet-4-5')
-  const answer = 'Synced 14 notebooks.\n\nEach is a Markdown file under `notes/remarkable/`, its pages in order.'
+  const answer = 'Synced 14 notebooks.\n\nEach is a Markdown file under `notes/notebooks/`, its pages in order.'
   M.addMessage(data, { from: M.MAIN, to: M.YOU, kind: 'answer', text: answer, at: ago(120) })
   M.noteMainAnswer(main, answer)
   Object.assign(main, { status: 'idle' })
