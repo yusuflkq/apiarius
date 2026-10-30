@@ -871,12 +871,23 @@ export type WebStateV2 = {
   cleared: { count: number; at: number | null }
   /** Every session on this machine (./sessions, "All sessions"), here's first; absent until the registry was read (and in another session's state as it wrote it: a deck showing it puts its own list there). */
   sessions?: SessionsV2
-  /** Set only on another session's state as a deck shows it (./sessions `peerStateOf`): where its window is, and whether its deck takes answers and messages from here. Its controls that act only there say so where they stand. */
+  /** Set only on another session's state as a deck shows it (./sessions `peerStateOf`): where its window is, whether its deck takes commands from here, and what came of the presses sent to it. A permission prompt, answered only in its window, says so where it stands. */
   peer?: V2Peer
 }
 
-/** Another session shown in a deck: its window ("Terminal · site", its row's `where`; '' when the list does not hold it), and whether its deck takes answers and messages from another (its inbox). */
-export type V2Peer = { where: string; canSteer: boolean }
+/**
+ * Another session shown in a deck: its window ("Terminal · site", its row's
+ * `where`; '' when the list does not hold it); whether its deck takes
+ * commands from here now (its inbox: every control but a permission prompt's),
+ * else `why` not, said at each control before a press ("Its deck isn't
+ * answering: last heard 2m ago."); and each press sent to it from here, by
+ * its control (`presses`: 'turn', `agent:<id>`, `bg:<id>`, 'clear', 'show',
+ * 'repo', 'review'), as its ack in that deck's state says.
+ */
+export type V2Peer = { where: string; canSteer: boolean; why: string; presses?: Readonly<Record<string, V2Press>> }
+
+/** A press on another session's deck as its control shows it: `sending` until that deck's ack (`text` what the control says meanwhile: "Stopping…"), then `done` or `failed` with the ack's words. */
+export type V2Press = { status: 'sending' | 'done' | 'failed'; text: string }
 
 /** An agent's own file, `agents/<id>.json`, read when its page opens: its words whole and its calls. */
 export type V2AgentFile = {

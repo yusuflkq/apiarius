@@ -12,19 +12,22 @@
  *   there?) and removed once it is not, or long after.
  * - **Its inbox** (`<state folder>/inbox/<viewer>.json`), read on every tick:
  *   while a deck shows this session, this one writes its state folder as
- *   for `/deck web` (`isViewed`); a `chat` or an `answer` in it runs as the
- *   page's own would (the host's `steer`), through Claude Code's channels,
- *   its ack in this session's state. Only a session the registry lists may
- *   write one; a file whose writer it could not find listed is read again
- *   a few seconds later, not only when it changes.
+ *   for `/deck web` (`isViewed`); each command in it (`S.STEERING`: an
+ *   answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick of
+ *   Changes, Review) runs as the page's own would (the host's `steer`),
+ *   through Claude Code's channels and its own checks, its ack in this
+ *   session's state. Only a session the registry lists may write one; a
+ *   file whose writer it could not find listed is read again a few seconds
+ *   later, not only when it changes.
  * - **Showing another** (`openSession`): its `state.json` read from its
  *   folder while its deck shows here, read again when it changes, and shown
  *   at once; its lazy files read after it shows, never before (a long
  *   session's state names hundreds). Its deck is asked to keep writing them
- *   (its inbox): every 30 s, and every 5 s until its state first shows. An
- *   answer or a message to it goes into its inbox, where its own deck takes
- *   it; a deck that reads no inbox is answered in its own window. Its own
- *   session picked again (`showHere`) shows this deck's own once more.
+ *   (its inbox): every 30 s, and every 5 s until its state first shows. A
+ *   press on its deck goes into its inbox, where its own deck takes it, and
+ *   its control says what came of it (sending, then its ack); a deck gone
+ *   quiet or that reads no inbox says so at its controls before a press.
+ *   Its own session picked again (`showHere`) shows this deck's own once more.
  *
  * The deck's hooks module hands in what it alone holds (`RegistryHost`:
  * its state, and every engine call, since each `$` call lives there) and
@@ -67,7 +70,7 @@ export type RegistryHost = {
   dirOf: () => string
   /** The session's process id, as the deck read it ('' when it could not). */
   pidOf: () => Promise<string>
-  /** Runs a command another session's deck sent, as the page's own: a `chat` or an `answer`, acked under its `id`. */
+  /** Runs a command another session's deck sent, as the page's own (one of `S.STEERING`, checked again there), acked under its `id`. */
   steer: (cmd: Record<string, unknown>) => void
   /** Whether this deck's state already holds an ack under `id` (a command acted on before a reload). */
   hasAck: (id: string) => boolean
@@ -88,7 +91,6 @@ type Viewed = {
   /** Its state folder, read from (`sample`: the sample's, under the mod). */
   dir: string
   isSample: boolean
-  canSteer: boolean
   state: W.WebStateV2 | null
   /** Its state.json's size and time when last read: read again only when they move. */
   stamp: string
@@ -112,6 +114,11 @@ type Viewed = {
   openedAt: number
   /** When its deck was last asked to keep writing (its inbox). */
   askedAt: number
+  /** The presses sent to its deck from here, by their control's key ('turn', `agent:<id>`, `bg:<id>`, 'clear', 'show', 'repo', 'review'): the last of each. */
+  presses: Map<string, S.PressSent>
+  /** What they said at the last tick, as one string; the ids whose outcome was toasted. */
+  pressesShown: string
+  told: Set<string>
   isReading: boolean
   /** When the read under way began: one past `READ_HUNG_MS` is let go, so a read that never ends holds no other back. */
   readingAt: number
@@ -480,6 +487,24 @@ export async function registryTick(now: number, isWebOn: boolean): Promise<void>
   const reads = [pollInbox(now), reg.isOpen || reg.viewing !== null || isWebOn ? readRegistry(now) : null, reg.viewing ? readViewed(now) : null]
   // the deck's own tick goes on whatever one of them met: the next one reads again
   await Promise.all(reads.map(read => read?.catch(() => undefined)))
+  if (reg.viewing) notePresses(reg.viewing, now)
+}
+
+/** The presses sent to the session shown, as their controls say them at `now`: what came of each said once as a toast too, as its own window's press says it; drawn again when that moved (a word whose time is up goes), those long past forgotten. */
+function notePresses(v: Viewed, now: number): void {
+  for (const [key, one] of v.presses) if (now - one.at > S.COMMAND_MS + S.PRESS_SHOWN_MS) v.presses.delete(key)
+  const presses = S.pressesOf(v.presses, v.state?.acks ?? [], now)
+  for (const [key, press] of Object.entries(presses)) {
+    const sent = v.presses.get(key)
+    if (!sent || press.status === 'sending' || v.told.has(sent.id)) continue
+    v.told.add(sent.id)
+    reg.host?.toast(press.text)
+  }
+  const shown = JSON.stringify(presses)
+  if (shown === v.pressesShown) return
+  v.pressesShown = shown
+  v.version += 1
+  reg.host?.refresh(now)
 }
 
 // ---------------------------------------------------------------- the list
@@ -585,7 +610,6 @@ export async function openSession(id: string, isSample = false): Promise<void> {
     id,
     dir,
     isSample: sample !== null,
-    canSteer: entry.inbox,
     state: null,
     stamp: '',
     agents: {},
@@ -602,6 +626,9 @@ export async function openSession(id: string, isSample = false): Promise<void> {
     version: 0,
     openedAt: now,
     askedAt: now,
+    presses: new Map(),
+    pressesShown: '{}',
+    told: new Set(),
     isReading: false,
     readingAt: 0,
   }
@@ -754,12 +781,14 @@ async function readLazy(v: Viewed, state: W.WebStateV2, by: number): Promise<boo
  * The session shown in this deck's place, as the pane draws it: its row in
  * the list (null when the list holds it no more), why its deck shows
  * nothing yet ('' once it does), its state marked as another session's
- * (`S.peerStateOf`: where its window is, Stop offered nowhere here) with
- * this deck's own list of sessions, its lazy files, its model (its own
- * page, file and commit; no git of this session's, no web line, no band;
- * the list dropped as this deck's) and its presses (its agent page; an
- * answer or a message to its deck; nothing else of this deck's). Null while
- * this deck's own session shows.
+ * (`S.peerStateOf`: where its window is, whether its deck takes commands
+ * from here, what came of each press sent to it) with this deck's own list
+ * of sessions, its lazy files, its model (its own page, file and commit; no
+ * git of this session's, no web line, no band; the list dropped as this
+ * deck's) and its presses: its agent page, and every press its own window
+ * has (an answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick
+ * of Changes, Review) to its own deck. Null while this deck's own session
+ * shows.
  */
 export function viewingFor(model: DeckModel, actions: DashActions): DashModel['viewing'] {
   const v = reg.viewing
@@ -770,7 +799,9 @@ export function viewingFor(model: DeckModel, actions: DashActions): DashModel['v
     v.version += 1
     reg.host?.changed()
   }
-  const refuse = (what: string) => reg.host?.toast(`${what}: this is another session's deck. Do it in its window${row ? `: ${row.where}` : ''}.`)
+  // a press its own window has: to its own deck, its control saying what came of it
+  const press = (key: string, doing: string, cmd: Record<string, unknown>) => void pressViewed(v, key, doing, cmd)
+  const turnId = v.state?.header.turn?.id
   const viewedActions: DashActions = {
     ...actions,
     openAgent: id => {
@@ -790,15 +821,20 @@ export function viewingFor(model: DeckModel, actions: DashActions): DashModel['v
       changed()
     },
     answer: (callId, answers) => void steerViewed(v, { cmd: 'answer', callId, answers }),
-    sendChat: (agentId, text) => void steerViewed(v, { cmd: 'chat', agentId, text }),
-    review: () => refuse('Review'),
-    // its Changes' picks and Follow the work are its own deck's: pinning here would pin this session's
-    selectRepo: () => refuse('Pick a repository'),
-    clearFinished: () => refuse('Clear finished'),
-    showCleared: () => refuse('Show cleared'),
+    sendChat: (agentId, text, ackId) => void steerViewed(v, { cmd: 'chat', agentId, text }, ackId),
+    stopAgent: id => press(`agent:${id}`, 'Stopping…', { cmd: 'stopAgent', agentId: id }),
+    // its own turn, as it showed: its deck refuses it once that turn has ended
+    abortTurn: () => press('turn', 'Stopping…', { cmd: 'abortTurn', ...(turnId ? { turnId } : {}) }),
+    stopBackground: id => press(`bg:${id}`, v.state?.background?.rows.find(one => one.id === id)?.stop?.label === 'Cancel' ? 'Cancelling…' : 'Stopping…', { cmd: 'stopBackground', bgId: id }),
+    clearFinished: () => press('clear', 'Clearing…', { cmd: 'clearFinished' }),
+    showCleared: () => press('show', 'Showing them…', { cmd: 'showCleared' }),
+    // its Changes' picks and Follow the work pin its own deck's Changes
+    selectRepo: root => press('repo', 'Asking its deck…', { cmd: 'selectRepo', root }),
+    review: text => press('review', 'Sending…', { cmd: 'review', text }),
     loadMessage: (id, onRead) => onRead(Object.hasOwn(v.messages, id) ? (v.messages[id] ?? null) : null),
   }
-  const peer = { where: row?.where ?? '', canSteer: v.canSteer && !v.isSample }
+  const why = S.notAnsweringOf(row)
+  const peer = { where: row?.where ?? '', canSteer: why === '', why, presses: S.pressesOf(v.presses, v.state?.acks ?? [], model.now) }
   return {
     id: v.id,
     row,
@@ -811,22 +847,50 @@ export function viewingFor(model: DeckModel, actions: DashActions): DashModel['v
   }
 }
 
-/** An answer or a message from the pane to the session shown: into its inbox, where its own deck takes it; refused where its deck reads none, or in the sample. */
-async function steerViewed(v: Viewed, cmd: Record<string, unknown>): Promise<void> {
+/** A fresh id for a command this deck sends another session's deck: its ack's. */
+async function pressIdOf(): Promise<string> {
+  return `deck-${(await io().now()).toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** An answer or a message from the pane to the session shown (under the composer's `ackId` where it gave one): into its inbox, where its own deck takes it; refused where its deck reads none, or in the sample. */
+async function steerViewed(v: Viewed, cmd: Record<string, unknown>, ackId = ''): Promise<void> {
   if (v.isSample) {
     reg.host?.toast('Sample data: nothing is sent.')
     return
   }
-  const id = `deck-${(await io().now()).toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  const id = W.cmdIdOf({ id: ackId }) || (await pressIdOf())
   const why = await sendToSession(v.id, { ...cmd, id })
   reg.host?.toast(why === '' ? 'Sent to its deck, which passes it to Claude Code: what came of it shows there.' : why)
 }
 
 /**
+ * A press on the session shown's own controls (Stop, Stop turn, Cancel,
+ * Clear finished, a pick of Changes, Review), into its inbox under the
+ * control's `key`: its control says `doing` ("Stopping…") until its deck's
+ * ack, then what came of it (`S.pressesOf`). In the sample nothing is sent.
+ */
+async function pressViewed(v: Viewed, key: string, doing: string, cmd: Record<string, unknown>): Promise<void> {
+  if (v.isSample) {
+    reg.host?.toast('Sample data: nothing is sent.')
+    return
+  }
+  const now = await io().now()
+  const sent: S.PressSent = { id: await pressIdOf(), at: now, doing, failed: '' }
+  v.presses.set(key, sent)
+  v.version += 1
+  reg.host?.changed()
+  const why = await sendToSession(v.id, { ...cmd, id: sent.id })
+  if (why === '' || reg.viewing !== v || v.presses.get(key) !== sent) return
+  v.presses.set(key, { ...sent, failed: why })
+  v.version += 1
+  reg.host?.changed()
+}
+
+/**
  * A page command for another session (`S.sessionCmdOf`): `view` keeps it
- * written while the page looks (asked again with each one); a `chat` or an
- * `answer` goes into its inbox, its ack then in its own state. Answers why
- * it could not go ('' when it went), and acks that here too.
+ * written while the page looks (asked again with each one); any other (one
+ * of `S.STEERING`) goes into its inbox, its ack then in its own state.
+ * Answers why it could not go ('' when it went), and acks that here too.
  */
 export async function fromPage(session: string, cmd: Record<string, unknown>): Promise<string> {
   if (!reg.host || reg.dir === '') return 'No other session is known here'
@@ -841,7 +905,7 @@ export async function fromPage(session: string, cmd: Record<string, unknown>): P
   return sendToSession(session, cmd)
 }
 
-/** Writes a `chat` or an `answer` (with its `id`) into session `id`'s inbox; answers why not ('' when it went), acked here when it could not go. */
+/** Writes a command of `S.STEERING` (with its `id`, each field checked) into session `id`'s inbox; answers why not ('' when it went), acked here when it could not go. */
 async function sendToSession(id: string, cmd: Record<string, unknown>): Promise<string> {
   const host = reg.host
   const ackId = W.cmdIdOf(cmd)
@@ -853,16 +917,18 @@ async function sendToSession(id: string, cmd: Record<string, unknown>): Promise<
     return why
   }
   if (!host || !entry || !S.isLiveEntry(entry, now)) return fail('That session is not running any more')
-  if (!entry.inbox || !S.isStateDirOf(entry.dir, id)) return fail('Answer it in its window: its deck takes no answers or messages from another')
-  if (!S.STEERING.includes(String(cmd.cmd)) || ackId === '') return fail('Only an answer or a message goes to another session')
+  if (!entry.inbox || !S.isStateDirOf(entry.dir, id)) return fail(`${S.NOT_ANSWERING}: it runs an older Agent Deck`)
+  if (S.isQuietEntry(entry, now)) return fail(`${S.NOT_ANSWERING}: it has not been heard from lately`)
+  const said = S.steeringCmdOf(cmd)
+  if (!said) return fail(S.steeringRefusalOf(cmd))
   const path = S.inboxPathOf(entry.dir, me)
-  if (path === '') return fail('Answer it in its window')
-  const file = S.inboxWith(me, now, Math.max(reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], cmd)
+  if (path === '') return fail(S.NOT_ANSWERING)
+  const file = S.inboxWith(me, now, Math.max(reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], said)
   reg.outbox.set(id, file.cmds)
   try {
     await io().write(path, `${JSON.stringify(file)}\n`)
   } catch {
-    return fail('Could not reach its deck: answer it in its window')
+    return fail("Could not reach its deck: it isn't answering")
   }
   return ''
 }

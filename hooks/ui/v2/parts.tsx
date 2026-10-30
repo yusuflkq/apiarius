@@ -17,6 +17,7 @@
 import type { RenderElement } from 'claude-code'
 
 import * as AV from '../../../web/avatars.mjs'
+import type { V2Press, WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { ticks, uiWrapAdvance, type TickPart } from './dashModel'
 import { avatar, avatarAgentOf, avatarStyleOf, svgOf, terminalCell, type Face } from './look'
@@ -132,22 +133,66 @@ export function openFoldsWith(open: readonly string[], id: string): string[] {
   return open.includes(id) ? open.filter(one => one !== id) : [...open, id]
 }
 
+/** A press on another session's deck, as its control `key` shows it (`peer.presses`); undefined for none, and on this deck's own. */
+export function pressOf(state: Pick<WebStateV2, 'peer'>, key: string): V2Press | undefined {
+  return state.peer?.presses?.[key]
+}
+
+/** A press still on its way: what its control says in its place ("Stopping…"), dim. */
+export function pressSending(kit: Kit, press: V2Press, key: string): RenderElement {
+  const { Text } = kit
+  return (
+    <Text key={`press:${key}`} color={P.muted2}>
+      {press.text}
+    </Text>
+  )
+}
+
+/** What came of a press, after its control: ✓ and its deck's word, or ✕ and why; null for none and while it is on its way. */
+export function pressNote(kit: Kit, press: V2Press | undefined, key: string): RenderElement | null {
+  const { Text } = kit
+  if (!press || press.status === 'sending') return null
+  const isDone = press.status === 'done'
+  return (
+    <Text key={`press:${key}`} color={isDone ? P.doneText : P.failText} wrap="truncate-end">
+      {`${isDone ? '✓' : '✕'} ${press.text}`}
+    </Text>
+  )
+}
+
+/** A control pressed on another session's deck: its doing in its place while its deck has not answered, else the control and what came of it; the control alone on this deck's own. */
+export function pressed(kit: Kit, state: Pick<WebStateV2, 'peer'>, key: string, control: RenderElement): RenderElement[] {
+  const press = pressOf(state, key)
+  if (press?.status === 'sending') return [pressSending(kit, press, key)]
+  const note = pressNote(kit, press, key)
+  return note ? [control, note] : [control]
+}
+
 /**
  * The "N finished" row under the agents in front (the Dashboard's cards,
  * Chat's members): "3 finished ▸" (a plain Button keyed `<key>:fold`; a
  * press opens it on them, "3 finished ▾", or folds it), then "Clear
  * finished" (`<key>:clear`: they are hidden from the deck, nothing in Claude
  * Code changes), both while any is finished; and "Show 2 cleared"
- * (`<key>:show`) while any is cleared. Null with neither.
+ * (`<key>:show`) while any is cleared. Null with neither. On another
+ * session's deck the same, each press to its own deck and what came of it
+ * beside it; where its deck takes nothing from here, why, in their place.
  */
-export function finishedRow(kit: Kit, key: string, count: number, isOpen: boolean, cleared: number, actions: DashActions, toggle: () => void): RenderElement | null {
-  const { Box, Button } = kit
+export function finishedRow(kit: Kit, key: string, count: number, isOpen: boolean, cleared: number, actions: DashActions, toggle: () => void, state: Pick<WebStateV2, 'peer'> = {}): RenderElement | null {
+  const { Box, Button, Text } = kit
   if (count === 0 && cleared === 0) return null
+  const deaf = state.peer && !state.peer.canSteer ? state.peer.why : ''
+  // what came of Clear finished stays beside the row once nothing is left to clear
   return (
     <Box key={key} flexDirection="row" flexWrap="wrap" columnGap={2} alignItems="center">
       {count > 0 ? <Button key={`${key}:fold`} label={`${count} finished ${chevronOf(isOpen)}`} plain dimColor onPress={toggle} /> : null}
-      {count > 0 ? <Button key={`${key}:clear`} label="Clear finished" plain dimColor onPress={() => actions.clearFinished()} /> : null}
-      {cleared > 0 ? <Button key={`${key}:show`} label={`Show ${cleared} cleared`} plain dimColor onPress={() => actions.showCleared()} /> : null}
+      {deaf !== '' ? (
+        <Text key={`${key}:deaf`} color={P.muted2} wrap="wrap">
+          {deaf}
+        </Text>
+      ) : null}
+      {count > 0 && deaf === '' ? pressed(kit, state, 'clear', <Button key={`${key}:clear`} label="Clear finished" plain dimColor onPress={() => actions.clearFinished()} />) : pressNote(kit, pressOf(state, 'clear'), 'clear')}
+      {cleared > 0 && deaf === '' ? pressed(kit, state, 'show', <Button key={`${key}:show`} label={`Show ${cleared} cleared`} plain dimColor onPress={() => actions.showCleared()} />) : null}
     </Box>
   )
 }

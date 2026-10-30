@@ -14,9 +14,12 @@
  *   call says it does, and "Answer it in Claude Code".
  * - Claude Code's notification: its title and its words, verbatim.
  *
- * Another session's (the state marked `peer`) says where instead: "Answer
- * it in its window: Terminal · site." (../../sessions `inItsWindow`); its
- * questions answer through its own deck only where that takes answers.
+ * Another session's (the state marked `peer`): its questions answer
+ * through its own deck, as its own window's would; what no deck answers (a
+ * permission prompt, which Claude Code takes only in its own window, and
+ * its notification) says where instead: "Answer it in its window: Terminal
+ * · site." (../../sessions `inItsWindow`). Where its deck takes nothing from
+ * here, its questions show read-only, saying why.
  *
  * Each card's title is a plain Button keyed `need:<id>` (W.needKeyOf, the
  * row `j`, `k` and `n` move the focus to) that opens the asking agent's page.
@@ -70,13 +73,22 @@ export function needsSection(kit: Kit, state: WebStateV2, list: readonly V2Need[
   )
 }
 
-/** Where a card says its need is answered: in Claude Code, or, on another session's deck (`peer`), in its window, named. */
-type Notes = { answer: string; orAnswer: string }
+/**
+ * What a card says of where its need is answered: `answer` under what no
+ * deck can answer (a permission prompt, Claude Code's notification), in
+ * Claude Code, or, on another session's deck (`peer`), in its window,
+ * named; `held` under a question the deck cannot answer, the same, or, where
+ * that session's deck takes nothing from here, why; `orAnswer` beside one it
+ * can, as its own window's deck says it.
+ */
+type Notes = { answer: string; held: string; orAnswer: string }
 
 function notesOf(state: Pick<WebStateV2, 'peer'>): Notes {
   const peer = state.peer
-  if (!peer) return { answer: 'Answer it in Claude Code.', orAnswer: 'Or answer it in Claude Code.' }
-  return { answer: inItsWindow('Answer it', peer.where), orAnswer: inItsWindow('Or answer it', peer.where) }
+  const orAnswer = 'Or answer it in Claude Code.'
+  if (!peer) return { answer: 'Answer it in Claude Code.', held: 'Answer it in Claude Code.', orAnswer }
+  const answer = inItsWindow('Answer it', peer.where)
+  return { answer, held: peer.canSteer ? answer : peer.why, orAnswer }
 }
 
 /** What a need's title says: who asks, who needs your OK and for which tool, or the notification's own title, else its type in words ("Permission prompt"; one the deck does not know as sent). */
@@ -276,7 +288,7 @@ function otherField(kit: Kit, need: V2Need, qi: number, mode: Mode, actions: Das
 /** Under the questions: Submit and where else to answer; for a read-only question, where to answer it. */
 function questionFoot(kit: Kit, need: V2Need, mode: Mode, actions: DashActions, now: number, notes: Notes): RenderElement {
   const { Box, Text, Button } = kit
-  if (!mode.canAnswer) return <Text color={NOTE} wrap="wrap">{notes.answer}</Text>
+  if (!mode.canAnswer) return <Text color={NOTE} wrap="wrap">{notes.held}</Text>
   if (mode.isInstant) return <Text color={NOTE} wrap="wrap">{notes.orAnswer}</Text>
   const qs = need.questions ?? []
   const pick = A.pickOf(need)

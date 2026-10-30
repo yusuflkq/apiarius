@@ -168,7 +168,7 @@ export function agentsSection(kit: Kit, state: WebStateV2, actions: DashActions,
     })
   }
   const toggle = () => actions.setV2View({ openFolds: openFoldsWith(openFolds, FINISHED_FOLD.now) })
-  const fin = finishedRow(kit, FINISHED_FOLD.now, finishedCount, isFinishedOpen, state.cleared?.count ?? 0, actions, toggle)
+  const fin = finishedRow(kit, FINISHED_FOLD.now, finishedCount, isFinishedOpen, state.cleared?.count ?? 0, actions, toggle, state)
   let front = fold.isOpen ? grid(shown) : []
   let behind = fold.isOpen ? grid(finished) : []
   // the terminal, short of rows (`maxRows`): the rows of cards that fit under the head, the finished row kept; the rest counted in the link to Org
@@ -224,7 +224,7 @@ function agentCard(kit: Kit, state: WebStateV2, card: CardModel, width: number, 
   const open = () => actions.openAgent(row.id)
   return (
     <Box key={`card:${row.id}`} flexDirection="column" width={width} borderStyle="round" borderColor={tone.edge} hover={{ borderColor: tone.hot }} paddingX={1} rowGap={isAiry(kit) ? 1 : 0}>
-      {cardHead(kit, row, inner, open, cardStop(kit, row, actions))}
+      {cardHead(kit, row, inner, open, cardStop(kit, row, actions, state), cardStopCells(kit, row, state))}
       {cardStep(kit, row, card.chip, inner, open)}
       {card.isSaid ? cardWords(kit, card.lines, lines) : cardBody(kit, row, card.lines, lines, open)}
       {cardFoot(kit, row, inner, state.now, open)}
@@ -251,13 +251,13 @@ const NAME_MIN = 11
  * Claude Code allows it, stands just before "Open →", whatever the width;
  * "Open →" stays beside it while the name still fits whole.
  */
-function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void, stop: RenderElement | null = null): RenderElement {
+function cardHead(kit: Kit, row: V2AgentRow, inner: number, open: () => void, stop: RenderElement | null = null, stopWidth = 0): RenderElement {
   const { Box, Button, Text } = kit
   const adv = advanceOf(kit)
   const before = avatarCells(kit, AVATAR.card, true) + 1 + plainSlack(kit) + 1
   const beside = 1 + openCells(kit)
   const word = row.isStopped ? 'stopped' : toneOf(row.status).word
-  const stopCells = stop ? cardStopCells(kit, row) : 0
+  const stopCells = stop ? stopWidth : 0
   const room = inner - before - pillCells(kit, row.status) - (row.isStopped ? 1 : 0) - stopCells
   const isOpenShown = inner - before - pillCells(kit, 'starting') - beside >= NAME_MIN && cellsOf(row.title, adv) <= room - beside
   const name = cutCells(row.title, Math.max(4, isOpenShown ? room - beside : room), adv)

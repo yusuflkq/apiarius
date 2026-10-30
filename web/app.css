@@ -1442,10 +1442,17 @@ kbd {
 .hd-sessions-label .ic { width: 14px; height: 14px; }
 .hd-sessions-need { color: var(--wait-text); font-weight: 500; }
 
-/* where a control of another session's deck acts: in its window */
+/* another session's deck: where only its window answers (a permission prompt), or why its deck takes nothing from here */
 .peer-note { font-size: 12px; color: var(--muted); }
 .hd-peer-stop { flex: none; white-space: nowrap; color: var(--muted-2); }
 .bg-where { margin: 0; padding: 0 2px; }
+.chg-picks .peer-note { flex-basis: 100%; margin: 2px 0 0; }
+
+/* what came of a press, beside its control: its deck's word a while after its ack */
+.press-note { font-size: 12px; min-width: 0; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.press-note.is-done { color: var(--done-text); }
+.press-note.is-failed { color: var(--fail-text); }
+.hd-top .press-note { flex: 0 1 auto; }
 
 /* All sessions (#/sessions) */
 .page-sessions { gap: 16px; }

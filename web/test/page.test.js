@@ -1253,21 +1253,24 @@ test('Changes with no repository: it says where the chat runs and what Changes f
   // a later edit opens nothing by itself: what is open stays
   p.load(sample(s => { noRepo(s); s.now += 1000; s.changes.edits.push({ id: 'toolu_01Late', agent: BUILDER, tool: 'Edit', path: 'C:/Users/sam/code/acme-api/README.md', at: s.now, added: 1, removed: 0 }) }))
   assert.deepEqual(groups().map(g => [g.k.split(/[\\/]/).pop(), g.p.class.includes('open')]).slice(0, 2), [['README.md', false], ['bench.js', true]])
-  // pinned: the usual git view, "pinned", and Follow the work, which sends the empty root
-  p.load(sample(s => { s.now += 2000; s.changes.where = { ...where, pinned: s.changes.repo.root } }))
+  // pinned (the pick's ack with it): the usual git view, "pinned", what came of the pick, and Follow the work, which sends the empty root
+  p.load(sample(s => { s.now += 2000; s.changes.where = { ...where, pinned: s.changes.repo.root }; s.acks.push({ id: sent.id, ok: true, status: 'delivered', text: 'Changes shows agent-deck', at: s.now }) }))
   assert.match(flat(textOf(find(view(), 'chg-repo')[0])), /· acme-api · pinned$/)
   assert.equal(picks().length, 0)
+  assert.equal(flat(textOf(find(view(), 'press-note')[0])), '✓ Changes shows agent-deck')
   click(byText(view(), 'chg-follow', 'Follow the work'))
   await settle()
   assert.deepEqual(p.commands().at(-1), { cmd: 'selectRepo', id: p.commands().at(-1).id, root: '' })
+  // until its ack, Follow the work says it is asking, and takes no second press
+  assert.equal(byText(view(), 'chg-follow', 'Asking…').p.disabled, true)
   // the chat's own repository: no picks, no Follow the work
   p.load(sample(s => { s.now += 3000 }))
   assert.equal(picks().length, 0)
   assert.equal(find(view(), 'chg-follow').length, 0)
-  // another session's deck, shown here: its picks and Follow the work are its own deck's, done in its window
+  // another session's deck the list holds no more: its deck isn't answering, said before anything goes
   const other = page({ hash: '#/s/other-1/changes' })
   assert.equal(other.run('route.session'), 'other-1')
-  assert.equal(await other.run("command({ cmd: 'selectRepo', root: '' }).then(() => 'sent', e => e.message)"), 'This is another session\'s deck. Do that in its window.')
+  assert.equal(await other.run("command({ cmd: 'selectRepo', root: '' }).then(() => 'sent', e => e.message)"), 'Its deck isn\'t answering: it is not listed any more.')
   assert.equal(other.commands().length, 0)
 })
 

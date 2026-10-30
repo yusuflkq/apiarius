@@ -1048,9 +1048,19 @@ function onWebLine($: EngineInterface, line: string): boolean {
     void SR.fromPage(other.session, other.cmd)
     return false
   }
-  const ackId = W.cmdIdOf(said.cmd)
-  const route = W.routeOf(said.cmd, data)
-  if (route === null) void ack($, ackId, 'failed', W.refusalOf(said.cmd, data))
+  runCommand($, said.cmd)
+  return false
+}
+
+/**
+ * A page command, checked against the model (`W.routeOf`) and acted on, its
+ * ack under its `id`: the page's own, and one another session's deck sent
+ * (`steerFromSession`), alike. Refused, its ack says why.
+ */
+function runCommand($: EngineInterface, cmd: Record<string, unknown>) {
+  const ackId = W.cmdIdOf(cmd)
+  const route = W.routeOf(cmd, data)
+  if (route === null) void ack($, ackId, 'failed', W.refusalOf(cmd, data))
   else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
   else if (route.kind === 'review') void sendReview($, route.text, ackId)
   else if (route.kind === 'answer') answerCall($, route.callId, route.answers, ackId)
@@ -1064,7 +1074,6 @@ function onWebLine($: EngineInterface, line: string): boolean {
   } else if (route.kind === 'clearFinished') void clearFinished($, ackId)
   else if (route.kind === 'showCleared') void showCleared($, ackId)
   else if (route.kind === 'selectRepo') void repoFromPage($, route.root, ackId)
-  return false
 }
 
 /**
@@ -2748,18 +2757,17 @@ function registryHost($: EngineInterface): SR.RegistryHost {
 }
 
 /**
- * A command another session's deck sent (its inbox, ./registry): a `chat` or
- * an `answer` runs exactly as the page's own (`sendChat`, `answerCall`),
- * through Claude Code's channels, its ack in this session's state; anything
- * else is refused.
+ * A command another session's deck sent (its inbox, ./registry): one of
+ * `SE.STEERING`, each field checked (`SE.steeringCmdOf`), runs exactly as
+ * the page's own (`runCommand`: an answer, a message, Stop, Stop turn,
+ * Cancel, Clear finished, a pick of Changes, Review), through Claude Code's
+ * channels and with the same checks, its ack in this session's state; any
+ * other is refused, its ack saying why.
  */
 function steerFromSession($: EngineInterface, cmd: Record<string, unknown>) {
-  const ackId = W.cmdIdOf(cmd)
-  const route = W.routeOf(cmd, data)
-  if (route === null) void ack($, ackId, 'failed', W.refusalOf(cmd, data))
-  else if (route.kind === 'chat') void sendChat($, route.agentId, route.text, ackId)
-  else if (route.kind === 'answer') answerCall($, route.callId, route.answers, ackId)
-  else void ack($, ackId, 'failed', "Not from another session's deck: do it in its window")
+  const said = SE.steeringCmdOf(cmd)
+  if (said) runCommand($, said)
+  else void ack($, W.cmdIdOf(cmd), 'failed', SE.steeringRefusalOf(cmd))
 }
 
 function editedPathOf(input: Record<string, unknown>): string {

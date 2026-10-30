@@ -622,7 +622,7 @@ function memberList(ctx: Ctx, filter: string): RenderElement {
   }
   // the finished behind one row at the list's foot: "3 finished ▸", Clear finished, Show 2 cleared
   const isFinishedOpen = ctx.openFolds.includes(FINISHED_FOLD.chat)
-  const fin = finishedRow(kit, FINISHED_FOLD.chat, finished.length, isFinishedOpen, state.cleared?.count ?? 0, actions, () => actions.setV2View({ openFolds: openFoldsWith(ctx.openFolds, FINISHED_FOLD.chat) }))
+  const fin = finishedRow(kit, FINISHED_FOLD.chat, finished.length, isFinishedOpen, state.cleared?.count ?? 0, actions, () => actions.setV2View({ openFolds: openFoldsWith(ctx.openFolds, FINISHED_FOLD.chat) }), state)
   const behind = isFinishedOpen ? finished : []
   const between =
     picked === '' ? (
@@ -1344,8 +1344,9 @@ function composer(ctx: Ctx, isDemo: boolean, most = FIELD_ROWS): RenderElement {
   const placeholder = to && to.id !== MAIN ? `Message ${cut(to.title, 48)}…` : to ? `Message the ${ORCHESTRATOR}…` : `Message the ${ORCHESTRATOR}, or @name an agent…`
   // a name several agents answer to: "Did you mean" says it, each a press
   const said = preview.candidates.length > 1 ? '' : preview.text
-  // an empty field says whom words go to; in the sample, that nothing is sent says enough
-  const line = [said || (view.draft.trim() === '' && !isDemo ? hintOf(to) : ''), isDemo ? 'Sample data: nothing is sent.' : ''].filter(Boolean).join(' · ')
+  // an empty field says whom words go to (on another session's deck that takes nothing from here, why not); in the sample, that nothing is sent says enough
+  const deaf = state.peer && !state.peer.canSteer ? state.peer.why : ''
+  const line = [said || (view.draft.trim() === '' && !isDemo ? deaf || hintOf(to) : ''), isDemo ? 'Sample data: nothing is sent.' : ''].filter(Boolean).join(' · ')
   return (
     <Box key="chat:compose" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
       <Input

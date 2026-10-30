@@ -86,7 +86,7 @@ export function agentPage(kit: Kit, state: WebStateV2, files: V2Files, id: strin
     <Box key={`page:${row.id}`} flexDirection="column" gap={1}>
       {head(kit, state, row, actions)}
       {actionsLine(kit, row, actions)}
-      {pageStop(kit, row, actions)}
+      {pageStop(kit, row, actions, state)}
       {row.live ? liveLine(kit, state, row) : row.said ? saidLine(kit, state, row) : null}
       {needsSection(kit, state, state.needs.filter(need => need.agent === row.id), actions, 'page')}
       {textPart(kit, row, 'task', 'Task', '', file?.task || row.task, false, actions)}
@@ -770,7 +770,8 @@ function composerPart(kit: Kit, state: WebStateV2, row: V2AgentRow, isDemo: bool
     actions.redraw()
   }
   const placeholder = row.id === MAIN ? `Message the ${ORCHESTRATOR}…` : `Message ${cut(row.title, 48)}…`
-  const where = [viaText(state, row.id, row.title), isDemo ? 'Sample data: nothing is sent.' : ''].filter(one => one !== '').join(' · ')
+  // on another session's deck that takes nothing from here, why not, where the words would go
+  const where = [state.peer && !state.peer.canSteer ? state.peer.why : viaText(state, row.id, row.title), isDemo ? 'Sample data: nothing is sent.' : ''].filter(one => one !== '').join(' · ')
   return (
     <Box key="page:compose" flexDirection="column" borderStyle="round" borderColor={P.border} paddingX={1}>
       <Input key={pageComposerKey(row.id)} placeholder={placeholder} value={drafts.get(row.id) ?? ''} submitLabel="Send" onInput={text => void drafts.set(row.id, text)} onSubmit={send} />

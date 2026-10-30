@@ -13,7 +13,9 @@
  * follows the repository an agent edits in, offers the repositories directly
  * inside the chat's directory (`selectRepo` pins one), and lists every edit
  * the agents made, the newest file open. Pinned, a quiet Follow the work
- * lets it follow the work again.
+ * lets it follow the work again. On another session's deck its picks,
+ * Follow the work and Review go to that session's own deck, what came of
+ * each said beside it; where its deck takes nothing from here, why instead.
  *
  * Pure: Kit, the state, its lazy files, the deck model (the diff and the
  * commit read) and DashActions come from the hooks module.
@@ -28,7 +30,7 @@ import { rowOf } from './dashModel'
 import { delta, diffBlocks, editBlock, editorIdsOf, editorsOf, titleOf, type Budget } from './diffs'
 import { advanceOf, icon, quiet, sectionHead, svgOf } from './look'
 import { P } from './palette'
-import { cellsForPx, chevronOf, faces, facesCells, plainSlack } from './parts'
+import { cellsForPx, chevronOf, faces, facesCells, plainSlack, pressed, pressNote, pressOf, pressSending } from './parts'
 import { ago, cellsOf, cutCells, plural } from './text'
 
 /** The diff characters one drawing of Changes spends at most, every open file and commit together. */
@@ -97,12 +99,36 @@ export function noRepoText(changes: Pick<V2Changes, 'where' | 'edits'>): string 
   return hasEdits ? 'No git repository here: the edits agents made are below, exact.' : 'No git repository here.'
 }
 
-/** Follow the work: a quiet plain Button that lets go of the pin, so Changes follows the repository an agent edits in again. */
-function followButton(kit: Kit, actions: DashActions): RenderElement {
-  const { Box, Button } = kit
+/** Where another session's deck takes nothing from here: why ('' on this deck's own, and while it does). Its picks, Follow the work and Review are not offered then. */
+function deafOf(state: Pick<WebStateV2, 'peer'>): string {
+  return state.peer && !state.peer.canSteer ? state.peer.why : ''
+}
+
+/**
+ * Follow the work: a quiet plain Button that lets go of the pin, so Changes
+ * follows the repository an agent edits in again; on another session's
+ * deck, what came of a pick or of it beside it ("Asking its deck…" in its
+ * place while that deck has not answered), and, where it takes nothing
+ * from here, why in its place.
+ */
+function followPart(kit: Kit, state: WebStateV2, actions: DashActions, isPinned: boolean): RenderElement | null {
+  const { Box, Button, Text } = kit
+  const deaf = deafOf(state)
+  if (deaf !== '' && isPinned) {
+    return (
+      <Box flexShrink={1} minWidth={0}>
+        <Text color={P.muted2} wrap="truncate-end">
+          {deaf}
+        </Text>
+      </Box>
+    )
+  }
+  // a pick or Follow the work done: Changes shows what its deck now shows, and what came of it at its right
+  const parts = isPinned ? pressed(kit, state, 'repo', <Button key="changes:follow" label="Follow the work" plain dimColor onPress={() => actions.selectRepo('')} />) : [pressNote(kit, pressOf(state, 'repo'), 'repo')]
+  if (parts.every(part => part === null)) return null
   return (
-    <Box flexShrink={0}>
-      <Button key="changes:follow" label="Follow the work" plain dimColor onPress={() => actions.selectRepo('')} />
+    <Box flexShrink={0} flexDirection="row" columnGap={2}>
+      {parts}
     </Box>
   )
 }
@@ -120,7 +146,7 @@ function repoLine(kit: Kit, state: WebStateV2, actions: DashActions, isDemo: boo
             {noRepoText(state.changes)}
           </Text>
         </Box>
-        {isPinned ? followButton(kit, actions) : null}
+        {followPart(kit, state, actions, isPinned)}
       </Box>
     )
   }
@@ -128,7 +154,7 @@ function repoLine(kit: Kit, state: WebStateV2, actions: DashActions, isDemo: boo
   const removed = files.reduce((sum, file) => sum + file.removed, 0)
   const branch = repo.branch === '' || repo.branch === 'HEAD' ? 'detached' : repo.branch
   const counts = delta(kit, added, removed)
-  const canReview = !isDemo && files.length > 0
+  const canReview = !isDemo && files.length > 0 && deafOf(state) === ''
   return (
     <Box key="changes:repo" flexDirection="row" columnGap={2}>
       <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -143,10 +169,10 @@ function repoLine(kit: Kit, state: WebStateV2, actions: DashActions, isDemo: boo
           {files.length > 0 ? counts : null}
         </Text>
       </Box>
-      {isPinned ? followButton(kit, actions) : null}
+      {followPart(kit, state, actions, isPinned)}
       {canReview ? (
-        <Box flexShrink={0}>
-          <Button key="changes:review" label="Review" plain onPress={() => actions.review(reviewText(repo.root))} />
+        <Box flexShrink={0} flexDirection="row" columnGap={2}>
+          {pressed(kit, state, 'review', <Button key="changes:review" label="Review" plain onPress={() => actions.review(reviewText(repo.root))} />)}
         </Box>
       ) : null}
     </Box>
@@ -164,6 +190,9 @@ function picksList(kit: Kit, state: WebStateV2, actions: DashActions): RenderEle
   const where = state.changes.where
   if (!where || where.isRepo !== false || where.pinned !== '' || where.picks.length === 0) return null
   const room = Math.max(8, kit.columns - 4)
+  // another session's: its picks pin its own deck's Changes ("Asking its deck…" under them meanwhile); where its deck takes nothing from here, names alone, and why
+  const deaf = deafOf(state)
+  const press = pressOf(state, 'repo')
   return (
     <Box key="changes:picks" flexDirection="column">
       {sectionHead(kit, `Repositories in ${where.name || where.cwd}`, where.picks.length)}
@@ -171,10 +200,17 @@ function picksList(kit: Kit, state: WebStateV2, actions: DashActions): RenderEle
         {where.picks.map(pick => (
           <Box key={`pick:${pick.root}`} flexDirection="row" columnGap={1} flexShrink={0}>
             <Text color={P.muted2}>⎇</Text>
-            <Button key={`changes:pick:${pick.root}`} label={cutCells(pick.name, room, advanceOf(kit))} plain onPress={() => actions.selectRepo(pick.root)} />
+            {deaf !== '' ? <Text color={P.fg2}>{cutCells(pick.name, room, advanceOf(kit))}</Text> : <Button key={`changes:pick:${pick.root}`} label={cutCells(pick.name, room, advanceOf(kit))} plain onPress={() => actions.selectRepo(pick.root)} />}
           </Box>
         ))}
       </Box>
+      {deaf !== '' ? (
+        <Text key="changes:deaf" color={P.muted2} wrap="wrap">
+          {deaf}
+        </Text>
+      ) : press?.status === 'sending' ? (
+        pressSending(kit, press, 'repo')
+      ) : null}
     </Box>
   )
 }

@@ -37,6 +37,8 @@ const BG_ID = /^[A-Za-z0-9_-]{1,200}$/ // a background row's id (stopBackground'
 const STYLE = /^[a-z]{1,20}$/ // an avatar style's id (web/avatars.mjs STYLE_IDS); the mod says whether it knows it
 const ROOT = /^[^\u0000-\u001f\u007f]{0,1000}$/ // a repository's root (selectRepo's): one line, '' to follow the work; the mod says whether Changes offers it
 const SESSION_ID = /^[A-Za-z0-9_-]{1,100}$/ // another session's id, as its registry file is named
+// the commands that may name another session: every one about a session (hooks/sessions.ts STEERING); the avatar style is the person's, for every session
+const STEERING = new Set(['chat', 'answer', 'stopAgent', 'abortTurn', 'stopBackground', 'clearFinished', 'showCleared', 'selectRepo', 'review'])
 const SESSION_LIVE_MS = 3 * 60_000 // a registry file whose heartbeat is older is no live session's (hooks/sessions.ts STALE_MS)
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never open them as files
 const JSON_TYPE = 'application/json; charset=utf-8'
@@ -252,7 +254,7 @@ function answersOf(value) {
  */
 function commandOf(value) {
   if (!isRecord(value)) return null
-  // for another session (the page views its deck): `view` names it alone; a chat or an answer is checked as this session's, then carries it
+  // for another session (the page views its deck): `view` names it alone; any command about a session (STEERING) is checked as this session's, then carries it
   if (Object.prototype.hasOwnProperty.call(value, 'session')) {
     if (!(sessions && typeof value.session === 'string' && SESSION_ID.test(value.session))) return null
     const { session, ...rest } = value
@@ -261,7 +263,7 @@ function commandOf(value) {
       if (hasId && !(typeof rest.id === 'string' && CMD_ID.test(rest.id))) return null
       return Object.keys(rest).filter(key => key !== 'id').join(',') === 'cmd' ? { cmd: 'view', ...(hasId ? { id: rest.id } : {}), session } : null
     }
-    if (rest.cmd !== 'chat' && rest.cmd !== 'answer') return null
+    if (!STEERING.has(rest.cmd)) return null
     const inner = commandOf(rest)
     return inner ? { ...inner, session } : null
   }
