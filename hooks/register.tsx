@@ -1134,7 +1134,7 @@ function avatarStyleNamed(words: string): AV.AvatarStyle | undefined {
 /** `/apiarius avatars`: the styles, the one drawn marked; `/apiarius avatars <style>` draws that one from now on, in every session. */
 function avatarsCommand($: EngineInterface, words: string): CommandRunResult {
   const list = AV.STYLES.map(one => `${one.id === view.avatarStyle ? '▸' : ' '} ${one.id.padEnd(8)} ${one.name}`).join('\n')
-  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/apiarius avatars <style> draws another, here and on the web page, in every session. The pane's Settings (5) picks one too.` }
+  if (words === '') return { text: `Avatar styles (now ${AV.styleName(view.avatarStyle)}):\n${list}\n/apiarius avatars <style> draws another, here and on the web page, in every session. The pane's Settings (6) picks one too.` }
   const style = avatarStyleNamed(words)
   if (style === undefined) return { text: `No avatar style called "${F.trunc(F.oneLine(words), 40)}". One of: ${AV.STYLE_IDS.join(', ')}.` }
   setAvatarStyle($, style)
