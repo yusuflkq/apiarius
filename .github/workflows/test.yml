@@ -1,0 +1,59 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # The Claude Code release these checks were last run with. Raise it on purpose.
+  CLAUDE_CODE_VERSION: 2.1.312
+  # No auto-update, telemetry or error reports from the runner.
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@${{ env.CLAUDE_CODE_VERSION }}
+
+      - name: Versions
+        run: |
+          node --version
+          claude --version
+
+      - name: Validate the plugin and its marketplace
+        run: claude plugin validate --strict .
+
+      # The mod's tests feed it Windows paths (drive letters, backslashes, 8.3
+      # short names), and Claude Code resolves a path for a file call the way
+      # the host does, so on Linux those paths read as relative ones. They run
+      # on Windows only.
+      - name: Mod tests
+        if: runner.os == 'Windows'
+        run: claude plugin test .
+
+      - name: Web server and page tests
+        run: node --test web/test/
+
+      - name: Sample data matches its builder
+        run: node web/fixtures/make-v2.mjs --check
