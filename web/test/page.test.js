@@ -674,12 +674,13 @@ test('Org`s Timeline, its third view (kept): from /timeline a row an agent (its 
   assert.equal(find(grid, 'tl-you').length, 2)
   assert.equal(find(grid, 'tl-bg').length, 2)
   // a hover title on each: a call (its words while the deck keeps them), a wait, an end, a prompt, a shell
+  // (a clock time is [^·]+: the locale's own, such as 21:15:00 or 09:15:00 PM)
   const lint = lanes[6]
-  assert.match(flat(textOf(find(lint, 'tl-seg-fail')[0])), /^Bash npx eslint src\/rateLimit\.ts src\/app\.ts · failed · \S+ – \S+ · 2s$/)
-  assert.match(flat(textOf(find(lint, 'tl-cap-failed')[0])), /^Failed: Lint the new files · \S+$/)
-  assert.match(flat(textOf(find(lanes[5], 'tl-wait')[0])), /^Waiting on you · \S+ – \S+ · 1m$/)
+  assert.match(flat(textOf(find(lint, 'tl-seg-fail')[0])), /^Bash npx eslint src\/rateLimit\.ts src\/app\.ts · failed · [^·]+ – [^·]+ · 2s$/)
+  assert.match(flat(textOf(find(lint, 'tl-cap-failed')[0])), /^Failed: Lint the new files · [^·]+$/)
+  assert.match(flat(textOf(find(lanes[5], 'tl-wait')[0])), /^Waiting on you · [^·]+ – [^·]+ · 1m$/)
   assert.match(flat(textOf(find(lanes[0], 'tl-you')[0])), /^You: Add per-user rate limiting/)
-  assert.match(flat(textOf(find(lanes[4], 'tl-bg')[0])), /^Shell · npm run dev: Start the dev server · \S+ – now · 18m$/)
+  assert.match(flat(textOf(find(lanes[4], 'tl-bg')[0])), /^Shell · npm run dev: Start the dev server · [^·]+ – now · 18m$/)
   // the messages: an arrow out of the sender's lane, into the receiver's, a line through the rows between; numbered, listed under the chart
   assert.equal(find(grid, 'tl-msg').length, 4)
   assert.equal(find(grid, 'tl-pass').length, 10)
@@ -741,7 +742,7 @@ test('Org`s Timeline folds every stretch of 20 minutes or more where nobody work
   assert.match(flat(textOf(find(lanes[1], 'tl-seg')[0])), /^Read ×10 · /)
   // the shell ended before now: its bar ends with its cap there
   assert.equal(find(lanes[2], 'tl-bg-end').length, 1)
-  assert.match(flat(textOf(find(lanes[2], 'tl-bg')[0])), / – \S+ · 36m$/)
+  assert.match(flat(textOf(find(lanes[2], 'tl-bg')[0])), / – [^·]+ · 36m$/)
 })
 
 test('the plan: every source Claude used, each as made (the board with owners, the todos, the approved plan as Markdown, a workflow`s phases with no status); none, no section', () => {
