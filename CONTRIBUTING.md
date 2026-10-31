@@ -2,7 +2,7 @@
 
 ## Run the mod from a clone
 
-You need Claude Code 2.1.287 or later, which mods require. The checks below also need Node.js 22.18 or later.
+You need Claude Code 2.1.304 or later. The checks below also need Node.js 22.18 or later.
 
 ```bash
 git clone https://github.com/yusuflkq/apiarius.git
@@ -10,7 +10,7 @@ cd apiarius
 claude --plugin-dir .
 ```
 
-Type `/apiarius` in that session to open the deck. Claude Code watches a folder loaded with `--plugin-dir`, so saving a file reloads the mod. The README shows how to load the folder in every session, including in the Desktop app.
+Type `/apiarius` in that session to open the deck. Claude Code watches a folder loaded with `--plugin-dir`, so saving a file reloads the mod. To load the clone in every session, the Desktop app's included, set `CLAUDE_CODE_PLUGIN_DIRS` to its absolute path in the `env` block of `~/.claude/settings.json`.
 
 Only one plugin of a name loads. If you installed Apiarius from its marketplace too, turn that copy off first with `claude plugin disable apiarius@apiarius`.
 
@@ -19,10 +19,10 @@ Only one plugin of a name loads. If you installed Apiarius from its marketplace 
 CI runs these on every push and pull request to `main` (`.github/workflows/test.yml`). Run them before you open a pull request:
 
 ```bash
-claude plugin validate .
-claude plugin test .                    # the mod's tests
-node --test web/test/                   # the web server and page
-node web/fixtures/make-v2.mjs --check   # the sample data is current
+claude plugin validate --strict --profile directory .
+claude plugin test .                                    # the mod's tests
+node --test web/test/                                   # the web server and page
+node web/fixtures/make-v2.mjs --check                   # the sample data is current
 ```
 
 - The sample data in `web/fixtures/` is built by the mod's own code. When a change alters what the deck shows, run `node web/fixtures/make-v2.mjs` to write it again, and commit the result with the change.
@@ -36,4 +36,4 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## Issues
 
-Report bugs and ask for features with the issue templates. They ask for your Claude Code version, where you saw the problem (the terminal, the Desktop app's side pane or the web page) and your OS.
+Report bugs and ask for features with the issue templates. They ask for your Claude Code version, where you saw the problem (the terminal, the Desktop app's side pane or the web page) and your OS. Report a security problem privately, as [SECURITY.md](SECURITY.md) describes.

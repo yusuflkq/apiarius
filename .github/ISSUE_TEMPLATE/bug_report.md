@@ -20,4 +20,4 @@ labels: bug
 
 ## Anything else
 
-<!-- A screenshot or the text of an error. A `.debug/` dump (see the README) helps too, once you have checked that it holds nothing private. -->
+<!-- A screenshot or the text of an error. A debug dump helps too: create the folder `~/.claude/apiarius/debug/`, show the problem again, and attach the `<session id>.json` Apiarius writes there, once you have checked that it holds nothing private. -->
