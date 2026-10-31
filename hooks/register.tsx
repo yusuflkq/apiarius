@@ -6,7 +6,7 @@
  * messages between agents) into one live model, run git in the background,
  * and draw the views from `./views`. `/apiarius web` serves the same model as a
  * live dashboard in the Desktop's Browser pane (`./web`).
- * Every `$` call lives in this file.
+ * Every `$` call lives in this file and in ./inspectHooks, which makes Inspect's reads.
  */
 import type {
   AgentInfo,
@@ -2444,7 +2444,7 @@ function shownV2Of(now: number): W.WebStateV2 | null {
   return view.isDemo ? demoShown() : v2Of(now)
 }
 
-/** `j` (1) and `k` (-1): the ring a row down or up among `keys`, else among the rows the v2 screen draws (`W.focusKeysOf`); held at either end. */
+/** The ring a row down (1) or up (-1) among `keys`, else among the rows the v2 screen draws (`W.focusKeysOf`); held at either end. Chat and an agent's page move it onto their composer this way; no key is bound to it. */
 async function focusNext($: EngineInterface, dir: 1 | -1, keys?: readonly string[]): Promise<void> {
   const state = keys ? null : shownV2Of(await $.clock.now())
   const rows = keys ?? (state ? W.focusKeysOf(state, view.v2, view.page) : [])
@@ -2452,7 +2452,7 @@ async function focusNext($: EngineInterface, dir: 1 | -1, keys?: readonly string
   if (key !== '' && key !== paneFocus) await focusOn($, key)
 }
 
-/** `n`: Now (off an agent's page and Inspect), the ring on the next thing that needs you, after the one it is on, round to the first. */
+/** Now (off an agent's page and Inspect): the ring on the next thing that needs you, after the one it is on, round to the first. No key is bound to it. */
 async function focusNeed($: EngineInterface): Promise<void> {
   const state = shownV2Of(await $.clock.now())
   const key = state ? W.nextNeedKeyOf(state, paneFocus) : ''
@@ -3184,15 +3184,15 @@ async function toggleProbe($: EngineInterface): Promise<CommandRunResult> {
   const panes = await $.ui.panes().catch(() => [])
   if (panes.some(pane => pane.id === PROBE)) {
     await $.ui.close({ id: PROBE })
-    return { text: 'Deck probe closed.' }
+    return { text: 'Apiarius probe closed.' }
   }
   probe.tick = 0
   probe.message = ''
   probe.fault = null
   probe.failedOn.clear()
-  const opened = await $.ui.open({ id: PROBE, title: 'Deck probe', focus: true, closeOnEscape: true, rows: 24 })
+  const opened = await $.ui.open({ id: PROBE, title: 'Apiarius probe', focus: true, closeOnEscape: true, rows: 24 })
   startProbe($)
-  return opened.isPlaced ? {} : { text: 'Deck probe is open and waiting for room: widen the window, or press ctrl+x then tab.' }
+  return opened.isPlaced ? {} : { text: 'Apiarius probe is open and waiting for room: widen the window, or press ctrl+x then tab.' }
 }
 
 /** Plain data as one line of JSON, cut to fit a line. */

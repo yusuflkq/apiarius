@@ -6,7 +6,7 @@ const PROBE = 'apiarius-probe'
 const COPPER = '#c9824f'
 
 const PROBE_PANE = {
-  title: 'Deck probe',
+  title: 'Apiarius probe',
   isFocused: true,
   bodyColumns: 96,
   placement: 'dock',
@@ -84,7 +84,7 @@ test('/apiarius probe opens a pane of its own with the keyboard (Esc closes it);
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
 
   expect((await $.command.run(deck('probe'))).text).toBeUndefined()
-  expect(opened).toEqual([{ id: PROBE, title: 'Deck probe', focus: true, closeOnEscape: true, rows: 24 }])
+  expect(opened).toEqual([{ id: PROBE, title: 'Apiarius probe', focus: true, closeOnEscape: true, rows: 24 }])
 
   const ui = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'Pane', requestId: PROBE, viewport: VIEWPORT, props: PROBE_PANE })
   const clientProps = async () => (await ui.find({ type: 'Client', key: 'probe' }))?.props.props
@@ -95,7 +95,7 @@ test('/apiarius probe opens a pane of its own with the keyboard (Esc closes it);
   expect(await clientProps()).toEqual({ tick: 2, cols: 96 })
 
   // closed: the tick stops with the pane
-  expect((await $.command.run(deck('probe'))).text).toBe('Deck probe closed.')
+  expect((await $.command.run(deck('probe'))).text).toBe('Apiarius probe closed.')
   expect(closed).toEqual([PROBE])
   await clock.advance(6000)
   await ui.redraw()
@@ -106,7 +106,7 @@ test('/apiarius probe opens a pane of its own with the keyboard (Esc closes it);
   expect(opened.map(one => one.id)).toEqual([PROBE, PROBE])
   await clock.advance(1500)
   expect(await clientProps()).toEqual({ tick: 1, cols: 96 })
-  expect((await $.command.run(deck('probe'))).text).toBe('Deck probe closed.')
+  expect((await $.command.run(deck('probe'))).text).toBe('Apiarius probe closed.')
   expect(closed).toEqual([PROBE, PROBE])
   await ui.unmount()
 })

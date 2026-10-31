@@ -1,10 +1,10 @@
 /**
  * The avatars of Apiarius: one library for every surface that draws an agent.
  *
- * Eleven styles, each an SVG document on a 40 by 40 grid, as the owner reviewed
- * them (2026-10-21): robot (the default), bee (2026-10-30: the app icon's,
- * a honeycomb cell with a robot's visor, in the agent's colours), mood,
- * critter, pixel, mono, orbit, bauhaus, ring, glyph and blob.
+ * Eleven styles, each an SVG document on a 40 by 40 grid: robot (the
+ * default), bee (the app icon's, a honeycomb cell with a robot's visor, in
+ * the agent's colours), mood, critter, pixel, mono, orbit, bauhaus, ring,
+ * glyph and blob.
  * `avatarSvg(style, agent, opts)` is one whole document: the agent's face,
  * its status dot at its foot (a progress ring says its status with the
  * ring), every id in it its own, nothing outside it referenced. A robot's,
@@ -35,7 +35,7 @@
  * never loaded again while nothing about it changed.
  */
 
-/** The styles, in the order a picker lists them, each with the name the owner saw it under. */
+/** The styles, in the order a picker lists them, each with the name the picker shows. */
 export const STYLES = [
   { id: 'robot', name: 'Robots' },
   { id: 'bee', name: 'Bees' },
@@ -657,7 +657,7 @@ function initialOf(name, seed) {
 /**
  * Each style on the terminal, which draws no SVG: one cell from the face's
  * context (as `partsOf` makes it) as `{ glyph, color, background?, bold? }`.
- * The owner chose them from mocks in Cascadia Mono (2026-10-27).
+ * They were chosen from mocks drawn in Cascadia Mono.
  */
 const TERMINAL = {
   robot: c => ({ glyph: ROBOT_GLYPHS[pickOf(`${c.seed}r`) % ROBOT_GLYPHS.length], color: c.c1 }),

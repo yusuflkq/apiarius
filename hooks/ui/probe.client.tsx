@@ -18,7 +18,7 @@ import type { ClientKeyEvent, ClientModule } from 'claude-code'
 type ProbeProps = { tick: number; cols: number }
 type ProbeState = { clicks: number; box: readonly [number, number] | null; key: string }
 
-/** theme.ts's Copper (the clicked box), Raised (the hover tint) and Graphite (the text on copper). */
+/** The probe's colours: copper for the clicked box, a raised grey for the hover tint, and graphite for the text on copper. */
 const COPPER = '#c9824f'
 const RAISED = '#242422'
 const GRAPHITE = '#161615'

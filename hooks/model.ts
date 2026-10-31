@@ -309,7 +309,7 @@ const OPEN_FOLDS_KEPT = 50
 
 /**
  * The v2 screens' state with `patch` laid over it, each field checked as a
- * reload's would be (a tab of the five, fold ids and a filter as strings,
+ * reload's would be (a tab of the six, fold ids and a filter as strings,
  * the oldest folds dropped past 50); what `patch` leaves out stays.
  *
  * Inspect is a tab of its own now: `isInspectOpen` stays false, and a
@@ -2016,10 +2016,10 @@ export function agentsKeyOf(data: DeckData, git: Pick<GitState, 'isRepo' | 'file
 }
 
 // ---------------------------------------------------------------------------
-// v3: where loops come from, spawns and their placeholders, results, goals,
-// checklists, the task board, plans, files, and the queries the Agents tab
-// reads (goalOf, planOf, checklistOf, stepOf, lastActionOf, filesOf,
-// needsOf, summaryOf, foldOf). All pure, like the rest of this module.
+// Where loops come from, spawns and their placeholders, results, goals,
+// checklists, the task board, plans, files, and the queries ./web builds the
+// page's state from (goalOf, planOf, checklistOf, stepOf, lastActionOf,
+// filesOf, needsOf, summaryOf, foldOf). All pure, like the rest of this module.
 
 // Loops: where each came from, and the rows that fold away.
 
@@ -3879,7 +3879,7 @@ function sharedNowOf(data: DeckData): { file: DeckFile; a: DeckAgent; b: DeckAge
 /** What git says of the repository the deck follows, as the header reads it. */
 export type GitFacts = Pick<GitState, 'isRepo' | 'files'> & Partial<Pick<GitState, 'checkedAt' | 'added' | 'removed'>>
 
-/** The one line that leads the Agents tab. */
+/** The one line that says what needs you. */
 export type DeckNeedsLine = {
   /** `attention`: waits on you, or a shared file; `alert`: a failure; `done`: all done, files to review; `quiet`: nothing. */
   tone: 'alert' | 'attention' | 'done' | 'quiet'
@@ -4026,14 +4026,14 @@ export function goalMinutesOf(data: DeckData, now?: number): number {
   return Math.max(0, Math.floor((end - goal.at) / 60_000))
 }
 
-// The redraw policy: what the Agents tab shows, as one signature.
+// The model as one signature.
 
 /**
- * Everything the v3 Agents tab draws, as one short signature: the goal, the
- * plan (sources, steps, states, links), each agent's row (label, status, step,
- * last action and whether it runs, checklist, counts, result), the files, the
- * messages, the needs-you line, the summary (minutes included) and the folded
- * row. Equal signatures draw the same tab.
+ * The model as one short signature: the goal, the plan (sources, steps,
+ * states, links), each agent's row (label, status, step, last action and
+ * whether it runs, checklist, counts, result), the files, the messages, the
+ * needs-you line, the summary (minutes included) and the folded row. Equal
+ * signatures: nothing on that list changed.
  */
 export function deckKeyOf(data: DeckData, git: GitFacts, now: number): string {
   const goal = goalOf(data)
