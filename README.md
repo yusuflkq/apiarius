@@ -23,7 +23,7 @@ Or do both in one step:
 /plugin install apiarius --marketplace yusuflkq/apiarius
 ```
 
-It needs Claude Code 2.1.304 or later, in the terminal or in the Code tab of the Claude Desktop app. The web page needs Node.js 20 or later on your PATH, and Changes needs git.
+It needs Claude Code 2.1.304 or later, in the terminal or in the Code tab of the Claude Desktop app. The web page needs Node.js 22 or later on your PATH, and Changes needs git 2.26 or later.
 
 Then run `/apiarius`.
 
@@ -78,7 +78,7 @@ To look around before you run any agents, use `/apiarius demo`. The deck shows a
 | `/apiarius` | Opens the deck on the Dashboard |
 | `/apiarius chat`, `org`, `changes`, `inspect`, `settings` | Opens that tab. A prefix works: `/apiarius i` is Inspect |
 | `/apiarius sessions` | Opens All sessions |
-| `/apiarius web` | Starts the web page and answers with its link |
+| `/apiarius web` | Starts the web page and opens it in the Browser pane, or shows its link on the deck |
 | `/apiarius web stop` | Stops the web page. The next start gives a new link |
 | `/apiarius demo` | Shows the deck on sample data |
 | `/apiarius clear` | Hides finished agents from the deck (Claude Code is untouched) |
@@ -101,26 +101,30 @@ Where Claude Code loads its built-in guard (on a Team or Enterprise login, or a 
 
 Apiarius makes no network requests of its own. What it hands to Claude goes through Claude Code like anything you type, and nothing is sent anywhere else.
 
-It reads Claude Code's events for the session, the session's own transcript to recover what the deck showed after the mod reloads, and what git says about the repositories your agents work in. It writes only under `~/.claude/apiarius/`, in files only you can read, and deletes a session's files there when the session ends. The one exception is the debug dump, which you turn on yourself and which stays until you delete it.
+It reads Claude Code's events for the session, the session's own transcript to recover what the deck showed after the mod reloads, and what git says about the repositories your agents work in. It keeps its files in `~/.claude/apiarius/`, in folders only you can open, and deletes a session's files there when the session ends. The one exception is the debug dump, which you turn on yourself and which stays until you delete it.
 
-The web page runs only after you start it. It listens on 127.0.0.1, and its link carries a random token that every request for the session's data needs. Apiarius opens the Desktop's Browser pane only when you run `/apiarius web` or press Start the web page in the deck's Settings.
+The web page runs only after you start it. It listens on 127.0.0.1, and every request for the session's data needs the random token in its link. Apiarius never hands that link to Claude, and opens the Desktop's Browser pane only when you run `/apiarius web` or press Start the web page in the deck's Settings.
 
 <details>
 <summary>Everything it runs, writes and reads</summary>
 
-Apiarius makes no network requests of its own. What it hands to Claude goes through Claude Code like anything you type: your messages to agents, your answers to Claude's questions, and a note with the web page's link. Nothing is sent anywhere else.
+Apiarius makes no network requests of its own. What it hands to Claude goes through Claude Code like anything you type: your messages to agents and your answers to Claude's questions. Nothing is sent anywhere else.
 
-`/apiarius web` runs `node web/server.js` from the plugin's folder as a child process of the session. The server has no dependencies and listens on 127.0.0.1 only, on a port the system picks; a reload of the mod asks for the same port again. It refuses any request for the session's data without a random token, which reaches the server in an environment variable and reaches you in the link; `/apiarius web stop` discards it. The page sets no cookie. The server also refuses requests addressed to any other host name, and takes commands only from its own page. The page loads nothing from the internet. The server exits with the session, on `/apiarius web stop`, or when its parent process is gone. On the Desktop the command asks the Browser pane to open the page through the pane's `preview_start` MCP tool, and Apiarius opens the pane at no other time. Its answer leaves Claude the note with the link, so Claude can open the page when you ask.
+`/apiarius web` runs `node web/server.js` from the plugin's folder as a child process of the session. The server has no dependencies and listens on 127.0.0.1 only, on a port the system picks; a reload of the mod asks for the same port again. Its random token reaches the server on stdin and you in the link, and stays in memory; `/apiarius web stop` discards it. The page's own files need no token, every request for the session's data does, and no cookie is set. The server refuses requests addressed to any other host name, takes commands only from its own page, and can't be framed by another page. The page loads nothing from the internet. The server exits with the session, on `/apiarius web stop`, or when its parent process is gone. On the Desktop the command asks the Browser pane to open the page through the pane's `preview_start` MCP tool, and Apiarius opens the pane at no other time. Where the pane can't open it, the link is on the deck's top line and under Settings.
 
-For Changes it runs read-only git commands (`rev-parse`, `status`, `diff`, `log`, `rev-list`, `show`) in the session's repository or the ones its agents edit in, with `--no-optional-locks`, no pager or prompts, and `--no-ext-diff --no-textconv` on diffs. They run after edits and shell commands, and every 6 seconds while a deck is open. Short `node` one-liners read the session's process id, check whether other listed sessions' processes still run, and delete registry and inbox files the mod made.
+For Changes it runs read-only git commands (`config --list`, `rev-parse`, `status`, `diff`, `log`, `rev-list`, `show`) with `git -C` on the session's repository or the ones its agents edit in, after edits and shell commands, and every 6 seconds while a deck is open. Nothing a repository's own settings name runs: no file system monitor, signature check, submodule, remote, external diff or text conversion, and a filter driver the repository's own config defines is switched off, with a notice (your global ones, such as git-lfs, keep working). A submodule with only uncommitted changes inside it isn't listed, and a file name with control or text-direction characters shows them as replacement characters, with no diff.
 
-It writes these under `~/.claude/apiarius/` (`$CLAUDE_CONFIG_DIR/apiarius/` when that is set), each file readable by you alone (0600, in 0700 folders):
+`node web/home.js` makes Apiarius's folders and files private and removes what a session no longer needs. Short `node` one-liners read the session's process id, check whether other listed sessions' processes still run, and delete registry and inbox files the mod made. None of them runs through a shell.
 
-- `sessions/<session id>.json`, so All sessions can list the session: its title, folder, repository, state, what needs you, what it is doing, its agents at work, its spend estimate and its process id. It is rewritten at most every 2 seconds and on a 30-second heartbeat, and deleted when the session ends or, if the session died, by another deck.
-- `web/<session id>/`: the page's `state.json` and the files it loads on demand (patches, git diffs, long messages, agent pages, the timeline), written only while the web page is on or another session's deck is showing this one. That deck leaves its requests in `inbox/` there, signed, and a deck acts only on requests whose signature checks out. The folder is deleted when the session ends.
+It keeps its files in `~/.claude/apiarius/` (under `CLAUDE_CONFIG_DIR` when that is set, or in `APIARIUS_HOME`), with its folders 0700 and the state and debug files 0600, and never follows a link there:
+
+- `sessions/<session id>.json` (in `APIARIUS_SESSIONS` when that is set), so All sessions can list the session: its title, folder, repository, state, what needs you, what it is doing, its agents at work, its spend estimate and its process id. It is rewritten at most every 2 seconds and on a 30-second heartbeat, and deleted when the session ends or, if the session died, by another deck.
+- `web/<session id>/`: the page's `state.json` and the files it loads on demand (patches, git diffs, long messages, agent pages, the timeline), written only while the web page is on or another session's deck is showing this one. That deck leaves its requests in `inbox/` there. A `/clear` or a resume empties the folder but for the inbox, the session's end deletes it, and each start deletes the folders of sessions whose process is gone.
 - `debug/<session id>.json`, a dump of the deck's state, only while a `debug` folder you created exists there. It stays until you delete it.
 
-Claude Code's plugin storage keeps your preferences (avatar style, the band) between sessions. For each session it also holds the deck's snapshot and the web page's token and port, so a reload of the mod keeps its place; those last only as long as the session. Apiarius reads the files agents edit, the session's transcript, Claude Code's settings for Inspect, and other sessions' registry files and state folders.
+Registry and inbox files carry an HMAC-SHA256 seal made with a random key in Claude Code's plugin storage. A deck lists only sessions whose files carry a valid seal, and refuses and deletes a command that is unsealed, altered, meant for another session, replayed or more than 2 minutes old. A session that runs an older Apiarius, or a copy installed elsewhere with its own storage, doesn't show in All sessions.
+
+Claude Code's plugin storage keeps that key and your preferences (avatar style, the band) between sessions. The deck's snapshot and the web page's token and port stay in memory for the session, so a reload of the mod keeps its place. Apiarius reads the files agents edit, the session's transcript, Claude Code's settings for Inspect, and other sessions' registry files and state folders.
 
 </details>
 

@@ -12,7 +12,7 @@ claude --plugin-dir .
 
 Type `/apiarius` in that session to open the deck. Claude Code watches a folder loaded with `--plugin-dir`, so saving a file reloads the mod. To load the clone in every session, the Desktop app's included, set `CLAUDE_CODE_PLUGIN_DIRS` to its absolute path in the `env` block of `~/.claude/settings.json`.
 
-Only one plugin of a name loads. If you installed Apiarius from its marketplace too, turn that copy off first with `claude plugin disable apiarius@apiarius`.
+Only one plugin of a name loads. If you installed Apiarius from its marketplace too, turn that copy off first with `claude plugin disable apiarius@apiarius`. A clone keeps its own plugin storage, and so its own sealing key: its decks don't list or steer sessions that run an installed copy. To keep a test session's files apart from your own, set `APIARIUS_HOME` to a scratch folder.
 
 ## Checks
 

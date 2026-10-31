@@ -19,7 +19,7 @@
  * only from a folder beside its own as the deck makes them
  * (`<home>/web/<sessionId>`, still there once every link is followed).
  *
- * Plain Node (18+), no dependencies. stdout carries the ready line
+ * Plain Node (22+), no dependencies. stdout carries the ready line
  * `{"ready":<port>}` and then one `{"cmd":…}` line per command, nothing else;
  * diagnostics go to stderr. It exits with the parent, on a signal, or when
  * its stdin pipe closes.
