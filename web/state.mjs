@@ -25,7 +25,7 @@ const TICKET = (() => { try { return new URLSearchParams(location.search).get('t
 const KEPT = 'apiarius:handle';
 /** Every data request's header, once the page has a handle. */
 export const AUTH = {};
-/** Where the page's access stands: its handle and grade, and, refused, why ('used', 'unknown', 'restarted', 'none'). */
+/** Where the page's access stands: its handle and grade, and, refused, why ('used', 'expired', 'unknown', 'restarted', 'none'). */
 export const access = { handle: '', grade: '', why: '', ticket: TICKET };
 
 function keepHandle(handle, grade) {
@@ -91,7 +91,7 @@ async function trade() {
   // a link used once already: this tab may hold the handle it was traded for (a reload of a page whose address kept it)
   keptHandle();
   if (access.handle) return true;
-  dropHandle(data && data.error === 'used' ? 'used' : 'unknown');
+  dropHandle(data && (data.error === 'used' || data.error === 'expired') ? data.error : 'unknown');
   return false;
 }
 

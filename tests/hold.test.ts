@@ -231,7 +231,12 @@ test('"Open in browser" opens a full link of its own, made for the press, with t
   await desktop.press({ key: 'settings:web:open-browser' })
   await clock.settle()
   expect(w.browsed).toHaveLength(2)
-  for (const link of w.browsed) expect(link).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=f-[0-9a-f]{16}-[0-9a-f]{32}\\n$`))
+  // each with its deadline, 30 s on (the opener's arguments may hold it while it runs), sealed in
+  for (const link of w.browsed) {
+    expect(link).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=f-[0-9a-f]{16}-[0-9a-f]{8}-[0-9a-f]{32}\\n$`))
+    const until = parseInt(/-([0-9a-f]{8})-/.exec(link)?.[1] ?? '0', 16) * 1000
+    expect(until - NOW >= W.OPENER_TICKET_MS && until - NOW <= W.OPENER_TICKET_MS + 5000).toBe(true)
+  }
   // each press its own one-time link
   expect(w.browsed[0]).not.toBe(w.browsed[1])
   await desktop.unmount()
@@ -256,6 +261,9 @@ test('a ticket is sealed as web/server.js checks it: a known secret and nonce gi
   expect(W.ticketOf(secret, 'pane', '0011223344556677')).toBe('p-0011223344556677-adec674903d619b39d62c67a42bb3d17')
   expect(W.ticketOf(secret, 'full', '0011223344556677')).toBe('f-0011223344556677-a284df635f2f16617d5887d94954f3f8')
   expect(W.nonceOf('f-0011223344556677-a284df635f2f16617d5887d94954f3f8')).toBe('0011223344556677')
+  // with a deadline, sealed in: web/server.js's test gives the same
+  expect(W.ticketOf(secret, 'full', '0011223344556677', 0x6a000000)).toBe('f-0011223344556677-6a000000-adda29be5226c4c28362ed400df5c76a')
+  expect(W.nonceOf('f-0011223344556677-6a000000-adda29be5226c4c28362ed400df5c76a')).toBe('0011223344556677')
   expect(W.nonceOf('nope')).toBe('')
   expect(W.newSecret()).toMatch(/^[0-9a-f]{64}$/)
   expect(W.newSecret()).not.toBe(W.newSecret())

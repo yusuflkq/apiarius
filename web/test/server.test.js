@@ -16,10 +16,11 @@ const crypto = require('node:crypto')
 /** The secret the servers here start with: what their tickets are sealed with, never a credential itself. */
 const SECRET = 'test-token-0123456789abcdef'
 
-/** A ticket of `grade` for a server started with `secret`, as hooks/web.ts ticketOf makes one: `<p|f>-<nonce>-<seal>`. */
-function ticketOf(grade, nonce = crypto.randomBytes(8).toString('hex'), secret = SECRET) {
-  const seal = crypto.createHmac('sha256', Buffer.from(secret, 'utf8')).update(`apiarius/ticket/1|${grade}|${nonce}`).digest('hex').slice(0, 32)
-  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${seal}`
+/** A ticket of `grade` for a server started with `secret`, as hooks/web.ts ticketOf makes one: `<p|f>-<nonce>-<seal>`, or `<p|f>-<nonce>-<until>-<seal>` with a deadline (`until`, seconds since the epoch). */
+function ticketOf(grade, nonce = crypto.randomBytes(8).toString('hex'), secret = SECRET, until = 0) {
+  const deadline = until > 0 ? Math.floor(until).toString(16).padStart(8, '0') : ''
+  const seal = crypto.createHmac('sha256', Buffer.from(secret, 'utf8')).update(`apiarius/ticket/1|${grade}|${nonce}${deadline ? `|${deadline}` : ''}`).digest('hex').slice(0, 32)
+  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${deadline ? `${deadline}-` : ''}${seal}`
 }
 
 /** Each server's `full` handle (what most tests read and send with), by its port. */
@@ -304,6 +305,24 @@ test('a ticket trades once for a handle of its grade (POST /session, from its ow
 test('the seal is hooks/web.ts`s: a known secret and nonce give the ticket its test gives', () => {
   assert.equal(ticketOf('pane', '0011223344556677'), 'p-0011223344556677-adec674903d619b39d62c67a42bb3d17')
   assert.equal(ticketOf('full', '0011223344556677'), 'f-0011223344556677-a284df635f2f16617d5887d94954f3f8')
+  assert.equal(ticketOf('full', '0011223344556677', SECRET, 0x6a000000), TIMED)
+})
+
+/** hooks/web.ts`s ticket with a deadline (tests/hold.test.ts gives the same): full, nonce 0011223344556677, until 0x6a000000. */
+const TIMED = 'f-0011223344556677-6a000000-adda29be5226c4c28362ed400df5c76a'
+
+test('a ticket with a deadline (the link the system`s opener opens) trades before it and is refused after it, as expired; its deadline is sealed, so one moved later is no ticket at all', async () => {
+  const now = Math.floor(Date.now() / 1000)
+  const soon = ticketOf('full', undefined, SECRET, now + 30)
+  const got = await trade(main.port, soon)
+  assert.equal(got.status, 200)
+  assert.equal(got.grade, 'full')
+  assert.deepEqual(await trade(main.port, soon), { status: 403, ok: false, error: 'used' })
+  const late = ticketOf('full', undefined, SECRET, now - 1)
+  assert.deepEqual(await trade(main.port, late), { status: 403, ok: false, error: 'expired' })
+  // its deadline moved on, the seal kept: never sealed so
+  const [letter, nonce, , seal] = late.split('-')
+  assert.deepEqual(await trade(main.port, [letter, nonce, (now + 3600).toString(16), seal].join('-')), { status: 403, ok: false, error: 'unknown' })
 })
 
 test('each command printed carries the grade of the handle that sent it: pane from the Browser pane`s link, full from your own browser`s; a body that names a grade itself is refused', async () => {

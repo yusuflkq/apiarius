@@ -80,6 +80,7 @@ const OPEN_AGAIN = 'Open it again from Claude Code: /apiarius web for the Browse
 /** Why the page has no access, in words, by what the server said (state.mjs `access.why`). */
 function deniedText() {
   if (access.why === 'used') return { title: 'This link was used already', why: 'Each link opens one page.' };
+  if (access.why === 'expired') return { title: 'This link has expired', why: 'A link Open in browser makes works for 30 seconds.' };
   if (access.why === 'restarted') return { title: 'This page needs opening again', why: 'The deck\'s server started again, so the access this page had ended.' };
   if (access.why === 'none') return { title: 'This page was opened without its link', why: 'The deck opens it with a link of its own.' };
   return { title: 'This link no longer works', why: 'It is from before the deck\'s server started again, or not one of its own.' };

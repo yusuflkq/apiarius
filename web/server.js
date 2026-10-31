@@ -17,7 +17,9 @@
  * tools can drive, and `full` for the person's own browser. A link carries
  * one as `t`; the page trades it at once (POST /session, the ticket in the
  * `X-Deck-Ticket` header) for a handle of the same grade, and a ticket used
- * once is refused after (the mod hears of each use: `{"used":…}`). Every data
+ * once is refused after (the mod hears of each use: `{"used":…}`), as is one
+ * past the deadline it carries, sealed with it (the link the system's opener
+ * opens, whose arguments other programs can read while it runs: 30 s). Every data
  * route and POST /cmd needs a handle, in the `X-Deck-Handle` header, or as
  * `h` for /events alone (an EventSource sends no header); the page's own
  * files (index.html, app.js, app.css, the .mjs it imports) hold no data and
@@ -53,7 +55,7 @@ const MAX_BODY = 16 * 1024
 const MAX_CLIENTS = 50 // the live (SSE) connections at once: the page keeps one; a cap so no client holds them all
 const MAX_HANDLES = 64 // the handles kept at once (a page each, a reload keeps its own): past it the oldest goes
 const MAX_USED = 10_000 // the tickets remembered as used: past it every ticket is refused (no secret lives that long)
-const TICKET = /^([pf])-([0-9a-f]{16})-([0-9a-f]{32})$/ // a ticket: its grade (p: pane, f: full), its nonce, its seal (hooks/web.ts ticketOf)
+const TICKET = /^([pf])-([0-9a-f]{16})(?:-([0-9a-f]{8}))?-([0-9a-f]{32})$/ // a ticket: its grade (p: pane, f: full), its nonce, the second it works until (none: no deadline), its seal (hooks/web.ts ticketOf)
 const GRADES = { p: 'pane', f: 'full' }
 const HANDLE = /^[A-Za-z0-9_-]{43}$/ // a handle: 32 random bytes, base64url
 const MAX_TEXT = 4000
@@ -130,16 +132,17 @@ if (!(Number.isInteger(wanted) && wanted >= 0 && wanted < 65536)) fail('--port m
 let SECRET = null // the secret's bytes, once read: what each ticket is sealed with
 const secretOk = secret => typeof secret === 'string' && secret.length >= 16 && !/[\u0000-\u0020\u007f]/.test(secret)
 
-/** A ticket's seal: the first 32 hex digits of HMAC-SHA256(secret, "apiarius/ticket/1|<grade>|<nonce>"), the grade spelled whole, as hooks/web.ts ticketOf makes it. */
-const sealOf = (grade, nonce) => crypto.createHmac('sha256', SECRET).update(`apiarius/ticket/1|${grade}|${nonce}`).digest('hex').slice(0, 32)
+/** A ticket's seal: the first 32 hex digits of HMAC-SHA256(secret, "apiarius/ticket/1|<grade>|<nonce>"), "|<until>" after it for a ticket with a deadline, the grade spelled whole, as hooks/web.ts ticketOf makes it. */
+const sealOf = (grade, nonce, until) => crypto.createHmac('sha256', SECRET).update(`apiarius/ticket/1|${grade}|${nonce}${until ? `|${until}` : ''}`).digest('hex').slice(0, 32)
 
-/** A ticket's grade and nonce when its seal is this secret's (compared in constant time); null for any other text. */
+/** A ticket's grade, nonce and deadline (ms since the epoch, 0 for none) when its seal is this secret's (compared in constant time); null for any other text. */
 function ticketOf(value) {
   const found = SECRET !== null && typeof value === 'string' ? TICKET.exec(value) : null
   if (!found) return null
-  const [, letter, nonce, seal] = found
+  const [, letter, nonce, until, seal] = found
   const grade = GRADES[letter]
-  return crypto.timingSafeEqual(Buffer.from(sealOf(grade, nonce)), Buffer.from(seal)) ? { grade, nonce } : null
+  if (!crypto.timingSafeEqual(Buffer.from(sealOf(grade, nonce, until)), Buffer.from(seal))) return null
+  return { grade, nonce, until: until ? parseInt(until, 16) * 1000 : 0 }
 }
 
 const used = new Set() // the nonces of the tickets traded: each opens one page
@@ -427,8 +430,9 @@ function command(req, res, host) {
  * POST /session: the page trades its link's ticket (the `X-Deck-Ticket`
  * header, from its own Origin) for a handle of the ticket's grade, once: a
  * ticket used before is refused (`used`), as is one this secret never
- * sealed (`unknown`: an earlier server's, or none). The mod hears of each
- * use, so a link it shows that was used is made anew.
+ * sealed (`unknown`: an earlier server's, or none), and one past its
+ * deadline (`expired`). The mod hears of each use, so a link it shows that
+ * was used is made anew.
  */
 function session(req, res, host) {
   req.resume() // a body says nothing here
@@ -436,6 +440,7 @@ function session(req, res, host) {
   const ticket = ticketOf(req.headers['x-deck-ticket'])
   if (ticket === null) return send(res, 403, '{"ok":false,"error":"unknown"}', JSON_TYPE)
   if (used.has(ticket.nonce) || used.size >= MAX_USED) return send(res, 403, '{"ok":false,"error":"used"}', JSON_TYPE)
+  if (ticket.until !== 0 && Date.now() > ticket.until) return send(res, 403, '{"ok":false,"error":"expired"}', JSON_TYPE)
   used.add(ticket.nonce)
   const handle = newHandle(ticket.grade)
   process.stdout.write(`${JSON.stringify({ used: ticket.nonce, grade: ticket.grade })}\n`)

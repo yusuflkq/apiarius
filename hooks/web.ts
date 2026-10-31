@@ -2011,19 +2011,27 @@ function hexOf(bytes: Uint8Array): string {
   return hex
 }
 
+/** How long a link the system's opener opens works for unless its page traded it: the opener's arguments hold it while it runs (Windows, Linux), and any program of the person's can read those. */
+export const OPENER_TICKET_MS = 30_000
+
 /**
  * A one-time ticket of `grade` for the server started with `secret`:
  * `<p|f>-<nonce>-<seal>`, the seal the first 32 hex digits (128 bits) of
  * HMAC-SHA256(secret, "apiarius/ticket/1|<grade>|<nonce>"), as web/server.js
  * checks it. The page trades it for a handle once; the server refuses it after.
+ * With `until` (seconds since the epoch) it works until then only:
+ * `<p|f>-<nonce>-<until, 8 hex digits>-<seal>`, the deadline sealed too
+ * ("…|<nonce>|<until>").
  */
-export function ticketOf(secret: string, grade: WebGrade, nonce: string): string {
-  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${hmacHex(new TextEncoder().encode(secret), `apiarius/ticket/1|${grade}|${nonce}`).slice(0, 32)}`
+export function ticketOf(secret: string, grade: WebGrade, nonce: string, until = 0): string {
+  const deadline = until > 0 ? Math.floor(until).toString(16).padStart(8, '0').slice(-8) : ''
+  const sealed = `apiarius/ticket/1|${grade}|${nonce}${deadline ? `|${deadline}` : ''}`
+  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${deadline ? `${deadline}-` : ''}${hmacHex(new TextEncoder().encode(secret), sealed).slice(0, 32)}`
 }
 
 /** A ticket's nonce (what the server's `used` line names); '' for any other text. */
 export function nonceOf(ticket: string): string {
-  return /^[pf]-([0-9a-f]{16})-[0-9a-f]{32}$/.exec(ticket)?.[1] ?? ''
+  return /^[pf]-([0-9a-f]{16})(?:-[0-9a-f]{8})?-[0-9a-f]{32}$/.exec(ticket)?.[1] ?? ''
 }
 
 /**

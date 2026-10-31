@@ -873,9 +873,9 @@ function webPaneOf(): WebPane {
   return { status: web.status, url: isUp ? W.webUrlOf(web.port, web.shown) : '', opened: web.opened, note: web.note }
 }
 
-/** A new one-time ticket of `grade` for the running server ('' while none runs): each link the deck hands out carries its own. */
-function ticketFor(grade: W.WebGrade): string {
-  return web.secret === '' ? '' : W.ticketOf(web.secret, grade, W.newNonce())
+/** A new one-time ticket of `grade` for the running server ('' while none runs): each link the deck hands out carries its own; with `until` (seconds since the epoch) it works until then only. */
+function ticketFor(grade: W.WebGrade, until = 0): string {
+  return web.secret === '' ? '' : W.ticketOf(web.secret, grade, W.newNonce(), until)
 }
 
 /** Keeps the web deck's switch, port and folder in `$.state`, so a reload starts it again where it was; its secret never. */
@@ -1690,12 +1690,16 @@ async function openWeb($: EngineInterface): Promise<CommandRunResult> {
 /**
  * "Open in browser" (Settings, and the deck's top line while the Browser
  * pane did not take the page): a `full` link made for this press, opened in
- * your own browser by the system's opener (web/open.js: `open`, `start`,
- * `xdg-open`), the link on its stdin; a toast when it could not (the
- * terminal shows a link to copy).
+ * your own browser by the system's opener (web/open.js: osascript's `open
+ * location` read on its stdin on macOS, so no process's arguments ever hold
+ * it; `start`, `xdg-open` elsewhere, whose arguments do while they run), the
+ * link on its stdin; a toast when it could not (the terminal shows a link to
+ * copy). Its ticket works for `W.OPENER_TICKET_MS` only, unless the page
+ * traded it by then.
  */
 async function openOwnBrowser($: EngineInterface): Promise<void> {
-  const ticket = web.status === 'running' && web.port > 0 ? ticketFor('full') : ''
+  const until = Math.ceil(((await $.clock.now()) + W.OPENER_TICKET_MS) / 1000)
+  const ticket = web.status === 'running' && web.port > 0 ? ticketFor('full', until) : ''
   if (ticket === '') {
     $.ui.toast('Apiarius web is not running: /apiarius web starts it.')
     return
