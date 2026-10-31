@@ -779,7 +779,8 @@ async function runHome($: EngineInterface, request: W.HomeRequest): Promise<bool
 async function startHome($: EngineInterface): Promise<void> {
   if (home === '' || sessionId === '') return
   await runHome($, { op: 'sweep', home, registry: homeRegistry, keep: sessionId, legacy: pluginRoot === '' ? '' : `${pluginRoot}/.web` })
-  if (await runHome($, { op: 'prepare', home, id: sessionId, files: [], isOwnHome: isHomeOwn })) web.isPrivate = true
+  // the registry folder named too, so it and this session's file in it are made private (0700/0600) however the race with the registry writer goes
+  if (await runHome($, { op: 'prepare', home, id: sessionId, files: [], isOwnHome: isHomeOwn, ...(homeRegistry !== '' ? { registry: homeRegistry } : {}) })) web.isPrivate = true
 }
 
 const web: {

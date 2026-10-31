@@ -50,7 +50,12 @@ function leftFolder(root, id, { pid = null, files = { 'state.json': '{"v":1,"sec
   fs.mkdirSync(path.join(dir, 'messages'), { recursive: true })
   for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text)
   if (pid !== null) fs.writeFileSync(path.join(dir, 'owner.json'), JSON.stringify({ pid }))
-  if (mtime !== null) fs.utimesSync(dir, mtime / 1000, mtime / 1000)
+  // `mtime` ages everything the sweep weighs (the folder and its state and owner files), so a folder reads as long untouched
+  if (mtime !== null) {
+    const t = mtime / 1000
+    for (const name of [...Object.keys(files), 'owner.json']) { try { fs.utimesSync(path.join(dir, name), t, t) } catch {} }
+    fs.utimesSync(dir, t, t)
+  }
   return dir
 }
 
@@ -86,6 +91,27 @@ test('prepare makes an existing file 0600 and loose folders 0700 (a viewer`s wri
   assert.equal(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'), 'x')
   assert.equal(run({ op: 'prepare', home: named, id: 'sess-1', files: [], isOwnHome: true }).ok, true)
   assert.equal(modeOf(named), 0o700)
+})
+
+test('prepare, given the registry folder, makes it 0700 and this session`s file in it 0600 before the registry writer writes it, and fixes every session`s file in it left looser', { skip: isWindows }, () => {
+  const home = path.join(tempDir(), 'apiarius')
+  const registry = path.join(home, 'sessions')
+  // an earlier build left the folder and another session's file loose, and this session's not yet made
+  fs.mkdirSync(registry, { recursive: true, mode: 0o755 })
+  fs.writeFileSync(path.join(registry, 'other-2.json'), '{"v":1}', { mode: 0o644 })
+  fs.writeFileSync(path.join(registry, 'notes.txt'), 'x', { mode: 0o644 }) // not a session file: left alone
+  assert.equal(run({ op: 'prepare', home, id: 'sess-1', files: [], registry }).ok, true)
+  assert.equal(modeOf(registry), 0o700)
+  // this session's file pre-created 0600; the engine's later write over it keeps that mode
+  assert.equal(modeOf(path.join(registry, 'sess-1.json')), 0o600)
+  assert.equal(fs.readFileSync(path.join(registry, 'sess-1.json'), 'utf8'), '')
+  assert.equal(modeOf(path.join(registry, 'other-2.json')), 0o600)
+  assert.equal(modeOf(path.join(registry, 'notes.txt')), 0o644)
+  // works for an APIARIUS_SESSIONS override outside the home too
+  const outside = path.join(tempDir(), 'reg')
+  assert.equal(run({ op: 'prepare', home, id: 'sess-1', files: [], registry: outside }).ok, true)
+  assert.equal(modeOf(outside), 0o700)
+  assert.equal(modeOf(path.join(outside, 'sess-1.json')), 0o600)
 })
 
 test('prepare refuses what is not the session`s own: another session`s files, a path, a bad id or file name, a relative home', () => {
@@ -174,7 +200,7 @@ test('clear (a /clear) empties what the folder holds of the conversation, its fo
   if (!isWindows) assert.equal(modeOf(path.join(dir, 'messages')), 0o700)
 })
 
-test('sweep removes the folders of sessions that are gone, by their owner`s process or, with none, the registry; keeps a live one`s, a new one`s and its own; never a link or a file', async () => {
+test('sweep removes the folders of sessions that are gone, by their owner`s own process alone (never a registry file, which carries no seal and a forger could write): a crashed one`s, an orphan with no owner, and a live-looking one bounded after days untouched; keeps a live one`s (its owner runs and it was touched lately), a new one`s and its own; never a link or a file', async () => {
   const root = tempDir()
   const home = path.join(root, 'apiarius')
   const web = path.join(home, 'web')
@@ -183,19 +209,27 @@ test('sweep removes the folders of sessions that are gone, by their owner`s proc
   fs.mkdirSync(web, { recursive: true })
   const dead = await deadPid()
   const old = Date.now() - 10 * 60_000
+  const ancient = Date.now() - 4 * 24 * 60 * 60_000 // older than MAX_KEEP_MS (3 days)
   const entry = (id, extra) => fs.writeFileSync(path.join(registry, `${id}.json`), JSON.stringify({ v: 1, id, heartbeatAt: Date.now(), pid: dead, ...extra }))
+  // the owner process is gone: a crashed session's folder
   leftFolder(web, 'crashed-1', { pid: dead })
+  // the owner process runs: kept, whatever a registry file says of it
   leftFolder(web, 'alive-1', { pid: process.pid })
-  entry('alive-1', { endedAt: Date.now() }) // a registry file says it ended, but its process runs: kept, whatever a registry file says
+  entry('alive-1', { endedAt: Date.now() }) // a registry file says it ended, but its process runs: ignored, the folder kept
+  // kept because it is this session's own (`keep`), whatever its owner says
   leftFolder(web, 'mine-1', { pid: dead })
-  leftFolder(web, 'ended-1', { mtime: old })
-  entry('ended-1', { endedAt: Date.now() })
+  // a registry file says it is live, but no owner.json runs and it is old: removed, the registry never keeps a folder here
   leftFolder(web, 'listed-1', { mtime: old })
   entry('listed-1', {})
-  leftFolder(web, 'silent-1', { mtime: old })
-  entry('silent-1', { heartbeatAt: Date.now() - 60 * 60_000 })
-  leftFolder(web, 'fresh-1') // a viewer's inbox write just made it: let be a while
+  // no owner and old: an orphan
   leftFolder(web, 'orphan-1', { mtime: old })
+  // a viewer's inbox write just made it (no owner, recent): let be a while
+  leftFolder(web, 'fresh-1')
+  // its owner's pid runs (a planted, long-lived pid), but nothing in it has been touched for days: removed by the bound
+  leftFolder(web, 'planted-1', { pid: process.pid, mtime: ancient })
+  // its owner's pid runs and its folder is old, but its state was written lately (a sharing session): kept
+  leftFolder(web, 'busy-1', { pid: process.pid, mtime: ancient })
+  fs.writeFileSync(path.join(web, 'busy-1', 'state.json'), '{"v":1,"fresh":true}')
   const outside = path.join(root, 'outside')
   fs.mkdirSync(path.join(outside, 'inner'), { recursive: true })
   fs.writeFileSync(path.join(outside, 'precious.txt'), 'keep me')
@@ -205,13 +239,12 @@ test('sweep removes the folders of sessions that are gone, by their owner`s proc
   const legacy = path.join(root, 'mod', '.web')
   leftFolder(legacy, 'mine-1', { mtime: old })
   leftFolder(legacy, 'gone-2', { mtime: old })
-  leftFolder(legacy, 'live-2', { mtime: old })
-  entry('live-2', {})
+  leftFolder(legacy, 'live-2', { pid: process.pid })
 
   const said = run({ op: 'sweep', home, registry, keep: 'mine-1', legacy })
   assert.equal(said.ok, true)
-  assert.deepEqual(said.removed.sort(), ['crashed-1', 'ended-1', 'legacy:gone-2', 'legacy:mine-1', 'orphan-1', 'silent-1'])
-  assert.deepEqual(fs.readdirSync(web).sort(), ['alive-1', 'file-1', 'fresh-1', 'link-1', 'listed-1', 'mine-1'])
+  assert.deepEqual(said.removed.sort(), ['crashed-1', 'legacy:gone-2', 'legacy:mine-1', 'listed-1', 'orphan-1', 'planted-1'])
+  assert.deepEqual(fs.readdirSync(web).sort(), ['alive-1', 'busy-1', 'file-1', 'fresh-1', 'link-1', 'mine-1'])
   assert.deepEqual(fs.readdirSync(legacy), ['live-2'])
   assert.deepEqual(fs.readdirSync(outside).sort(), ['inner', 'precious.txt'])
 })

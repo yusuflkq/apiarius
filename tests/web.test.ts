@@ -525,7 +525,7 @@ test('/apiarius web starts the server once (node, web/server.js, its folder in t
   expect(statesOf(w)).toEqual([])
   expect(w.homeRequests.map(one => one.op)).toEqual(['sweep', 'prepare'])
   expect(w.homeRequests[0]).toMatchObject({ op: 'sweep', home: HOME, registry: `${HOME}/sessions`, keep: 'session-1', legacy: expect.stringMatching(/[\\/]\.web$/) })
-  expect(w.homeRequests[1]).toEqual({ op: 'prepare', home: HOME, id: 'session-1', files: [], isOwnHome: false })
+  expect(w.homeRequests[1]).toEqual({ op: 'prepare', home: HOME, id: 'session-1', files: [], isOwnHome: false, registry: `${HOME}/sessions` })
 
   const answer = await $.command.run(deck('web'))
   await clock.settle()

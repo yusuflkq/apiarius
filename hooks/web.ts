@@ -190,13 +190,16 @@ export function webDirOf(home: string, sessionId: string): string {
  * What the home helper (web/home.js, run with node, no shell) is asked:
  * `prepare` the session's folder private (0700) with `files` (each by its
  * place under the home, `web/<id>/…` or `debug/<id>.json`) made 0600 before
- * the engine writes them, as its write keeps a file's mode; `remove` those
- * sessions' folders; `clear` what a folder holds of the conversation; `sweep`
- * the folders of sessions that are gone, and an earlier version's under the
- * mod (`legacy`, `<mod>/.web`), `keep`'s own aside.
+ * the engine writes them, as its write keeps a file's mode, and, with
+ * `registry` (its folder), that folder made 0700 and this session's file in
+ * it made 0600 (fixing any left looser) before the registry writer's first
+ * write, whichever runs first; `remove` those sessions' folders; `clear`
+ * what a folder holds of the conversation; `sweep` the folders of sessions
+ * that are gone, and an earlier version's under the mod (`legacy`,
+ * `<mod>/.web`), `keep`'s own aside.
  */
 export type HomeRequest =
-  | { op: 'prepare'; home: string; id: string; files: readonly string[]; isOwnHome: boolean }
+  | { op: 'prepare'; home: string; id: string; files: readonly string[]; isOwnHome: boolean; registry?: string }
   | { op: 'remove'; home: string; ids: readonly string[] }
   | { op: 'clear'; home: string; id: string }
   | { op: 'sweep'; home: string; registry: string; keep: string; legacy: string }

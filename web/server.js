@@ -30,9 +30,11 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const net = require('net')
+const NOFOLLOW = fs.constants.O_NOFOLLOW || 0
 
 const EMPTY = '{"v":1,"empty":true}'
 const MAX_BODY = 16 * 1024
+const MAX_CLIENTS = 50 // the live (SSE) connections at once: the page keeps one; a cap so no client holds them all
 const MAX_TEXT = 4000
 const MAX_ANSWERS = 4 // AskUserQuestion asks 1 to 4 questions at once
 const MAX_ANSWER = 2000 // a question's text, and an answer's
@@ -190,6 +192,8 @@ function page(res, [file, type]) {
 }
 
 function events(req, res) {
+  // the page keeps one stream; a cap so a client that opens many never holds them all open at once
+  if (clients.size >= MAX_CLIENTS) return send(res, 503, 'too many live connections\n')
   res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive' })
   req.socket.setNoDelay(true)
   res.write(`retry: 1000\nevent: state\ndata: ${state}\n\n`)
@@ -207,26 +211,36 @@ function events(req, res) {
  */
 function written(res, id, folder, ext, what, type = TEXT_TYPE) {
   if (!FILE_ID.test(id) || DEVICE.test(id)) return send(res, 400, `bad ${what} id\n`)
-  fs.readFile(path.join(dir, folder, `${id}${ext}`), 'utf8', (err, text) => (err ? send(res, 404, `no such ${what}\n`) : send(res, 200, text, type)))
+  readFileNoFollow(path.join(dir, folder, `${id}${ext}`), (err, text) => (err ? send(res, 404, `no such ${what}\n`) : send(res, 200, text, type)))
+}
+
+/** Reads a file as UTF-8 without following a symbolic link at its final component (a link planted in a session folder is refused, never read through); the callback is handed the open or read error otherwise. */
+function readFileNoFollow(file, cb) {
+  fs.open(file, fs.constants.O_RDONLY | NOFOLLOW, (err, fd) => {
+    if (err) return cb(err)
+    fs.readFile(fd, 'utf8', (readErr, text) => fs.close(fd, () => cb(readErr, text)))
+  })
 }
 
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /**
- * Another session's state folder, as its registry file names it: only a live
- * session's (its heartbeat within 3 minutes, not ended), only the folder
+ * Another session's state folder: only a live session's (its registry file
+ * says its heartbeat is within 3 minutes and not ended), only the folder
  * `<home>/web/<its id>` beside this server's own (and still so once every
  * link is followed: a link there, or to it, is refused); null for any other.
- * A request names the session by its id alone, never a path.
+ * A request names the session by its id alone, never a path. The registry
+ * file carries no seal here, so the folder is derived from this server's own
+ * web root and the id, never from a `dir` the file names: no field in it can
+ * point the server at another folder.
  */
 function sessionDirOf(id) {
   if (!sessions || !SESSION_ID.test(id) || DEVICE.test(id)) return null
   let entry
   try { entry = JSON.parse(fs.readFileSync(path.join(sessions, `${id}.json`), 'utf8')) } catch { return null }
-  if (!isRecord(entry) || entry.id !== id || typeof entry.dir !== 'string' || entry.dir === '' || entry.endedAt !== undefined) return null
+  if (!isRecord(entry) || entry.id !== id || entry.endedAt !== undefined) return null
   if (!(typeof entry.heartbeatAt === 'number' && Date.now() - entry.heartbeatAt <= SESSION_LIVE_MS)) return null
   const shaped = path.join(webRoot, id)
-  if (path.resolve(entry.dir) !== shaped) return null
   let real, realRoot
   try { real = fs.realpathSync(shaped); realRoot = fs.realpathSync(webRoot) } catch { return null }
   let stat
@@ -240,7 +254,7 @@ function otherSession(res, route) {
   const other = extra === undefined ? sessionDirOf(id) : null
   if (!other) return send(res, 404, 'no such session\n')
   if (what === 'state' && file === '') {
-    return fs.readFile(path.join(other, 'state.json'), 'utf8', (err, text) => {
+    return readFileNoFollow(path.join(other, 'state.json'), (err, text) => {
       if (err) return send(res, 200, EMPTY, JSON_TYPE)
       let value
       try { value = JSON.parse(text.trim()) } catch { return send(res, 503, 'state being written\n') }
@@ -251,7 +265,7 @@ function otherSession(res, route) {
   if (!lazy || !Object.prototype.hasOwnProperty.call({ patch: 1, gitdiff: 1, message: 1, agent: 1 }, what)) return send(res, 404, 'not found\n')
   const [folder, ext, word, type] = lazy
   if (!FILE_ID.test(file) || DEVICE.test(file)) return send(res, 400, `bad ${word} id\n`)
-  fs.readFile(path.join(other, folder, `${file}${ext}`), 'utf8', (err, text) => (err ? send(res, 404, `no such ${word}\n`) : send(res, 200, text, type)))
+  readFileNoFollow(path.join(other, folder, `${file}${ext}`), (err, text) => (err ? send(res, 404, `no such ${word}\n`) : send(res, 200, text, type)))
 }
 
 /** An answer command's answers: 1 to 4 of question text → answer, each a string that is not blank and at most 2000 characters. */
@@ -372,6 +386,9 @@ const server = http.createServer((req, res) => {
     if (!res.headersSent) send(res, 500, 'server error\n')
   }
 })
+// a slow client never holds a connection open for long: time to receive the headers, then the whole request (the long-lived /events stream is sent once the request is in, so neither cuts it)
+server.headersTimeout = 10_000
+server.requestTimeout = 20_000
 
 // ---- lifetime: leave with the session. Windows does not kill a child with
 // its parent, so watch the parent's pid; stdin closing is the faster signal.

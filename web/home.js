@@ -12,18 +12,21 @@
  * Every request names the home, never a path to act on: a session by its id,
  * a file by its place under the home (`FILE`).
  *
- * - `prepare` {home, id, files}: the folders made 0700 (`<home>` when this
- *   made it or it is Apiarius's own, `<home>/web`, `<home>/web/<id>` and its
- *   folders, `<home>/sessions` and `<home>/debug` where they are), its
- *   `owner.json` (the session's process, the parent of this one), then each
- *   file in `files` made 0600 before the mod writes it: the engine's write
- *   keeps an existing file's mode. A debug file only while `<home>/debug` is.
+ * - `prepare` {home, id, files, registry}: the folders made 0700 (`<home>`
+ *   when this made it or it is Apiarius's own, `<home>/web`, `<home>/web/<id>`
+ *   and its folders, `<home>/sessions` and `<home>/debug` where they are),
+ *   its `owner.json` (the session's process, the parent of this one), then
+ *   each file in `files` made 0600 before the mod writes it: the engine's
+ *   write keeps an existing file's mode. A debug file only while `<home>/debug`
+ *   is. With `registry` (its folder) that folder is made 0700 and this
+ *   session's file in it 0600, every other session's file in it 0600 too,
+ *   before the registry writer's first write (whichever runs first).
  * - `remove` {home, ids}: those sessions' folders gone, whole.
  * - `clear` {home, id}: what a folder holds of the conversation gone (all but
  *   its inbox and owner.json), after a /clear.
- * - `sweep` {home, registry, keep, legacy}: the folders of sessions that are
- *   gone (`orphanOf`), and an earlier version's under the mod (`legacy`,
- *   `<mod>/.web`), but `keep`'s own.
+ * - `sweep` {home, keep, legacy}: the folders of sessions that are gone
+ *   (`orphanOf`, by each folder's own owner.json), and an earlier version's
+ *   under the mod (`legacy`, `<mod>/.web`), but `keep`'s own.
  *
  * It never follows a symbolic link to delete or chmod: only a real folder
  * that is a direct child of `<home>/web` (or `legacy`) and named as a session
@@ -43,11 +46,10 @@ const SUBDIRS = ['patches', 'messages', 'agents', 'gitdiffs', 'inbox']
 /** What a /clear removes from a state folder, everything of the conversation: these files, and what these folders hold (the folders stay, 0700). */
 const CONTENT_FILES = ['state.json', 'timeline.json']
 const CONTENT_DIRS = ['patches', 'messages', 'agents', 'gitdiffs']
-/** A registry file whose heartbeat is older is no live session's (hooks/sessions.ts STALE_MS, GONE_MS). */
-const STALE_MS = 3 * 60_000
-const GONE_MS = 30 * 60_000
-/** A folder with no owner and no registry file is let be this long: a viewer's write may have just made it. */
+/** A folder with no live owner is let be this long: a viewer's write may have just made it. */
 const NEW_MS = 2 * 60_000
+/** A folder whose owner process runs but nothing in it has been touched for this long goes anyway: the id a dead session's `owner.json` named may have been given to a long-lived process of someone else's (a planted pid like 1 would otherwise keep a dead folder forever). */
+const MAX_KEEP_MS = 3 * 24 * 60 * 60_000
 const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never a file name
 const isWindows = process.platform === 'win32'
 const UID = typeof process.getuid === 'function' ? process.getuid() : null
@@ -101,7 +103,30 @@ function webRootOf(home) {
   return isOwnDir(lstatOf(root)) ? root : null
 }
 
-function prepare({ home: given, id, files = [], isOwnHome = false }) {
+/**
+ * The registry folder made private (0700) and this session's file in it made
+ * 0600, before the registry writer's first write of it (whichever runs
+ * first: the engine's own write makes a new folder 0755 and a new file 0644,
+ * and keeps an existing file's mode, so this both pre-creates and fixes).
+ * Every other session's file in it is made 0600 too (files an earlier build
+ * left looser). `dir` is the registry folder (`APIARIUS_SESSIONS`, else
+ * `<home>/sessions`); a folder that is a link or another user's is refused.
+ */
+function secureRegistry(dir, id) {
+  if (dir === null) return
+  privateDir(dir)
+  if (isSessionName(id)) privateFile(path.join(dir, `${id}.json`))
+  let names = []
+  try { names = fs.readdirSync(dir) } catch { return }
+  for (const name of names) {
+    if (!name.endsWith('.json') || !isSessionName(name.slice(0, -'.json'.length))) continue
+    const p = path.join(dir, name)
+    const stat = lstatOf(p)
+    if (stat !== null && stat.isFile() && !stat.isSymbolicLink() && (UID === null || stat.uid === UID) && !isWindows && (stat.mode & 0o777) !== 0o600) fs.chmodSync(p, 0o600)
+  }
+}
+
+function prepare({ home: given, id, files = [], isOwnHome = false, registry }) {
   const home = homeOf(given)
   if (home === null) return { ok: false, why: 'no home' }
   if (typeof id !== 'string' || !isSessionName(id)) return { ok: false, why: 'bad session id' }
@@ -125,6 +150,8 @@ function prepare({ home: given, id, files = [], isOwnHome = false }) {
     if (parts[0] === 'debug' && !isOwnDir(lstatOf(path.join(real, 'debug')))) continue // a dump only while its folder is there
     privateFile(path.join(real, ...parts))
   }
+  // the registry folder and this session's file in it made private, however the race with the registry writer goes
+  if (typeof registry === 'string' && registry.trim() !== '' && path.isAbsolute(registry.trim())) secureRegistry(path.resolve(registry.trim()), id)
   return { ok: true }
 }
 
@@ -174,47 +201,55 @@ function jsonOf(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null }
 }
 
-/**
- * Whether session `name`'s folder is an orphan at `now`: its owner (the
- * process `owner.json` names) is gone; or, with no owner said, the registry
- * says the session ended, or lists no live session by that id (silent past
- * STALE_MS with its process gone, or past GONE_MS) and the folder is past
- * NEW_MS. A folder whose owner runs is kept, whatever the registry says: a
- * registry file never gets a live session's folder removed.
- */
-function orphanOf(dir, name, registry, now) {
-  const owner = jsonOf(path.join(dir, 'owner.json'))
-  if (owner && Number.isInteger(owner.pid)) return !isAlive(owner.pid)
-  const entry = registry ? jsonOf(path.join(registry, `${name}.json`)) : null
-  if (entry && entry.id === name && entry.endedAt !== undefined) return true
-  if (entry && entry.id === name && typeof entry.heartbeatAt === 'number') {
-    const silent = now - entry.heartbeatAt
-    if (silent <= STALE_MS) return false
-    if (silent <= GONE_MS && isAlive(entry.pid)) return false
-    return true
+/** When something in session `name`'s folder was last touched: the newest of the folder's own time and its state and owner files' (a sharing session rewrites `state.json` often, so its folder is never judged stale). */
+function lastTouchMs(dir) {
+  let newest = 0
+  for (const name of ['', 'state.json', 'owner.json']) {
+    const stat = lstatOf(name === '' ? dir : path.join(dir, name))
+    if (stat !== null) newest = Math.max(newest, stat.mtimeMs)
   }
-  const stat = lstatOf(dir)
-  return stat !== null && now - stat.mtimeMs > NEW_MS
+  return newest
 }
 
-function sweep({ home: given, registry, keep = '', legacy = '' }) {
+/**
+ * Whether session `name`'s folder is an orphan at `now`, judged by its own
+ * `owner.json` alone (never by a registry file, which carries no seal here
+ * and a forger could write): its owner process is gone, so a crash left it;
+ * or its owner process runs but nothing in it has been touched for
+ * `MAX_KEEP_MS` (the id its owner names may since have gone to a long-lived
+ * process of someone else's); or no owner is named and the folder is past
+ * `NEW_MS` (a viewer's inbox write may have just made it). A folder whose
+ * owner process runs and that was touched lately is a live session's, and is
+ * never removed.
+ */
+function orphanOf(dir, name, now) {
+  const folder = lstatOf(dir)
+  if (folder === null) return false
+  const owner = jsonOf(path.join(dir, 'owner.json'))
+  if (owner && Number.isInteger(owner.pid) && owner.pid > 0) {
+    if (!isAlive(owner.pid)) return true
+    return now - lastTouchMs(dir) > MAX_KEEP_MS
+  }
+  return now - folder.mtimeMs > NEW_MS
+}
+
+function sweep({ home: given, keep = '', legacy = '' }) {
   const home = homeOf(given)
   if (home === null) return { ok: false, why: 'no home' }
   const now = Date.now()
-  const reg = typeof registry === 'string' && path.isAbsolute(registry) ? registry : null
   const removed = []
   const root = webRootOf(home)
   if (root !== null) {
     for (const one of fs.readdirSync(root, { withFileTypes: true })) {
       if (!one.isDirectory() || one.name === keep || !isSessionName(one.name)) continue
-      if (orphanOf(path.join(root, one.name), one.name, reg, now) && removeChild(root, one.name)) removed.push(one.name)
+      if (orphanOf(path.join(root, one.name), one.name, now) && removeChild(root, one.name)) removed.push(one.name)
     }
   }
   // an earlier version's folders under the mod (`<mod>/.web/<id>`): this session's own goes, another's once it is no live session's
   if (typeof legacy === 'string' && path.isAbsolute(legacy) && isOwnDir(lstatOf(legacy))) {
     for (const one of fs.readdirSync(legacy, { withFileTypes: true })) {
       if (!one.isDirectory() || !isSessionName(one.name)) continue
-      if ((one.name === keep || orphanOf(path.join(legacy, one.name), one.name, reg, now)) && removeChild(legacy, one.name)) removed.push(`legacy:${one.name}`)
+      if ((one.name === keep || orphanOf(path.join(legacy, one.name), one.name, now)) && removeChild(legacy, one.name)) removed.push(`legacy:${one.name}`)
     }
   }
   return { ok: true, removed }

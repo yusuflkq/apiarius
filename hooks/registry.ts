@@ -61,7 +61,7 @@ export type RegistryHost = {
   now: () => Promise<number>
   read: (path: string) => Promise<string>
   write: (path: string, text: string) => Promise<void>
-  list: (path: string) => Promise<readonly { name: string; kind: string; mtimeMs: number }[]>
+  list: (path: string) => Promise<readonly { name: string; kind: string; size: number; mtimeMs: number }[]>
   stat: (path: string) => Promise<{ mtimeMs: number; size: number }>
   /** The plugin's own store (`$.store`), where the person's key is kept. */
   storeGet: (key: string) => Promise<unknown>
@@ -150,6 +150,12 @@ const CLOCK_SKEW_MS = 10_000
 
 /** A file whose seal is not the key's has the key read again from the store at most this often: another deck may have settled on another meanwhile. */
 const KEY_AGAIN_MS = 5_000
+
+/** A registry or inbox file larger than this is no deck's of the person's (a sealed entry is well under it): it is passed over, never read into the deck. */
+const MAX_FILE_BYTES = 64 * 1024
+
+/** At most this many registry or inbox files are read in one tick (the rest wait for the next): a folder filled with files never holds a tick open. */
+const MOST_PER_TICK = 64
 
 const reg = {
   /** The registry folder; '' while it is off (no home known, as in the tests). */
@@ -377,6 +383,7 @@ async function readRegistry(now: number): Promise<void> {
   const me = host.sessionId()
   const next = new Map<string, S.SessionEntry>()
   const silent: string[] = []
+  let reads = 0
   try {
     for (const one of await io().list(reg.dir)) {
       if (one.kind !== 'file' || !one.name.endsWith('.json')) continue
@@ -391,6 +398,18 @@ async function readRegistry(now: number): Promise<void> {
         if (now - one.mtimeMs > S.GONE_MS) silent.push(`${reg.dir}/${one.name}`)
         continue
       }
+      // one too big to be a sealed entry is passed over as a forgery would be, and removed once it is long silent
+      if (one.size > MAX_FILE_BYTES) {
+        reg.refused.set(id, one.mtimeMs)
+        if (now - one.mtimeMs > S.GONE_MS) silent.push(`${reg.dir}/${one.name}`)
+        continue
+      }
+      // only so many reads a tick: the rest keep what they said and are read next tick (a folder full of files never holds the tick open)
+      if (reads >= MOST_PER_TICK) {
+        if (known) next.set(id, known)
+        continue
+      }
+      reads += 1
       try {
         const text = await io().read(`${reg.dir}/${one.name}`)
         const said = await openedOf(SL.ENTRY, text, now)
@@ -535,6 +554,7 @@ async function pollInbox(now: number): Promise<void> {
   const wasViewed = isViewed(now)
   for (const [id, at] of reg.handled) if (now - at > S.COMMAND_MS + CLOCK_SKEW_MS) reg.handled.delete(id)
   const gone: string[] = []
+  let reads = 0
   for (const one of listed) {
     if (one.kind !== 'file' || !one.name.endsWith('.json')) continue
     const path = `${dir}/inbox/${one.name}`
@@ -544,13 +564,26 @@ async function pollInbox(now: number): Promise<void> {
     }
     const seen = reg.inboxSeen.get(one.name)
     if (seen && seen.mtimeMs === one.mtimeMs && (seen.isListed || now - seen.at < INBOX_RETRY_MS)) continue
+    // one too big to be a sealed command is no deck's of the person's: removed unread
+    if (one.size > MAX_FILE_BYTES) {
+      reg.inboxSeen.set(one.name, { mtimeMs: one.mtimeMs, at: now, isListed: true })
+      gone.push(path)
+      continue
+    }
+    // only so many reads a tick: the rest (not remembered) are read next tick
+    if (reads >= MOST_PER_TICK) continue
+    reads += 1
     let text: string
     try {
       text = await io().read(path)
     } catch {
       continue
     }
-    if (!SL.isJson(text)) continue
+    // not JSON yet (being written): remembered by its time, so it is read again only once it moves, not every tick
+    if (!SL.isJson(text)) {
+      reg.inboxSeen.set(one.name, { mtimeMs: one.mtimeMs, at: now, isListed: true })
+      continue
+    }
     const said = await openedOf(SL.INBOX, text, now)
     const file = said ? S.inboxFrom(said) : null
     if (!file || `${file.from}.json` !== one.name || file.to !== me || now - file.at > S.COMMAND_MS || file.at > now + CLOCK_SKEW_MS) {
