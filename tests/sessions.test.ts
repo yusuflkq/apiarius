@@ -1109,6 +1109,40 @@ test('from the page: every command about another session goes into its inbox (it
   expect(states.at(-1)?.v2.sessions?.rows.map(row => row.id)).toEqual(['session-1', OLD, OTHER, QUIET])
 })
 
+test('from the Browser pane`s page, words in your voice for another session wait here first: nothing goes into its inbox until your Send above the prompt, then it goes sealed as ever (its deck takes it at once); Stop turn for it goes at once', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const w = newWorld({ verdict: 'allow' })
+  const { clock } = await started($, on, w, d, work)
+  await clock.advance(1000)
+  const child = w.children[0]
+  const inboxOf = () => {
+    const written = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).at(-1)?.text ?? ''
+    return written === '' ? [] : (JSON.parse(written) as S.InboxFile).cmds.map(one => one.cmd)
+  }
+  command(child, { cmd: 'chat', id: 'p-1', agentId: 'main', text: 'Go ahead and rebuild', session: OTHER }, 'pane')
+  command(child, { cmd: 'abortTurn', id: 'p-2', turnId: 'turn_9', session: OTHER }, 'pane')
+  await clock.advance(1000)
+  // Stop turn speaks for nobody: in its inbox at once; the message waits here
+  expect(inboxOf()).toEqual([{ cmd: 'abortTurn', id: 'p-2', turnId: 'turn_9' }])
+  const acks = () => (w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 }).at(-1)?.v2.acks ?? [])
+  expect(acks().find(one => one.id === 'p-1')).toMatchObject({ status: 'held' })
+  const band = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
+  expect(JSON.stringify(await band.drawn())).toContain('“Go ahead and rebuild”')
+  await band.press({ key: 'held:send:h1' })
+  await clock.advance(1000)
+  // your Send: sealed into its inbox, as a page in your own browser would have sent it
+  const written = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).at(-1)?.text ?? ''
+  expect(SL.openedOf(KEY, SL.INBOX, written)).toMatchObject({ from: 'session-1', to: OTHER })
+  expect(inboxOf()).toEqual([
+    { cmd: 'abortTurn', id: 'p-2', turnId: 'turn_9' },
+    { cmd: 'chat', id: 'p-1', agentId: 'main', text: 'Go ahead and rebuild' },
+  ])
+  // nothing of it ran here
+  expect(w.submitted.some(one => one.text === 'Go ahead and rebuild')).toBe(false)
+  expect(acks().find(one => one.id === 'p-1')).toMatchObject({ status: 'queued', text: 'Sent to its deck' })
+  await band.unmount()
+})
+
 test('the registry lists no session whose file a deck of the person`s did not seal: one with no seal, another key`s, one changed after it was sealed (its folder moved to another`s) is passed over, offered nowhere and sent nothing; the key is the store`s, read again on the heartbeat, made where there is none', async ($, on) => {
   const d: Disk = { files: new Map() }
   const w = newWorld({ verdict: 'allow' })

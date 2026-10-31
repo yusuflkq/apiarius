@@ -83,6 +83,8 @@ export type World = {
   invalidates: number
   /** Each node the deck ran (`$.process.run`), its arguments: the files it removes among them. */
   nodeRuns: string[][]
+  /** Each link "Open in browser" handed web/open.js on its stdin (it answers that it opened it). */
+  browsed: string[]
   /** What /cost totals (`session.usage`'s `cost.usd`), when the test moves it; left out, $1.25. */
   costUsd?: number
   /** The home's `debug/` folder is there: the deck writes its debug dump (`debug/<sessionId>.json`) among the writes. */
@@ -120,6 +122,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     checkFails: 0,
     invalidates: 0,
     nodeRuns: [],
+    browsed: [],
     homeRequests: [],
     ...extra,
   }
@@ -180,6 +183,11 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('process.run', ($, e) => {
     const request = homeRequestOf(e.argv)
     if (request) w.homeRequests.push(request)
+    // "Open in browser": web/open.js, the link on its stdin
+    if (e.argv[0] === 'node' && /[\\/]web[\\/]open\.js$/.test(e.argv[1] ?? '')) {
+      w.browsed.push(e.init?.stdin ?? '')
+      return { value: { exitCode: 0, stdout: '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     return request
       ? { value: { exitCode: 0, stdout: w.isHomeRefused ? '{"ok":false,"why":"refused"}\n' : '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
       : e.argv[0] === 'node'
@@ -357,10 +365,15 @@ export function lastState(w: World): W.WebState {
   return last
 }
 
-/** The page's command, as the server prints it: one line of JSON. */
-export function command(child: Child | undefined, cmd: Record<string, unknown>) {
+/**
+ * The page's command, as the server prints it: one line of JSON, stamped with
+ * the grade of the page's handle (web/server.js): `full`, your own browser's,
+ * unless the test says `pane`, the Browser pane's (whose words in your voice
+ * wait for your Send above the prompt).
+ */
+export function command(child: Child | undefined, cmd: Record<string, unknown>, grade: 'full' | 'pane' = 'full') {
   if (!child) throw new Error('no server is running')
-  child.print(`${JSON.stringify(cmd)}\n`)
+  child.print(`${JSON.stringify({ ...cmd, grade })}\n`)
 }
 
 /** One model step of `agentId`'s loop (the Orchestrator's with none), read to its end: what it answered. */

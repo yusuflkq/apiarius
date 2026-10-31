@@ -7,6 +7,7 @@ import type { Elements, RenderSurface } from 'claude-code'
 
 import type { DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
+import type { HeldRow } from '../hold'
 import type { SessionRowV2, SessionsV2 } from '../sessions'
 import type { V2Band, V2Files, WebStateV2 } from '../web'
 
@@ -49,7 +50,12 @@ export type UsageInfo = {
 export type WebPane = {
   /** `off` until it is asked for, `starting` until the server says it is ready, `failed` when it could not start or stopped by itself. */
   status: 'off' | 'starting' | 'running' | 'failed'
-  /** The page's address while the server runs; '' otherwise. */
+  /**
+   * A link for your own browser while the server runs ('' otherwise): a
+   * `full` one-time ticket, made anew once the page it opened traded it. The
+   * terminal draws it as text to copy; the desktop draws no link, only "Open
+   * in browser", which makes its own (the model never reads either).
+   */
   url: string
   /** How the last try to open it in the Browser pane went; '' before the first. */
   opened: '' | 'opened' | 'failed'
@@ -75,6 +81,8 @@ export type DeckModel = {
   web?: WebPane
   /** What the band above the prompt says, from this session's v2 state (`W.bandOf`): null (or absent) when it says nothing. */
   band?: V2Band | null
+  /** What the Browser pane's page sent in your voice, waiting for your Send in the band (../hold), oldest first; absent reads as none. */
+  held?: HeldRow[]
   /** Every session on this machine is listed, dropped over the tabs (`s`, the header's title or its count of sessions, ./v2/sessions); absent reads as not. */
   isSessionsOpen?: boolean
 }
@@ -100,6 +108,14 @@ export type Actions = {
   selectRepo: (root: string) => void
   /** What `/apiarius web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
   openWeb: () => void
+  /** "Open in browser": a new `full` link to the running page, opened in your own browser by the system's opener (a toast when it could not). */
+  openBrowser: () => void
+  /** Send on a band row the Browser pane's page sent in your voice (../hold): it runs as your own browser's page would have run it at once. */
+  sendHeld: (key: string) => void
+  /** Discard on such a row: nothing is sent, and the page says so. */
+  discardHeld: (key: string) => void
+  /** More, or Less, on such a row too long for one line. */
+  toggleHeld: (key: string) => void
 }
 
 /** What the native dashboard's presses run, beside the deck's own (Actions). */

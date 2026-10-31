@@ -29,6 +29,7 @@ import * as B from './background'
 import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
 import * as F from './format'
 import * as G from './git'
+import * as H from './hold'
 import {
   contextWaitOf,
   inspectCalled,
@@ -647,7 +648,7 @@ async function writeDump($: EngineInterface): Promise<void> {
  * every surface draws (`v2Of`), its header, needs, plan sources, latest chat
  * rows and tree; per loop what Claude Code gave it (its name, description,
  * type, origin, status, parent, background flag, calls, list and result);
- * the latest edits; and how the web deck stands (never its token).
+ * the latest edits; and how the web deck stands (never its secret or a link).
  */
 function debugStateOf(now: number) {
   const state = v2Of(now)
@@ -700,7 +701,7 @@ function debugStateOf(now: number) {
         ? { row: row.row, id: row.id, depth: row.depth, text: row.text, ids: row.ids }
         : { row: row.row, id: row.id, depth: row.depth, title: row.title, kind: row.kind, status: row.status, fold: row.fold, live: row.live ? `${row.live.tool} ${row.live.text}` : null, needs: row.needs },
     ),
-    web: { isOn: web.isOn, status: web.status, port: web.port, dir: web.dir, opened: web.opened, note: web.note, patches: web.written.size, hasParent: web.pid !== '' },
+    web: { isOn: web.isOn, status: web.status, port: web.port, dir: web.dir, opened: web.opened, note: web.note, patches: web.written.size, hasParent: web.pid !== '', held: held.items.map(item => ({ kind: item.kind, to: item.to, session: item.session, at: item.at })) },
     // what waits on you, and whether the page may answer it; what came of the page's latest commands
     pending: data.pending.map(item => ({ ...item, isAnswerable: askers.has(item.id) })),
     acks: data.acks.slice(-10),
@@ -710,8 +711,13 @@ function debugStateOf(now: number) {
 /**
  * The web deck. `/apiarius web`, or the pane's Open dashboard,
  * starts `web/server.js` for the session and opens the page in the
- * Desktop's Browser pane; its link (the token in it) is the person's alone,
- * on the pane, never in what the model reads. While it is on, what the
+ * Desktop's Browser pane. Each link carries a one-time ticket the page
+ * trades for a handle (web/server.js), of one of two grades (`W.WebGrade`):
+ * the Browser pane's is `pane`, since Claude's tools drive that pane, and
+ * what it sends in your voice waits for your Send in the band (./hold);
+ * "Open in browser" opens a `full` one in your own browser with the
+ * system's opener, and the terminal deck shows one as text to copy. A link
+ * is never in what the model reads. While it is on, what the
  * deck holds goes to `<home>/web/<sessionId>/state.json` at most every 300 ms
  * after a change (`W.webStateOf`, with the v2 view model under `v2`), each
  * edit's patch once beside it, each agent's file when it changed, and the
@@ -725,9 +731,10 @@ function debugStateOf(now: number) {
  * `$` outlives every hook, and spawns it each time it is asked. Leaving its
  * loop (`/apiarius web stop`) or a reload of this module kills it, and its
  * `--parent` check ends it with the session's process (its stdin carries
- * the token and then closes, so stdin cannot tell it). A reload starts it
- * again with the token and port `$.state` kept: the open page reconnects
- * by itself.
+ * the secret and then closes, so stdin cannot tell it). Every start makes a
+ * new secret, never kept: a reload starts it again on the port `$.state`
+ * kept, and a page open on it hears its old handle refused and says to open
+ * it again from the deck.
  */
 const WEB_STATE = { plugin: 'apiarius', key: 'web' } as const
 /** How long a start waits for the server's ready line. */
@@ -786,8 +793,10 @@ async function startHome($: EngineInterface): Promise<void> {
 const web: {
   /** On for this session, from the first /apiarius web until /apiarius web stop, as `$.state` keeps it. */
   isOn: boolean
-  /** The server's access token, the page's `t`. */
-  token: string
+  /** The secret the running server seals its tickets with (`W.ticketOf`): new for every start, never kept; '' while none runs. */
+  secret: string
+  /** The `full` ticket the terminal deck shows as its link, made when the server is ready and again once the page it opened traded it; '' before. */
+  shown: string
   /** The port the server listens on, taken again after a reload; 0 before it is known. */
   port: number
   /** The port a restart asked for again, until its ready line says which it got. */
@@ -832,7 +841,8 @@ const web: {
   isWriteQueued: boolean
 } = {
   isOn: false,
-  token: '',
+  secret: '',
+  shown: '',
   port: 0,
   keptPort: 0,
   dir: '',
@@ -856,15 +866,20 @@ const web: {
   isWriteQueued: false,
 }
 
-/** The web deck as the pane draws it. */
+/** The web deck as the pane draws it: its link the `full` one the terminal shows (`web.shown`). */
 function webPaneOf(): WebPane {
-  const isUp = web.status === 'running' && web.port > 0
-  return { status: web.status, url: isUp ? W.webUrlOf(web.port, web.token) : '', opened: web.opened, note: web.note }
+  const isUp = web.status === 'running' && web.port > 0 && web.shown !== ''
+  return { status: web.status, url: isUp ? W.webUrlOf(web.port, web.shown) : '', opened: web.opened, note: web.note }
 }
 
-/** Keeps the web deck's switch, token, port and folder in `$.state`, so a reload starts it again where it was. */
+/** A new one-time ticket of `grade` for the running server ('' while none runs): each link the deck hands out carries its own. */
+function ticketFor(grade: W.WebGrade): string {
+  return web.secret === '' ? '' : W.ticketOf(web.secret, grade, W.newNonce())
+}
+
+/** Keeps the web deck's switch, port and folder in `$.state`, so a reload starts it again where it was; its secret never. */
 function saveWeb($: EngineInterface) {
-  void $.state.set(WEB_STATE, { isOn: web.isOn, token: web.token, port: web.port, dir: web.dir }).catch(() => undefined)
+  void $.state.set(WEB_STATE, { isOn: web.isOn, port: web.port, dir: web.dir }).catch(() => undefined)
 }
 
 /** Settles every start waiting for the server: up, or not. */
@@ -1017,7 +1032,7 @@ async function enginePidOf($: EngineInterface): Promise<string> {
 /**
  * The session's web deck, for as long as this session.start is the latest:
  * picks up what `$.state` kept (a reload while it was on asks for the server
- * again, with its token and port), then runs the server each time it is asked.
+ * again, on its port), then runs the server each time it is asked.
  * A folder kept that is no longer this session's (an earlier version's under
  * the mod, or one a /clear's old id named) is let go, and removed when it is
  * in the home: the server serves this session's own.
@@ -1025,9 +1040,8 @@ async function enginePidOf($: EngineInterface): Promise<string> {
 async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
   try {
     const { value } = await $.state.get(WEB_STATE)
-    if (value && value.isOn === true && typeof value.token === 'string' && value.token !== '' && epoch === web.epoch) {
+    if (value && value.isOn === true && epoch === web.epoch) {
       web.isOn = true
-      web.token = value.token
       web.port = typeof value.port === 'number' && value.port > 0 ? value.port : 0
       const own = W.webDirOf(await homeOf($), sessionId)
       if (typeof value.dir === 'string' && value.dir !== '' && value.dir !== own) {
@@ -1059,7 +1073,7 @@ type WebRun = { isReady: boolean; isMissing: boolean; why: string }
 /**
  * Runs the server until it ends: the state is written first (the page's
  * first load finds it), the session's pid read for `--parent`, then `node
- * web/server.js` starts with the token in its environment. A restart on a
+ * web/server.js` starts with a new secret on its stdin. A restart on a
  * kept port that never comes up is tried once more on a port the OS picks.
  */
 async function runWeb($: EngineInterface, epoch: number): Promise<void> {
@@ -1078,7 +1092,6 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
     redraw($)
     return
   }
-  if (web.token === '') web.token = crypto.randomUUID()
   saveWeb($)
   redraw($)
   web.lastKey = ''
@@ -1104,6 +1117,9 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
   }
   web.keptPort = 0
   if (epoch !== web.epoch) return
+  // what the server handed out ended with it
+  web.secret = ''
+  web.shown = ''
   if (!web.isOn) {
     web.status = 'off'
   } else if (ran.isMissing) {
@@ -1133,19 +1149,23 @@ function lastLineOf(text: string): string {
 }
 
 /**
- * One run of the server: its stdout read line by line as it comes (a chunk
- * may cut a line or hold several; `W.splitLines` holds the rest), its stderr
- * kept for why it ended, until the child ends or `web.stop` ends the loop.
- * Rejects never: a start that fails (no node) is a run that says so.
+ * One run of the server, with a secret of its own (every start's is new,
+ * so no ticket or handle of an earlier one works on it): its stdout read
+ * line by line as it comes (a chunk may cut a line or hold several;
+ * `W.splitLines` holds the rest), its stderr kept for why it ended, until
+ * the child ends or `web.stop` ends the loop. Rejects never: a start that
+ * fails (no node) is a run that says so.
  */
 async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<WebRun> {
   let rest = ''
   let isReady = false
   let errors = ''
   let stop: (() => void) | undefined
+  web.secret = W.newSecret()
+  web.shown = ''
   try {
-    // the token on stdin, never argv or the environment, which other processes can read; started outside any workspace (Windows looks for a bare `node` in the working folder first)
-    const child = $.process.spawn({ argv, input: `${web.token}\n`, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
+    // the secret on stdin, never argv or the environment, which other processes can read; started outside any workspace (Windows looks for a bare `node` in the working folder first)
+    const child = $.process.spawn({ argv, input: `${web.secret}\n`, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
     stop = () => {
       void child.return({ code: null, signal: null }).catch(() => undefined)
     }
@@ -1176,22 +1196,33 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
 }
 
 /**
- * A whole line from the server: its ready line (the port it listens on), or
- * a command from the page, checked against the model (`W.routeOf`) and acted
- * on: `chat` through `sendChat`, `review` through `sendReview`, `answer` to
- * the question it names (`answerCall`, the pane's resolver too). A command with an `id` gets an
- * ack, the page's word on what came of it; one refused gets why. Anything
- * else is ignored. Answers whether it was the ready line.
+ * A whole line from the server: its ready line (the port it listens on); a
+ * ticket traded (the terminal's link, once used, is made anew); or a command
+ * from the page, checked against the model (`W.routeOf`) and acted on:
+ * `chat` through `sendChat`, `review` through `sendReview`, `answer` to the
+ * question it names (`answerCall`, the pane's resolver too). One in your
+ * voice from a `pane` page waits for your Send above the prompt instead
+ * (`holdFromPage`). A command with an `id` gets an ack, the page's word on
+ * what came of it; one refused gets why. Anything else is ignored. Answers
+ * whether it was the ready line.
  */
 function onWebLine($: EngineInterface, line: string): boolean {
   const said = W.parseLine(line)
   if (said === null) return false
+  if (said.kind === 'used') {
+    if (said.nonce === W.nonceOf(web.shown)) {
+      web.shown = ticketFor('full')
+      redraw($)
+    }
+    return false
+  }
   if (said.kind === 'ready') {
     const kept = web.keptPort
     web.keptPort = 0
     web.port = said.port
     web.status = 'running'
     web.note = ''
+    web.shown = ticketFor('full')
     saveWeb($)
     settleWeb(true)
     // the page open before a reload knows the old port only
@@ -1199,14 +1230,131 @@ function onWebLine($: EngineInterface, line: string): boolean {
     redraw($)
     return true
   }
-  // a command for another session's deck (the page views it): into its inbox, where its own deck takes it
-  const other = SE.sessionCmdOf(said.cmd, sessionId)
-  if (other) {
-    void SR.fromPage(other.session, other.cmd)
+  // in your voice from the Browser pane's page: it waits for your Send above the prompt
+  if (said.grade !== 'full' && H.isVoice(said.cmd)) {
+    void holdFromPage($, said.cmd)
     return false
   }
-  runCommand($, said.cmd)
+  runFromPage($, said.cmd)
   return false
+}
+
+/** A page's command run: one for another session's deck (the page views it) into its inbox, where its own deck takes it; this session's through `runCommand`. */
+function runFromPage($: EngineInterface, cmd: Record<string, unknown>): void {
+  const other = SE.sessionCmdOf(cmd, sessionId)
+  if (other) void SR.fromPage(other.session, other.cmd)
+  else runCommand($, cmd)
+}
+
+/**
+ * What the Browser pane's page sent in your voice, waiting for your Send in
+ * the band above the prompt (./hold), oldest first; the rows opened to their
+ * whole text; a count that moves with every change, for the band's drawing;
+ * and the next key.
+ */
+const held: { items: H.Held[]; open: Set<string>; version: number; seq: number } = { items: [], open: new Set(), version: 0, seq: 0 }
+
+/** Whom a command for this session goes to, in words: its agent's name ("Orchestrator", "builder"), the Orchestrator for Review, an answer's asker. */
+function heldToOf(cmd: Record<string, unknown>): string {
+  if (cmd.cmd === 'review') return ''
+  const route = W.routeOf(cmd, data)
+  const id = route?.kind === 'chat' ? route.agentId : route?.kind === 'answer' ? (M.pendingOf(data).find(one => one.id === route.callId)?.agentId ?? M.MAIN) : M.MAIN
+  const agent = M.agentOf(data, id)
+  return agent ? M.labelOf(agent) : M.ORCHESTRATOR
+}
+
+/**
+ * A command in your voice from the Browser pane's page: checked as it would
+ * be once sent (one refused now is refused at once, never held), then held
+ * in the band for your Send, its ack saying so; refused while `H.MOST_HELD`
+ * wait already. One for another session's deck waits here too, and goes
+ * into its inbox once you press Send.
+ */
+async function holdFromPage($: EngineInterface, cmd: Record<string, unknown>): Promise<void> {
+  const ackId = W.cmdIdOf(cmd)
+  const other = SE.sessionCmdOf(cmd, sessionId)
+  const route = other ? null : W.routeOf(cmd, data)
+  // an answer to a question that no longer waits here is refused at once, as it would be once sent
+  const gone = route?.kind === 'answer' ? answerGoneOf(route.callId) : ''
+  const refusal = other ? (SE.steeringCmdOf(other.cmd) ? '' : SE.steeringRefusalOf(other.cmd)) : route === null ? W.refusalOf(cmd, data) : gone
+  if (refusal !== '' || held.items.length >= H.MOST_HELD) {
+    void ack($, ackId, 'failed', refusal || H.FULL_TEXT)
+    return
+  }
+  const now = await $.clock.now()
+  const agentOfOther = other && other.cmd.cmd === 'chat' && other.cmd.agentId !== M.MAIN ? ` · ${F.trunc(F.oneLine(String(other.cmd.agentId)), 40)}` : ''
+  const to = other ? `${SR.sessionNameOf(other.session)}${agentOfOther}` : heldToOf(cmd)
+  held.seq += 1
+  held.items.push(H.heldOf(other ? other.cmd : cmd, `h${held.seq}`, now, other?.session ?? '', to))
+  held.version += 1
+  await ack($, ackId, 'held', H.HELD_TEXT)
+  $.ui.toast('From the web page: it waits above your prompt for your Send.')
+  // it goes unsent once its ten minutes are up (the tick looks too)
+  $.clock.after(H.HOLD_MS, () => void pruneHeld($))
+  redraw($)
+}
+
+/** Takes held command `key` out of the queue; undefined when it went already. */
+function takeHeld(key: string): H.Held | undefined {
+  const at = held.items.findIndex(item => item.key === key)
+  if (at < 0) return undefined
+  const [item] = held.items.splice(at, 1)
+  held.open.delete(key)
+  held.version += 1
+  return item
+}
+
+/**
+ * Your Send on a held row: the command runs exactly as a page in your own
+ * browser would have run it at once (its checks again, its ack under the
+ * page's id); one for another session's deck goes into its inbox, sealed,
+ * as ever.
+ */
+function sendHeld($: EngineInterface, key: string): void {
+  const item = takeHeld(key)
+  if (!item) return
+  if (item.session === '') {
+    runCommand($, item.cmd)
+  } else {
+    void SR.fromPage(item.session, item.cmd).then(why => {
+      // its own deck acks it in its own state; here the word it went
+      if (why === '') void ack($, item.ackId, 'queued', 'Sent to its deck')
+    })
+  }
+  redraw($)
+}
+
+/** Your Discard on a held row: nothing is sent, and the page's ack says so. */
+function discardHeld($: EngineInterface, key: string): void {
+  const item = takeHeld(key)
+  if (!item) return
+  void ack($, item.ackId, 'failed', H.unsentText('discarded'))
+  redraw($)
+}
+
+/** More and Less on a held row too long for one line: its whole text shown, or its start again. */
+function toggleHeld($: EngineInterface, key: string): void {
+  if (!held.items.some(item => item.key === key)) return
+  if (!held.open.delete(key)) held.open.add(key)
+  held.version += 1
+  redraw($)
+}
+
+/** The held commands whose ten minutes are up go unsent, and an answer held for a question that no longer waits goes with why; the page's acks say so. */
+async function pruneHeld($: EngineInterface): Promise<void> {
+  if (held.items.length === 0) return
+  const now = await $.clock.now()
+  const expired = new Set(H.expiredOf(held.items, now))
+  let isChanged = false
+  for (const item of [...held.items]) {
+    const route = item.session === '' && item.kind === 'answer' && !expired.has(item) ? W.routeOf(item.cmd, data) : null
+    const gone = route?.kind === 'answer' ? answerGoneOf(route.callId) : ''
+    if (!expired.has(item) && gone === '') continue
+    takeHeld(item.key)
+    isChanged = true
+    void ack($, item.ackId, 'failed', gone || H.unsentText('expired'))
+  }
+  if (isChanged) redraw($)
 }
 
 /**
@@ -1511,17 +1659,17 @@ async function showWeb($: EngineInterface, url: string): Promise<void> {
   redraw($)
 }
 
-/** What `/apiarius web` answers once the page is up: no link, since a command's text reaches the model as its output; the link is the pane's. */
-const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in the Browser pane; elsewhere, /apiarius shows its link (also under Settings) to open it in your browser.'
+/** What `/apiarius web` answers once the page is up: no link, since a command's text reaches the model as its output; the links are the deck's. */
+const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in the Browser pane, where each message you send waits for one Send click above your prompt; Open in browser (under Settings in /apiarius) opens it in your own browser, where messages go at once.'
 
 /**
  * `/apiarius web` and the pane's Open dashboard: starts the web deck if it is
- * not running, then tries to open the page in the Browser pane (left to run).
- * The page's link holds its token, which acts as the person, so it goes to
- * the person alone: the Browser pane, and the deck's own link (`webPaneOf`,
- * drawn on the pane, never sent to the model). The answer's text and
- * context, which the model reads, say where it is, never the link. Without
- * node the deck stays native.
+ * not running, then tries to open the page in the Browser pane (left to run)
+ * with a new `pane` ticket. A link acts as the person, so it goes to the
+ * person alone: the Browser pane, and the deck's own "Open in browser"
+ * (`openOwnBrowser`, and the terminal's link text, `webPaneOf`), never sent
+ * to the model. The answer's text and context, which the model reads, say
+ * where it is, never a link. Without node the deck stays native.
  */
 async function openWeb($: EngineInterface): Promise<CommandRunResult> {
   if (web.isEnded) return { text: 'This session has ended: Apiarius web starts again in a new one.' }
@@ -1531,11 +1679,35 @@ async function openWeb($: EngineInterface): Promise<CommandRunResult> {
     $.ui.toast(`Apiarius web: ${why}`)
     return { text: `${why} The deck stays in its pane: /apiarius.` }
   }
-  void showWeb($, W.webUrlOf(web.port, web.token))
+  void showWeb($, W.webUrlOf(web.port, ticketFor('pane')))
   return {
     text: WEB_OPENED_TEXT,
     context: ['/apiarius web opened the Apiarius dashboard for the user. Its address is for the user alone; if they ask to see it again, tell them to run /apiarius web, which opens it itself.'],
   }
+}
+
+/**
+ * "Open in browser" (Settings, and the deck's top line while the Browser
+ * pane did not take the page): a `full` link made for this press, opened in
+ * your own browser by the system's opener (web/open.js: `open`, `start`,
+ * `xdg-open`), the link on its stdin; a toast when it could not (the
+ * terminal shows a link to copy).
+ */
+async function openOwnBrowser($: EngineInterface): Promise<void> {
+  const ticket = web.status === 'running' && web.port > 0 ? ticketFor('full') : ''
+  if (ticket === '') {
+    $.ui.toast('Apiarius web is not running: /apiarius web starts it.')
+    return
+  }
+  let why = ''
+  try {
+    const ran = await $.process.run(['node', `${$.plugin.root.replace(/[\\/]+$/, '')}/web/open.js`], { stdin: `${W.webUrlOf(web.port, ticket)}\n`, timeoutMs: 10_000, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
+    if (ran.exitCode === 0 && W.isHomeDone(ran.stdout)) return
+    why = W.openWhyOf(ran.stdout)
+  } catch (error) {
+    why = error instanceof Error ? error.message : String(error)
+  }
+  $.ui.toast(`Could not open your browser${why ? ` (${F.trunc(F.oneLine(why), 120)})` : ''}. In a terminal, Settings in /apiarius shows the link to copy.`)
 }
 
 /** `/apiarius web stop`: the server ends, the state is no longer written, and the next start makes a new link. Answers whether it was on. */
@@ -1543,7 +1715,8 @@ function stopWeb($: EngineInterface): boolean {
   const wasOn = web.isOn || web.status === 'running' || web.status === 'starting'
   web.isOn = false
   web.isAsked = false
-  web.token = ''
+  web.secret = ''
+  web.shown = ''
   web.port = 0
   web.keptPort = 0
   web.status = 'off'
@@ -2574,6 +2747,8 @@ async function tick($: EngineInterface): Promise<void> {
   }
   // what the deck may stop: Claude Code's permission check asked again where its verdict is missing or old
   if (isPaneOpen || web.isOn) probeStops($, now)
+  // the page's words held for your Send: those past their ten minutes, or answers to a question that no longer waits, go unsent
+  await pruneHeld($)
   // the pane's first tick looks again for what a reload lost (once a pass under way is done)
   if (!isPaneOpen) {
     recovery.isPaneSeen = false
@@ -2885,6 +3060,11 @@ function actionsFor($: EngineInterface): DeckActions {
       void openPane($)
     },
     openWeb: () => void openWeb($),
+    openBrowser: () => void openOwnBrowser($),
+    // the band's rows of what the Browser pane's page sent in your voice (./hold): your Send runs it, Discard drops it, More shows it whole
+    sendHeld: key => sendHeld($, key),
+    discardHeld: key => discardHeld($, key),
+    toggleHeld: key => toggleHeld($, key),
   }
 }
 
@@ -3051,6 +3231,7 @@ function modelOf(now: number): DeckModel {
     web: webPaneOf(),
     // what the band says: this session's, never the sample's
     band: W.bandOf(v2Of(now)),
+    held: H.heldRowsOf(held.items, held.open),
     isSessionsOpen: SR.isListOpen(),
   }
 }
@@ -3406,6 +3587,16 @@ function answerCall($: EngineInterface, callId: string, answers: Record<string, 
   return answerQuestion($, route.callId, route.answers, ackId)
 }
 
+/** Why the question held on call `callId` takes no answer from the deck (answered in Claude Code, by its idle timer, gone, or restored by a reload, which the deck may not answer); '' while its race runs here. */
+function answerGoneOf(callId: string): string {
+  if (askers.has(callId)) return ''
+  const end = questionEnds.get(callId)
+  const item = M.pendingOf(data).find(one => one.id === callId)
+  if (end === 'engine') return 'Already answered in Claude Code'
+  if (end === 'idle') return 'Auto-answered after idle'
+  return item && end === undefined ? 'The deck cannot answer this one since it reloaded: answer it in Claude Code' : 'No longer pending'
+}
+
 /**
  * The answer to the question held on call `callId`: it settles that call's
  * race (`raceDeck`), which says what came of it. Refused, with why (the
@@ -3418,15 +3609,7 @@ function answerQuestion($: EngineInterface, callId: string, answers: Record<stri
   const item = M.pendingOf(data).find(one => one.id === callId)
   const asker = askers.get(callId)
   if (!asker) {
-    const end = questionEnds.get(callId)
-    const why =
-      end === 'engine'
-        ? 'Already answered in Claude Code'
-        : end === 'idle'
-          ? 'Auto-answered after idle'
-          : item && end === undefined
-            ? 'The deck cannot answer this one since it reloaded: answer it in Claude Code'
-            : 'No longer pending'
+    const why = answerGoneOf(callId)
     void ack($, ackId, 'failed', why)
     return why
   }
@@ -4534,17 +4717,19 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     noteScreen(e.surface, e.viewport)
-    if (view.isBandHidden || e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey) return next(e)
     const now = await $.clock.now()
-    // one line, this session's: only while an agent is at work or something needs you (`W.bandOf`); Claude Code's own loops raise none
-    if (!W.bandOf(v2Of(now))) return next(e)
+    // one line, this session's: only while an agent is at work or something needs you (`W.bandOf`), and the person has not hidden it; Claude Code's own loops raise none
+    const band = view.isBandHidden ? null : W.bandOf(v2Of(now))
+    // what the Browser pane's page sent in your voice shows whatever else does: hidden band, no agent at work
+    if (!band && held.items.length === 0) return next(e)
     const theirs: RenderElement = await next(e)
     // the band speaks for the screen only while the pane, which shows more, is shut
     const key = screenKey(now)
     if (!isPaneOpen) shownKey = key
-    return drawn.of(`band:${e.surface}`, [e.props.bodyColumns, key, view, theirs], () => {
+    return drawn.of(`band:${e.surface}`, [e.props.bodyColumns, key, view, theirs, held.version], () => {
       const kit = kitOf($.ui.resolve(e), e.surface, Math.max(24, e.props.bodyColumns))
-      return bandOf(kit, modelOf(now), actionsFor($), theirs) ?? theirs
+      return bandOf(kit, { ...modelOf(now), band }, actionsFor($), theirs) ?? theirs
     })
   })
 

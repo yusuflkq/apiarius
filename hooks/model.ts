@@ -1338,7 +1338,10 @@ function healPending(value: unknown): DeckPending[] {
     .slice(-LIMITS.pending)
 }
 
-const ACK_STATES: readonly DeckAck['status'][] = ['queued', 'delivered', 'answered', 'failed']
+const ACK_STATES: readonly DeckAck['status'][] = ['queued', 'delivered', 'answered', 'failed', 'held']
+
+/** What a snapshot's `held` ack says once restored: what it waited on went with the module that held it. */
+export const HELD_LOST = 'Not sent: Apiarius reloaded before you pressed Send above the prompt'
 
 /** The notifications a snapshot says wait on the person: each of its shape, at most 20. */
 function healNeeds(value: unknown): DeckNeeds[] {
@@ -1359,7 +1362,10 @@ function healAcks(value: unknown): DeckAck[] {
   return value
     .filter(isRecord)
     .filter(ack => typeof ack.id === 'string' && ACK_STATES.includes(ack.status as DeckAck['status']) && typeof ack.text === 'string' && num(ack.at) !== undefined)
-    .map(ack => ({ id: ack.id as string, ok: ack.ok === true, status: ack.status as DeckAck['status'], text: ack.text as string, at: ack.at as number }))
+    .map(ack =>
+      // a command held for your Send lived in the module a reload replaced: it went unsent
+      ack.status === 'held' ? { id: ack.id as string, ok: false, status: 'failed' as const, text: HELD_LOST, at: ack.at as number } : { id: ack.id as string, ok: ack.ok === true, status: ack.status as DeckAck['status'], text: ack.text as string, at: ack.at as number },
+    )
     .slice(-LIMITS.acks)
 }
 

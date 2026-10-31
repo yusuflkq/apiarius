@@ -39,7 +39,7 @@ import { orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
 import { P } from './palette'
 import { headLine, sessionsList } from './sessions'
-import { settingsTab } from './settings'
+import { browserRow, settingsTab } from './settings'
 import { stopTurnButton } from './stop'
 
 /** The tabs, in their keys' order. */
@@ -59,7 +59,7 @@ const ORG_FRESH: OrgSpot = { isDown: false, selected: null }
 export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot = ORG_FRESH): RenderElement {
   const { Box } = kit
   const list = model.isSessionsOpen === true && state.sessions ? sessionsList(kit, state.sessions, state.session.id, actions) : null
-  const top = [header(kit, state, model, actions), list, model.web ? webLine(kit, model.web) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
+  const top = [header(kit, state, model, actions), list, model.web ? webLine(kit, model.web, actions) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
   // the terminal: the tab gets the rows the header, the tabs and the gaps between leave it
   const rows = kit.rows === undefined ? undefined : Math.max(FEWEST_ROWS / 2, kit.rows - rowsOf(top, kit.columns) - top.length)
   return (
@@ -121,11 +121,13 @@ function header(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
 
 /**
  * The web deck (`/apiarius web`) in one line, while it is on and has something
- * to say: starting, why it could not start, or its link where the Browser
- * pane could not open it. Nothing once the page is open, or while it is off.
+ * to say: starting, why it could not start, or, where the Browser pane could
+ * not take the page, "Open in browser" (your own: ./settings `browserRow`,
+ * the terminal's link to copy under it). Nothing once the page is open, or
+ * while it is off.
  */
-function webLine(kit: Kit, web: WebPane): RenderElement | null {
-  const { Text, Markdown } = kit
+function webLine(kit: Kit, web: WebPane, actions: DashActions): RenderElement | null {
+  const { Text } = kit
   if (web.status === 'starting') return <Text color={P.muted2}>Starting the web deck…</Text>
   if (web.status === 'failed') {
     return (
@@ -135,7 +137,15 @@ function webLine(kit: Kit, web: WebPane): RenderElement | null {
     )
   }
   if (web.status !== 'running' || web.url === '' || web.opened === 'opened') return null
-  return <Markdown key="web:link" text={`[Open the Apiarius deck](${web.url}) in the Browser pane`} />
+  return browserRow(
+    kit,
+    web,
+    actions,
+    'web',
+    <Text color={P.muted2} wrap="wrap">
+      The web deck is running: open it in your own browser.
+    </Text>,
+  )
 }
 
 /** The tabs (1 Dashboard · 2 Chat · 3 Org · 4 Changes · 5 Inspect · 6 Settings, the open one lit). A tab pressed on a page leaves it for that tab, and closes the list of sessions. */

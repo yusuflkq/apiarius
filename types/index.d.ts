@@ -453,7 +453,8 @@ export type DeckPending = {
 export type DeckAck = {
   id: string
   ok: boolean
-  status: 'queued' | 'delivered' | 'answered' | 'failed'
+  /** `held`: a command in your voice from the page in the Browser pane, waiting for your Send above the prompt (./hooks/hold). */
+  status: 'queued' | 'delivered' | 'answered' | 'failed' | 'held'
   /** In words: "It reads it at its next step", "Already answered in Claude Code", the reason it failed. */
   text: string
   at: number
@@ -771,9 +772,7 @@ export type DeckSnapshot = {
 /** What `$.state` keeps of the web deck (`/apiarius web`). */
 export type DeckWebSaved = {
   isOn: boolean
-  /** The server's access token (the page's `t`). */
-  token: string
-  /** The port it listened on, taken again after a reload; 0 for none yet. */
+  /** The port it listened on, taken again after a reload (a page open on it then hears the server refuse its old handle, and says to open it again); 0 for none yet. Its secret is never kept: every start makes a new one. */
   port: number
   /** The folder it serves, `<home>/web/<sessionId>` (an earlier version's `<mod>/.web/<sessionId>` is let go). */
   dir: string

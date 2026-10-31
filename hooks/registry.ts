@@ -684,6 +684,13 @@ export function registryKey(): string {
   return [reg.gen, reg.isOpen, v ? `${v.id}:${v.version}:${v.page}:${v.file}:${v.commit}` : '', reg.sample !== null].join('|')
 }
 
+/** Session `id` in a few words, as its row names it: its repository's folder and its latest request, cut short; "another session" while the registry holds none of it. */
+export function sessionNameOf(id: string): string {
+  const entry = reg.entries.get(id)
+  const words = entry ? [entry.repo, F.trunc(F.oneLine(entry.title), 40)].filter(one => one !== '').join(' · ') : ''
+  return words || 'another session'
+}
+
 /** The list shows, dropped over the tabs. */
 export function isListOpen(): boolean {
   return reg.isOpen

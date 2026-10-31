@@ -8,7 +8,8 @@
  *   over it; Org's chart as the surface allows (`dash.isOrgDown`,
  *   `dash.selected`); the deck of whichever session is picked from the
  *   header's switcher, this one's or another's, drawn the same way;
- * - the band above the prompt (`bandOf`): one line, ./ui/band.
+ * - the band above the prompt (`bandOf`): one line, ./ui/band, and a row for
+ *   each thing the Browser pane's page sent in your voice, waiting for your Send.
  *
  * Pure: Kit, DeckModel, DashModel and DeckActions come from the hooks module.
  */
@@ -25,9 +26,9 @@ import { pendingDeck } from './ui/v2/sessions'
 /** What the hooks module's presses run (its `actionsFor`): the screens' own, as they press them. */
 export type DeckActions = DashActions
 
-/** The band above the prompt (./ui/band): its one line from `model.band`; null when it has nothing to say. */
+/** The band above the prompt (./ui/band): the rows waiting for your Send (`model.held`), then its one line from `model.band`; null when it has nothing to say. */
 export function bandOf(kit: Kit, model: DeckModel, actions: DeckActions, theirs: RenderElement | null): RenderElement | null {
-  return bandView(kit, model.band, actions, theirs)
+  return bandView(kit, model.band, actions, theirs, model.held ?? [])
 }
 
 /** The whole pane: the sample's header when it shows, then the v2 deck (./ui/v2/deck) of the session picked: this one's, or another's in its place (`dash.viewing`), its own state, lazy files, model and presses, its switcher saying where to go next. */

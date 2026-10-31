@@ -8,8 +8,9 @@
  *   terminal), the one drawn marked; a press draws every agent in it from
  *   now on, in every session and on the web page (`setAvatarStyle`, as
  *   `/apiarius avatars`);
- * - Web page: "Start the web page" (`/apiarius web`), then "Open in browser", a
- *   link to it, and how the page stands;
+ * - Web page: "Start the web page" (`/apiarius web`), then "Open in browser",
+ *   which opens it in your own browser (and, on the terminal, its link to
+ *   copy), and how the page stands;
  * - Help: what each tab shows, and the few keys there are.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks module.
@@ -176,34 +177,69 @@ function webNote(web: WebPane | undefined): { text: string; color: string } {
   if (!web || web.status === 'off') return { text: 'The same deck as a live page in your browser (/apiarius web).', color: P.muted2 }
   if (web.status === 'starting') return { text: 'Starting the web page…', color: P.muted2 }
   if (web.status === 'failed') return { text: web.note || 'The web page could not start.', color: P.failText }
-  return { text: 'Live, on this machine only.', color: P.muted }
+  return { text: 'Live, on this machine only. In your own browser your messages go at once; in the Browser pane, which Claude can drive, each waits for your Send above the prompt.', color: P.muted }
 }
 
 /**
- * The web page and how it stands. While it runs, "Open in browser" is a link
- * to it, which the surface opens itself (as the deck's top line is): the
- * Browser pane refuses a mod's preview_start. Until then a Button starts it
- * (as /apiarius web), and the link takes its place.
+ * "Open in browser": a Button that opens the running page in your own
+ * browser with the system's opener, each press its own one-time link
+ * (`actions.openBrowser`); never a link the surface opens itself, which the
+ * Desktop may open in its Browser pane. The terminal shows that link too
+ * (`web.url`), as text to copy: a link opens one page, and the deck shows a
+ * new one once it was used. `prefix` keys it apart where two draw.
+ */
+export function browserRow(kit: Kit, web: WebPane, actions: DashActions, prefix: string, note: RenderElement | null): RenderElement {
+  const { Box, Button, Text } = kit
+  return (
+    <Box key={`${prefix}:browser`} flexDirection="column">
+      <Box flexDirection="row" columnGap={2} alignItems="center">
+        <Box flexShrink={0}>
+          <Button key={`${prefix}:open-browser`} label="Open in browser" onPress={() => actions.openBrowser()} />
+        </Box>
+        {note ? (
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            {note}
+          </Box>
+        ) : null}
+      </Box>
+      {kit.surface === 'terminal' && web.url !== '' ? (
+        <Box key={`${prefix}:link`}>
+          <Text color={P.muted} wrap="wrap">
+            {web.url}
+          </Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/**
+ * The web page and how it stands. While it runs, "Open in browser" opens it
+ * in your own browser (`browserRow`). Until then a Button starts it (as
+ * /apiarius web), and "Open in browser" takes its place.
  */
 function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): RenderElement {
-  const { Box, Button, Markdown, Text } = kit
+  const { Box, Button, Text } = kit
   const note = webNote(web)
   const isUp = web !== undefined && web.status === 'running' && web.url !== ''
+  const said = (
+    <Text color={note.color} wrap="wrap">
+      {note.text}
+    </Text>
+  )
   return section(kit, 'settings:web', sectionHead(kit, 'Web page', null), [
-    <Box key="settings:web:row" flexDirection="row" columnGap={2} alignItems="center">
-      <Box flexShrink={0}>
-        {isUp ? (
-          <Markdown key="settings:web:link" text={`[Open in browser](${web.url})`} />
-        ) : (
+    isUp ? (
+      browserRow(kit, web, actions, 'settings:web', said)
+    ) : (
+      <Box key="settings:web:row" flexDirection="row" columnGap={2} alignItems="center">
+        <Box flexShrink={0}>
           <Button key="web:open" label={web?.status === 'starting' ? 'Starting…' : 'Start the web page'} onPress={() => actions.openWeb()} />
-        )}
+        </Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          {said}
+        </Box>
       </Box>
-      <Box flexGrow={1} flexShrink={1} minWidth={0}>
-        <Text color={note.color} wrap="wrap">
-          {note.text}
-        </Text>
-      </Box>
-    </Box>,
+    ),
   ])
 }
 

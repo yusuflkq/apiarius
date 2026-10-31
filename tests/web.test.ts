@@ -503,11 +503,16 @@ function patchesOf(w: World): string[] {
   return w.writes.filter(one => /[\\/]patches[\\/]/.test(one.path)).map(one => one.path.replace(/^.*[\\/]patches[\\/]/, ''))
 }
 
-/** The page's link the deck last asked the Browser pane to open, and its token. */
-function linkOf(w: World): { url: string; token: string } {
+/** The page's link the deck last asked the Browser pane to open, and its ticket. */
+function linkOf(w: World): { url: string; ticket: string } {
   const url = String(w.opened[w.opened.length - 1]?.url ?? '')
   const found = /^http:\/\/127\.0\.0\.1:\d+\/\?t=(.+)$/.exec(url)
-  return { url: found ? url : '', token: decodeURIComponent(found?.[1] ?? '') }
+  return { url: found ? url : '', ticket: decodeURIComponent(found?.[1] ?? '') }
+}
+
+/** The secret a child was started with: its stdin's one line. */
+function secretOf(child: Child | undefined): string {
+  return String(child?.request.input ?? '').replace(/\n$/, '')
 }
 
 /** What the model reads of an answer: its text (a command's output reaches it) and its context. */
@@ -515,7 +520,7 @@ function modelSees(answer: { text?: string; context?: readonly string[] }): stri
   return [answer.text ?? '', ...(answer.context ?? [])].join('\n')
 }
 
-test('/apiarius web starts the server once (node, web/server.js, its folder in the home, the session pid, the token on its stdin) and opens the page in the Browser pane; the model reads no link and no token', async ($, on) => {
+test('/apiarius web starts the server once (node, web/server.js, its folder in the home, the session pid, a new secret on its stdin) and opens the page in the Browser pane with a pane ticket of its own; the model reads no link, no ticket and no secret', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -529,13 +534,17 @@ test('/apiarius web starts the server once (node, web/server.js, its folder in t
 
   const answer = await $.command.run(deck('web'))
   await clock.settle()
-  const { url, token } = linkOf(w)
+  const { url, ticket } = linkOf(w)
   expect(w.opened[0]).toEqual({ server: 'Claude_Browser', tool: 'preview_start', url })
-  expect(url).toBe(`http://127.0.0.1:${PORT}/?t=${encodeURIComponent(token)}`)
-  expect(token).toMatch(/^[0-9a-f-]{36}$/)
-  // a command's text reaches the model as its output, and its context is the model's: neither holds the link, the port or the token
-  expect(answer.text).toBe('Apiarius web is running on this machine. It opens in the Browser pane; elsewhere, /apiarius shows its link (also under Settings) to open it in your browser.')
-  for (const said of [token, url, String(PORT), 'http', '?t=']) expect(modelSees(answer)).not.toContain(said)
+  expect(url).toBe(`http://127.0.0.1:${PORT}/?t=${ticket}`)
+  // the Browser pane's grade (p), sealed with this start's secret
+  const secret = secretOf(w.children[0])
+  expect(secret).toMatch(/^[0-9a-f]{64}$/)
+  expect(ticket).toMatch(/^p-[0-9a-f]{16}-[0-9a-f]{32}$/)
+  expect(W.ticketOf(secret, 'pane', W.nonceOf(ticket))).toBe(ticket)
+  // a command's text reaches the model as its output, and its context is the model's: neither holds the link, the port, the ticket or the secret
+  expect(answer.text).toBe('Apiarius web is running on this machine. It opens in the Browser pane, where each message you send waits for one Send click above your prompt; Open in browser (under Settings in /apiarius) opens it in your own browser, where messages go at once.')
+  for (const said of [ticket, secret, url, String(PORT), 'http', '?t=']) expect(modelSees(answer)).not.toContain(said)
 
   expect(w.children).toHaveLength(1)
   const { argv, env, input } = w.children[0]!.request
@@ -544,23 +553,27 @@ test('/apiarius web starts the server once (node, web/server.js, its folder in t
   expect(argv.slice(2, 4)).toEqual(['--dir', DIR])
   // the registry of sessions in the home, whose folders it may serve too (`<home>/web/<id>` beside its own)
   expect(argv.slice(4)).toEqual(['--parent', PID, '--sessions', `${HOME}/sessions`])
-  // the token on stdin alone: never argv, never the environment
-  expect(input).toBe(`${token}\n`)
+  // the secret on stdin alone: never argv, never the environment
+  expect(input).toBe(`${secret}\n`)
   expect(env).toBeUndefined()
-  expect(argv.join(' ')).not.toContain(token)
-  // each file made 0600 before its first write, the state too; the state was there before the server started, and $.state keeps the switch, token, port and folder
+  expect(argv.join(' ')).not.toContain(secret)
+  // each file made 0600 before its first write, the state too; the state was there before the server started, and $.state keeps the switch, port and folder, never the secret
   const made = w.homeRequests.filter(one => one.op === 'prepare').flatMap(one => (one.op === 'prepare' ? one.files : []))
   expect(made).toContain('web/session-1/state.json')
   expect(made).toContain('web/session-1/agents/main.json')
   expect(w.writes.filter(one => one.path.startsWith(`${DIR}/`)).every(one => made.includes(one.path.slice(HOME.length + 1)))).toBe(true)
   expect(statesOf(w).length).toBeGreaterThan(0)
-  expect(w.saved[w.saved.length - 1]).toEqual({ isOn: true, token, port: PORT, dir: DIR })
+  expect(w.saved[w.saved.length - 1]).toEqual({ isOn: true, port: PORT, dir: DIR })
+  expect(JSON.stringify(w.saved)).not.toContain(secret)
+  // nothing written for the page holds a link or the secret
+  expect(w.writes.some(one => one.text.includes(secret) || one.text.includes(ticket))).toBe(false)
 
-  // again: the same link, no second server
+  // again: a new pane ticket on the same server, no second server
   const again = await $.command.run(deck('web'))
   await clock.settle()
-  expect(linkOf(w).url).toBe(url)
-  expect(modelSees(again)).not.toContain(token)
+  expect(linkOf(w).url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=p-`))
+  expect(linkOf(w).ticket).not.toBe(ticket)
+  expect(modelSees(again)).not.toContain(linkOf(w).ticket)
   expect(w.children).toHaveLength(1)
   expect(w.children[0]?.isRead).toBe(true)
 })
@@ -691,7 +704,7 @@ test('state.json carries the v2 view model under `v2` beside v1, and each agent`
   expect([statesOf(w).length, w.writes.length]).toEqual(settled)
 })
 
-test("the page's commands come back on the child's stdout: chat goes to session.send, review to the prompt box; split chunks are buffered, and a bad agent, bad JSON or an unknown command are ignored", async ($, on) => {
+test("the page's commands come back on the child's stdout, each with its page's grade (your own browser's here): chat goes to session.send, review to the prompt box; split chunks are buffered, and a bad agent, bad JSON or an unknown command are ignored", async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -702,16 +715,16 @@ test("the page's commands come back on the child's stdout: chat goes to session.
   child.print('{"cmd":"chat","agentId":"agent-x1","te')
   await clock.settle()
   expect(w.sent).toEqual([])
-  child.print('xt":"Look in src/range.js first"}\nnot json at all\n{"cmd":"chat","agentId":"agent-nobody","text":"hi"}\n')
+  child.print('xt":"Look in src/range.js first","grade":"full"}\nnot json at all\n{"cmd":"chat","agentId":"agent-nobody","text":"hi","grade":"full"}\n')
   await clock.settle()
-  child.print('{"cmd":"delete","path":"/"}\n{"cmd":"ping"}\n{"cmd":"review","text":"Review the diff of src/range.js"}\n')
+  child.print('{"cmd":"delete","path":"/","grade":"full"}\n{"cmd":"ping","grade":"full"}\n{"cmd":"review","text":"Review the diff of src/range.js","grade":"full"}\n')
   await clock.settle()
 
   expect(w.sent).toEqual([{ to: 'agent-x1', text: 'Look in src/range.js first' }])
   expect(w.filled).toEqual(['Review the diff of src/range.js'])
   expect(w.toasts).toContain('Sent to scout')
   // the loop reads on after the lines it ignored
-  child.print('{"cmd":"chat","agentId":"agent-x1","text":"and the tests"}\n')
+  child.print('{"cmd":"chat","agentId":"agent-x1","text":"and the tests","grade":"full"}\n')
   await clock.settle()
   expect(w.sent.map(one => one.text)).toEqual(['Look in src/range.js first', 'and the tests'])
   expect(child.isRead).toBe(true)
@@ -734,11 +747,11 @@ test('without node the first read rejects: a toast, a text answer, and the deck 
   expect(statesOf(w).length).toBe(written)
 })
 
-test('/apiarius web stop ends the child and the writes; a reload starts the server again with the same token on the same port', async ($, on) => {
+test('/apiarius web stop ends the child and the writes; a reload starts the server again on the same port with a new secret, never one kept', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ ready: [PORT] })
-  // what an earlier version kept: its folder under the mod, let go for the home's
-  const kept: DeckWebSaved = { isOn: true, token: 'token-kept', port: PORT, dir: '/mod/.web/session-1' }
+  // what an earlier version kept: its folder under the mod, let go for the home's, and its token, used no more
+  const kept = { isOn: true, token: 'token-kept', port: PORT, dir: '/mod/.web/session-1' } as DeckWebSaved
   world(on, w, kept)
   // a reload: session.start finds the web deck on, and starts its server again
   await work($)
@@ -746,10 +759,12 @@ test('/apiarius web stop ends the child and the writes; a reload starts the serv
   expect(w.children).toHaveLength(1)
   const { argv, input } = w.children[0]!.request
   expect(argv.slice(2)).toEqual(['--dir', DIR, '--parent', PID, '--port', String(PORT), '--sessions', `${HOME}/sessions`])
-  expect(input).toBe('token-kept\n')
+  expect(input).toMatch(/^[0-9a-f]{64}\n$/)
+  expect(input).not.toContain('token-kept')
   await $.command.run(deck('web'))
   await clock.settle()
-  expect(linkOf(w)).toEqual({ url: `http://127.0.0.1:${PORT}/?t=token-kept`, token: 'token-kept' })
+  expect(linkOf(w).url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=p-`))
+  expect(W.ticketOf(secretOf(w.children[0]), 'pane', W.nonceOf(linkOf(w).ticket))).toBe(linkOf(w).ticket)
   expect(w.children).toHaveLength(1)
   expect(w.toasts.some(text => text.includes('another port'))).toBe(false)
 
@@ -769,7 +784,7 @@ test('a restart that cannot take its old port again takes another and says so; o
   const clock = mock.clock(on, { now: NOW })
   // the first child exits before its ready line, the second listens on 5555
   const w = newWorld({ ready: [] })
-  world(on, w, { isOn: true, token: 'token-kept', port: PORT, dir: DIR })
+  world(on, w, { isOn: true, port: PORT, dir: DIR })
   await work($)
   await clock.settle()
   expect(w.children).toHaveLength(1)
@@ -781,10 +796,13 @@ test('a restart that cannot take its old port again takes another and says so; o
   expect(w.toasts.some(text => text.includes('another port'))).toBe(true)
   await $.command.run(deck('web'))
   await clock.settle()
-  expect(linkOf(w).url).toBe('http://127.0.0.1:5555/?t=token-kept')
+  expect(linkOf(w).url).toMatch(/^http:\/\/127\.0\.0\.1:5555\/\?t=p-/)
+  // each start its own secret: the second child's tickets are not the first's
+  expect(secretOf(w.children[1])).not.toBe(secretOf(w.children[0]))
+  expect(W.ticketOf(secretOf(w.children[1]), 'pane', W.nonceOf(linkOf(w).ticket))).toBe(linkOf(w).ticket)
 })
 
-test('the pane: with no Browser pane to open the web deck in, its link shows as markdown under the header', async ($, on) => {
+test('the pane: with no Browser pane to open the web deck in, Open in browser shows under the header (no link the desktop would open itself), and Settings has it too', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ hasBrowser: false })
   world(on, w)
@@ -798,17 +816,18 @@ test('the pane: with no Browser pane to open the web deck in, its link shows as 
   await clock.advance(500)
   const pane = { plugin: 'apiarius', surface: 'desktop' as const, component: 'Pane' as const, requestId: 'apiarius', viewport: { columns: 100, rows: 50, isFullscreen: true }, props: { title: 'Apiarius', isFocused: true, bodyColumns: 96, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} } as const }
   const ui = await $.ui.mount(pane)
-  const link = await ui.find({ key: 'web:link' })
-  expect(link?.type).toBe('Markdown')
-  expect(link?.text).toContain(`[Open the Apiarius deck](http://127.0.0.1:${PORT}/?t=`)
-  expect(link?.text).toMatch(/\) in the Browser pane$/)
-  // Settings' Open in browser is that link too, which the surface opens itself: no Button that asks the Browser pane
+  expect((await ui.find({ key: 'web:open-browser' }))?.props.label).toBe('Open in browser')
+  // no link drawn on the desktop, which may open one in its Browser pane, and no Markdown for it
+  expect(await ui.find({ key: 'web:link' })).toBeUndefined()
+  expect(JSON.stringify(await ui.drawn())).not.toContain('?t=')
   await ui.press({ key: 'tab:settings' })
   await ui.redraw()
-  const open = await ui.find({ key: 'settings:web:link' })
-  expect(open?.type).toBe('Markdown')
-  expect(open?.text).toMatch(/^\[Open in browser\]\(http:\/\/127\.0\.0\.1:\d+\/\?t=[^)]+\)$/)
-  expect(open?.text).toContain(`http://127.0.0.1:${PORT}/?t=`)
+  expect((await ui.find({ key: 'settings:web:open-browser' }))?.props.label).toBe('Open in browser')
+  expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
   expect(await ui.find({ key: 'web:open' })).toBeUndefined()
   await ui.unmount()
+  // the terminal: the link as text to copy, a full one
+  const term = await $.ui.mount({ ...pane, surface: 'terminal' as const, viewport: { columns: 120, rows: 50, isFullscreen: true }, props: { ...pane.props, bodyColumns: 116 } })
+  expect((await term.find({ key: 'web:link' }))?.text).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=f-[0-9a-f]{16}-[0-9a-f]{32}$`))
+  await term.unmount()
 })

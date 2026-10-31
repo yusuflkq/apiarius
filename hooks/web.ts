@@ -19,6 +19,7 @@ import * as F from './format'
 import type { GitState } from './git'
 import * as I from './inspect'
 import * as M from './model'
+import { hmacHex } from './seal'
 import { othersLineOf, type SessionsV2 } from './sessions'
 import { timelineOf, type V2Timeline } from './timeline'
 import type { UsageInfo } from './ui/types'
@@ -157,7 +158,7 @@ export type WebPending = Omit<DeckPending, 'questions'> & {
   isAnswerable: boolean
 }
 
-export type WebAck = { id: string; ok: boolean; status: 'queued' | 'delivered' | 'answered' | 'failed'; text: string; at: number }
+export type WebAck = { id: string; ok: boolean; status: 'queued' | 'delivered' | 'answered' | 'failed' | 'held'; text: string; at: number }
 
 /** The size limits the page relies on. */
 export const WEB_CAPS = { task: 2000, result: 4000, messages: 200, messageChars: 600, activity: 150, edits: 300, commits: 20, acks: 50 } as const
@@ -216,6 +217,16 @@ export function isHomeDone(stdout: string): boolean {
     return typeof said === 'object' && said !== null && (said as { ok?: unknown }).ok === true
   } catch {
     return false
+  }
+}
+
+/** Why web/open.js could not open the link, as its line says it; '' when it says nothing readable. */
+export function openWhyOf(stdout: string): string {
+  try {
+    const said = JSON.parse(stdout.trim()) as unknown
+    return typeof said === 'object' && said !== null && typeof (said as { why?: unknown }).why === 'string' ? (said as { why: string }).why : ''
+  } catch {
+    return ''
   }
 }
 
@@ -1976,12 +1987,53 @@ export function threadEndOf(state: WebState, agentId: string): string {
 // The server: how it is started, and what it prints back.
 
 /**
- * The page's address: the server's port on 127.0.0.1, the token as `t`. For
- * the person's eyes alone (the pane's link, the Browser pane's preview_start):
- * never in a command's text or context, which the model reads.
+ * Who a link is for, and so what the page it opens may do: `pane`, the page
+ * the deck opens in the Desktop's Browser pane, whose tools Claude can drive
+ * (it reads everything, and each of its words in your voice waits for your
+ * Send above the prompt); `full`, your own browser's ("Open in browser"),
+ * whose every command runs at once.
  */
-export function webUrlOf(port: number, token: string): string {
-  return `http://127.0.0.1:${port}/?t=${encodeURIComponent(token)}`
+export type WebGrade = 'pane' | 'full'
+
+/** A new secret for one start of the server: 32 random bytes, hex. Every ticket the deck hands out is sealed with it, so a start makes every earlier link stale. */
+export function newSecret(): string {
+  return hexOf(crypto.getRandomValues(new Uint8Array(32)))
+}
+
+/** A new ticket's nonce: 8 random bytes, hex (a link stays short enough to copy off a terminal line). */
+export function newNonce(): string {
+  return hexOf(crypto.getRandomValues(new Uint8Array(8)))
+}
+
+function hexOf(bytes: Uint8Array): string {
+  let hex = ''
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, '0')
+  return hex
+}
+
+/**
+ * A one-time ticket of `grade` for the server started with `secret`:
+ * `<p|f>-<nonce>-<seal>`, the seal the first 32 hex digits (128 bits) of
+ * HMAC-SHA256(secret, "apiarius/ticket/1|<grade>|<nonce>"), as web/server.js
+ * checks it. The page trades it for a handle once; the server refuses it after.
+ */
+export function ticketOf(secret: string, grade: WebGrade, nonce: string): string {
+  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${hmacHex(new TextEncoder().encode(secret), `apiarius/ticket/1|${grade}|${nonce}`).slice(0, 32)}`
+}
+
+/** A ticket's nonce (what the server's `used` line names); '' for any other text. */
+export function nonceOf(ticket: string): string {
+  return /^[pf]-([0-9a-f]{16})-[0-9a-f]{32}$/.exec(ticket)?.[1] ?? ''
+}
+
+/**
+ * The page's address: the server's port on 127.0.0.1, a one-time ticket as
+ * `t`. For the person's eyes alone (the Browser pane's preview_start, the
+ * terminal deck's link, the system's opener): never in a command's text or
+ * context, which the model reads.
+ */
+export function webUrlOf(port: number, ticket: string): string {
+  return `http://127.0.0.1:${port}/?t=${encodeURIComponent(ticket)}`
 }
 
 /** The server's command line (no shell): node, web/server.js, its folder, the session's pid to outlive no longer, the port to take again, and the registry of sessions (./sessions) whose folders it may read too. */
@@ -1989,8 +2041,13 @@ export function serverArgvOf(script: string, dir: string, pid: string, port: num
   return ['node', script, '--dir', dir, ...(pid ? ['--parent', pid] : []), ...(port > 0 ? ['--port', String(port)] : []), ...(sessions ? ['--sessions', sessions] : [])]
 }
 
-/** A line the server printed: its first, `{"ready":<port>}`, or a command from the page. */
-export type ServerLine = { kind: 'ready'; port: number } | { kind: 'cmd'; cmd: Record<string, unknown> }
+/**
+ * A line the server printed: its first, `{"ready":<port>}`; a command from
+ * the page, with the grade of the page that sent it (one the server did not
+ * stamp `full` reads `pane`), the stamp itself left out of `cmd`; or a
+ * ticket traded (`{"used":<nonce>,"grade":…}`).
+ */
+export type ServerLine = { kind: 'ready'; port: number } | { kind: 'cmd'; cmd: Record<string, unknown>; grade: WebGrade } | { kind: 'used'; nonce: string; grade: WebGrade }
 
 /** What a command from the page asks the mod to do, checked against the model. */
 export type WebRoute =
@@ -2045,7 +2102,12 @@ export function parseLine(line: string): ServerLine | null {
   if (!isRecord(value)) return null
   const port = value.ready
   if (typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65_536) return { kind: 'ready', port }
-  if (typeof value.cmd === 'string') return { kind: 'cmd', cmd: value }
+  const grade: WebGrade = value.grade === 'full' ? 'full' : 'pane'
+  if (typeof value.cmd === 'string') {
+    const cmd = Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'grade'))
+    return { kind: 'cmd', cmd, grade }
+  }
+  if (typeof value.used === 'string' && /^[0-9a-f]{16}$/.test(value.used)) return { kind: 'used', nonce: value.used, grade }
   return null
 }
 
