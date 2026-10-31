@@ -196,11 +196,10 @@ test('POST /cmd passes every command about a session naming one (an answer, a me
 // ------------------------------------------------------------------ the page
 
 const AVATARS = require('../avatars.mjs')
-const IMPORT = "import * as AV from './avatars.mjs';"
-const SOURCE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8').replace(IMPORT, 'const AV = __avatars;').replace("import * as TL from './timeline.mjs';", 'const TL = __timeline;')
+const SOURCE = require('./page-script').pageScript()
 const NOW = SAMPLE.now
 
-/** A page at `hash` (app.js in a vm, no DOM): its fetch answers /cmd, /s/<id>/state with `others[id]`, and every other GET from `files`; calls kept. */
+/** A page at `hash` (app.js and its modules in a vm, no DOM): its fetch answers /cmd, /s/<id>/state with `others[id]`, and every other GET from `files`; calls kept. */
 function page({ hash = '', others = {}, files = {} } = {}) {
   const noop = () => {}
   const calls = []
@@ -220,7 +219,7 @@ function page({ hash = '', others = {}, files = {} } = {}) {
     localStorage: { getItem: () => null, setItem: noop }, requestAnimationFrame: () => 1, cancelAnimationFrame: noop, setTimeout: () => 1, clearTimeout: noop, setInterval: () => 1,
     performance: { now: () => 0 }, fetch, URLSearchParams,
   })
-  vm.runInContext(SOURCE, context, { filename: 'app.js' })
+  vm.runInContext(SOURCE, context, { filename: 'page-script' })
   vm.runInContext(`Date.now = () => ${NOW}; renderNow = () => {}`, context)
   const run = js => vm.runInContext(js, context)
   return {

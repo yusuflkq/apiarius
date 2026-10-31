@@ -1,6 +1,6 @@
 /**
  * Stop, as the pane and the terminal draw it (the web page draws the same,
- * web/app.js):
+ * web/now.mjs):
  *
  * - **Stop turn** at the right of the header while the main loop's turn
  *   runs (`header.turn`): `$.turn.abort`, as Esc does.

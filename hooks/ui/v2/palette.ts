@@ -87,7 +87,7 @@ export function toneOf(status: string): Tone {
   return TONE[status as V2Status] ?? TONE.idle
 }
 
-/** The glyphs of the web's status family (web/app.js GLYPH): a plan item's, a call's. */
+/** The glyphs of the web's status family (web/parts.mjs GLYPH): a plan item's, a call's. */
 export type GlyphName = 'done' | 'active' | 'failed' | 'waiting' | 'idle' | 'pending'
 
 /** The idle and pending glyphs' grey: the idle hue at 62%, as the web's `.glyph.hue-idle`. */
@@ -176,7 +176,7 @@ export function ruleSvg(color: string): string {
   return memo(`rule|${color}`, () => `<svg xmlns="http://www.w3.org/2000/svg" width="4096" height="1" viewBox="0 0 4096 1" preserveAspectRatio="none"><rect width="4096" height="1" fill="${color}"/></svg>`)
 }
 
-// The web's icons (web/app.js IC: Lucide-style 24 px strokes) the deck draws.
+// The web's icons (web/basics.mjs IC: Lucide-style 24 px strokes) the deck draws.
 
 /** The icon names the deck draws. */
 export type IconName =

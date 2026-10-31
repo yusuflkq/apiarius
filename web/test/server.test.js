@@ -194,8 +194,10 @@ test('takes the token as the first line of stdin, as the mod gives it, and stays
 
 /** Every data route, with what it answers with the token: the state, the stream, each lazy file, another session's, Org's Timeline. */
 const DATA = [['/state', 200], ['/events', 200], ['/patch/toolu_01Abc-d_9', 200], ['/gitdiff/1kejm2g-1kfevo4-4g', 200], ['/message/1791970900000-14-main-you', 200], ['/agent/main', 200], ['/timeline', 404], ['/s/other-1/state', 404], ['/nope', 404]]
+/** The page's scripts: app.js and every module of its own it imports (./page-script.js), then the two the mod imports too. */
+const SCRIPTS = [...require('./page-script').modules(), 'avatars.mjs', 'timeline.mjs']
 /** The page's own files: no data in them. */
-const STATIC = ['/', '/app.js', '/app.css', '/avatars.mjs', '/timeline.mjs', '/favicon.ico']
+const STATIC = ['/', '/app.css', ...SCRIPTS.map(file => `/${file}`), '/favicon.ico']
 
 /** A GET that resolves on the answer's head, for /events too, which never ends. */
 function head(port, target, headers = {}) {
@@ -256,8 +258,9 @@ test('421 on a Host other than 127.0.0.1:<port> or localhost:<port>', async () =
   assert.equal((await request(main.port, { headers: { ...auth, Host: `localhost:${main.port}` } })).status, 200)
 })
 
-test('serves the page files with their types, no token needed (the avatar library and the timeline`s layout app.js imports scripts too), or 404 while one is missing', async () => {
-  const types = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/avatars.mjs': ['avatars.mjs', 'text/javascript'], '/timeline.mjs': ['timeline.mjs', 'text/javascript'] }
+test('serves the page files with their types, no token needed (app.js, every module it imports, the avatar library and the timeline`s layout scripts), or 404 while one is missing', async () => {
+  const types = { '/': ['index.html', 'text/html'], '/app.css': ['app.css', 'text/css'] }
+  for (const file of SCRIPTS) types[`/${file}`] = [file, 'text/javascript']
   for (const [target, [file, type]] of Object.entries(types)) {
     const res = await request(main.port, { path: target })
     if (!fs.existsSync(path.join(__dirname, '..', file))) { assert.equal(res.status, 404, target); continue }
@@ -266,6 +269,10 @@ test('serves the page files with their types, no token needed (the avatar librar
     assert.equal(res.headers['cache-control'], 'no-store')
     assert.equal(res.body, fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
   }
+})
+
+test('every page file is under 256 KiB: the plugin directory reviews a bigger one by hand', () => {
+  for (const file of ['index.html', 'app.css', ...SCRIPTS]) assert.ok(fs.statSync(path.join(__dirname, '..', file)).size < 256 * 1024, file)
 })
 
 test('/state serves the current state; a missing or empty file serves {"v":1,"empty":true}', async () => {

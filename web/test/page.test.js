@@ -1,9 +1,10 @@
 /**
- * The page's views on the v2 state, without a browser: app.js runs in a vm
- * context with no DOM (it boots nothing there), each test hands it a state as
- * the server would, and reads the text of the virtual DOM a view builds. The
- * state is the v2 sample (web/fixtures/state.v2.json, made by the mod's own
- * builder), and the lazy files are the sample's (web/fixtures/v2/).
+ * The page's views on the v2 state, without a browser: app.js and its
+ * modules run in a vm context with no DOM (they boot nothing there), each
+ * test hands it a state as the server would, and reads the text of the
+ * virtual DOM a view builds. The state is the v2 sample
+ * (web/fixtures/state.v2.json, made by the mod's own builder), and the lazy
+ * files are the sample's (web/fixtures/v2/).
  */
 'use strict'
 const { test } = require('node:test')
@@ -13,15 +14,10 @@ const path = require('node:path')
 const vm = require('node:vm')
 
 const WEB = path.join(__dirname, '..')
-// app.js is a module whose imports are the avatar library and the timeline's layout: here it runs as a script, those handed in as AV and TL
+// app.js and the modules it imports run here as one script (./page-script.js), the avatar library and the timeline's layout handed in as AV and TL
 const AVATARS = require('../avatars.mjs')
 const TIMELINE = require('../timeline.mjs')
-const IMPORT = "import * as AV from './avatars.mjs';"
-const TL_IMPORT = "import * as TL from './timeline.mjs';"
-const MODULE = fs.readFileSync(path.join(WEB, 'app.js'), 'utf8')
-assert.ok(MODULE.includes(IMPORT), 'app.js imports the avatar library')
-assert.ok(MODULE.includes(TL_IMPORT), 'app.js imports the timeline`s layout')
-const SOURCE = MODULE.replace(IMPORT, 'const AV = __avatars;').replace(TL_IMPORT, 'const TL = __timeline;')
+const SOURCE = require('./page-script').pageScript()
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.json'), 'utf8'))
 const NOW = SAMPLE.now
 const MIN = 60_000
@@ -50,7 +46,7 @@ function sample(change) {
 }
 
 /**
- * A fresh page at `hash`, its clock at `now`: app.js in a context of its own.
+ * A fresh page at `hash`, its clock at `now`: the page in a context of its own.
  * Its fetch answers POST /cmd with {"ok":true} and GET /agent, /patch,
  * /message and /gitdiff from `files` (the sample's by default); every call is
  * kept in `calls` (a command's body parsed). Its localStorage is `storage`, a
@@ -89,7 +85,7 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
     fetch,
     URLSearchParams,
   })
-  vm.runInContext(SOURCE, context, { filename: 'app.js' })
+  vm.runInContext(SOURCE, context, { filename: 'page-script' })
   vm.runInContext(`Date.now = () => ${now}; renderNow = () => {}`, context)
   const run = js => vm.runInContext(js, context)
   return {

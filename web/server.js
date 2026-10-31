@@ -54,12 +54,22 @@ const PAGE = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/app.css': ['app.css', 'text/css; charset=utf-8'],
-  // the avatar library app.js imports (the mod draws the pane's avatars from it too)
+  // the page's own modules, which app.js imports (its head says what each holds)
+  '/basics.mjs': ['basics.mjs', 'text/javascript; charset=utf-8'],
+  '/state.mjs': ['state.mjs', 'text/javascript; charset=utf-8'],
+  '/parts.mjs': ['parts.mjs', 'text/javascript; charset=utf-8'],
+  '/now.mjs': ['now.mjs', 'text/javascript; charset=utf-8'],
+  '/chat.mjs': ['chat.mjs', 'text/javascript; charset=utf-8'],
+  '/org.mjs': ['org.mjs', 'text/javascript; charset=utf-8'],
+  '/changes.mjs': ['changes.mjs', 'text/javascript; charset=utf-8'],
+  '/inspect.mjs': ['inspect.mjs', 'text/javascript; charset=utf-8'],
+  '/settings.mjs': ['settings.mjs', 'text/javascript; charset=utf-8'],
+  // the avatar library the page imports (the mod draws the pane's avatars from it too)
   '/avatars.mjs': ['avatars.mjs', 'text/javascript; charset=utf-8'],
-  // how Org's Timeline is laid out, which app.js imports (the mod lays the pane's out with it too)
+  // how Org's Timeline is laid out, which the page imports (the mod lays the pane's out with it too)
   '/timeline.mjs': ['timeline.mjs', 'text/javascript; charset=utf-8'],
 }
-// Scripts only from app.js, so agent text the page shows can never run as code; no other page may frame it.
+// Scripts only from the page's own files, so agent text the page shows can never run as code; no other page may frame it.
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 // On every answer: never cached, never sniffed, no Referer (the page's address holds the token), never framed, and nothing of it for another origin to load or keep a handle on.
 const HEADERS = {
@@ -334,7 +344,7 @@ function handle(req, res) {
   const url = new URL(`http://deck${req.url.startsWith('/') ? req.url : `/${req.url}`}`) // '//x' stays a path, never a host
   const route = url.pathname
   if (route === '/cmd' && req.method === 'POST') return command(req, res, host)
-  // The page's own files hold no data: served to any page on this host and port, the token left to app.js (it reads `t` from the address).
+  // The page's own files hold no data: served to any page on this host and port, the token left to the page (state.mjs reads `t` from the address).
   if (req.method === 'GET' && PAGE[route]) return page(res, PAGE[route])
   if (req.method === 'GET' && route === '/favicon.ico') return res.writeHead(204).end()
 

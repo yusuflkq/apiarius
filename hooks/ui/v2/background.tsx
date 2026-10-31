@@ -1,6 +1,6 @@
 /**
  * Background, as the pane and the terminal draw it (the web page draws the
- * same, web/app.js): a Dashboard section under the agents, shown only while
+ * same, web/now.mjs): a Dashboard section under the agents, shown only while
  * something runs in the background or is scheduled (the v2 state's
  * `background`). A bordered list (./dash `listBox`), a row each: its kind's
  * icon (a glyph on the terminal), its title bold and what it is dim, then

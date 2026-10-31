@@ -1,7 +1,7 @@
 /**
  * The Org tab's chart in cells: where each agent's card sits and the
  * box-drawing connectors between them. It is the web deck's tree
- * (web/app.js `layoutOrg`), fitted to a pane 68 to 84 columns wide:
+ * (web/org.mjs `layoutOrg`), fitted to a pane 68 to 84 columns wide:
  *
  * - the Orchestrator at the top, its agents below, nested agents under their parent;
  * - a parent's children wrap into rows when one row is wider than the pane,

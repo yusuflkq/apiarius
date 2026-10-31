@@ -21,8 +21,8 @@
  * work, and a progress ring with no progress to show spins.
  *
  * Who draws it:
- * - the web page imports this module (web/app.js) and shows each document
- *   as an image;
+ * - the web page imports this module (web/parts.mjs and others) and shows
+ *   each document as an image;
  * - the mod imports it too (hooks/ui/v2/look.tsx): the Desktop pane draws an
  *   Svg element as an image of the same document;
  * - the terminal draws no SVG: `terminalFace` is a character or two in the
