@@ -429,7 +429,8 @@ async function readRegistry(now: number): Promise<void> {
 async function alivePids(pids: readonly number[]): Promise<Set<number> | null> {
   const script = 'for (const p of process.argv.slice(1)) { try { process.kill(Number(p), 0); console.log(p) } catch (e) { if (e.code === "EPERM") console.log(p) } }'
   try {
-    const ran = await io().node(['-e', script, ...pids.map(String)])
+    // `--` so a value that begins with `-` is a positional argument, never read as a node option
+    const ran = await io().node(['-e', script, '--', ...pids.map(String)])
     if (ran.exitCode !== 0) return null
     return new Set(ran.stdout.split(/\s+/).filter(one => /^\d+$/.test(one)).map(Number))
   } catch {
@@ -442,7 +443,8 @@ async function removeFiles(paths: readonly string[]): Promise<void> {
   if (paths.length === 0) return
   const script = 'for (const p of process.argv.slice(1)) { try { require("fs").rmSync(p, { force: true }) } catch {} }'
   try {
-    await io().node(['-e', script, ...paths])
+    // `--` so a path that begins with `-` is a positional argument, never read as a node option
+    await io().node(['-e', script, '--', ...paths])
   } catch {
     // left for the next deck's clean
   }

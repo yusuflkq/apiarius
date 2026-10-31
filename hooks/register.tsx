@@ -68,6 +68,11 @@ let sessionId = ''
 let pluginRoot = ''
 /** Apiarius's home (`SE.homeDirOf`: `APIARIUS_HOME`, else `apiarius` under Claude Code's configuration folder), where each session's state folder lies (`<home>/web/<sessionId>`) and the debug dump goes; '' until read, or when no home is known. */
 let home = ''
+
+/** Where the deck starts a `node` child: the mod's own folder, else the home, never a workspace, so Windows (which looks for a bare `node` in the working folder first) never runs one a repository holds; undefined when neither is known (the session's own folder then, as in the tests). */
+function nodeCwd(): string | undefined {
+  return pluginRoot || home || undefined
+}
 let usage: UsageInfo | null = null
 let usageAt = 0
 /** How this process's session began, as Claude Code's SessionStart said it just before `session.start`: '' until it has, and after a reload (its snapshot keeps `data.isFork`). */
@@ -759,7 +764,7 @@ async function homeOf($: EngineInterface): Promise<string> {
 async function runHome($: EngineInterface, request: W.HomeRequest): Promise<boolean> {
   if (request.home === '') return false
   try {
-    const ran = await $.process.run(W.homeArgvOf(`${$.plugin.root.replace(/[\\/]+$/, '')}/web/home.js`, request), { timeoutMs: 10_000 })
+    const ran = await $.process.run(W.homeArgvOf(`${$.plugin.root.replace(/[\\/]+$/, '')}/web/home.js`, request), { timeoutMs: 10_000, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
     return ran.exitCode === 0 && W.isHomeDone(ran.stdout)
   } catch {
     return false
@@ -1000,7 +1005,7 @@ const timelineWritten = { key: '' }
 /** The session's own process id, read as the parent of a node it starts (no shell between); '' when node cannot say. */
 async function enginePidOf($: EngineInterface): Promise<string> {
   try {
-    const ran = await $.process.run(['node', '-p', 'process.ppid'], { timeoutMs: 10_000 })
+    const ran = await $.process.run(['node', '-p', 'process.ppid'], { timeoutMs: 10_000, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
     const pid = ran.stdout.trim()
     return ran.exitCode === 0 && /^\d+$/.test(pid) ? pid : ''
   } catch {
@@ -1138,8 +1143,8 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
   let errors = ''
   let stop: (() => void) | undefined
   try {
-    // the token on stdin, never argv or the environment, which other processes can read
-    const child = $.process.spawn({ argv, input: `${web.token}\n` })
+    // the token on stdin, never argv or the environment, which other processes can read; started outside any workspace (Windows looks for a bare `node` in the working folder first)
+    const child = $.process.spawn({ argv, input: `${web.token}\n`, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
     stop = () => {
       void child.return({ code: null, signal: null }).catch(() => undefined)
     }
@@ -3080,7 +3085,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
     stat: path => $.fs.stat(path),
     storeGet: key => $.store.get(key),
     storeSet: (key, value) => $.store.set(key, value),
-    node: args => $.process.run(['node', ...args], { timeoutMs: 10_000 }),
+    node: args => $.process.run(['node', ...args], { timeoutMs: 10_000, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) }),
     every: (ms, fn) => $.clock.every(ms, fn),
     after: (ms, fn) => $.clock.after(ms, fn),
     surfaces: () => $.session.surfaces(),
