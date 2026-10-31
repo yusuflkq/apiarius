@@ -131,10 +131,12 @@ const isProbe = (run: Run) => run.line.includes('rev-parse --show-toplevel')
 /** A read of where git's settings come from, which the deck makes before each run, there (`isConfigList`). */
 const isConfig = (run: Run) => isConfigList(run.line.split(' '))
 
-/** Whether git changed to each folder itself (`-C`, never started there), and each run came with a read of where git's settings come from in its folder. */
+/** Whether git changed to each folder itself (`-C`, never started there), and each run came with a read of where git's settings come from in its folder (one that reads the working tree with another after it). */
 function isEachReadFirst(runs: readonly Run[]): boolean {
-  const folders = (some: readonly Run[]) => some.map(run => run.cwd).sort().join('\n')
-  return runs.every(run => run.line.startsWith('git -C ')) && folders(runs.filter(isConfig)) === folders(runs.filter(run => !isConfig(run)))
+  const count = (some: readonly Run[], folder: string) => some.filter(run => run.cwd === folder).length
+  const reads = runs.filter(run => run.line.includes(' config --list --show-scope'))
+  const others = runs.filter(run => !isConfig(run))
+  return runs.every(run => run.line.startsWith('git -C ')) && others.every(run => count(reads, run.cwd) >= count(others, run.cwd))
 }
 
 test('a session outside any repository follows the one an agent edits: its files on each surface, git run at its root', async ($, on) => {

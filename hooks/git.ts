@@ -89,6 +89,84 @@ export const argv = {
   recentHashes: [...G, 'rev-list', '-n', '5', 'HEAD'],
   /** Every setting git reads there, each with where it came from (`repoConfigOf` reads it). */
   config: [...G, 'config', '--list', '--show-scope', '-z'],
+  /** Every `.gitattributes` the index holds, or the working tree has outside what it ignores (`ls-files` reads no file's content: no filter runs). */
+  attrFiles: [...G, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ':(glob)**/.gitattributes'],
+  /** Every ignored `.gitattributes` in a folder git still walks (one holding a tracked file); a folder wholly ignored and untracked shows as itself, and no tracked file in it has attributes to read. */
+  ignoredAttrFiles: [...G, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory', '--', ':(glob)**/.gitattributes'],
+  /** Where git reads the repository's `info/attributes` (a worktree's is its main repository's). */
+  infoAttributes: [...G, 'rev-parse', '--git-path', 'info/attributes'],
+  /** A tracked `.gitattributes` as the index holds it, for one gone from the working tree (git reads the index's then); `cat-file` runs no filter. */
+  indexBlob: (place: string) => [...G, 'cat-file', 'blob', `:${place}`],
+}
+
+/** Whether a command reads the working tree's files (`status`, `diff`), the only ones a filter driver can run on: before one, the deck reads every attribute file too, and after it whether the repository's filter settings moved. */
+export function readsWorktree(args: readonly string[]): boolean {
+  const sub = args[G.length]
+  return sub === 'status' || sub === 'diff'
+}
+
+/** The most attribute files the deck reads in a repository: past it, it runs no git there. */
+export const MOST_ATTR_FILES = 256
+
+/** The most bytes an attribute file may hold: past it, the deck runs no git there. */
+export const MOST_ATTR_BYTES = 256 * 1024
+
+/** The places of a repository's in-tree attribute files, from `argv.attrFiles` and `argv.ignoredAttrFiles` (git's own `-z` lists, relative to the repository's top): each once, a folder git showed whole left out. */
+export function attrPlacesOf(...lists: readonly string[]): string[] {
+  const places = new Set<string>()
+  for (const list of lists) {
+    for (const place of list.split('\0')) {
+      if (place === '' || place.endsWith('/') || !(place === '.gitattributes' || place.endsWith('/.gitattributes'))) continue
+      places.add(place)
+    }
+  }
+  return [...places]
+}
+
+/**
+ * Where an attribute file a repository's own config names lies
+ * (`core.attributesFile`, local or worktree scope, `localAttributesFileOf`),
+ * as git reads it in `where` (its top level, where git runs): `~/` under the
+ * person's `home`, a relative one under `where`, an absolute one as it is;
+ * '' for none. One the deck cannot place as git would (`~name/`, a
+ * `%(prefix)/` path, `~/` with no home known) is a refusal.
+ */
+export function attributesFileOf(listing: string, where: string, home: string): string | { refusal: string } {
+  const named = localAttributesFileOf(listing).trim()
+  if (named === '') return ''
+  const cannot = { refusal: `This repository's own git settings name an attribute file Apiarius cannot place (${JSON.stringify(shownOf(named).slice(0, 60))}), so it runs no git there.` }
+  if (named.startsWith('~/') || named.startsWith('~\\')) return home.trim() === '' ? cannot : `${home.replace(/[\\/]+$/, '')}/${named.slice(2)}`
+  if (named.startsWith('~') || named.startsWith('%(')) return cannot
+  if (/^(?:[\\/]|[A-Za-z]:[\\/])/.test(named)) return named
+  return `${where.replace(/[\\/]+$/, '')}/${named}`
+}
+
+/** Why the deck runs no git in a repository whose attribute file is a link, no plain file, too big or unreadable: it cannot tell which filters it names. */
+export function attrRefusalOf(place: string): string {
+  return `This repository's attribute file ${JSON.stringify(shownOf(place).slice(0, 60))} is a link, not a plain file, too big or unreadable, so Apiarius runs no git there.`
+}
+
+/** Why the deck runs no git in a repository again this session: its filter settings moved while a command of the deck's ran there. */
+export const SETTINGS_MOVED = "This repository's git filter settings changed while Apiarius read it, so it runs no git there again this session."
+
+/**
+ * The settings that decide which filter runs, from `argv.config`'s listing:
+ * every `filter.*` setting and `core.attributesFile`, each with its scope, in
+ * git's order. The deck reads these before and after each command that reads
+ * the working tree; when they moved, a definition came in while git ran
+ * (the race), so that run's output is dropped and the repository refused.
+ * Any other setting may move freely (a `git push -u` writes the branch's).
+ */
+export function filterSettingsOf(listing: string): string {
+  const parts = listing.split('\0')
+  const kept: string[] = []
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const entry = parts[i + 1] ?? ''
+    const cut = entry.indexOf('\n')
+    const key = (cut < 0 ? entry : entry.slice(0, cut)).toLowerCase()
+    if (key.startsWith('filter.') || key === 'core.attributesfile') kept.push(`${parts[i] ?? ''}\0${entry}`)
+  }
+  return kept.join('\0')
 }
 
 /** Whether `hash` is a commit's name as git prints one (4 to 64 hex digits): the only thing `show` is ever handed. */
@@ -122,15 +200,18 @@ const DRIVER_NAME = /^[A-Za-z0-9._@+-]{1,100}$/
  * repository cannot define a filter in its config *after* the deck read it
  * (a race the per-run config read alone would miss): with the driver blanked
  * on the command line, a late definition has nothing git will attach to.
- * A comment line (`#`) names none, nor a macro line (`[attr]…`); only an
- * unset `filter=NAME` token names a driver (`-filter`/`!filter` do not).
+ * A comment line (`#`) names none. A macro's own line (`[attr]m filter=NAME`)
+ * names its driver, since a pattern line may set the macro; and a pattern
+ * may itself start with `[` (`[ab]*.txt filter=NAME`). Every `filter=NAME`
+ * token counts, so a token git would read as the pattern names one too (more
+ * blanked, never fewer); `-filter`/`!filter` name none.
  */
 export function attrFilterNamesOf(texts: readonly string[]): string[] {
   const names = new Set<string>()
   for (const text of texts) {
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim()
-      if (line === '' || line.startsWith('#') || line.startsWith('[')) continue
+      if (line === '' || line.startsWith('#')) continue
       for (const match of line.matchAll(/(?:^|\s)filter=(\S+)/g)) {
         const name = match[1] ?? ''
         if (name !== '') names.add(name)

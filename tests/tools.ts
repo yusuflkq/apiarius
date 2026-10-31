@@ -15,9 +15,15 @@ export function gitWhere(e: { argv: readonly string[]; init?: { cwd?: string } |
   return e.argv[1] === '-C' ? (e.argv[2] ?? '') : (e.init?.cwd ?? '')
 }
 
-/** Whether a git run is the deck's read of where git's settings come from, before each of its runs (`git config --list --show-scope`): a repository with no settings of its own answers it with nothing. */
+/** Whether a git run is the deck's read of where a repository's attribute files lie, before each run that reads the working tree (`ls-files` of its `.gitattributes`, `rev-parse --git-path info/attributes`). */
+export function isAttrList(argv: readonly string[]): boolean {
+  const line = argv.join(' ')
+  return line.includes(' ls-files -z ') || line.includes(' rev-parse --git-path info/attributes')
+}
+
+/** Whether a git run is one of the deck's reads of a repository's settings, before each of its runs: where git's settings come from (`git config --list --show-scope`), or where its attribute files lie (`isAttrList`). A repository with no settings and no attribute files of its own answers each with nothing. */
 export function isConfigList(argv: readonly string[]): boolean {
-  return argv.join(' ').includes(' config --list --show-scope')
+  return argv.join(' ').includes(' config --list --show-scope') || isAttrList(argv)
 }
 
 /** Bash's own arguments, as its input schema has them. */

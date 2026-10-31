@@ -183,6 +183,104 @@ test('through the deck: a git too old to say where its settings come from (befor
   expect(w.toasts.filter(text => text.includes('git 2.26 or newer')).length).toBe(1)
 })
 
+test('a repository`s attribute files, pure: every .gitattributes git lists (a folder it shows whole left out), each `filter=` a macro or a pattern starting with [ names, a core.attributesFile placed as git places it, the filter settings compared before and after a run, and which commands read the working tree', () => {
+  expect(G.attrPlacesOf('.gitattributes\0sub/.gitattributes\0src/a.ts\0', 'ign/.gitattributes\0node_modules/\0sub/.gitattributes\0')).toEqual(['.gitattributes', 'sub/.gitattributes', 'ign/.gitattributes'])
+  expect(G.attrFilterNamesOf(['[attr]m filter=macro\n* m\n', '[ab]*.txt filter=bracket\n# * filter=comment\n*.bin -filter !filter\n', 'x\tfilter=tab'])).toEqual(['macro', 'bracket', 'tab'])
+  const named = (value: string) => listing(['local', 'core.attributesfile', value])
+  expect(G.attributesFileOf(named('my.attrs'), '/r/x', '/home/me')).toBe('/r/x/my.attrs')
+  expect(G.attributesFileOf(named('~/attrs'), '/r/x', '/home/me')).toBe('/home/me/attrs')
+  expect(G.attributesFileOf(named('/etc/attrs'), '/r/x', '/home/me')).toBe('/etc/attrs')
+  expect(G.attributesFileOf(named('C:/attrs'), '/r/x', '/home/me')).toBe('C:/attrs')
+  expect(G.attributesFileOf(listing(['global', 'core.attributesfile', '~/mine']), '/r/x', '/home/me')).toBe('')
+  for (const odd of ['~root/attrs', '%(prefix)/attrs']) expect(G.attributesFileOf(named(odd), '/r/x', '/home/me')).toHaveProperty('refusal')
+  expect(G.attributesFileOf(named('~/attrs'), '/r/x', '')).toHaveProperty('refusal')
+  // only the settings that decide which filter runs: a branch's upstream written meanwhile (git push -u) moves nothing
+  const before = listing(['local', 'core.bare', 'false'], ['local', 'filter.lfs.clean', 'x'])
+  expect(G.filterSettingsOf(before)).toBe(G.filterSettingsOf(`${before}${listing(['local', 'branch.main.remote', 'origin'])}`))
+  expect(G.filterSettingsOf(before)).not.toBe(G.filterSettingsOf(`${before}${listing(['local', 'filter.evil.clean', 'touch /tmp/pwned'])}`))
+  expect(G.filterSettingsOf(before)).not.toBe(G.filterSettingsOf(`${before}${listing(['local', 'core.attributesFile', 'x'])}`))
+  expect([G.argv.status, G.argv.numstat('HEAD'), G.argv.fileDiff('HEAD', [])].every(G.readsWorktree)).toBe(true)
+  expect([G.argv.log(30), G.argv.toplevel, G.argv.showPatch('abc1234'), G.argv.config, G.argv.attrFiles].some(G.readsWorktree)).toBe(false)
+})
+
+test('through the deck: before a command that reads the working tree, every filter any attribute file names is blanked (a nested one, a macro, an ignored one, info/attributes where git keeps it, a relative core.attributesFile, a tracked one gone from the working tree as the index holds it), each read through web/files.js; a command that reads no working tree reads none', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const { w, runs } = repoWorld(() => ({ exitCode: 0, stdout: listing(['local', 'core.attributesfile', 'my.attrs']) }))
+  w.gitAttrs = argv => {
+    const line = argv.join(' ')
+    if (line.includes('--ignored')) return { exitCode: 0, stdout: 'ign/.gitattributes\0node_modules/\0' }
+    if (line.includes('ls-files')) return { exitCode: 0, stdout: '.gitattributes\0sub/.gitattributes\0gone/.gitattributes\0' }
+    return { exitCode: 0, stdout: '.git/info/attributes\n' }
+  }
+  const git = w.git
+  w.git = (argv, cwd) => (argv.join(' ').includes('cat-file blob :gone/.gitattributes') ? { exitCode: 0, stdout: '* filter=fromindex\n' } : (git?.(argv, cwd) ?? { exitCode: 1, stdout: '' }))
+  w.onDisk = {
+    '/work/.gitattributes': '[attr]m filter=macro\n* m\n',
+    '/work/sub/.gitattributes': '* filter=nested\n',
+    '/work/ign/.gitattributes': '* filter=ignored\n',
+    '/work/.git/info/attributes': '* filter=info\n',
+    '/work/my.attrs': '* filter=attrfile\n',
+  }
+  // gone/.gitattributes is in the index alone
+  w.stat = path => (path.replace(/\\/g, '/') === '/work/gone/.gitattributes' ? null : { size: 12, mtimeMs: NOW })
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await $.command.run(deck('changes'))
+  await clock.advance(1000)
+  const status = runs.find(argv => argv.includes('status'))?.join(' ') ?? ''
+  for (const name of ['macro', 'nested', 'ignored', 'info', 'attrfile', 'fromindex']) expect([name, status.includes(`-c filter.${name}.clean= -c filter.${name}.smudge= -c filter.${name}.process= -c filter.${name}.required=false`)]).toEqual([name, true])
+  const branch = runs.find(argv => argv.join(' ').includes('rev-parse --abbrev-ref HEAD'))?.join(' ') ?? ''
+  expect(branch).not.toContain('filter.')
+  expect(new Set(w.fileReads)).toEqual(new Set(['/work/.gitattributes', '/work/sub/.gitattributes', '/work/ign/.gitattributes', '/work/.git/info/attributes', '/work/my.attrs']))
+})
+
+for (const how of ['a link', 'one web/files.js refuses'] as const) {
+  test(`through the deck: a repository whose attribute file is ${how} runs no command that reads its working tree, and says why once`, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { w, runs } = repoWorld(() => ({ exitCode: 0, stdout: '' }))
+    w.gitAttrs = argv => (argv.join(' ').includes('ls-files') && !argv.includes('--ignored') ? { exitCode: 0, stdout: 'sub/.gitattributes\0' } : { exitCode: 0, stdout: '' })
+    w.stat = path => (path.replace(/\\/g, '/') === '/work/sub/.gitattributes' ? { size: 12, mtimeMs: NOW, isLink: how === 'a link' } : { size: 12, mtimeMs: NOW })
+    w.onDisk = { '/work/sub/.gitattributes': '* filter=evil\n' }
+    w.safeRead = abs => (how !== 'a link' && abs === '/work/sub/.gitattributes' ? { kind: 'refused', why: 'a link on the way' } : undefined)
+    world(on, w)
+    await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+    await $.command.run(deck('changes'))
+    await clock.advance(1000)
+    await clock.advance(7000)
+    expect(runs.some(argv => argv.includes('status') || argv.includes('diff'))).toBe(false)
+    expect(w.toasts.filter(text => text.includes('attribute file'))).toEqual([`work: This repository's attribute file "sub/.gitattributes" is a link, not a plain file, too big or unreadable, so Apiarius runs no git there.`])
+  })
+}
+
+test('through the deck: a repository whose filter settings move while git reads its working tree (a definition raced in) has that run`s output dropped and runs no git again this session, saying why once; a setting that names no filter may move freely', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  let reads = 0
+  let isRaced = false
+  const { w, runs } = repoWorld(() => {
+    reads += 1
+    // a branch's upstream comes and goes on every read: nothing to do with filters
+    const base = listing(['local', reads % 2 === 0 ? 'branch.main.remote' : 'core.bare', 'false'])
+    return { exitCode: 0, stdout: isRaced && reads % 2 === 0 ? `${base}${listing(['local', 'filter.evil.clean', 'touch /tmp/pwned'])}` : base }
+  })
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await $.command.run(deck('changes'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount(pane('terminal'))
+  expect(JSON.stringify(await ui.drawn())).toContain('app.ts')
+  await ui.unmount()
+  expect(w.toasts.filter(text => text.includes('changed while'))).toEqual([])
+  isRaced = true
+  await clock.advance(7000)
+  expect(w.toasts.filter(text => text.includes('changed while'))).toEqual([`work: ${G.SETTINGS_MOVED}`])
+  const ran = runs.length
+  await clock.advance(7000)
+  await clock.advance(7000)
+  // refused from then on: not even a read of its settings
+  expect(runs.length).toBe(ran)
+  expect(w.toasts.filter(text => text.includes('changed while')).length).toBe(1)
+})
+
 test('through the deck: an untracked symbolic link is never read through (its diff is the target`s path, as git shows a link, never the target`s content), an untracked file whose real place is outside the repository is left out, not read, and a plain one is read through web/files.js alone, never `fs.read`', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const norm = (p: string) => p.replace(/\\/g, '/')

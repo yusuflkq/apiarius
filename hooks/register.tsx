@@ -1898,32 +1898,105 @@ function tellGitOnce($: EngineInterface, text: string) {
   $.ui.toast(text)
 }
 
-/** A file read without following a link to it (an attribute file a repository holds), capped and discarded on anything that is not a plain file of a sane size; '' when there is none, or it is a link. */
-async function readAttrFile($: EngineInterface, path: string): Promise<string> {
-  try {
-    const stat = await $.fs.stat(path)
-    if (stat.isLink || stat.kind !== 'file' || stat.size > 256 * 1024) return ''
-    return await $.fs.read(path)
-  } catch {
-    return ''
+/** A git run's outcome: whether it exited 0, and what it printed. */
+type GitRun = { ok: boolean; out: string; err: string }
+
+/** The repositories the deck runs no git in again this session (their filter settings moved while it read them), by `R.keyOf` of where, and why. */
+const gitRefused = new Map<string, string>()
+
+/** The person's own home folder (`USERPROFILE`, else `HOME`), read once: where a repository's `~/` attribute file lies; '' when unknown. */
+let userHome: string | null = null
+
+/**
+ * Reads attribute files through web/files.js (`readSafely`): `places` under
+ * `root`, each a regular file there with no link anywhere on its way, at most
+ * `G.MOST_ATTR_BYTES`. Their texts, the places not there, or the first one
+ * that is a link, no plain file, too big or unreadable (`refused`).
+ */
+async function readAttrFiles($: EngineInterface, root: string, places: readonly string[]): Promise<{ texts: string[]; missing: string[] } | { refused: string }> {
+  const stats = await Promise.all(
+    places.map(async place => {
+      try {
+        return { place, stat: await $.fs.stat(joinPath(root, place)) }
+      } catch {
+        return { place, stat: null }
+      }
+    }),
+  )
+  const missing = stats.filter(one => one.stat === null).map(one => one.place)
+  const wanted: Wanted[] = []
+  for (const { place, stat } of stats) {
+    if (stat === null) continue
+    if (stat.isLink || stat.kind !== 'file' || stat.size > G.MOST_ATTR_BYTES) return { refused: place }
+    wanted.push({ place, abs: joinPath(root, place), size: stat.size, mtimeMs: stat.mtimeMs })
   }
+  const read = await readSafely($, root, wanted, G.MOST_ATTR_BYTES, G.MOST_ATTR_BYTES)
+  const texts: string[] = []
+  for (const one of wanted) {
+    const got = read.get(one.place)
+    if (got?.kind === 'none') missing.push(one.place)
+    else if (got?.kind === 'file' && got.text !== undefined) texts.push(got.text)
+    else if (got === undefined && isNodeMissing) {
+      // no node to read it safely: the engine's read, after the look above. Only the filter names in it are taken, never shown, so a link swapped in here hands over no text
+      try {
+        texts.push(await $.fs.read(one.abs))
+      } catch {
+        return { refused: one.place }
+      }
+    } else return { refused: one.place }
+  }
+  return { texts, missing }
+}
+
+/** Splits an absolute path into its folder and its name, for `readAttrFiles` (a drive's or the disk's root stays a root). */
+function folderAndName(path: string): [string, string] {
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  const folder = cut <= 0 ? '/' : path.slice(0, cut)
+  return [/^[A-Za-z]:$/.test(folder) ? `${folder}/` : folder, path.slice(cut + 1)]
 }
 
 /**
- * The filter driver names a repository's attribute files name (`filter=NAME`),
- * read there and then beside its config, so each can be switched off even if
- * the repository defines it in its config after the deck read that
- * (`G.attrFilterNamesOf`): its top-level `.gitattributes`, its
- * `.git/info/attributes`, and the `core.attributesFile` its own config names
- * (`G.localAttributesFileOf`, from `listing`). None is followed through a
- * link, and none of their text is ever shown.
+ * The filter driver names a repository's attribute files name (`filter=NAME`,
+ * a macro's own line included), read there and then beside its config, so
+ * each can be switched off even if the repository defines it in its config
+ * after the deck read that (`G.attrFilterNamesOf`): every `.gitattributes`
+ * git lists in it (tracked, untracked or ignored, nested ones too:
+ * `G.argv.attrFiles`, `G.argv.ignoredAttrFiles`; a tracked one gone from the
+ * working tree as the index holds it, which git reads then), its
+ * `info/attributes` where git keeps it, and the `core.attributesFile` its own
+ * config names (`G.attributesFileOf`, placed as git places it). Each is read
+ * through web/files.js; one that is a link, no plain file, too big or
+ * unreadable is a refusal, as is a list git could not give. None of their
+ * text is ever shown.
  */
-async function attrFilterNamesOf($: EngineInterface, where: string, listing: string): Promise<string[]> {
-  const base = where.replace(/[\\/]+$/, '')
-  const paths = [`${base}/.gitattributes`, `${base}/.git/info/attributes`]
-  const named = G.localAttributesFileOf(listing).trim()
-  if (named !== '') paths.push(named)
-  const texts = await Promise.all(paths.map(path => readAttrFile($, path)))
+async function attrNamesIn($: EngineInterface, where: string, listing: string, lists: { attrs: GitRun; ignored: GitRun; info: GitRun }, run: (argv: readonly string[], ms: number) => Promise<GitRun>): Promise<string[] | { refusal: string }> {
+  const { attrs, ignored, info } = lists
+  if (!attrs.ok || !ignored.ok || !info.ok) return { refusal: 'git could not list its attribute files' }
+  const places = G.attrPlacesOf(attrs.out, ignored.out)
+  if (places.length > G.MOST_ATTR_FILES) return { refusal: G.attrRefusalOf(`${places.length} .gitattributes files`) }
+  if (userHome === null) userHome = ((await $.env.get('USERPROFILE').catch(() => undefined)) ?? (await $.env.get('HOME').catch(() => undefined)) ?? '').trim()
+  const named = G.attributesFileOf(listing, where, userHome)
+  if (typeof named !== 'string') return named
+  const infoPath = info.out.replace(/\r?\n$/, '')
+  const outside = [infoPath === '' ? '' : /^(?:[\\/]|[A-Za-z]:[\\/])/.test(infoPath) ? infoPath : joinPath(where, infoPath), named].filter(one => one !== '')
+  const texts: string[] = []
+  const inTree = await readAttrFiles($, where, places)
+  if ('refused' in inTree) return { refusal: G.attrRefusalOf(inTree.refused) }
+  texts.push(...inTree.texts)
+  for (const path of outside) {
+    const [folder, name] = folderAndName(path)
+    const one = await readAttrFiles($, folder, [name])
+    if ('refused' in one) return { refusal: G.attrRefusalOf(path) }
+    texts.push(...one.texts)
+  }
+  // a tracked one gone from the working tree: git reads the index's
+  for (const place of inTree.missing.slice(0, 16)) {
+    const blob = await run(G.argvIn(G.argv.indexBlob(place), where), 5_000)
+    if (!blob.ok) continue
+    if (blob.out.length > G.MOST_ATTR_BYTES) return { refusal: G.attrRefusalOf(place) }
+    texts.push(blob.out)
+  }
+  if (inTree.missing.length > 16) return { refusal: G.attrRefusalOf(inTree.missing[16] ?? '') }
   return G.attrFilterNamesOf(texts)
 }
 
@@ -1933,12 +2006,20 @@ async function attrFilterNamesOf($: EngineInterface, where: string, listing: str
  * from (`G.argv.config`), there and then, so nothing the repository's own
  * config defines runs (`G.repoConfigOf`: its filter drivers off, the rest
  * held off by every command's own options); where git cannot say, nothing
- * runs. Git starts in the session's own folder and changes to `where`
- * itself (`G.argvIn`).
+ * runs. A command that reads the working tree (`G.readsWorktree`, the only
+ * kind a filter runs in) has every filter the repository's attribute files
+ * name blanked too (`attrNamesIn`), so one its config defines only after
+ * that read has nothing to attach to; and once it ran, the filter settings
+ * are read again: moved (`G.filterSettingsOf`), its output is dropped and
+ * the repository refused for the session (`gitRefused`), with a notice.
+ * Git starts in the session's own folder and changes to `where` itself
+ * (`G.argvIn`).
  */
-async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 15_000, where = git.root): Promise<{ ok: boolean; out: string; err: string }> {
+async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 15_000, where = git.root): Promise<GitRun> {
   if (!where) return { ok: false, out: '', err: 'not in a git repository' }
-  const run = async (argv: readonly string[], ms: number) => {
+  const refused = gitRefused.get(R.keyOf(where))
+  if (refused !== undefined) return { ok: false, out: '', err: refused }
+  const run = async (argv: readonly string[], ms: number): Promise<GitRun> => {
     try {
       const ran = await $.process.run(argv, { env: G.GIT_ENV, timeoutMs: ms })
       return { ok: ran.exitCode === 0, out: ran.stdout, err: ran.stderr }
@@ -1946,20 +2027,39 @@ async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 1
       return { ok: false, out: '', err: error instanceof Error ? error.message : String(error) }
     }
   }
-  const listed = await run(G.argvIn(G.argv.config, where), Math.min(timeoutMs, 5_000))
+  const isTree = G.readsWorktree(args)
+  const ms = Math.min(timeoutMs, 5_000)
+  const none: GitRun = { ok: true, out: '', err: '' }
+  const [listed, attrs, ignored, info] = await Promise.all([
+    run(G.argvIn(G.argv.config, where), ms),
+    isTree ? run(G.argvIn(G.argv.attrFiles, where), ms) : none,
+    isTree ? run(G.argvIn(G.argv.ignoredAttrFiles, where), ms) : none,
+    isTree ? run(G.argvIn(G.argv.infoAttributes, where), ms) : none,
+  ])
   if (!listed.ok) {
     const why = G.configRefusalOf(listed.err)
     if (why === G.OLD_GIT) tellGitOnce($, why)
     return { ok: false, out: '', err: why }
   }
+  const name = F.baseName(R.cleanPath(where))
   // the filters the repository's attribute files name, blanked too, so a definition it writes into its config after this read cannot attach to one (a race)
-  const plan = G.repoConfigOf(listed.out, await attrFilterNamesOf($, where, listed.out))
+  const names = isTree ? await attrNamesIn($, where, listed.out, { attrs, ignored, info }, run) : []
+  const plan = Array.isArray(names) ? G.repoConfigOf(listed.out, names) : names
   if ('refusal' in plan) {
-    tellGitOnce($, `${F.baseName(R.cleanPath(where))}: ${plan.refusal}`)
+    tellGitOnce($, `${name}: ${plan.refusal}`)
     return { ok: false, out: '', err: plan.refusal }
   }
-  if (plan.drivers.length > 0) tellGitOnce($, `Changes reads ${F.baseName(R.cleanPath(where))} with its own git ${plan.drivers.length === 1 ? 'filter' : 'filters'} (${plan.drivers.join(', ')}) off: files ${plan.drivers.length === 1 ? 'it handles' : 'they handle'} may show as changed.`)
-  return run(G.argvIn(args, where, plan.overrides), timeoutMs)
+  if (plan.drivers.length > 0) tellGitOnce($, `Changes reads ${name} with its own git ${plan.drivers.length === 1 ? 'filter' : 'filters'} (${plan.drivers.join(', ')}) off: files ${plan.drivers.length === 1 ? 'it handles' : 'they handle'} may show as changed.`)
+  const ran = await run(G.argvIn(args, where, plan.overrides), timeoutMs)
+  if (!isTree) return ran
+  // a filter defined while git ran (the race): what it printed is dropped, and the repository refused from now on
+  const after = await run(G.argvIn(G.argv.config, where), ms)
+  if (!after.ok || G.filterSettingsOf(after.out) !== G.filterSettingsOf(listed.out)) {
+    gitRefused.set(R.keyOf(where), G.SETTINGS_MOVED)
+    tellGitOnce($, `${name}: ${G.SETTINGS_MOVED}`)
+    return { ok: false, out: '', err: G.SETTINGS_MOVED }
+  }
+  return ran
 }
 
 /** The root of the repository holding `dir` as git spells it; null outside one, or where git cannot run. */

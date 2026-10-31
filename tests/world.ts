@@ -10,7 +10,7 @@ import type { CommandSpec, On, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSp
 import { mock, type Engine } from 'claude-code/testing'
 
 import type * as W from '../hooks/web'
-import { filesAnswerOf, filesRequestOf, gitWhere, isConfigList } from './tools'
+import { filesAnswerOf, filesRequestOf, gitWhere, isAttrList, isConfigList } from './tools'
 import type { DeckSnapshot } from '../types'
 
 export const NOW = 1_700_000_100_000
@@ -59,6 +59,8 @@ export type World = {
   git?: (argv: readonly string[], cwd?: string) => { exitCode: number; stdout: string }
   /** What `git config --list --show-scope -z` prints in `cwd` (the deck reads it before each run); left out, no settings of the repository's own. */
   gitConfig?: (cwd: string) => { exitCode: number; stdout: string; stderr?: string }
+  /** What git prints where the deck asks where a repository's attribute files lie (`isAttrList`: its `ls-files` of `.gitattributes`, its `rev-parse --git-path info/attributes`); left out, none. */
+  gitAttrs?: (argv: readonly string[], cwd: string) => { exitCode: number; stdout: string }
   /** What `fs.list` lists in a directory, when the test lays one out (null: there is none); left out, the testing kit's own. */
   list?: (path: string) => { name: string; kind: 'file' | 'dir' | 'other' }[] | null
   /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
@@ -210,7 +212,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
       : e.argv[0] === 'node'
       ? (w.nodeRuns.push([...e.argv]), { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
       : w.git && e.argv[0] === 'git'
-        ? { value: { stderr: '', ...(isConfigList(e.argv) ? (w.gitConfig?.(gitWhere(e)) ?? { exitCode: 0, stdout: '' }) : w.git(e.argv, gitWhere(e))), isStdoutTruncated: false, isStderrTruncated: false } }
+        ? { value: { stderr: '', ...(isAttrList(e.argv) ? (w.gitAttrs?.(e.argv, gitWhere(e)) ?? { exitCode: 0, stdout: '' }) : isConfigList(e.argv) ? (w.gitConfig?.(gitWhere(e)) ?? { exitCode: 0, stdout: '' }) : w.git(e.argv, gitWhere(e))), isStdoutTruncated: false, isStderrTruncated: false } }
         : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   const files = w.files

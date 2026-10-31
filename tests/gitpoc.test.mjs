@@ -24,9 +24,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 
 const G = await import(process.env.GITPOC_MODULE ? pathToFileURL(path.resolve(process.env.GITPOC_MODULE)).href : new URL('../hooks/git.ts', import.meta.url).href)
 const isOld = typeof G.repoConfigOf !== 'function'
+/** A module that reads every attribute file git lists before a command that reads the working tree, and its filter settings again after (fix/round3 on); an older one reads three. */
+const isListing = typeof G.attrPlacesOf === 'function'
+/** web/files.js, which reads the attribute files as the deck does (never through a link). */
+const FILES = createRequire(import.meta.url)('../web/files.js')
 
 /** What Claude Code 2.1.309's `$.process.run` adds when it starts git (read off a real session): its own guards, as `-c` settings in the environment. */
 const ENGINE_GUARDS = [
@@ -339,8 +344,8 @@ function git(argv, env, cwd) {
   return { ok: ran.status === 0, out: ran.stdout ?? '', err: ran.stderr ?? '' }
 }
 
-/** The filter driver names a repository's attribute files name, as the deck reads them beside the config (its top-level `.gitattributes`, its `.git/info/attributes`, and the `core.attributesFile` its own config names). */
-function attrNamesOf(dir, listing) {
+/** The filter driver names a repository's attribute files name, as an older deck read them beside the config (its top-level `.gitattributes`, its `.git/info/attributes`, and the `core.attributesFile` its own config names). */
+function oldAttrNamesOf(dir, listing) {
   const texts = []
   for (const p of [path.join(dir, '.gitattributes'), path.join(dir, '.git', 'info', 'attributes')]) {
     try { texts.push(fs.readFileSync(p, 'utf8')) } catch {}
@@ -350,14 +355,78 @@ function attrNamesOf(dir, listing) {
   return G.attrFilterNamesOf(texts)
 }
 
-/** One command run in `dir` as the deck's `runGit` runs it (the old module's way: git started in the repository); what it printed, or why it ran nothing. */
-function runAsDeck(args, dir, env) {
+/** Attribute files under `root` as the deck's `readAttrFiles` reads them: a look first (a link, no plain file or a big one refused), then web/files.js; their texts and the places not there, or the one refused. */
+function readAttr(root, places) {
+  const texts = []
+  const missing = []
+  const wanted = []
+  for (const place of places) {
+    const abs = path.join(root, place)
+    let isLink = false
+    let stat = null
+    try { isLink = fs.lstatSync(abs).isSymbolicLink(); stat = fs.statSync(abs) } catch {}
+    if (stat === null && !isLink) { missing.push(place); continue }
+    if (isLink || !stat.isFile() || stat.size > G.MOST_ATTR_BYTES) return { refused: place }
+    wanted.push(place)
+  }
+  const said = FILES.readFiles({ root, paths: wanted, most: G.MOST_ATTR_BYTES, textMost: G.MOST_ATTR_BYTES })
+  if (!said.ok) return { refused: wanted[0] ?? root }
+  for (const one of said.files) {
+    if (one.kind === 'none') missing.push(one.path)
+    else if (one.kind === 'file' && typeof one.text === 'string') texts.push(one.text)
+    else return { refused: one.path }
+  }
+  return { texts, missing }
+}
+
+/** The filter driver names a repository's attribute files name, as the deck's `attrNamesIn` reads them before a command that reads the working tree: every `.gitattributes` git lists, `info/attributes` where git keeps it, the `core.attributesFile` its config names, a tracked one gone from the working tree as the index holds it; or why it runs nothing. */
+function attrNamesOf(dir, listing, env) {
+  if (!isListing) return oldAttrNamesOf(dir, listing)
+  const [attrs, ignored, info] = [G.argv.attrFiles, G.argv.ignoredAttrFiles, G.argv.infoAttributes].map(argv => git(G.argvIn(argv, dir), env, SESSION))
+  if (!attrs.ok || !ignored.ok || !info.ok) return { refusal: 'git could not list its attribute files' }
+  const places = G.attrPlacesOf(attrs.out, ignored.out)
+  const named = G.attributesFileOf(listing, dir, HOME)
+  if (typeof named !== 'string') return named
+  const infoPath = info.out.replace(/\r?\n$/, '')
+  const texts = []
+  const inTree = readAttr(dir, places)
+  if ('refused' in inTree) return { refusal: G.attrRefusalOf(inTree.refused) }
+  texts.push(...inTree.texts)
+  for (const one of [path.resolve(dir, infoPath), named].filter(Boolean)) {
+    const read = readAttr(path.dirname(one), [path.basename(one)])
+    if ('refused' in read) return { refusal: G.attrRefusalOf(one) }
+    texts.push(...read.texts)
+  }
+  for (const place of inTree.missing) {
+    const blob = git(G.argvIn(G.argv.indexBlob(place), dir), env, SESSION)
+    if (blob.ok) texts.push(blob.out)
+  }
+  return G.attrFilterNamesOf(texts)
+}
+
+/**
+ * One command run in `dir` as the deck's `runGit` runs it (the old module's
+ * way: git started in the repository); what it printed, or why it ran
+ * nothing. `race` runs between the deck's reads and the command, as a
+ * process writing the repository's files meanwhile would; a run whose
+ * filter settings moved meanwhile (read again after it) is dropped
+ * (`isMoved`), and the deck runs no git there again.
+ */
+function runAsDeck(args, dir, env, race = () => {}) {
   if (isOld) return git(args, env, dir)
   const listed = git(G.argvIn(G.argv.config, dir), env, SESSION)
   if (!listed.ok) return { ok: false, out: '', err: G.configRefusalOf(listed.err), isRefused: true }
-  const plan = G.repoConfigOf(listed.out, attrNamesOf(dir, listed.out))
+  const isTree = !isListing || G.readsWorktree(args)
+  const names = isTree ? attrNamesOf(dir, listed.out, env) : []
+  if (!Array.isArray(names)) return { ok: false, out: '', err: names.refusal, isRefused: true }
+  const plan = G.repoConfigOf(listed.out, names)
   if ('refusal' in plan) return { ok: false, out: '', err: plan.refusal, isRefused: true }
-  return git(G.argvIn(args, dir, plan.overrides), env, SESSION)
+  race()
+  const ran = git(G.argvIn(args, dir, plan.overrides), env, SESSION)
+  if (!isListing || !isTree) return ran
+  const after = git(G.argvIn(G.argv.config, dir), env, SESSION)
+  if (!after.ok || G.filterSettingsOf(after.out) !== G.filterSettingsOf(listed.out)) return { ok: false, out: '', err: G.SETTINGS_MOVED, isRefused: true, isMoved: true }
+  return ran
 }
 
 const MODES = { 'as Claude Code starts git': { ...BASE_ENV, ...ENGINE_ENV }, 'bare git, no guards of Claude Code`s': BASE_ENV }
@@ -418,7 +487,7 @@ test('a filter the repository defines in its config AFTER the deck read its conf
   git(G.argvIn(G.argv.fileDiff('HEAD', []), dir, racey.overrides), env, SESSION)
   assert.ok(marks().includes('toctou'), 'without the fix, the late filter runs')
   // with it: every filter the attributes name is blanked on the command line, so the late definition cannot attach
-  const safe = G.repoConfigOf(listed.out, attrNamesOf(dir, listed.out))
+  const safe = G.repoConfigOf(listed.out, attrNamesOf(dir, listed.out, env))
   clearMarks()
   const out = git(G.argvIn(G.argv.status, dir, safe.overrides), env, SESSION)
   assert.ok(out.ok, out.err)
@@ -437,4 +506,62 @@ test('git starts in the session`s own folder and changes to the repository itsel
   const out = runAsDeck(G.argv.status, dir, env)
   assert.ok(out.ok, out.err)
   assert.deepEqual(marks(), [])
+})
+
+/**
+ * The race again, every way a repository could name a filter beside its
+ * config (audit-b2/race.mjs): the attribute file nested, a macro, ignored, a
+ * link, too big, a relative core.attributesFile. Each time the filter's
+ * definition is written into `.git/config` after the deck read it and before
+ * git runs (what a process writing the repository meanwhile could do). None
+ * may run; a repository the deck cannot read so is refused, running nothing.
+ */
+/** A file in folder `sub` committed (forced past an ignore), then changed, so git reads it from the working tree. */
+function tracked(dir, sub) {
+  fs.mkdirSync(path.join(dir, sub), { recursive: true })
+  fs.writeFileSync(path.join(dir, sub, 'c.txt'), 'one\n')
+  sh(dir, 'add', '-f', path.join(sub, 'c.txt'))
+  sh(dir, 'commit', '-qm', `in ${sub}`)
+  fs.writeFileSync(path.join(dir, sub, 'c.txt'), 'one\ntwo\n')
+}
+
+const RACES = {
+  'the top .gitattributes': dir => fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=evil\n'),
+  'a nested sub/.gitattributes': dir => { tracked(dir, 'sub'); fs.writeFileSync(path.join(dir, 'sub', '.gitattributes'), '* filter=evil\n') },
+  'an untracked .gitattributes in an ignored folder holding a tracked file': dir => { fs.writeFileSync(path.join(dir, '.gitignore'), 'ign/\n'); tracked(dir, 'ign'); fs.writeFileSync(path.join(dir, 'ign', '.gitattributes'), '* filter=evil\n') },
+  'a macro, [attr]m filter=evil': dir => fs.writeFileSync(path.join(dir, '.gitattributes'), '[attr]m filter=evil\n* m\n'),
+  'a pattern starting with [': dir => fs.writeFileSync(path.join(dir, '.gitattributes'), '[ab].txt filter=evil\n'),
+  'an ignored .gitattributes': dir => { fs.writeFileSync(path.join(dir, '.gitignore'), '.gitattributes\n'); fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=evil\n') },
+  'a tracked .gitattributes gone from the working tree': dir => { fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=evil\n'); sh(dir, 'add', '.gitattributes'); sh(dir, 'commit', '-qm', 'attrs'); fs.rmSync(path.join(dir, '.gitattributes')) },
+  '.git/info/attributes a link': dir => { const target = path.join(TMP, `attrs-${path.basename(dir)}`); fs.writeFileSync(target, '* filter=evil\n'); fs.mkdirSync(path.join(dir, '.git', 'info'), { recursive: true }); fs.rmSync(path.join(dir, '.git', 'info', 'attributes'), { force: true }); fs.symlinkSync(target, path.join(dir, '.git', 'info', 'attributes')) },
+  'a .gitattributes over 256 KB': dir => fs.writeFileSync(path.join(dir, '.gitattributes'), `${'# pad\n'.repeat(50_000)}* filter=evil\n`),
+  'a relative core.attributesFile': dir => { fs.writeFileSync(path.join(dir, 'my.attrs'), '* filter=evil\n'); set(dir, 'core.attributesFile', 'my.attrs') },
+}
+
+for (const [what, setup] of Object.entries(RACES)) {
+  test(`a filter defined in the config after the deck read it, named in ${what}, does not run: blanked, or the repository refused`, { skip: isOld }, () => {
+    const name = `race-${Object.keys(RACES).indexOf(what)}`
+    const dir = repo(name)
+    setup(dir)
+    const env = { ...BASE_ENV, ...ENGINE_ENV }
+    for (const args of [G.argv.status, G.argv.numstat('HEAD'), G.argv.fileDiff('HEAD', [])]) {
+      const config = fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8')
+      clearMarks()
+      runAsDeck(args, dir, env, () => fs.appendFileSync(path.join(dir, '.git', 'config'), `[filter "evil"]\n\tclean = '${marker(name)}'\n\tprocess = '${marker(name)}'\n`))
+      assert.deepEqual(marks().filter(mark => mark !== 'trusted-lfs'), [], `${args.join(' ')}`)
+      fs.writeFileSync(path.join(dir, '.git', 'config'), config)
+    }
+  })
+}
+
+test('a filter whose attribute and definition are both written after the deck`s reads (which no read before a run can see) is caught by the read after it: that run`s output is dropped, and the deck runs no git there again', { skip: isOld || !isListing }, () => {
+  const dir = repo('race-late')
+  const env = { ...BASE_ENV, ...ENGINE_ENV }
+  clearMarks()
+  const out = runAsDeck(G.argv.fileDiff('HEAD', []), dir, env, () => {
+    fs.writeFileSync(path.join(dir, '.gitattributes'), '* filter=late\n')
+    fs.appendFileSync(path.join(dir, '.git', 'config'), `[filter "late"]\n\tclean = '${marker('race-late')}'\n`)
+  })
+  assert.equal(out.isMoved, true)
+  assert.equal(out.out, '')
 })
