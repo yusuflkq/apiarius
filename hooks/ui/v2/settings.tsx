@@ -224,6 +224,7 @@ export const KEYS: readonly (readonly [string, string])[] = [
   ['1 – 6', 'the tabs'],
   ['Enter', 'opens what has the focus: an agent, a fold, a need, a file'],
   ['b', 'back from an agent’s page'],
+  ['s', 'opens All sessions'],
 ]
 
 /** Help: the tabs, then the keys. */

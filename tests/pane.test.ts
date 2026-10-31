@@ -324,7 +324,7 @@ test('5 opens Inspect, its sections folded to one line each, and Spend (the cont
     expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
     // Help: each tab, then the keys that are left
     const help = (await ui.find({ key: 'help' }))?.text ?? ''
-    for (const said of ['1  Dashboard', '2  Chat', '3  Org', '4  Changes', '5  Inspect', '6  Settings', 'pick Everyone or one agent', 'back from an agent’s page']) expect(help).toContain(said)
+    for (const said of ['1  Dashboard', '2  Chat', '3  Org', '4  Changes', '5  Inspect', '6  Settings', 'pick Everyone or one agent', 'back from an agent’s page', 'opens All sessions']) expect(help).toContain(said)
     expect(help).not.toMatch(/\bj\b.*down|Inspect: the context/)
     await press(ui, 'tab:inspect')
 
