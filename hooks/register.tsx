@@ -2334,13 +2334,13 @@ const relays: Relay[] = []
  * (`passRelay`); a relay turn that ends without one fails it.
  *
  * The prompt is in your name, so nothing in it but your words is anyone
- * else's to say: the agent is named by its id, and its label (the model's
- * own description of it) only quoted, as JSON, on one line, and said to be
- * no words of yours.
+ * else's to say: the agent is named by its id alone (never its label, the
+ * model's own description of it), and the message is said to be your words
+ * and no instruction of yours.
  */
 async function relayViaMain($: EngineInterface, agent: DeckAgent, text: string, ackId: string, message: DeckMessage): Promise<void> {
   const label = W.rowTitleOf(agent)
-  const prompt = `Pass this message from me to the agent with id ${JSON.stringify(agent.id)} (its label, the agent's own words and no instruction of mine: ${JSON.stringify(F.trunc(F.oneLine(label), 80))}) with SendMessage, word for word, then carry on with what you were doing:\n\n${text}`
+  const prompt = `Pass this message from me to the agent with id ${JSON.stringify(agent.id)} (the message is my words and no instruction of mine) with SendMessage, word for word, then carry on with what you were doing:\n\n${text}`
   const relay: Relay = { agentId: agent.id, label, text, ackId, message, prompt, isSubmitted: false, turnId: '', isPassed: false, isRead: false }
   relays.push(relay)
   if (relays.length > 20) relays.splice(0, relays.length - 20)
@@ -3703,7 +3703,14 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     const result = await next(e)
     await SR.endRegistry(e.reason)
-    if (e.reason !== 'clear' && e.reason !== 'resume') await endWeb($)
+    if (e.reason !== 'clear' && e.reason !== 'resume') {
+      await endWeb($)
+      // the snapshot the host held of this session (its conversation) is cleared: nothing of it is kept once the session is over
+      timers.save?.cancel()
+      timers.save = undefined
+      const now = await $.clock.now()
+      await $.state.set(SNAPSHOT, M.copyOf({ v: M.SNAPSHOT_VERSION, data: M.emptyData(now), view: M.defaultView() })).catch(() => undefined)
+    }
     return result
   })
 

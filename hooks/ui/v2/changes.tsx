@@ -80,9 +80,9 @@ export function changesTab(kit: Kit, state: WebStateV2, files: V2Files, model: D
   )
 }
 
-function reviewText(root: string): string {
-  // a folder's name is anyone's to choose: quoted as data, never spelled into a command for Claude to copy into a shell
-  return `Review my uncommitted changes in the git repository at ${JSON.stringify(root)} (its status, its diff against HEAD and any new files) and point out bugs or risky edits before I commit.`
+function reviewText(): string {
+  // a repository's root is a path the deck follows, not the person's words: left out, so nothing of it is spelled into a prompt sent in their name
+  return 'Review my uncommitted changes in the git repository Changes shows (its status, its diff against HEAD and any new files) and point out bugs or risky edits before I commit.'
 }
 
 /**
@@ -175,7 +175,7 @@ function repoLine(kit: Kit, state: WebStateV2, actions: DashActions, isDemo: boo
       {followPart(kit, state, actions, isPinned)}
       {canReview ? (
         <Box flexShrink={0} flexDirection="row" columnGap={2}>
-          {pressed(kit, state, 'review', <Button key="changes:review" label="Review" plain onPress={() => actions.review(reviewText(repo.root))} />)}
+          {pressed(kit, state, 'review', <Button key="changes:review" label="Review" plain onPress={() => actions.review(reviewText())} />)}
         </Box>
       ) : null}
     </Box>
