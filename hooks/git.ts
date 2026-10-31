@@ -116,20 +116,62 @@ const FILTER_KEYS = ['clean', 'smudge', 'process', 'required'] as const
 const DRIVER_NAME = /^[A-Za-z0-9._@+-]{1,100}$/
 
 /**
+ * Every filter driver a repository's attribute files name (`filter=NAME`):
+ * the drivers git would run on its files, as the attributes stand. The deck
+ * blanks each of these too (`repoConfigOf`'s `attrNames`), so that a
+ * repository cannot define a filter in its config *after* the deck read it
+ * (a race the per-run config read alone would miss): with the driver blanked
+ * on the command line, a late definition has nothing git will attach to.
+ * A comment line (`#`) names none, nor a macro line (`[attr]…`); only an
+ * unset `filter=NAME` token names a driver (`-filter`/`!filter` do not).
+ */
+export function attrFilterNamesOf(texts: readonly string[]): string[] {
+  const names = new Set<string>()
+  for (const text of texts) {
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (line === '' || line.startsWith('#') || line.startsWith('[')) continue
+      for (const match of line.matchAll(/(?:^|\s)filter=(\S+)/g)) {
+        const name = match[1] ?? ''
+        if (name !== '') names.add(name)
+      }
+    }
+  }
+  return [...names]
+}
+
+/** The `core.attributesFile` a repository's own config names (local or worktree scope, never the person's trusted one): the attribute file the deck reads too, for the filters it names; '' for none. */
+export function localAttributesFileOf(listing: string): string {
+  const parts = listing.split('\0')
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const scope = parts[i] ?? ''
+    const entry = parts[i + 1] ?? ''
+    const cut = entry.indexOf('\n')
+    const key = cut < 0 ? entry : entry.slice(0, cut)
+    if (key.toLowerCase() === 'core.attributesfile' && !TRUSTED_SCOPES.has(scope)) return cut < 0 ? '' : entry.slice(cut + 1)
+  }
+  return ''
+}
+
+/**
  * What the deck must tell git so that no filter driver a repository's own
  * config defines runs (its `clean`, `smudge` or `process`), from
- * `git config --list --show-scope -z` there (`argv.config`): each setting
- * of a driver that came from outside the person's trusted scopes is set
- * back to what their own config says (a global git-lfs keeps working), or
- * blanked where theirs says none. A driver left with nothing of the
- * person's to run (none of theirs by that name, or a `process` of the
- * repository's, which the command line can blank but not unset, beside a
- * `clean` of theirs) is switched off, `required` false so git reads the
- * files as they stand, and named in `drivers` (for a note). A repository
- * defining a driver whose name the command line cannot carry is refused:
- * nothing runs there.
+ * `git config --list --show-scope -z` there (`argv.config`), and no driver
+ * its attribute files name (`attrNames`, from `attrFilterNamesOf`) runs
+ * either: each setting of a driver that came from outside the person's
+ * trusted scopes is set back to what their own config says (a global
+ * git-lfs keeps working), or blanked where theirs says none; a driver an
+ * attribute names is blanked whole (`clean`, `smudge` and `process`), so a
+ * definition the repository writes into its config after this read has
+ * nothing to attach to (a race). A driver left with nothing of the person's
+ * to run (none of theirs by that name, or a `process` of the repository's,
+ * which the command line can blank but not unset, beside a `clean` of
+ * theirs) is switched off, `required` false so git reads the files as they
+ * stand, and, where the repository's own config defined it, named in
+ * `drivers` (for a note). A repository defining or naming a driver whose
+ * name the command line cannot carry is refused: nothing runs there.
  */
-export function repoConfigOf(listing: string): { overrides: string[]; drivers: string[] } | { refusal: string } {
+export function repoConfigOf(listing: string, attrNames: readonly string[] = []): { overrides: string[]; drivers: string[] } | { refusal: string } {
   const parts = listing.split('\0')
   const trusted = new Map<string, string>()
   const untrusted = new Map<string, Set<string>>()
@@ -147,20 +189,27 @@ export function repoConfigOf(listing: string): { overrides: string[]; drivers: s
     if (TRUSTED_SCOPES.has(scope)) trusted.set(`${name}\n${what}`, value)
     else untrusted.set(name, (untrusted.get(name) ?? new Set<string>()).add(what))
   }
+  // every driver to neutralise: the repository's config-defined ones, and the ones its attributes name (which its config may define only later)
+  const names = new Set<string>([...untrusted.keys(), ...attrNames])
   const overrides: string[] = []
   const drivers: string[] = []
-  for (const [name, said] of [...untrusted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const name of [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     if (!DRIVER_NAME.test(name)) return { refusal: `This repository's own git settings define a filter Apiarius cannot switch off (${JSON.stringify(name.slice(0, 40))}), so it runs no git there.` }
+    const said = untrusted.get(name) ?? new Set<string>()
     const own = (what: string) => trusted.get(`${name}\n${what}`)
+    const isOwned = FILTER_KEYS.some(what => own(what) !== undefined)
+    // an attribute names a driver the person does not define: blank every key the command line can, whatever the config says now or writes later (the race). A driver the person does define is restored to exactly theirs, not blanked (a blank `process` would stop a clean/smudge driver of theirs); the command line beats the repository's own scopes, so a late redefinition of theirs cannot win either.
+    const wipe = attrNames.includes(name) && !isOwned
     const set = (what: string, value: string) => overrides.push('-c', `filter.${name}.${what}=${value}`)
     for (const what of ['clean', 'smudge', 'process']) {
       const value = own(what)
       if (value !== undefined) set(what, value)
-      else if (said.has(what)) set(what, '')
+      else if (wipe || said.has(what)) set(what, '')
     }
     // git runs a driver's process before its clean, and a blank one is no filter at all
-    const isOff = own('process') === undefined && (said.has('process') || own('clean') === undefined)
-    if (isOff) drivers.push(name)
+    const isOff = own('process') === undefined && (wipe || said.has('process') || own('clean') === undefined)
+    // the note is for a driver the repository's own config actually defines, not one merely named in its attributes
+    if (isOff && said.size > 0) drivers.push(name)
     set('required', isOff ? 'false' : (own('required') ?? 'false'))
   }
   return { overrides, drivers }

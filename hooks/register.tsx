@@ -1718,6 +1718,35 @@ function tellGitOnce($: EngineInterface, text: string) {
   $.ui.toast(text)
 }
 
+/** A file read without following a link to it (an attribute file a repository holds), capped and discarded on anything that is not a plain file of a sane size; '' when there is none, or it is a link. */
+async function readAttrFile($: EngineInterface, path: string): Promise<string> {
+  try {
+    const stat = await $.fs.stat(path)
+    if (stat.isLink || stat.kind !== 'file' || stat.size > 256 * 1024) return ''
+    return await $.fs.read(path)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The filter driver names a repository's attribute files name (`filter=NAME`),
+ * read there and then beside its config, so each can be switched off even if
+ * the repository defines it in its config after the deck read that
+ * (`G.attrFilterNamesOf`): its top-level `.gitattributes`, its
+ * `.git/info/attributes`, and the `core.attributesFile` its own config names
+ * (`G.localAttributesFileOf`, from `listing`). None is followed through a
+ * link, and none of their text is ever shown.
+ */
+async function attrFilterNamesOf($: EngineInterface, where: string, listing: string): Promise<string[]> {
+  const base = where.replace(/[\\/]+$/, '')
+  const paths = [`${base}/.gitattributes`, `${base}/.git/info/attributes`]
+  const named = G.localAttributesFileOf(listing).trim()
+  if (named !== '') paths.push(named)
+  const texts = await Promise.all(paths.map(path => readAttrFile($, path)))
+  return G.attrFilterNamesOf(texts)
+}
+
 /**
  * Runs git in `where`, the repository shown unless told otherwise; with
  * none, runs nothing. Each run first reads where git's settings there come
@@ -1737,13 +1766,14 @@ async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 1
       return { ok: false, out: '', err: error instanceof Error ? error.message : String(error) }
     }
   }
-  const listed = await run(G.argvIn(G.argv.config, where), Math.min(timeoutMs, 10_000))
+  const listed = await run(G.argvIn(G.argv.config, where), Math.min(timeoutMs, 5_000))
   if (!listed.ok) {
     const why = G.configRefusalOf(listed.err)
     if (why === G.OLD_GIT) tellGitOnce($, why)
     return { ok: false, out: '', err: why }
   }
-  const plan = G.repoConfigOf(listed.out)
+  // the filters the repository's attribute files name, blanked too, so a definition it writes into its config after this read cannot attach to one (a race)
+  const plan = G.repoConfigOf(listed.out, await attrFilterNamesOf($, where, listed.out))
   if ('refusal' in plan) {
     tellGitOnce($, `${F.baseName(R.cleanPath(where))}: ${plan.refusal}`)
     return { ok: false, out: '', err: plan.refusal }

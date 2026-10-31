@@ -339,12 +339,23 @@ function git(argv, env, cwd) {
   return { ok: ran.status === 0, out: ran.stdout ?? '', err: ran.stderr ?? '' }
 }
 
+/** The filter driver names a repository's attribute files name, as the deck reads them beside the config (its top-level `.gitattributes`, its `.git/info/attributes`, and the `core.attributesFile` its own config names). */
+function attrNamesOf(dir, listing) {
+  const texts = []
+  for (const p of [path.join(dir, '.gitattributes'), path.join(dir, '.git', 'info', 'attributes')]) {
+    try { texts.push(fs.readFileSync(p, 'utf8')) } catch {}
+  }
+  const named = G.localAttributesFileOf(listing).trim()
+  if (named) { try { texts.push(fs.readFileSync(named, 'utf8')) } catch {} }
+  return G.attrFilterNamesOf(texts)
+}
+
 /** One command run in `dir` as the deck's `runGit` runs it (the old module's way: git started in the repository); what it printed, or why it ran nothing. */
 function runAsDeck(args, dir, env) {
   if (isOld) return git(args, env, dir)
   const listed = git(G.argvIn(G.argv.config, dir), env, SESSION)
   if (!listed.ok) return { ok: false, out: '', err: G.configRefusalOf(listed.err), isRefused: true }
-  const plan = G.repoConfigOf(listed.out)
+  const plan = G.repoConfigOf(listed.out, attrNamesOf(dir, listed.out))
   if ('refusal' in plan) return { ok: false, out: '', err: plan.refusal, isRefused: true }
   return git(G.argvIn(args, dir, plan.overrides), env, SESSION)
 }
@@ -392,6 +403,27 @@ test('a repository that redefines the person`s lfs filter runs the person`s, not
   assert.deepEqual(planOf('filter-lfs-process'), { overrides: ['-c', `filter.lfs.clean='${path.join(BIN, 'trusted-lfs')}'`, '-c', 'filter.lfs.smudge=cat', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=false'], drivers: ['lfs'] })
   HOSTILE['filter clean']()
   assert.deepEqual(planOf('filter-clean'), { overrides: ['-c', 'filter.evil.clean=', '-c', 'filter.evil.required=false'], drivers: ['evil'] })
+})
+
+test('a filter the repository defines in its config AFTER the deck read its config, but names in its attributes before, does not run: the deck blanks every filter its attributes name, so a late definition has nothing to attach to (the config-read race)', { skip: isOld }, () => {
+  // the attribute names the filter up front; no filter.evil in the config when the deck reads it
+  const dir = repo('toctou', '* filter=evil\n')
+  const env = { ...BASE_ENV, ...ENGINE_ENV }
+  const listed = git(G.argvIn(G.argv.config, dir), env, SESSION)
+  // without the attribute-aware blanking, a filter written after the read runs (the race the config read alone misses)
+  fs.appendFileSync(path.join(dir, '.git', 'config'), `[filter "evil"]\n\tclean = '${marker('toctou')}'\n`)
+  clearMarks()
+  const racey = G.repoConfigOf(listed.out) // overrides: [] (the config read saw no filter.evil)
+  git(G.argvIn(G.argv.status, dir, racey.overrides), env, SESSION)
+  git(G.argvIn(G.argv.fileDiff('HEAD', []), dir, racey.overrides), env, SESSION)
+  assert.ok(marks().includes('toctou'), 'without the fix, the late filter runs')
+  // with it: every filter the attributes name is blanked on the command line, so the late definition cannot attach
+  const safe = G.repoConfigOf(listed.out, attrNamesOf(dir, listed.out))
+  clearMarks()
+  const out = git(G.argvIn(G.argv.status, dir, safe.overrides), env, SESSION)
+  assert.ok(out.ok, out.err)
+  git(G.argvIn(G.argv.fileDiff('HEAD', []), dir, safe.overrides), env, SESSION)
+  assert.deepEqual(marks().filter(mark => mark !== 'trusted-lfs'), [])
 })
 
 test('git starts in the session`s own folder and changes to the repository itself, so no program the repository holds is the one found by name', () => {
