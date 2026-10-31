@@ -47,12 +47,14 @@ function waitFor(subscribe, check, ms, what) {
 /**
  * Starts a server; resolves once it printed its ready line. `lines` collects
  * what it prints after. `stdin`: 'pipe' kept open, 'closed' (a pipe ended at
- * once, as the mod's $.process.spawn gives it), or 'ignore'.
+ * once), 'ignore', or 'token' (the token as its first line, then its end, as
+ * the mod's $.process.spawn gives it with `input`; `input` says what else).
  */
-function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_TOKEN: TOKEN } } = {}) {
+function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_TOKEN: TOKEN }, input = `${TOKEN}\n` } = {}) {
   const argv = [SERVER, '--dir', dir, ...args]
-  const child = spawn(process.execPath, argv, { env: { ...process.env, APIARIUS_TOKEN: '', ...env }, stdio: [stdin === 'closed' ? 'pipe' : stdin, 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(process.execPath, argv, { env: { ...process.env, APIARIUS_TOKEN: '', ...env }, stdio: [['closed', 'token'].includes(stdin) ? 'pipe' : stdin, 'pipe', 'pipe'], windowsHide: true })
   if (stdin === 'closed') child.stdin.end()
+  if (stdin === 'token') child.stdin.end(input)
   children.add(child)
   const server = { child, lines: [], first: null, port: 0, stderr: '', exited: false, listeners: new Set() }
   const notify = () => { for (const fn of [...server.listeners]) fn() }
@@ -163,7 +165,10 @@ after(async () => {
 })
 
 test('refuses to start without a token, or with bad arguments', async () => {
-  await assert.rejects(start({ dir: tempDir(), env: {} }), /exited with 2/)
+  await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'closed' }), /exited with 2/)
+  await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'ignore' }), /exited with 2/)
+  await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'token', input: 'short\n' }), /exited with 2/)
+  await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'token', input: 'has a space 0123456789\n' }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), env: { APIARIUS_TOKEN: 'short' } }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--parent', 'abc'] }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--port', '70000'] }), /exited with 2/)
@@ -176,30 +181,71 @@ test('prints the ready line first, with the port it listens on', async () => {
   assert.equal((await request(main.port, { headers: { 'X-Deck-Token': TOKEN } })).status, 200)
 })
 
-test('refuses every route without the token (403), and answers with it', async () => {
-  for (const target of ['/', '/app.js', '/app.css', '/avatars.mjs', '/state', '/events', '/patch/toolu_01Abc-d_9', '/gitdiff/1kejm2g-1kfevo4-4g', '/message/1791970900000-14-main-you', '/agent/main', '/nope']) {
-    assert.equal((await request(main.port, { path: target })).status, 403, target)
-    assert.equal((await request(main.port, { path: target, headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403, target)
-  }
-  const res = await request(main.port, { headers: { 'X-Deck-Token': TOKEN } })
-  assert.equal(res.status, 200)
-  assert.equal(res.headers['cache-control'], 'no-store')
+test('takes the token as the first line of stdin, as the mod gives it, and stays up once stdin ends', async () => {
+  const server = await start({ dir: tempDir(), env: {}, stdin: 'token' })
+  await sleep(1500) // its stdin ended at once, after the token: that says nothing of the parent
+  assert.equal(server.exited, false)
+  assert.equal((await request(server.port, { headers: { 'X-Deck-Token': TOKEN } })).status, 200)
+  assert.equal((await request(server.port, { headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403)
+  // the token is in no argument another process could read
+  assert.ok(!server.child.spawnargs.join(' ').includes(TOKEN))
+  server.child.kill()
 })
 
-test('the t param sets an HttpOnly SameSite=Strict cookie, which then carries the token', async () => {
-  const first = await request(main.port, { path: `/state?t=${TOKEN}` })
-  assert.equal(first.status, 200)
-  const [cookie] = first.headers['set-cookie']
-  assert.match(cookie, new RegExp(`^deck_t_${main.port}=${TOKEN};`))
-  assert.match(cookie, /; HttpOnly/)
-  assert.match(cookie, /; SameSite=Strict/)
-  const pair = cookie.split(';')[0]
-  const again = await request(main.port, { headers: { Cookie: `other=1; ${pair}` } })
-  assert.equal(again.status, 200)
-  assert.equal(again.headers['set-cookie'], undefined) // already set
-  assert.equal((await request(main.port, { headers: { Cookie: `deck_t_${main.port}=wrong-token-0123456789` } })).status, 403)
-  assert.equal((await request(main.port, { headers: { Cookie: `deck_t_1=${TOKEN}` } })).status, 403) // another server's cookie
-  assert.equal((await request(main.port, { path: '/state?t=wrong-token-0123456789' })).status, 403)
+/** Every data route, with what it answers with the token: the state, the stream, each lazy file, another session's, Org's Timeline. */
+const DATA = [['/state', 200], ['/events', 200], ['/patch/toolu_01Abc-d_9', 200], ['/gitdiff/1kejm2g-1kfevo4-4g', 200], ['/message/1791970900000-14-main-you', 200], ['/agent/main', 200], ['/timeline', 404], ['/s/other-1/state', 404], ['/nope', 404]]
+/** The page's own files: no data in them. */
+const STATIC = ['/', '/app.js', '/app.css', '/avatars.mjs', '/timeline.mjs', '/favicon.ico']
+
+/** A GET that resolves on the answer's head, for /events too, which never ends. */
+function head(port, target, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path: target, headers }, res => { resolve({ status: res.statusCode, headers: res.headers }); req.destroy() })
+    req.on('error', reject)
+  })
+}
+
+test('the page`s own files need no token; every data route refuses without it (403), and answers with the header', async () => {
+  for (const target of STATIC) {
+    const res = await head(main.port, target)
+    assert.ok([200, 204].includes(res.status), `${target}: ${res.status}`)
+  }
+  for (const [target, status] of DATA) {
+    assert.equal((await head(main.port, target)).status, 403, target)
+    assert.equal((await head(main.port, target, { 'X-Deck-Token': 'wrong-token-0123456789' })).status, 403, target)
+    assert.equal((await head(main.port, target, { 'X-Deck-Token': TOKEN })).status, status, target)
+  }
+  // not GET: refused without the token too, whatever the path
+  for (const method of ['PUT', 'DELETE', 'HEAD', 'OPTIONS']) assert.equal((await request(main.port, { method, path: '/state' })).status, 403, method)
+  assert.equal((await request(main.port, { method: 'POST', path: '/' })).status, 403)
+})
+
+test('the t param stands for the header on /events alone (an EventSource sends none); on any other route it is refused', async () => {
+  assert.equal((await head(main.port, `/events?t=${TOKEN}`)).status, 200)
+  assert.equal((await head(main.port, '/events?t=wrong-token-0123456789')).status, 403)
+  for (const [target] of DATA.filter(([one]) => one !== '/events')) assert.equal((await head(main.port, `${target}?t=${encodeURIComponent(TOKEN)}`)).status, 403, target)
+})
+
+test('no cookie: none is ever set, and one that carries the token opens nothing', async () => {
+  for (const target of [...STATIC, `/?t=${TOKEN}`, `/state?t=${TOKEN}`, `/events?t=${TOKEN}`]) {
+    assert.equal((await head(main.port, target, { 'X-Deck-Token': TOKEN })).headers['set-cookie'], undefined, target)
+    assert.equal((await head(main.port, target)).headers['set-cookie'], undefined, target)
+  }
+  for (const cookie of [`deck_t_${main.port}=${TOKEN}`, `deck_t=${TOKEN}`, `t=${TOKEN}`]) assert.equal((await head(main.port, '/state', { Cookie: cookie })).status, 403, cookie)
+})
+
+test('every answer: no framing (frame-ancestors none, X-Frame-Options DENY), no Referer, same-origin COOP and CORP, never cached or sniffed', async () => {
+  for (const [target, headers] of [['/', {}], ['/app.js', {}], ['/state', { 'X-Deck-Token': TOKEN }], ['/state', {}], ['/nope', { 'X-Deck-Token': TOKEN }], ['/events', { 'X-Deck-Token': TOKEN }]]) {
+    const res = await head(main.port, target, headers)
+    assert.match(res.headers['content-security-policy'], /(^|; )frame-ancestors 'none'(;|$)/, target)
+    assert.match(res.headers['content-security-policy'], /(^|; )script-src 'self'(;|$)/, target)
+    assert.equal(res.headers['x-frame-options'], 'DENY', target)
+    assert.equal(res.headers['referrer-policy'], 'no-referrer', target)
+    assert.equal(res.headers['cross-origin-opener-policy'], 'same-origin', target)
+    assert.equal(res.headers['cross-origin-resource-policy'], 'same-origin', target)
+    assert.equal(res.headers['cache-control'], 'no-store', target)
+    assert.equal(res.headers['x-content-type-options'], 'nosniff', target)
+  }
 })
 
 test('421 on a Host other than 127.0.0.1:<port> or localhost:<port>', async () => {
@@ -210,10 +256,10 @@ test('421 on a Host other than 127.0.0.1:<port> or localhost:<port>', async () =
   assert.equal((await request(main.port, { headers: { ...auth, Host: `localhost:${main.port}` } })).status, 200)
 })
 
-test('serves the page files with their types (the avatar library and the timeline`s layout app.js imports scripts too), or 404 while one is missing', async () => {
+test('serves the page files with their types, no token needed (the avatar library and the timeline`s layout app.js imports scripts too), or 404 while one is missing', async () => {
   const types = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/avatars.mjs': ['avatars.mjs', 'text/javascript'], '/timeline.mjs': ['timeline.mjs', 'text/javascript'] }
   for (const [target, [file, type]] of Object.entries(types)) {
-    const res = await request(main.port, { path: target, headers: { 'X-Deck-Token': TOKEN } })
+    const res = await request(main.port, { path: target })
     if (!fs.existsSync(path.join(__dirname, '..', file))) { assert.equal(res.status, 404, target); continue }
     assert.equal(res.status, 200, target)
     assert.equal(res.headers['content-type'], `${type}; charset=utf-8`)

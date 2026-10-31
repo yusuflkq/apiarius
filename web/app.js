@@ -24,6 +24,8 @@ import * as TL from './timeline.mjs';
 
 // ===================================================================== basics
 
+// The server's token, from the page's own address (a reload keeps it): every data request sends it as a header,
+// and /events alone as `t`, since an EventSource sends no header. The server sets no cookie.
 const TOKEN = new URLSearchParams(location.search).get('t') || '';
 const AUTH = TOKEN ? { 'X-Deck-Token': TOKEN } : {};
 const QT = TOKEN ? `?t=${encodeURIComponent(TOKEN)}` : '';
@@ -742,7 +744,7 @@ async function connect() {
   conn.retryAt = 0;
   let res;
   try {
-    res = await fetch(`/state${QT}`, { headers: AUTH, cache: 'no-store' });
+    res = await fetch('/state', { headers: AUTH, cache: 'no-store' });
   } catch {
     return retry();
   }
@@ -877,7 +879,7 @@ function fullTextOf(id) {
   if (t) return t;
   t = { status: 'loading', text: '', error: '' };
   fullTexts.set(id, t);
-  fetch(`${baseUrl()}/message/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
+  fetch(`${baseUrl()}/message/${encodeURIComponent(id)}`, { headers: AUTH })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'The rest is not on disk yet.' : `The server answered ${r.status}.`))))
     .then(text => { t.status = 'ok'; t.text = text; })
     .catch(e => { t.status = 'error'; t.error = e.message || 'Could not load the rest.'; })
@@ -896,7 +898,7 @@ function diffOf(kind, id) {
   if (p) return p;
   p = { status: 'loading', hunks: null, error: '' };
   diffs.set(key, p);
-  fetch(`${baseUrl()}/${kind}/${encodeURIComponent(id)}${QT}`, { headers: AUTH })
+  fetch(`${baseUrl()}/${kind}/${encodeURIComponent(id)}`, { headers: AUTH })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? `${DIFF_WORD[kind]} is not on disk yet.` : `The server answered ${r.status}.`))))
     .then(text => { p.status = 'ok'; p.hunks = parsePatch(text); })
     .catch(e => { p.status = 'error'; p.error = e.message || `Could not load ${DIFF_WORD[kind].toLowerCase()}.`; })
@@ -970,7 +972,7 @@ function agentFileOf(a) {
   if (!f) { f = { status: 'loading', data: null, error: '', sig: '', loading: false, tries: 0 }; agentFiles.set(a.fileId, f); }
   f.sig = sig;
   f.loading = true;
-  fetch(`${baseUrl()}/agent/${encodeURIComponent(a.fileId)}${QT}`, { headers: AUTH, cache: 'no-store' })
+  fetch(`${baseUrl()}/agent/${encodeURIComponent(a.fileId)}`, { headers: AUTH, cache: 'no-store' })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'Its activity is not on disk yet.' : `The server answered ${r.status}.`))))
     .then(text => { f.data = agentFileFrom(JSON.parse(text)); f.status = 'ok'; f.error = ''; f.tries = 0; })
     .catch(e => {
@@ -2147,7 +2149,7 @@ function timelineNow() {
   const want = S.now;
   if (tl.loading || tl.loadedFor === want) return tl;
   tl.loading = true;
-  fetch(`/timeline${QT}`, { headers: AUTH, cache: 'no-store' })
+  fetch('/timeline', { headers: AUTH, cache: 'no-store' })
     .then(r => (r.ok ? r.text() : Promise.reject(new Error(r.status === 404 ? 'The timeline is not on disk yet.' : `The server answered ${r.status}.`))))
     .then(text => { tl.data = timelineFrom(JSON.parse(text)); tl.status = 'ok'; tl.error = ''; tl.tries = 0; tl.loadedFor = want; })
     .catch(e => {
@@ -4453,7 +4455,7 @@ async function pollView(seq) {
     command({ cmd: 'view', session: id }).catch(() => {});
   }
   try {
-    const res = await fetch(`/s/${encodeURIComponent(id)}/state${QT}`, { headers: AUTH, cache: 'no-store' });
+    const res = await fetch(`/s/${encodeURIComponent(id)}/state`, { headers: AUTH, cache: 'no-store' });
     if (seq !== VIEW.seq) return;
     if (res.status === 404) VIEW.error = 'That session is not running any more: its deck lists it no longer.';
     else if (res.ok) {

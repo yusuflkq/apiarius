@@ -4,12 +4,20 @@
  * messages cut for the state and the agents' page files, live updates over
  * SSE, and turns the page's commands into stdout lines for the mod.
  *
- *   APIARIUS_TOKEN=<token> node web/server.js --dir <mod root>/.web/<sessionId> --parent <pid> [--sessions <registry>]
+ *   node web/server.js --dir <home>/web/<sessionId> --parent <pid> [--sessions <registry>]   (the token on stdin)
+ *
+ * The token comes as the first line of stdin (the mod's `input`), or from
+ * `APIARIUS_TOKEN` (web/dev.js and the tests): never argv, which other
+ * processes can read. Every data route and POST /cmd needs it, in the
+ * `X-Deck-Token` header, or as `t` for /events alone (an EventSource sends no
+ * header); the page's own files (index.html, app.js, app.css, the .mjs it
+ * imports) hold no data and need none, so no cookie is ever set.
  *
  * With `--sessions` (the registry of every session on this machine,
  * hooks/sessions.ts) it also serves another session's state and lazy files
  * under /s/<sessionId>/…, read from the folder its registry file names, and
- * only from a folder shaped as the deck makes them (`…/.web/<sessionId>`).
+ * only from a folder beside its own as the deck makes them
+ * (`<home>/web/<sessionId>`, still there once every link is followed).
  *
  * Plain Node (18+), no dependencies. stdout carries the ready line
  * `{"ready":<port>}` and then one `{"cmd":…}` line per command, nothing else;
@@ -51,11 +59,20 @@ const PAGE = {
   // how Org's Timeline is laid out, which app.js imports (the mod lays the pane's out with it too)
   '/timeline.mjs': ['timeline.mjs', 'text/javascript; charset=utf-8'],
 }
-const HEADERS = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' }
-// Scripts only from app.js, so agent text the page shows can never run as code.
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+// Scripts only from app.js, so agent text the page shows can never run as code; no other page may frame it.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+// On every answer: never cached, never sniffed, no Referer (the page's address holds the token), never framed, and nothing of it for another origin to load or keep a handle on.
+const HEADERS = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Content-Security-Policy': CSP,
+  'X-Frame-Options': 'DENY',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+}
 
-// ---- the command line, and the token (from the environment, never argv)
+// ---- the command line, and the token (from stdin or the environment, never argv)
 const log = message => process.stderr.write(`apiarius server: ${message}\n`)
 const fail = message => { log(message); process.exit(2) }
 
@@ -67,6 +84,8 @@ for (let i = 2; i < process.argv.length; i += 2) {
 }
 if (!args.dir) fail('--dir is required')
 const dir = path.resolve(args.dir)
+// where the other sessions' folders are: beside this one's (`<home>/web`)
+const webRoot = path.dirname(dir)
 // the registry of every session on this machine; null: this session's own files alone
 const sessions = args.sessions ? path.resolve(args.sessions) : null
 const parent = args.parent === undefined ? null : Number(args.parent)
@@ -74,23 +93,14 @@ if (parent !== null && !(Number.isInteger(parent) && parent > 0)) fail('--parent
 // A restart asks for its last port again, so the open page reconnects; when it is taken the OS picks one.
 let wanted = args.port === undefined ? 0 : Number(args.port)
 if (!(Number.isInteger(wanted) && wanted >= 0 && wanted < 65536)) fail('--port must be a port number')
-const token = process.env.APIARIUS_TOKEN ?? ''
-if (token.length < 16) fail('APIARIUS_TOKEN must be set (16 characters or more)')
 
 // Compares digests, so a check takes the same time whatever the guess.
 const digest = text => crypto.createHash('sha256').update(text).digest()
-const TOKEN = digest(token)
-const isToken = value => typeof value === 'string' && value !== '' && crypto.timingSafeEqual(digest(value), TOKEN)
+let TOKEN = null // the token's digest, once read
+const isToken = value => TOKEN !== null && typeof value === 'string' && value !== '' && crypto.timingSafeEqual(digest(value), TOKEN)
+const tokenOk = token => typeof token === 'string' && token.length >= 16 && !/[\u0000-\u0020\u007f]/.test(token)
 
-// Cookies ignore ports, so each server names its own: two sessions' decks on
-// 127.0.0.1 must not overwrite each other's token. Both are set on listen.
 let port = 0
-let cookie = 'deck_t'
-
-function cookieOf(req) {
-  const pair = (req.headers.cookie ?? '').split(/;\s*/).find(part => part.startsWith(`${cookie}=`))
-  try { return pair ? decodeURIComponent(pair.slice(cookie.length + 1)) : '' } catch { return '' }
-}
 
 // ---- the state: the last good state.json, minified so it fits one SSE data line
 const stateFile = path.join(dir, 'state.json')
@@ -165,7 +175,6 @@ function send(res, status, body = '', type = TEXT_TYPE) {
 function page(res, [file, type]) {
   fs.readFile(path.join(__dirname, file), (err, body) => {
     if (err) return send(res, 404, `${file} is missing\n`)
-    if (file === 'index.html') res.setHeader('Content-Security-Policy', CSP)
     send(res, 200, body, type)
   })
 }
@@ -195,9 +204,10 @@ const isRecord = value => value !== null && typeof value === 'object' && !Array.
 
 /**
  * Another session's state folder, as its registry file names it: only a live
- * session's (its heartbeat within 3 minutes, not ended), only a folder named
- * `.web/<its id>` (and still so once every link is followed); null for any
- * other. A request names the session by its id alone, never a path.
+ * session's (its heartbeat within 3 minutes, not ended), only the folder
+ * `<home>/web/<its id>` beside this server's own (and still so once every
+ * link is followed: a link there, or to it, is refused); null for any other.
+ * A request names the session by its id alone, never a path.
  */
 function sessionDirOf(id) {
   if (!sessions || !SESSION_ID.test(id) || DEVICE.test(id)) return null
@@ -205,12 +215,13 @@ function sessionDirOf(id) {
   try { entry = JSON.parse(fs.readFileSync(path.join(sessions, `${id}.json`), 'utf8')) } catch { return null }
   if (!isRecord(entry) || entry.id !== id || typeof entry.dir !== 'string' || entry.dir === '' || entry.endedAt !== undefined) return null
   if (!(typeof entry.heartbeatAt === 'number' && Date.now() - entry.heartbeatAt <= SESSION_LIVE_MS)) return null
-  const isShaped = p => path.basename(p) === id && path.basename(path.dirname(p)) === '.web'
-  const named = path.resolve(entry.dir)
-  if (!isShaped(named)) return null
-  let real
-  try { real = fs.realpathSync(named) } catch { return null }
-  return isShaped(real) ? real : null
+  const shaped = path.join(webRoot, id)
+  if (path.resolve(entry.dir) !== shaped) return null
+  let real, realRoot
+  try { real = fs.realpathSync(shaped); realRoot = fs.realpathSync(webRoot) } catch { return null }
+  let stat
+  try { stat = fs.lstatSync(shaped) } catch { return null }
+  return real === path.join(realRoot, id) && stat.isDirectory() && !stat.isSymbolicLink() ? real : null
 }
 
 /** GET /s/<sessionId>/<what>: another session's state (`state`) or one of its lazy files, as this session's own are served; 404 for a session not listed. */
@@ -323,18 +334,17 @@ function handle(req, res) {
   const url = new URL(`http://deck${req.url.startsWith('/') ? req.url : `/${req.url}`}`) // '//x' stays a path, never a host
   const route = url.pathname
   if (route === '/cmd' && req.method === 'POST') return command(req, res, host)
+  // The page's own files hold no data: served to any page on this host and port, the token left to app.js (it reads `t` from the address).
+  if (req.method === 'GET' && PAGE[route]) return page(res, PAGE[route])
+  if (req.method === 'GET' && route === '/favicon.ico') return res.writeHead(204).end()
 
-  // Everything else needs the token: the `t` param on the first load (it sets the cookie), then the cookie or the header.
-  const fromQuery = url.searchParams.get('t')
-  const fromCookie = cookieOf(req)
-  if (!isToken(req.headers['x-deck-token']) && !isToken(fromCookie) && !isToken(fromQuery)) return send(res, 403, 'forbidden\n')
-  if (isToken(fromQuery) && !isToken(fromCookie)) res.setHeader('Set-Cookie', `${cookie}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict`)
+  // Everything else needs the token: the header, or `t` for /events alone, which an EventSource opens with no header.
+  if (!isToken(req.headers['x-deck-token']) && !(route === '/events' && isToken(url.searchParams.get('t')))) return send(res, 403, 'forbidden\n')
 
   if (req.method !== 'GET' || route === '/cmd') {
     res.setHeader('Allow', route === '/cmd' ? 'POST' : 'GET')
     return send(res, 405, 'method not allowed\n')
   }
-  if (PAGE[route]) return page(res, PAGE[route])
   if (route === '/state') return send(res, 200, state, JSON_TYPE)
   if (route === '/events') return events(req, res)
   if (route.startsWith('/patch/')) return written(res, route.slice('/patch/'.length), 'patches', '.diff', 'patch')
@@ -343,7 +353,6 @@ function handle(req, res) {
   if (route.startsWith('/agent/')) return written(res, route.slice('/agent/'.length), 'agents', '.json', 'agent file', JSON_TYPE)
   if (route.startsWith('/s/')) return otherSession(res, route)
   if (route === '/timeline') return written(res, 'timeline', '.', '.json', 'timeline', JSON_TYPE) // Org's Timeline, timeline.json beside the state
-  if (route === '/favicon.ico') return res.writeHead(204).end()
   send(res, 404, 'not found\n')
 }
 
@@ -364,10 +373,14 @@ function isAlive(pid) {
 
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGBREAK']) process.on(signal, quit)
 process.stdout.on('error', quit) // EPIPE: nobody reads the commands any more
-// Only a pipe that closes later says the parent let go. stdin 'ignore' (the null
-// device) or a pipe closed from the start (the mod's $.process.spawn) ends at
+// The token on stdin is followed by its end (the mod's `input`): that end says
+// nothing. Without one, only a pipe that closes later says the parent let go:
+// stdin 'ignore' (the null device) or a pipe closed from the start ends at
 // once, and a terminal belongs to a person: those leave it to the pid check.
-if (process.stdin instanceof net.Socket && !process.stdin.isTTY) {
+const fromEnv = process.env.APIARIUS_TOKEN ?? ''
+if (fromEnv === '') {
+  readToken()
+} else if (process.stdin instanceof net.Socket && !process.stdin.isTTY) {
   const ended = () => { if (process.uptime() > 1) quit() }
   process.stdin.on('end', ended).on('close', ended).on('error', ended).resume()
 }
@@ -378,7 +391,6 @@ if (parent !== null) {
 
 server.on('listening', () => {
   port = server.address().port
-  cookie = `deck_t_${port}`
   process.stdout.write(`${JSON.stringify({ ready: port })}\n`)
 })
 // A reload's killed server can hold its port for a moment, and the open page
@@ -394,4 +406,34 @@ server.on('error', err => {
   log(err.message)
   process.exit(1)
 })
-server.listen(wanted, '127.0.0.1')
+
+/** Takes the token (16 characters or more, one line, nothing blank in it) and starts listening; a bad one exits. */
+function begin(token) {
+  if (!tokenOk(token)) fail('the token must come on stdin or as APIARIUS_TOKEN: 16 characters or more, on one line')
+  TOKEN = digest(token)
+  server.listen(wanted, '127.0.0.1')
+}
+
+/** The token as stdin's first line, or all of it once it ends; none within 10 s exits. */
+function readToken() {
+  let text = ''
+  let isTaken = false
+  const take = line => {
+    if (isTaken) return
+    isTaken = true
+    clearTimeout(timer)
+    begin(line.replace(/\r$/, ''))
+  }
+  const timer = setTimeout(() => fail('no token on stdin'), 10_000)
+  process.stdin.setEncoding('utf8')
+  process.stdin.on('data', chunk => {
+    if (isTaken) return
+    text += chunk
+    const at = text.indexOf('\n')
+    if (at >= 0) take(text.slice(0, at))
+    else if (text.length > 1000) fail('no token on stdin')
+  })
+  process.stdin.on('end', () => take(text)).on('error', () => take(text)).resume()
+}
+
+if (fromEnv !== '') begin(fromEnv)
