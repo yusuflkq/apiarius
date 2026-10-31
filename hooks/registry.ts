@@ -19,6 +19,14 @@
  *   session's state. Only a session the registry lists may write one; a
  *   file whose writer it could not find listed is read again a few seconds
  *   later, not only when it changes.
+ * - **Seals** (./seal). Every registry file and inbox file is sealed with
+ *   the person's own key, which every session of theirs shares (the
+ *   plugin's store) and no file in a workspace holds: a registry file whose
+ *   seal is not the key's lists no session, and an inbox file whose seal is
+ *   not, or that was written for another session, long ago or for a time to
+ *   come, is removed unread. A command runs once (its id remembered while
+ *   it could still come), only within `S.COMMAND_MS` of when it was given,
+ *   and only in the process it was given to.
  * - **Showing another** (`openSession`): its `state.json` read from its
  *   folder while its deck shows here, read again when it changes, and shown
  *   at once; its lazy files read after it shows, never before (a long
@@ -38,6 +46,7 @@
 import type { Timer } from 'claude-code'
 
 import * as F from './format'
+import * as SL from './seal'
 import * as S from './sessions'
 import type { DashActions, DeckModel, DashModel } from './ui/types'
 import * as W from './web'
@@ -54,6 +63,9 @@ export type RegistryHost = {
   write: (path: string, text: string) => Promise<void>
   list: (path: string) => Promise<readonly { name: string; kind: string; mtimeMs: number }[]>
   stat: (path: string) => Promise<{ mtimeMs: number; size: number }>
+  /** The plugin's own store (`$.store`), where the person's key is kept. */
+  storeGet: (key: string) => Promise<unknown>
+  storeSet: (key: string, value: unknown) => Promise<void>
   /** Runs node with `args` (no shell); its exit code and what it printed. */
   node: (args: readonly string[]) => Promise<{ exitCode: number; stdout: string }>
   every: (ms: number, fn: () => void) => Timer
@@ -133,6 +145,12 @@ const ASK_WAITING_MS = 5_000
 /** An inbox file whose writer was not found listed is read again after this long, though it did not change: its registry file may have been mid-write. */
 const INBOX_RETRY_MS = 5_000
 
+/** How far ahead of this deck's clock an inbox file may say it was written (every deck reads the one clock of the machine). */
+const CLOCK_SKEW_MS = 10_000
+
+/** A file whose seal is not the key's has the key read again from the store at most this often: another deck may have settled on another meanwhile. */
+const KEY_AGAIN_MS = 5_000
+
 const reg = {
   /** The registry folder; '' while it is off (no home known, as in the tests). */
   dir: '',
@@ -165,7 +183,13 @@ const reg = {
   tickAt: 0,
   /** Each inbox file as last read: its time, and whether its writer was listed then (one that was not is read again after `INBOX_RETRY_MS`). */
   inboxSeen: new Map<string, { mtimeMs: number; at: number; isListed: boolean }>(),
-  handled: new Set<string>(),
+  /** The ids of the commands taken from the inbox, with when each was given: each kept while one of that time could still come (`S.COMMAND_MS`). */
+  handled: new Map<string, number>(),
+  /** The person's key (./seal), and when it was last read from the store. */
+  key: null as SL.SealKey | null,
+  keyReadAt: -Infinity,
+  /** The registry files whose seal was not the key's, by session id, with their times: read again only once they move. */
+  refused: new Map<string, number>(),
   /** Another session's deck shown here. */
   viewing: null as Viewed | null,
   /** The sessions the web page views, until when (its `view` commands). */
@@ -201,6 +225,7 @@ export async function startRegistry(host: RegistryHost): Promise<void> {
   reg.dir = S.registryDirOf(env)
   if (reg.dir === '') return
   reg.terminal = S.terminalOf(env)
+  await readKey(await host.now())
   await readWhere()
   const pid = await host.pidOf()
   reg.pid = /^\d+$/.test(pid) ? Number(pid) : null
@@ -225,9 +250,56 @@ async function readWhere(): Promise<void> {
   }
 }
 
-/** The heartbeat: this deck's file written (its heartbeat moved), where it runs read again, the others' read and the stale cleaned. */
+/**
+ * The person's key (./seal) as the plugin's store holds it, kept for the
+ * seals this deck makes and checks: read at the start, on every heartbeat,
+ * and again (at most every `KEY_AGAIN_MS`) when a file's seal is not the
+ * key's. The first deck that finds none makes one; two that make one at
+ * once each read the store again a moment later and take the one it kept.
+ * Where no store answers, a key of this process's own: no other deck then
+ * lists this one, or takes its commands. Answers whether the key changed.
+ */
+async function readKey(now: number, isMade = false): Promise<boolean> {
+  const host = reg.host
+  if (!host) return false
+  reg.keyReadAt = now
+  const was = reg.key?.hex ?? ''
+  try {
+    let kept = SL.keyOf(await host.storeGet(SL.KEY_STORE))
+    if (!kept) {
+      kept = SL.newKey()
+      await host.storeSet(SL.KEY_STORE, kept.hex)
+      // another deck may have made one at the same moment: the one the store keeps is read again shortly
+      if (!isMade) host.after(S.ENTRY_WRITE_MS, () => void (async () => (await readKey(await io().now(), true)) && writeEntry(await io().now()))().catch(() => undefined))
+    }
+    reg.key = kept
+  } catch {
+    reg.key ??= SL.newKey()
+  }
+  if (reg.key.hex === was) return false
+  // what was read under the last key is read again under this one
+  reg.refused.clear()
+  reg.inboxSeen.clear()
+  return was !== ''
+}
+
+/** The key, read once when the deck holds none yet. */
+async function keyNow(): Promise<SL.SealKey> {
+  if (!reg.key) await readKey(await io().now())
+  return reg.key ?? SL.newKey()
+}
+
+/** What a sealed file of `kind` says, its seal checked under the key (read again from the store once, where it is not the key's and `KEY_AGAIN_MS` has passed); null for one whose seal is not. */
+async function openedOf(kind: string, text: string, now: number): Promise<Record<string, unknown> | null> {
+  const said = SL.openedOf(await keyNow(), kind, text)
+  if (said || now - reg.keyReadAt < KEY_AGAIN_MS || !(await readKey(now))) return said
+  return SL.openedOf(await keyNow(), kind, text)
+}
+
+/** The heartbeat: the key read again, this deck's file written (its heartbeat moved), where it runs read again, the others' read and the stale cleaned. */
 async function beat(): Promise<void> {
   if (reg.dir === '') return
+  await readKey(await io().now())
   await readWhere()
   const now = await io().now()
   await writeEntry(now)
@@ -274,7 +346,7 @@ async function writeEntry(now: number): Promise<void> {
   if (path === '') return
   reg.isWriting = true
   try {
-    await io().write(path, `${JSON.stringify(shown)}\n`)
+    await io().write(path, SL.sealedText(await keyNow(), SL.ENTRY, shown))
     reg.me = shown
   } catch {
     // the next change or heartbeat writes it again
@@ -287,13 +359,20 @@ async function writeEntry(now: number): Promise<void> {
   }
 }
 
-/** Reads the others' files (each again only when its time moved); the list's screen key moves when what they say changed. */
+/**
+ * Reads the others' files (each again only when its time moved), each
+ * listed only where its seal is the key's: one whose seal is not (another
+ * program's, an older build's, one forged) is passed over until it moves,
+ * and removed once it is long silent. The list's screen key moves when what
+ * they say changed.
+ */
 async function readRegistry(now: number): Promise<void> {
   const host = reg.host
   if (reg.dir === '' || !host || reg.isReading) return
   reg.isReading = true
   const me = host.sessionId()
   const next = new Map<string, S.SessionEntry>()
+  const silent: string[] = []
   try {
     for (const one of await io().list(reg.dir)) {
       if (one.kind !== 'file' || !one.name.endsWith('.json')) continue
@@ -304,12 +383,19 @@ async function readRegistry(now: number): Promise<void> {
         next.set(id, known)
         continue
       }
+      if (reg.refused.get(id) === one.mtimeMs) {
+        if (now - one.mtimeMs > S.GONE_MS) silent.push(`${reg.dir}/${one.name}`)
+        continue
+      }
       try {
-        const entry = S.entryFromText(await io().read(`${reg.dir}/${one.name}`))
+        const text = await io().read(`${reg.dir}/${one.name}`)
+        const said = await openedOf(SL.ENTRY, text, now)
+        const entry = said ? S.entryFrom(said) : null
         if (entry && entry.id === id) {
           next.set(id, entry)
           reg.stamps.set(id, one.mtimeMs)
-        }
+          reg.refused.delete(id)
+        } else if (SL.isJson(text)) reg.refused.set(id, one.mtimeMs)
       } catch {
         // half written, or gone since: the next read sees it
       }
@@ -319,6 +405,7 @@ async function readRegistry(now: number): Promise<void> {
   } finally {
     reg.isReading = false
   }
+  void removeFiles(silent)
   reg.entries = next
   reg.readAt = now
   // what the list says of each: a deck going quiet (or heard again) changes it, its heartbeat alone does not
@@ -389,7 +476,7 @@ export async function endRegistry(reason: string): Promise<void> {
   const path = me ? S.entryPathOf(reg.dir, me.id) : ''
   if (me && path !== '') {
     try {
-      await io().write(path, `${JSON.stringify({ ...me, endedAt: await io().now() })}\n`)
+      await io().write(path, SL.sealedText(await keyNow(), SL.ENTRY, { ...me, endedAt: await io().now() }))
     } catch {
       // another deck's clean finds it silent
     }
@@ -412,13 +499,20 @@ export function isShared(): boolean {
 }
 
 /**
- * Reads this session's inbox: each viewer's file whose time moved, from a
- * session the registry lists (one whose writer was not found listed again
- * after `INBOX_RETRY_MS`: its registry file may have been mid-write, and
- * the viewer writes again only every 30 s). Its view keeps this session's
- * state folder written (`share` when a first one comes); each `chat` or
- * `answer` not acted on yet, given within `COMMAND_MS`, runs as the page's
- * own would (`steer`). An inbox file long silent is removed.
+ * Reads this session's inbox: each viewer's file whose time moved, its seal
+ * checked first. One whose seal is not the key's (no seal, another key's,
+ * forged), not written for this session, not by the viewer its name says,
+ * or written long ago (past `S.COMMAND_MS`) or for a time to come, is
+ * removed unread; one that is no JSON yet (being written) is read again
+ * once it moves. Then only from a session the registry lists (one whose
+ * writer was not found listed again after `INBOX_RETRY_MS`: its registry
+ * file may have been mid-write, and the viewer writes again only every
+ * 30 s). Its view keeps this session's state folder written (`share` when a
+ * first one comes); each command runs as the page's own would (`steer`)
+ * once: one acted on already (here, or before a reload: its ack), given past
+ * `S.COMMAND_MS` or after its file was written, or given to another process
+ * of this session's (before a resume) is let go. An inbox file long silent
+ * is removed.
  */
 async function pollInbox(now: number): Promise<void> {
   const host = reg.host
@@ -431,43 +525,58 @@ async function pollInbox(now: number): Promise<void> {
   } catch {
     return
   }
+  const me = host.sessionId()
   const wasViewed = isViewed(now)
-  const silent: string[] = []
+  for (const [id, at] of reg.handled) if (now - at > S.COMMAND_MS + CLOCK_SKEW_MS) reg.handled.delete(id)
+  const gone: string[] = []
   for (const one of listed) {
     if (one.kind !== 'file' || !one.name.endsWith('.json')) continue
-    if (now - one.mtimeMs > S.GONE_MS) silent.push(`${dir}/inbox/${one.name}`)
+    const path = `${dir}/inbox/${one.name}`
+    if (now - one.mtimeMs > S.GONE_MS) {
+      gone.push(path)
+      continue
+    }
     const seen = reg.inboxSeen.get(one.name)
     if (seen && seen.mtimeMs === one.mtimeMs && (seen.isListed || now - seen.at < INBOX_RETRY_MS)) continue
-    let file: S.InboxFile | null = null
+    let text: string
     try {
-      file = S.inboxFromText(await io().read(`${dir}/inbox/${one.name}`))
+      text = await io().read(path)
     } catch {
       continue
     }
-    const isOk = file !== null && `${file.from}.json` === one.name && (await isListed(file.from, now))
+    if (!SL.isJson(text)) continue
+    const said = await openedOf(SL.INBOX, text, now)
+    const file = said ? S.inboxFrom(said) : null
+    if (!file || `${file.from}.json` !== one.name || file.to !== me || now - file.at > S.COMMAND_MS || file.at > now + CLOCK_SKEW_MS) {
+      reg.inboxSeen.set(one.name, { mtimeMs: one.mtimeMs, at: now, isListed: true })
+      gone.push(path)
+      continue
+    }
+    const isOk = await isListed(file.from, now)
     reg.inboxSeen.set(one.name, { mtimeMs: one.mtimeMs, at: now, isListed: isOk })
-    if (!file || !isOk) continue
+    if (!isOk) continue
     reg.viewers.set(file.from, Math.min(file.viewUntil, now + S.VIEW_MS))
-    for (const said of file.cmds) {
-      const id = typeof said.cmd.id === 'string' ? said.cmd.id : ''
-      if (id === '' || reg.handled.has(id) || now - said.at > S.COMMAND_MS || host.hasAck(id)) continue
-      reg.handled.add(id)
-      if (reg.handled.size > 500) reg.handled.delete(reg.handled.values().next().value as string)
-      host.steer(said.cmd)
+    for (const cmd of file.cmds) {
+      const id = typeof cmd.cmd.id === 'string' ? cmd.cmd.id : ''
+      if (id === '' || reg.handled.has(id) || host.hasAck(id)) continue
+      if (now - cmd.at > S.COMMAND_MS || cmd.at > file.at || cmd.pid !== reg.pid) continue
+      reg.handled.set(id, cmd.at)
+      host.steer(cmd.cmd)
     }
   }
   if (!wasViewed && isViewed(now)) host.share()
-  await removeFiles(silent)
+  await removeFiles(gone)
 }
 
-/** Whether `id` is a live session the registry lists: read afresh when this deck has not seen it yet. */
+/** Whether `id` is a live session the registry lists, its file sealed with the key: read afresh when this deck has not seen it yet. */
 async function isListed(id: string, now: number): Promise<boolean> {
   const known = reg.entries.get(id)
   if (known && S.isLiveEntry(known, now)) return true
   const path = S.entryPathOf(reg.dir, id)
   if (path === '') return false
   try {
-    const entry = S.entryFromText(await io().read(path))
+    const said = await openedOf(SL.ENTRY, await io().read(path), now)
+    const entry = said ? S.entryFrom(said) : null
     return entry !== null && entry.id === id && S.isLiveEntry(entry, now)
   } catch {
     return false
@@ -653,13 +762,18 @@ async function askView(id: string, dir: string, until: number): Promise<void> {
   const path = S.inboxPathOf(dir, me)
   if (path === '' || !S.isStateDirOf(dir, id)) return
   const now = await io().now()
-  const file = S.inboxWith(me, now, Math.max(until, reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], null)
+  const file = S.inboxWith(me, id, now, Math.max(until, reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], null)
   reg.outbox.set(id, file.cmds)
   try {
-    await io().write(path, `${JSON.stringify(file)}\n`)
+    await writeInbox(path, file)
   } catch {
     // its deck reads none: the viewer says so once nothing comes
   }
+}
+
+/** Writes an inbox file, sealed with the person's key. */
+async function writeInbox(path: string, file: S.InboxFile): Promise<void> {
+  await io().write(path, SL.sealedText(await keyNow(), SL.INBOX, file))
 }
 
 /**
@@ -923,10 +1037,11 @@ async function sendToSession(id: string, cmd: Record<string, unknown>): Promise<
   if (!said) return fail(S.steeringRefusalOf(cmd))
   const path = S.inboxPathOf(entry.dir, me)
   if (path === '') return fail(S.NOT_ANSWERING)
-  const file = S.inboxWith(me, now, Math.max(reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], said)
+  // given to its process as its file names it: a session started again in another (a resume) takes none of it
+  const file = S.inboxWith(me, id, now, Math.max(reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], { at: now, cmd: said, pid: entry.pid })
   reg.outbox.set(id, file.cmds)
   try {
-    await io().write(path, `${JSON.stringify(file)}\n`)
+    await writeInbox(path, file)
   } catch {
     return fail("Could not reach its deck: it isn't answering")
   }

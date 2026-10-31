@@ -66,7 +66,7 @@ export const INBOX_MOST = 20
 /** Where a session draws: Claude Code's surfaces (`$.session.surfaces()`); '' when none is attached (a `-p` run, or before the Desktop attaches). */
 export type SessionSurface = 'desktop' | 'terminal' | 'vscode' | 'mobile' | ''
 
-/** One session's file in the registry, `<registry>/<sessionId>.json`, as its deck writes it. */
+/** One session's file in the registry, `<registry>/<sessionId>.json`, as its deck writes it, sealed (./seal `ENTRY`): a deck lists no session whose file's seal is not its own. */
 export type SessionEntry = {
   v: 1
   /** The session's id (its transcript's name). */
@@ -181,11 +181,13 @@ export type SessionsV2 = {
   machine: { waiting: number; working: number; agents: number }
 }
 
-/** The view and the steering a viewer writes into a session's inbox, `<dir>/inbox/<viewer's id>.json`, whole each time. */
+/** The view and the steering a viewer writes into a session's inbox, `<dir>/inbox/<viewer's id>.json`, whole each time, sealed (./seal `INBOX`): a deck takes nothing from a file whose seal is not its own. */
 export type InboxFile = {
   v: 1
   /** The viewer's session id. */
   from: string
+  /** The session it is written for: a file moved to another session's inbox is no command of the viewer's there. */
+  to: string
   /** When it was written. */
   at: number
   /** Until when the viewer looks: the session writes its state folder till then; 0 when it looks no more. */
@@ -194,8 +196,14 @@ export type InboxFile = {
   cmds: InboxCommand[]
 }
 
-/** One command in an inbox: a page command (`STEERING`) as the page sends it, with its `id`, and when it was given. */
-export type InboxCommand = { at: number; cmd: Record<string, unknown> }
+/**
+ * One command in an inbox: a page command (`STEERING`) as the page sends
+ * it, with its `id`, when it was given, and the process the session it went
+ * to ran in then (its registry file's `pid`): a session started again in
+ * another process (a resume) takes none given before, though the viewer
+ * writes them again.
+ */
+export type InboxCommand = { at: number; cmd: Record<string, unknown>; pid: number | null }
 
 const STATE_TEXT: Readonly<Record<SessionEntry['state'], string>> = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' }
 
@@ -457,14 +465,17 @@ export function entryKeyOf(entry: SessionEntry): string {
   return JSON.stringify({ ...entry, updatedAt: 0, heartbeatAt: 0 })
 }
 
-/** A registry file read: the entry, every field checked; null for anything else (a half-written file, another program's). */
+/** A registry file read as it stands (its seal not checked: the sample's, `/apiarius demo`): the entry, every field checked; null for anything else (a half-written file, another program's). */
 export function entryFromText(text: string): SessionEntry | null {
-  let value: unknown
   try {
-    value = JSON.parse(text)
+    return entryFrom(JSON.parse(text))
   } catch {
     return null
   }
+}
+
+/** A registry file's value (its seal checked and left out, ./seal `openedOf`): the entry, every field checked; null for anything else. */
+export function entryFrom(value: unknown): SessionEntry | null {
   if (!isRecord(value) || value.v !== REGISTRY_V || typeof value.id !== 'string' || sessionFileOf(value.id) === '') return null
   const str = (one: unknown, most = 400) => (typeof one === 'string' ? F.trunc(one, most) : '')
   const num = (one: unknown) => (typeof one === 'number' && Number.isFinite(one) ? one : 0)
@@ -654,27 +665,31 @@ export function sessionCmdOf(cmd: Record<string, unknown>, me: string): { sessio
   return { session, cmd: rest }
 }
 
-/** An inbox file read: its view and its commands, each one with an `id` its ack can name (its deck checks the rest: `steeringCmdOf`, refused with an ack); null for anything else. */
+/** An inbox file's value (its seal checked and left out, ./seal `openedOf`) read: its view and its commands, each one with an `id` its ack can name (its deck checks the rest: `steeringCmdOf`, refused with an ack); null for anything else. */
+export function inboxFrom(value: unknown): InboxFile | null {
+  if (!isRecord(value) || value.v !== 1 || typeof value.from !== 'string' || sessionFileOf(value.from) === '' || typeof value.to !== 'string' || sessionFileOf(value.to) === '') return null
+  const at = typeof value.at === 'number' && Number.isFinite(value.at) ? value.at : 0
+  const viewUntil = typeof value.viewUntil === 'number' && Number.isFinite(value.viewUntil) ? value.viewUntil : 0
+  const pidOf = (pid: unknown) => (typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : null)
+  const cmds: InboxCommand[] = Array.isArray(value.cmds)
+    ? value.cmds.flatMap((one: unknown) => (isRecord(one) && typeof one.at === 'number' && isRecord(one.cmd) && typeof one.cmd.id === 'string' && CMD_ID.test(one.cmd.id) ? [{ at: one.at, cmd: one.cmd, pid: pidOf(one.pid) }] : []))
+    : []
+  return { v: 1, from: value.from, to: value.to, at, viewUntil, cmds: cmds.slice(-INBOX_MOST) }
+}
+
+/** An inbox file's text read as it stands (its seal not checked: `inboxFrom` for one that was); null for anything else. */
 export function inboxFromText(text: string): InboxFile | null {
-  let value: unknown
   try {
-    value = JSON.parse(text)
+    return inboxFrom(JSON.parse(text))
   } catch {
     return null
   }
-  if (!isRecord(value) || value.v !== 1 || typeof value.from !== 'string' || sessionFileOf(value.from) === '') return null
-  const at = typeof value.at === 'number' ? value.at : 0
-  const viewUntil = typeof value.viewUntil === 'number' ? value.viewUntil : 0
-  const cmds: InboxCommand[] = Array.isArray(value.cmds)
-    ? value.cmds.flatMap((one: unknown) => (isRecord(one) && typeof one.at === 'number' && isRecord(one.cmd) && typeof one.cmd.id === 'string' && CMD_ID.test(one.cmd.id) ? [{ at: one.at, cmd: one.cmd }] : []))
-    : []
-  return { v: 1, from: value.from, at, viewUntil, cmds: cmds.slice(-INBOX_MOST) }
 }
 
-/** The inbox file a viewer writes next: its view until `viewUntil`, and its commands with `add` last, the newest 20, those past `COMMAND_MS` let go. */
-export function inboxWith(from: string, now: number, viewUntil: number, kept: readonly InboxCommand[], add: Record<string, unknown> | null): InboxFile {
-  const cmds = [...kept, ...(add ? [{ at: now, cmd: add }] : [])].filter(one => now - one.at <= COMMAND_MS).slice(-INBOX_MOST)
-  return { v: 1, from, at: now, viewUntil, cmds }
+/** The inbox file a viewer writes next into session `to`'s inbox: its view until `viewUntil`, and its commands with `add` last, the newest 20, those past `COMMAND_MS` let go. */
+export function inboxWith(from: string, to: string, now: number, viewUntil: number, kept: readonly InboxCommand[], add: InboxCommand | null): InboxFile {
+  const cmds = [...kept, ...(add ? [add] : [])].filter(one => now - one.at <= COMMAND_MS).slice(-INBOX_MOST)
+  return { v: 1, from, to, at: now, viewUntil, cmds }
 }
 
 /** A session's `state.json` read: its v2 state's text (under `v2`, as the deck writes it; bare, as the sample is); null for anything else. */

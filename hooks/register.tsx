@@ -2768,8 +2768,9 @@ function modelOf(now: number): DeckModel {
 
 /**
  * What the registry of sessions (./registry) reads of this deck: its id, its
- * state, its folder, its process; a command another session's deck sent
- * runs here as the page's own would (`steerFromSession`).
+ * state, its folder, its process, the plugin's store (where the person's
+ * key for the registry's seals is kept); a command another session's deck
+ * sent runs here as the page's own would (`steerFromSession`).
  */
 function registryHost($: EngineInterface): SR.RegistryHost {
   const read = async (get: () => Promise<string | undefined>) => {
@@ -2793,6 +2794,8 @@ function registryHost($: EngineInterface): SR.RegistryHost {
     write: (path, text) => $.fs.write(path, text),
     list: path => $.fs.list(path),
     stat: path => $.fs.stat(path),
+    storeGet: key => $.store.get(key),
+    storeSet: (key, value) => $.store.set(key, value),
     node: args => $.process.run(['node', ...args], { timeoutMs: 10_000 }),
     every: (ms, fn) => $.clock.every(ms, fn),
     after: (ms, fn) => $.clock.after(ms, fn),
