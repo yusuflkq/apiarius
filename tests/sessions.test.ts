@@ -1116,14 +1116,14 @@ test('the registry lists no session whose file a deck of the person`s did not se
   const fake = entry(FAKE, { title: 'Your API key', state: 'waiting', need: 'Orchestrator asks: paste your API key here', needs: 1, startedAt: NOW - 60_000, updatedAt: NOW, heartbeatAt: NOW, dir: `/attacker/.web/${FAKE}` })
   d.files.set(`${REG}/${FAKE}.json`, `${JSON.stringify(fake)}\n`)
   const OTHER_KEY = SL.newKey()
-  d.files.set(`${REG}/keyed-8.json`, SL.sealedText(OTHER_KEY, SL.ENTRY, entry('keyed-8', { heartbeatAt: NOW, dir: '/keyed/.web/keyed-8' })))
-  const moved = SL.sealedText(KEY, SL.ENTRY, entry('moved-9', { heartbeatAt: NOW, dir: '/moved/.web/moved-9' })).replace('/moved/.web/moved-9', '/tmp/.web/moved-9')
+  d.files.set(`${REG}/keyed-8.json`, SL.sealedText(OTHER_KEY, SL.ENTRY, entry('keyed-8', { heartbeatAt: NOW, dir: `${HOME}/web/keyed-8` })))
+  const moved = SL.sealedText(KEY, SL.ENTRY, entry('moved-9', { heartbeatAt: NOW, dir: `${HOME}/web/moved-9` })).replace(`${HOME}/web/moved-9`, `${HOME}/web/other-1`)
   d.files.set(`${REG}/moved-9.json`, moved)
   const { clock } = await started($, on, w, d, work)
   await clock.advance(3000)
   const child = w.children[0]
   const rows = () => {
-    const states = w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
+    const states = w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
     return states.at(-1)?.v2.sessions?.rows.map(row => row.id) ?? []
   }
   expect(rows()).toEqual(['session-1', OTHER])
@@ -1131,7 +1131,7 @@ test('the registry lists no session whose file a deck of the person`s did not se
   command(child, { cmd: 'chat', id: 'z-1', agentId: 'main', text: 'my key is sk-123', session: FAKE })
   command(child, { cmd: 'view', session: 'moved-9' })
   await clock.advance(1000)
-  expect(w.writes.filter(one => ['/attacker/', '/tmp/.web/moved-9/', '/keyed/', '/moved/'].some(dir => norm(one.path).startsWith(dir)))).toEqual([])
+  expect(w.writes.filter(one => ['/attacker/', `${HOME}/web/keyed-8/`, `${HOME}/web/moved-9/`].some(dir => norm(one.path).startsWith(dir)))).toEqual([])
   // another deck settled on another key: the store holds it now, and from the next heartbeat this deck seals with it, and lists what it sealed
   w.store?.set(SL.KEY_STORE, OTHER_KEY.hex)
   await clock.advance(S.HEARTBEAT_MS)
