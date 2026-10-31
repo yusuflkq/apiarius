@@ -1873,10 +1873,56 @@ function joinPath(root: string, rel: string): string {
   return `${root.replace(/[\\/]+$/, '')}/${rel}`
 }
 
-async function lineCountOf($: EngineInterface, abs: string): Promise<number | null> {
+/** The repository's own place as the file system resolves it (every link folded), for judging whether an untracked file's own place is inside it; `root` itself when it cannot be resolved. */
+async function rootRealOf($: EngineInterface, root: string): Promise<string> {
   try {
-    const stat = await $.fs.stat(abs)
-    if (stat.kind !== 'file' || stat.size > 1_000_000) return null
+    const stat = await $.fs.stat(root, { resolve: true })
+    return R.cleanPath(stat.realPath ?? root)
+  } catch {
+    return R.cleanPath(root)
+  }
+}
+
+/** Whether `real` (an absolute, resolved path) is `rootReal` or inside it. */
+function isInsideRoot(real: string, rootReal: string): boolean {
+  const a = R.keyOf(real)
+  const b = R.keyOf(rootReal)
+  return a === b || a.startsWith(`${b}/`)
+}
+
+/**
+ * What an untracked path at `abs` is, read without ever following a link and
+ * never from outside the repository (`rootReal`, resolved once): a symbolic
+ * link is shown as git shows one, its target's path and never the target's
+ * content (`target`, '' when it leads nowhere); a path whose real place is
+ * outside the repository is left out (`outside`); a regular file inside it
+ * carries its `size`, for the caller to read. git, asked of a path that is a
+ * link or leads outside, shows no diff of its content either.
+ */
+type Untracked = { kind: 'link'; target: string } | { kind: 'file'; size: number } | { kind: 'outside' } | { kind: 'gone' }
+async function untrackedAt($: EngineInterface, abs: string, rootReal: string): Promise<Untracked> {
+  try {
+    const stat = await $.fs.stat(abs, { resolve: true })
+    if (stat.isLink) return { kind: 'link', target: stat.realPath ?? '' }
+    if (stat.realPath === undefined || !isInsideRoot(stat.realPath, rootReal)) return { kind: 'outside' }
+    if (stat.kind !== 'file') return { kind: 'gone' }
+    return { kind: 'file', size: stat.size }
+  } catch {
+    return { kind: 'gone' }
+  }
+}
+
+/** The diff a link shows: one added line, its target's path, as git shows a symbolic link (never the target's content). */
+function linkHunks(target: string): Hunk[] {
+  return addedFileHunks(`${target}\n`)
+}
+
+/** An untracked file's line count for its row, read safely (never through a link or from outside the repository); a link counts as its one line of target text, a file outside or too big is left uncounted. */
+async function lineCountOf($: EngineInterface, abs: string, rootReal: string): Promise<number | null> {
+  const found = await untrackedAt($, abs, rootReal)
+  if (found.kind === 'link') return found.target === '' ? 0 : 1
+  if (found.kind !== 'file' || found.size > 1_000_000) return null
+  try {
     const text = await $.fs.read(abs)
     if (text.includes('\u0000')) return null
     if (text === '') return 0
@@ -1938,12 +1984,13 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     const numstat = await run(G.argv.numstat(headHash ? 'HEAD' : G.EMPTY_TREE))
     const rows = G.parseStatus(status.out)
     const untracked = new Map<string, number>()
+    const rootReal = await rootRealOf($, root)
     await Promise.all(
       rows
         .filter(row => row.x === '?')
         .slice(0, 30)
         .map(async row => {
-          const lines = await lineCountOf($, joinPath(root, row.path))
+          const lines = await lineCountOf($, joinPath(root, row.path), rootReal)
           if (lines !== null) untracked.set(row.path, lines)
         }),
     )
@@ -2036,12 +2083,17 @@ async function readGitDiffs($: EngineInterface): Promise<void> {
         }
       }
     }
+    const rootReal = await rootRealOf($, root)
     for (const file of files.filter(one => one.isUntracked).slice(0, GIT_DIFF_UNTRACKED)) {
       try {
         const abs = joinPath(root, file.path)
-        if ((await $.fs.stat(abs)).size > W.GIT_DIFF_MOST) continue
-        const text = await $.fs.read(abs)
-        if (!text.includes('\u0000')) keep(file.path, addedFileHunks(text))
+        const found = await untrackedAt($, abs, rootReal)
+        // a link shows as its target's path (git's own diff of one); its content, and a file outside the repository, are never read
+        if (found.kind === 'link') keep(file.path, linkHunks(found.target))
+        else if (found.kind === 'file' && found.size <= W.GIT_DIFF_MOST) {
+          const text = await $.fs.read(abs)
+          if (!text.includes('\u0000')) keep(file.path, addedFileHunks(text))
+        }
       } catch {
         // a file that cannot be read has no diff
       }
@@ -2074,9 +2126,16 @@ async function loadFileDiff($: EngineInterface, path: string): Promise<void> {
   } else if (row.isUntracked) {
     try {
       const abs = joinPath(root, path)
-      const stat = await $.fs.stat(abs)
-      if (stat.size > 2_000_000) {
-        found = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(stat.size / 1024)} KB: too big to show.`, at: now }
+      const place = await untrackedAt($, abs, await rootRealOf($, root))
+      if (place.kind === 'link') {
+        // a link shows as its target's path, the way git shows one (its one line of diff); its content is never read
+        found = { path, hunks: linkHunks(place.target), isBinary: false, at: now }
+      } else if (place.kind === 'outside') {
+        found = { path, hunks: [], isBinary: false, note: 'This file lies outside the repository.', at: now }
+      } else if (place.kind !== 'file') {
+        found = { path, hunks: [], isBinary: false, note: 'Could not read this new file.', at: now }
+      } else if (place.size > 2_000_000) {
+        found = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(place.size / 1024)} KB: too big to show.`, at: now }
       } else {
         const text = await $.fs.read(abs)
         found = text.includes('\u0000') ? { path, hunks: [], isBinary: true, at: now } : { path, hunks: addedFileHunks(text), isBinary: false, at: now }

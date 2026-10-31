@@ -10,6 +10,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import * as G from '../hooks/git'
+import * as W from '../hooks/web'
 import { isConfigList } from './tools'
 import { deck, newWorld, NOW, world } from './world'
 
@@ -180,6 +181,68 @@ test('through the deck: a git too old to say where its settings come from (befor
   await clock.advance(7000)
   expect(runs.filter(argv => !isConfigList(argv))).toEqual([])
   expect(w.toasts.filter(text => text.includes('git 2.26 or newer')).length).toBe(1)
+})
+
+test('through the deck: an untracked symbolic link is never read through (its diff is the target`s path, as git shows a link, never the target`s content), and an untracked file whose real place is outside the repository is left out, not read', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const norm = (p: string) => p.replace(/\\/g, '/')
+  // three untracked files: a link to a secret outside the repository, a plain file inside it, and one whose real place is outside (reached through a parent alias)
+  const w = newWorld({
+    gitConfig: () => ({ exitCode: 0, stdout: '' }),
+    git: (argv, cwd = '') => {
+      const line = argv.join(' ')
+      if (norm(cwd) !== '/work') return { exitCode: 128, stdout: '' }
+      if (line.includes('rev-parse --show-toplevel')) return { exitCode: 0, stdout: '/work\n' }
+      if (line.includes('rev-parse --abbrev-ref HEAD')) return { exitCode: 0, stdout: 'main\n' }
+      if (line.includes('rev-parse --verify')) return { exitCode: 0, stdout: `${'a'.repeat(40)}\n` }
+      if (line.includes('status --porcelain')) return { exitCode: 0, stdout: '?? id_rsa\0?? inside.txt\0?? escape\0' }
+      if (line.includes('--numstat')) return { exitCode: 0, stdout: '' }
+      return { exitCode: 1, stdout: '' }
+    },
+    stat: path => {
+      const p = norm(path)
+      if (p === '/work') return { size: 0, mtimeMs: NOW, kind: 'dir', realPath: '/work' }
+      if (p === '/work/id_rsa') return { size: 20, mtimeMs: NOW, kind: 'file', isLink: true, realPath: '/secrets/id_rsa' }
+      if (p === '/work/inside.txt') return { size: 12, mtimeMs: NOW, kind: 'file', realPath: '/work/inside.txt' }
+      if (p === '/work/escape') return { size: 14, mtimeMs: NOW, kind: 'file', realPath: '/elsewhere/escape' }
+      return null
+    },
+  })
+  world(on, w)
+  // every read the deck makes is recorded; a read of the link or of anything outside the repository would be a leak
+  const reads: string[] = []
+  on('fs.read', ($, e) => {
+    const p = norm(e.path)
+    reads.push(p)
+    if (p === '/work/inside.txt') return { value: 'hello\nworld\n' }
+    if (p === '/work/id_rsa' || p === '/secrets/id_rsa') return { value: 'TOP-SECRET-KEY' }
+    if (p === '/work/escape' || p === '/elsewhere/escape') return { value: 'ESCAPED-SECRET' }
+    return { deny: 'no such file' }
+  })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await $.command.run(deck('changes'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: W.fileKeyOf('id_rsa') })
+  await clock.advance(1000)
+  await ui.redraw()
+  let drawn = JSON.stringify(await ui.drawn())
+  // the link's diff is its target's path, never its content
+  expect(drawn).toContain('/secrets/id_rsa')
+  expect(drawn).not.toContain('TOP-SECRET-KEY')
+  await ui.press({ key: W.fileKeyOf('id_rsa') })
+  await ui.redraw()
+  await ui.press({ key: W.fileKeyOf('escape') })
+  await clock.advance(1000)
+  await ui.redraw()
+  drawn = JSON.stringify(await ui.drawn())
+  // a file whose real place is outside the repository is left out, its content never shown
+  expect(drawn).toContain('outside the repository')
+  expect(drawn).not.toContain('ESCAPED-SECRET')
+  await ui.unmount()
+  // the deck read the plain file inside the repository, and never the link or anything outside
+  expect(reads).toContain('/work/inside.txt')
+  expect(reads.some(p => p === '/work/id_rsa' || p === '/secrets/id_rsa' || p === '/work/escape' || p === '/elsewhere/escape')).toBe(false)
 })
 
 test('through the deck: a file a repository named with control characters or a bidirectional override still draws, on the terminal and the desktop, each shown as U+FFFD', async ($, on) => {

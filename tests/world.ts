@@ -63,8 +63,8 @@ export type World = {
   list?: (path: string) => { name: string; kind: 'file' | 'dir' | 'other' }[] | null
   /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
   files?: Readonly<Record<string, string>>
-  /** What `fs.stat` says of a path, when the test says (null: there is none); left out, every path is a file of 12 bytes, as old as NOW. */
-  stat?: (path: string) => { size: number; mtimeMs: number } | null
+  /** What `fs.stat` says of a path, when the test says (null: there is none); left out, every path is a file of 12 bytes, as old as NOW. `isLink`/`realPath` answer a `{ resolve: true }` stat (an untracked symbolic link, or one whose real place is to be judged); `realPath` defaults to the path itself, `kind` to `file`. */
+  stat?: (path: string) => { size: number; mtimeMs: number; kind?: 'file' | 'dir' | 'other'; isLink?: boolean; realPath?: string } | null
   /** The plugin's own store (`$.store`: the person's prefs), when the test reads it back; left out, the testing kit's store in memory. */
   store?: Map<string, unknown>
   /** Each slash command the deck registered (`$.command.register`), by name. */
@@ -206,7 +206,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('fs.exists', ($, e) => ({ value: w.isDebug === true && /[\\/]apiarius[\\/]debug$/.test(e.path) }))
   on('fs.stat', ($, e) => {
     const said = w.stat ? w.stat(e.path) : { size: 12, mtimeMs: NOW }
-    return said ? { value: { kind: 'file', size: said.size, mtimeMs: said.mtimeMs, isLink: false } } : { deny: 'no such file' }
+    if (!said) return { deny: 'no such file' }
+    const resolve = (e as { resolve?: boolean }).resolve === true
+    const isLink = said.isLink === true
+    return { value: { kind: said.kind ?? 'file', size: said.size, mtimeMs: said.mtimeMs, isLink, ...(resolve ? { realPath: said.realPath ?? e.path } : {}) } }
   })
   on('fs.write', ($, e) => {
     w.writes.push({ path: e.path, text: e.text })
