@@ -62,10 +62,11 @@ export function cut(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('').trimEnd()}…`
 }
 
-/** One line: control characters and runs of white space become one space. */
+/** One line: control characters (C0, DEL and C1: a terminal takes ESC and CSI as commands) and runs of white space become one space; a bidirectional override, embedding or isolate (U+202A to U+202E, U+2066 to U+2069), which would make a name read in another order, shows as U+FFFD. */
 export function flat(text: string): string {
   return String(text ?? '')
-    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, '\ufffd')
     .replace(/\s+/g, ' ')
     .trim()
 }

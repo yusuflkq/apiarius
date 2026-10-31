@@ -231,7 +231,7 @@ export function steeringCmdOf(value: unknown): Record<string, unknown> | null {
     .sort()
     .join(',')
   const isText = (text: unknown): text is string => typeof text === 'string' && text.trim() !== '' && text.length <= 4000
-  const isName = (name: unknown): name is string => typeof name === 'string' && /^[^\u0000-\u001f\u007f]{1,200}$/.test(name)
+  const isName = (name: unknown): name is string => typeof name === 'string' && /^[^\u0000-\u001f\u007f-\u009f]{1,200}$/.test(name)
   const isWebId = (said: unknown, most: number): said is string => typeof said === 'string' && said.length <= most && /^[A-Za-z0-9_-]+$/.test(said)
   if (value.cmd === 'chat' && keys === 'agentId,cmd,text' && isName(value.agentId) && isText(value.text)) return { cmd: 'chat', id, agentId: value.agentId, text: value.text }
   if (value.cmd === 'answer' && keys === 'answers,callId,cmd' && isWebId(value.callId, 100) && isRecord(value.answers)) {
@@ -244,7 +244,7 @@ export function steeringCmdOf(value: unknown): Record<string, unknown> | null {
   if (value.cmd === 'abortTurn' && keys === 'cmd,turnId' && isWebId(value.turnId, 100)) return { cmd: 'abortTurn', id, turnId: value.turnId }
   if (value.cmd === 'stopBackground' && keys === 'bgId,cmd' && isWebId(value.bgId, 200)) return { cmd: 'stopBackground', id, bgId: value.bgId }
   if ((value.cmd === 'clearFinished' || value.cmd === 'showCleared') && keys === 'cmd') return { cmd: value.cmd, id }
-  if (value.cmd === 'selectRepo' && keys === 'cmd,root' && typeof value.root === 'string' && /^[^\u0000-\u001f\u007f]{0,1000}$/.test(value.root)) return { cmd: 'selectRepo', id, root: value.root }
+  if (value.cmd === 'selectRepo' && keys === 'cmd,root' && typeof value.root === 'string' && /^[^\u0000-\u001f\u007f-\u009f]{0,1000}$/.test(value.root)) return { cmd: 'selectRepo', id, root: value.root }
   if (value.cmd === 'review' && keys === 'cmd,text' && isText(value.text)) return { cmd: 'review', id, text: value.text }
   return null
 }

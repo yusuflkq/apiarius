@@ -9,6 +9,16 @@
  */
 import type { Args } from 'claude-code'
 
+/** Where one of the deck's git runs runs: the folder it hands git (`git -C <folder>`, from the session's own folder), else the run's own working folder. */
+export function gitWhere(e: { argv: readonly string[]; init?: { cwd?: string } | undefined }): string {
+  return e.argv[1] === '-C' ? (e.argv[2] ?? '') : (e.init?.cwd ?? '')
+}
+
+/** Whether a git run is the deck's read of where git's settings come from, before each of its runs (`git config --list --show-scope`): a repository with no settings of its own answers it with nothing. */
+export function isConfigList(argv: readonly string[]): boolean {
+  return argv.join(' ').includes(' config --list --show-scope')
+}
+
 /** Bash's own arguments, as its input schema has them. */
 export type BashArgs = { command: string; description?: string; timeout?: number; run_in_background?: boolean }
 

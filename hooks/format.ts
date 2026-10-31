@@ -51,9 +51,16 @@ export function money(usd: number | undefined): string {
   return usd < 10 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(1)}`
 }
 
-/** Collapses whitespace and strips control characters so text fits one row. */
+/**
+ * The bidirectional overrides, embeddings and isolates (U+202A to U+202E,
+ * U+2066 to U+2069): a file name or a line holding one reads in an order
+ * other than its own ("Trojan Source"), so each shows as U+FFFD instead.
+ */
+const BIDI = /[\u202a-\u202e\u2066-\u2069]/g
+
+/** Collapses whitespace and strips control characters (C0, DEL and C1: a terminal takes ESC and CSI as commands) so text fits one row; a bidirectional control shows as U+FFFD. */
 export function oneLine(text: string): string {
-  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').replace(BIDI, '\ufffd').replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -74,9 +81,9 @@ export function shortModel(model: string): string {
   return model.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/\[[^\]]*\]$/, '')
 }
 
-/** Removes control characters a Text leaf may not hold, keeping newlines and tabs. */
+/** Removes control characters a Text leaf may not hold (C0 but newlines and tabs, DEL, C1), and shows each bidirectional control as U+FFFD. */
 export function clean(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+  return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').replace(BIDI, '\ufffd')
 }
 
 export function trunc(text: string, max: number): string {

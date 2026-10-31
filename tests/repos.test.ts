@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import * as R from '../hooks/repos'
+import { gitWhere, isConfigList } from './tools'
 
 const HASH = 'b'.repeat(40)
 const NOW = 1_700_000_100_000
@@ -42,6 +43,7 @@ function isSame(a: string, b: string): boolean {
 /** What git prints for `argv` run in `cwd`: the top level anywhere inside a repository, the rest at its root alone. */
 function gitAt(argv: readonly string[], cwd: string): { exitCode: number; stdout: string } {
   const line = argv.join(' ')
+  if (isConfigList(argv)) return { exitCode: 0, stdout: '' }
   const at = cwd.replace(/\\/g, '/')
   const root = Object.keys(DISK).find(one => isSame(at, one) || isSame(at.slice(0, one.length + 1), `${one}/`))
   if (!root) return { exitCode: 128, stdout: '' }
@@ -79,7 +81,7 @@ function world(on: On, runs: Run[], folder?: Folder, lists: string[] = []) {
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [] }))
   on('process.run', ($, e) => {
-    const cwd = e.init?.cwd ?? ''
+    const cwd = gitWhere(e)
     runs.push({ line: e.argv.join(' '), cwd })
     return { value: { ...gitAt(e.argv, cwd), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -124,6 +126,15 @@ function pane(surface: 'terminal' | 'desktop') {
 
 const isProbe = (run: Run) => run.line.includes('rev-parse --show-toplevel')
 
+/** A read of where git's settings come from, which the deck makes before each run, there (`isConfigList`). */
+const isConfig = (run: Run) => isConfigList(run.line.split(' '))
+
+/** Whether git changed to each folder itself (`-C`, never started there), and each run came with a read of where git's settings come from in its folder. */
+function isEachReadFirst(runs: readonly Run[]): boolean {
+  const folders = (some: readonly Run[]) => some.map(run => run.cwd).sort().join('\n')
+  return runs.every(run => run.line.startsWith('git -C ')) && folders(runs.filter(isConfig)) === folders(runs.filter(run => !isConfig(run)))
+}
+
 test('a session outside any repository follows the one an agent edits: its files on each surface, git run at its root', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const runs: Run[] = []
@@ -145,7 +156,8 @@ test('a session outside any repository follows the one an agent edits: its files
   // each directory is probed once: the session's, then the edited file's
   expect(runs.filter(isProbe).map(run => run.cwd)).toEqual(['/notes', '/repo/src'])
   // and every other git command ran at the root git printed
-  const rest = runs.filter(run => !isProbe(run))
+  const rest = runs.filter(run => !isProbe(run) && !isConfig(run))
+  expect(isEachReadFirst(runs)).toBe(true)
   expect(rest.some(run => run.line.includes('status --porcelain'))).toBe(true)
   expect(rest.filter(run => run.cwd !== '/repo')).toEqual([])
 })
@@ -200,7 +212,7 @@ test('Windows spellings: a backslashed path in any case finds the root git print
   }
 
   expect(runs.filter(isProbe).map(run => run.cwd)).toEqual(['C:\\Users\\Me\\Documents', 'C:/Users/Me/proj/src'])
-  expect(runs.filter(run => !isProbe(run) && run.cwd !== 'C:/Users/Me/proj')).toEqual([])
+  expect(runs.filter(run => !isProbe(run) && !isConfig(run) && run.cwd !== 'C:/Users/Me/proj')).toEqual([])
 })
 
 /** The picks Changes offers, by their Buttons' keys in the order drawn. */

@@ -55,5 +55,10 @@ jobs:
       - name: Web server and page tests
         run: node --test web/test/
 
+      # Real git against hostile repositories: no command the deck runs may run what a repository's own settings name.
+      - name: Git against hostile repositories
+        if: runner.os != 'Windows'
+        run: node --test tests/gitpoc.test.mjs
+
       - name: Sample data matches its builder
         run: node web/fixtures/make-v2.mjs --check

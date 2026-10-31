@@ -1,7 +1,7 @@
 import type { AgentInfo, On } from 'claude-code'
 import { expect, mock, test, type FoundElement } from 'claude-code/testing'
 
-import { bash } from './tools'
+import { bash, gitWhere, isConfigList } from './tools'
 
 /**
  * The QA run's live scenario, replayed through the stubbed engine. You ask
@@ -120,6 +120,7 @@ function unifiedOf(path: string): string {
 /** What git prints for `argv` run in `cwd`: /repo is a repository, the session's /work is none. */
 function gitAt(argv: readonly string[], cwd: string, disk: Disk): { exitCode: number; stdout: string } {
   const line = argv.join(' ')
+  if (isConfigList(argv)) return { exitCode: 0, stdout: '' }
   const at = cwd.replace(/\\/g, '/')
   if (at !== '/repo' && !at.startsWith('/repo/')) return { exitCode: 128, stdout: '' }
   const ok = (stdout: string) => ({ exitCode: 0, stdout })
@@ -172,7 +173,7 @@ function world(on: On): { disk: Disk } {
     return { text: '' }
   })
   on('session.send', () => ({ isDelivered: true }))
-  on('process.run', ($, e) => ({ value: { ...gitAt(e.argv, e.init?.cwd ?? '', disk), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', ($, e) => ({ value: { ...gitAt(e.argv, gitWhere(e), disk), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }))
   on('fs.read', () => ({ value: 'hello\nworld\n' }))
   on('tool.call', ($, e) => {

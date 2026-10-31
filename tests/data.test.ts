@@ -5,7 +5,7 @@ import { emptyGit, type FileRow, type GitState } from '../hooks/git'
 import * as M from '../hooks/model'
 import * as W from '../hooks/web'
 import type { DeckAgent, DeckData, DeckSnapshot } from '../types'
-import { bash, type BashArgs } from './tools'
+import { bash, isConfigList, type BashArgs } from './tools'
 
 /**
  * The v3 data layer: goals, plans and their sources, checklists, placeholder
@@ -121,6 +121,7 @@ function world(on: On, clock: MockClock, saved: DeckSnapshot[], options: WorldOp
   on('fs.read', () => ({ value: '' }))
   on('process.run', ($, e) => {
     const line = e.argv.join(' ')
+    if (isConfigList(e.argv)) return ran(0, '')
     if (line.includes('rev-parse --show-toplevel')) return ran(0, '/repo\n')
     if (line.includes('rev-parse --abbrev-ref HEAD')) return ran(0, 'main\n')
     if (line.includes('rev-parse --verify --quiet HEAD')) return ran(0, `${HASH}\n`)

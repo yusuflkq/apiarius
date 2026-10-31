@@ -2,6 +2,19 @@
  * Git: the argument vectors the deck runs (no shell, no optional locks, no
  * external diff drivers, C locale) and the parsers for what they print.
  *
+ * The deck runs git every few seconds in repositories an agent edits in,
+ * which may be anywhere on the disk, so nothing a repository's own settings
+ * name ever runs: no file-system monitor, no signature check, no submodule's
+ * own git, no remote reached (a partial clone's lazy fetch runs its remote's
+ * command), no external diff or text conversion (on every command that diffs),
+ * and no filter driver the repository's own config defines (`repoConfigOf`:
+ * read before every run, each such driver switched off, or, where the
+ * person's own global config defines one by that name, set back to theirs).
+ * The person's global and system config stay trusted: a global git-lfs
+ * filter keeps working. Each command runs with `-C <repository>` from the
+ * session's own folder (`argvIn`), never with the repository as its working
+ * folder, so a program a repository holds is never the one found by name.
+ *
  * Pure: the hooks module runs these through `$.process.run`.
  */
 import type { Hunk } from './diff'
@@ -14,6 +27,8 @@ export const GIT_ENV: Record<string, string> = {
   GIT_OPTIONAL_LOCKS: '0',
   GIT_PAGER: 'cat',
   GIT_TERMINAL_PROMPT: '0',
+  // a partial clone fetches what it lacks from its remote, whose command its own config names: never
+  GIT_NO_LAZY_FETCH: '1',
 }
 
 const G = [
@@ -25,9 +40,27 @@ const G = [
   'diff.relative=false',
   '-c',
   'color.ui=false',
+  // what a repository's own config could run: none of it
+  '-c',
+  'core.fsmonitor=',
+  '-c',
+  'log.showSignature=false',
+  '-c',
+  'submodule.recurse=false',
+  '-c',
+  'diff.submodule=short',
+  '-c',
+  'status.submoduleSummary=false',
+  // no remote is ever reached (an older git's lazy fetch included), whatever its config allows
+  '-c',
+  'protocol.allow=never',
+  ...['file', 'git', 'ssh', 'http', 'https', 'ext'].flatMap(name => ['-c', `protocol.${name}.allow=never`]),
 ] as const
 
-const DIFF = ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'] as const
+/** Every command that diffs: no external diff, no text conversion, no submodule's own git. */
+const NO_DRIVERS = ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'] as const
+
+const DIFF = ['diff', ...NO_DRIVERS] as const
 
 export const argv = {
   toplevel: [...G, 'rev-parse', '--show-toplevel'],
@@ -35,24 +68,112 @@ export const argv = {
   head: [...G, 'rev-parse', '--verify', '--quiet', 'HEAD'],
   upstream: [...G, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
   aheadBehind: [...G, 'rev-list', '--left-right', '--count', '@{upstream}...HEAD'],
-  status: [...G, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+  status: [...G, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=dirty'],
   numstat: (base: string) => [...G, ...DIFF, '--numstat', '-z', base, '--'],
   fileDiff: (base: string, paths: readonly string[]) => [...G, ...DIFF, '-M', '-U3', base, '--', ...paths],
   log: (count: number) => [
     ...G,
     'log',
     `-n${count}`,
+    ...NO_DRIVERS,
     '--date=unix',
     '--pretty=format:%x1e%H%x1f%h%x1f%an%x1f%at%x1f%s',
     '--shortstat',
   ],
   countSince: (since: string) => [...G, 'rev-list', '--count', `--since=${since}`, 'HEAD'],
-  statSince: (since: string) => [...G, 'log', `--since=${since}`, '--pretty=format:%x1e', '--shortstat'],
-  showMeta: (hash: string) => [...G, 'show', '-s', '--format=%H%x1f%an%x1f%ae%x1f%at%x1f%B', hash],
-  showNumstat: (hash: string) => [...G, 'show', '--no-ext-diff', '--no-textconv', '--format=', '--numstat', '-z', hash],
-  showPatch: (hash: string) => [...G, 'show', '--no-ext-diff', '--no-textconv', '--format=', '-U3', hash],
+  statSince: (since: string) => [...G, 'log', `--since=${since}`, ...NO_DRIVERS, '--pretty=format:%x1e', '--shortstat'],
+  showMeta: (hash: string) => [...G, 'show', '-s', ...NO_DRIVERS, '--format=%H%x1f%an%x1f%ae%x1f%at%x1f%B', hash],
+  showNumstat: (hash: string) => [...G, 'show', ...NO_DRIVERS, '--format=', '--numstat', '-z', hash],
+  showPatch: (hash: string) => [...G, 'show', ...NO_DRIVERS, '--format=', '-U3', hash],
   newSince: (from: string) => [...G, 'rev-list', '-n', '40', `${from}..HEAD`],
   recentHashes: [...G, 'rev-list', '-n', '5', 'HEAD'],
+  /** Every setting git reads there, each with where it came from (`repoConfigOf` reads it). */
+  config: [...G, 'config', '--list', '--show-scope', '-z'],
+}
+
+/** Whether `hash` is a commit's name as git prints one (4 to 64 hex digits): the only thing `show` is ever handed. */
+export function isHash(hash: string): boolean {
+  return /^[0-9a-f]{4,64}$/i.test(hash)
+}
+
+/**
+ * The argument vector that runs `args` (one of `argv`) in the repository
+ * or folder `where`: git told to change there itself (`-C`), so the
+ * process starts in the session's folder and a program inside `where` is
+ * never found by name, then `overrides` (`repoConfigOf`'s), then its own.
+ */
+export function argvIn(args: readonly string[], where: string, overrides: readonly string[] = []): string[] {
+  return ['git', '-C', where, ...overrides, ...args.slice(1)]
+}
+
+/** Where git read a setting from that the person stands behind: their system's, their own global one, and the command line (the deck's and Claude Code's own `-c`). Any other (the repository's own, its worktree's, what those include) is the repository's to say. */
+const TRUSTED_SCOPES: ReadonlySet<string> = new Set(['system', 'global', 'command'])
+
+/** A filter driver's settings git runs or obeys. */
+const FILTER_KEYS = ['clean', 'smudge', 'process', 'required'] as const
+
+/** A driver name the deck can name back to git on its command line (`-c filter.<name>.clean=`): one with an `=` or a space would be read as something else. */
+const DRIVER_NAME = /^[A-Za-z0-9._@+-]{1,100}$/
+
+/**
+ * What the deck must tell git so that no filter driver a repository's own
+ * config defines runs (its `clean`, `smudge` or `process`), from
+ * `git config --list --show-scope -z` there (`argv.config`): each setting
+ * of a driver that came from outside the person's trusted scopes is set
+ * back to what their own config says (a global git-lfs keeps working), or
+ * blanked where theirs says none. A driver left with nothing of the
+ * person's to run (none of theirs by that name, or a `process` of the
+ * repository's, which the command line can blank but not unset, beside a
+ * `clean` of theirs) is switched off, `required` false so git reads the
+ * files as they stand, and named in `drivers` (for a note). A repository
+ * defining a driver whose name the command line cannot carry is refused:
+ * nothing runs there.
+ */
+export function repoConfigOf(listing: string): { overrides: string[]; drivers: string[] } | { refusal: string } {
+  const parts = listing.split('\0')
+  const trusted = new Map<string, string>()
+  const untrusted = new Map<string, Set<string>>()
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const scope = parts[i] ?? ''
+    const entry = parts[i + 1] ?? ''
+    const cut = entry.indexOf('\n')
+    const key = cut < 0 ? entry : entry.slice(0, cut)
+    const value = cut < 0 ? 'true' : entry.slice(cut + 1)
+    const match = /^filter\.(.+)\.([^.]+)$/i.exec(key)
+    if (!match) continue
+    const name = match[1] ?? ''
+    const what = (match[2] ?? '').toLowerCase()
+    if (!(FILTER_KEYS as readonly string[]).includes(what)) continue
+    if (TRUSTED_SCOPES.has(scope)) trusted.set(`${name}\n${what}`, value)
+    else untrusted.set(name, (untrusted.get(name) ?? new Set<string>()).add(what))
+  }
+  const overrides: string[] = []
+  const drivers: string[] = []
+  for (const [name, said] of [...untrusted].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (!DRIVER_NAME.test(name)) return { refusal: `This repository's own git settings define a filter Apiarius cannot switch off (${JSON.stringify(name.slice(0, 40))}), so it runs no git there.` }
+    const own = (what: string) => trusted.get(`${name}\n${what}`)
+    const set = (what: string, value: string) => overrides.push('-c', `filter.${name}.${what}=${value}`)
+    for (const what of ['clean', 'smudge', 'process']) {
+      const value = own(what)
+      if (value !== undefined) set(what, value)
+      else if (said.has(what)) set(what, '')
+    }
+    // git runs a driver's process before its clean, and a blank one is no filter at all
+    const isOff = own('process') === undefined && (said.has('process') || own('clean') === undefined)
+    if (isOff) drivers.push(name)
+    set('required', isOff ? 'false' : (own('required') ?? 'false'))
+  }
+  return { overrides, drivers }
+}
+
+/** What the deck says where git is too old to say where its settings come from (`--show-scope` came in 2.26): it runs none there. */
+export const OLD_GIT = 'Apiarius needs git 2.26 or newer to read a repository without running what its own settings name.'
+
+/** Why git could not say where its settings come from, in words for the person: an older git (`OLD_GIT`), else git's own first line. */
+export function configRefusalOf(stderr: string): string {
+  if (/show-scope/.test(stderr)) return OLD_GIT
+  const first = stderr.split(/\r?\n/).find(line => line.trim() !== '') ?? ''
+  return first.trim() || 'git could not read its settings here'
 }
 
 export type FileCode = 'M' | 'A' | 'D' | 'R' | 'N' | '!' | 'T'
@@ -160,6 +281,20 @@ export function emptyGit(): GitState {
 
 export type StatusRow = { x: string; y: string; path: string; oldPath?: string }
 
+/**
+ * What git printed of a repository's own (a path, with `-z` as it lies on
+ * the disk; a commit's author, subject or message), as the deck keeps and
+ * shows it: each control character (C0, DEL, C1; a message's newlines and
+ * tabs kept, with `isLines`) and each bidirectional override, embedding or
+ * isolate as U+FFFD. What a repository chose then neither breaks a drawing
+ * (every surface refuses a control character in text) nor reads in an
+ * order other than its own; git, asked of such a path, finds no such file,
+ * so it shows with no diff.
+ */
+export function shownOf(text: string, isLines = false): string {
+  return text.replace(isLines ? /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g : /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '\ufffd')
+}
+
 export function parseStatus(out: string): StatusRow[] {
   const parts = out.split('\0')
   const rows: StatusRow[] = []
@@ -169,11 +304,11 @@ export function parseStatus(out: string): StatusRow[] {
     if (!part || part.length < 4) continue
     const x = part[0] ?? ' '
     const y = part[1] ?? ' '
-    const path = part.slice(3)
+    const path = shownOf(part.slice(3))
     let oldPath: string | undefined
     if (x === 'R' || x === 'C' || y === 'R' || y === 'C') {
       i += 1
-      oldPath = parts[i]
+      oldPath = parts[i] === undefined ? undefined : shownOf(parts[i] ?? '')
     }
     rows.push({ x, y, path, ...(oldPath ? { oldPath } : {}) })
   }
@@ -191,11 +326,11 @@ export function parseNumstat(out: string): NumstatRow[] {
     const part = (parts[i] ?? '').replace(/^\n+/, '')
     const match = /^(-|\d+)\t(-|\d+)\t([\s\S]*)$/.exec(part)
     if (!match) continue
-    let path = match[3] ?? ''
+    let path = shownOf(match[3] ?? '')
     let oldPath: string | undefined
     if (path === '') {
-      oldPath = parts[i + 1]
-      path = parts[i + 2] ?? ''
+      oldPath = parts[i + 1] === undefined ? undefined : shownOf(parts[i + 1] ?? '')
+      path = shownOf(parts[i + 2] ?? '')
       i += 2
     }
     const isBinary = match[1] === '-'
@@ -263,7 +398,8 @@ export function parseLog(out: string): Commit[] {
     .map(chunk => {
       const [head = '', ...rest] = chunk.split('\n')
       const [hash = '', short = '', author = '', at = '0', subject = ''] = head.split('\x1f')
-      return { hash, short, author, at: Number(at) * 1000, subject, ...parseShortstat(rest.join('\n')) }
+      // what a commit says is its author's to choose: one line each, no control character
+      return { hash, short, author: shownOf(author), at: Number(at) * 1000, subject: shownOf(subject), ...parseShortstat(rest.join('\n')) }
     })
     .filter(commit => commit.hash !== '')
 }
@@ -281,7 +417,7 @@ export function sumShortstats(out: string): { added: number; removed: number } {
 
 export function parseMeta(out: string): Pick<CommitDetail, 'hash' | 'author' | 'email' | 'at' | 'body'> {
   const [hash = '', author = '', email = '', at = '0', ...body] = out.split('\x1f')
-  return { hash: hash.trim(), author, email, at: Number(at) * 1000, body: body.join('\x1f').trim() }
+  return { hash: hash.trim(), author: shownOf(author), email: shownOf(email), at: Number(at) * 1000, body: shownOf(body.join('\x1f'), true).trim() }
 }
 
 /** `git log --since` takes this spelling of a moment in every locale. */

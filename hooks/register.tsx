@@ -1520,15 +1520,48 @@ let savedPin = ''
 /** The root the edits' display paths are made against; null until the first look. */
 let shownRoot: string | null = null
 
-/** Runs git in `where`, the repository shown unless told otherwise; with none, runs nothing. */
+/** What the deck told the person once about a repository's own git settings (a filter switched off, a repository it runs no git in, a git too old), by what it said. */
+const gitTold = new Set<string>()
+
+/** Says `text` once a session (a toast), however often git meets it again. */
+function tellGitOnce($: EngineInterface, text: string) {
+  if (gitTold.has(text)) return
+  gitTold.add(text)
+  $.ui.toast(text)
+}
+
+/**
+ * Runs git in `where`, the repository shown unless told otherwise; with
+ * none, runs nothing. Each run first reads where git's settings there come
+ * from (`G.argv.config`), there and then, so nothing the repository's own
+ * config defines runs (`G.repoConfigOf`: its filter drivers off, the rest
+ * held off by every command's own options); where git cannot say, nothing
+ * runs. Git starts in the session's own folder and changes to `where`
+ * itself (`G.argvIn`).
+ */
 async function runGit($: EngineInterface, args: readonly string[], timeoutMs = 15_000, where = git.root): Promise<{ ok: boolean; out: string; err: string }> {
   if (!where) return { ok: false, out: '', err: 'not in a git repository' }
-  try {
-    const ran = await $.process.run(args, { cwd: where, env: G.GIT_ENV, timeoutMs })
-    return { ok: ran.exitCode === 0, out: ran.stdout, err: ran.stderr }
-  } catch (error) {
-    return { ok: false, out: '', err: error instanceof Error ? error.message : String(error) }
+  const run = async (argv: readonly string[], ms: number) => {
+    try {
+      const ran = await $.process.run(argv, { env: G.GIT_ENV, timeoutMs: ms })
+      return { ok: ran.exitCode === 0, out: ran.stdout, err: ran.stderr }
+    } catch (error) {
+      return { ok: false, out: '', err: error instanceof Error ? error.message : String(error) }
+    }
   }
+  const listed = await run(G.argvIn(G.argv.config, where), Math.min(timeoutMs, 10_000))
+  if (!listed.ok) {
+    const why = G.configRefusalOf(listed.err)
+    if (why === G.OLD_GIT) tellGitOnce($, why)
+    return { ok: false, out: '', err: why }
+  }
+  const plan = G.repoConfigOf(listed.out)
+  if ('refusal' in plan) {
+    tellGitOnce($, `${F.baseName(R.cleanPath(where))}: ${plan.refusal}`)
+    return { ok: false, out: '', err: plan.refusal }
+  }
+  if (plan.drivers.length > 0) tellGitOnce($, `Changes reads ${F.baseName(R.cleanPath(where))} with its own git ${plan.drivers.length === 1 ? 'filter' : 'filters'} (${plan.drivers.join(', ')}) off: files ${plan.drivers.length === 1 ? 'it handles' : 'they handle'} may show as changed.`)
+  return run(G.argvIn(args, where, plan.overrides), timeoutMs)
 }
 
 /** The root of the repository holding `dir` as git spells it; null outside one, or where git cannot run. */
@@ -1889,6 +1922,8 @@ function sameFileDiff(a: G.FileDiff, b: G.FileDiff): boolean {
 
 async function loadCommit($: EngineInterface, hash: string): Promise<void> {
   const root = git.root
+  // git is handed a commit's name as git printed it, never anything it could read as an option
+  if (!G.isHash(hash)) return
   const [meta, numstat, patch] = await Promise.all([
     runGit($, G.argv.showMeta(hash), 15_000, root),
     runGit($, G.argv.showNumstat(hash), 15_000, root),

@@ -10,6 +10,7 @@ import type { CommandSpec, On, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSp
 import { mock, type Engine } from 'claude-code/testing'
 
 import type * as W from '../hooks/web'
+import { gitWhere, isConfigList } from './tools'
 import type { DeckSnapshot } from '../types'
 
 export const NOW = 1_700_000_100_000
@@ -54,6 +55,8 @@ export type World = {
   isDecided: boolean
   /** What git prints for a command run in `cwd`, in a repository the test stands up; left out, there is no repository. */
   git?: (argv: readonly string[], cwd?: string) => { exitCode: number; stdout: string }
+  /** What `git config --list --show-scope -z` prints in `cwd` (the deck reads it before each run); left out, no settings of the repository's own. */
+  gitConfig?: (cwd: string) => { exitCode: number; stdout: string; stderr?: string }
   /** What `fs.list` lists in a directory, when the test lays one out (null: there is none); left out, the testing kit's own. */
   list?: (path: string) => { name: string; kind: 'file' | 'dir' | 'other' }[] | null
   /** The files `fs.read` reads, by their path (`/` between parts, no drive: the engine resolves `/work` to `C:\work` on Windows), when the test gives any: `fs.read` is then the world's. */
@@ -76,6 +79,8 @@ export type World = {
   checkFails: number
   /** How many redraws the deck asked for (`$.ui.invalidate`). */
   invalidates: number
+  /** Each node the deck ran (`$.process.run`), its arguments: the files it removes among them. */
+  nodeRuns: string[][]
   /** What /cost totals (`session.usage`'s `cost.usd`), when the test moves it; left out, $1.25. */
   costUsd?: number
   /** The mod's `.debug/` folder is there: the deck writes its debug dump (`.debug/<sessionId>.json`) among the writes. */
@@ -106,6 +111,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     aborted: [],
     checkFails: 0,
     invalidates: 0,
+    nodeRuns: [],
     ...extra,
   }
 }
@@ -158,9 +164,9 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('agent.list', () => ({ value: [] }))
   on('process.run', ($, e) =>
     e.argv[0] === 'node'
-      ? { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      ? (w.nodeRuns.push([...e.argv]), { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
       : w.git && e.argv[0] === 'git'
-        ? { value: { ...w.git(e.argv, e.init?.cwd ?? ''), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+        ? { value: { stderr: '', ...(isConfigList(e.argv) ? (w.gitConfig?.(gitWhere(e)) ?? { exitCode: 0, stdout: '' }) : w.git(e.argv, gitWhere(e))), isStdoutTruncated: false, isStderrTruncated: false } }
         : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } },
   )
   const files = w.files

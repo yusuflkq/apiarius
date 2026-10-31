@@ -4,7 +4,7 @@ import { expect, mock, test, type MockClock } from 'claude-code/testing'
 import { emptyGit, type FileRow } from '../hooks/git'
 import * as M from '../hooks/model'
 import type { DeckAgent, DeckData, DeckSnapshot, DeckStatus } from '../types'
-import { bash } from './tools'
+import { bash, gitWhere, isConfigList } from './tools'
 
 const HASH = 'c'.repeat(40)
 /** On a minute's edge, so a test's first minute is whole. */
@@ -43,6 +43,7 @@ function spawn(name: string, description: string, prompt: string) {
 /** What git prints in a repository at /repo with one changed file. */
 function gitOut(argv: readonly string[]): { exitCode: number; stdout: string } {
   const line = argv.join(' ')
+  if (isConfigList(argv)) return { exitCode: 0, stdout: '' }
   if (line.includes('rev-parse --show-toplevel')) return { exitCode: 0, stdout: '/repo\n' }
   if (line.includes('rev-parse --abbrev-ref HEAD')) return { exitCode: 0, stdout: 'main\n' }
   if (line.includes('rev-parse --verify --quiet HEAD')) return { exitCode: 0, stdout: `${HASH}\n` }
@@ -491,7 +492,8 @@ function qaWorld(on: On, saved: DeckSnapshot[], options: { root?: string; short?
   })
   on('process.run', ($, e) => {
     const line = e.argv.join(' ')
-    const at = longOf(e.init?.cwd ?? '').toLowerCase()
+    if (isConfigList(e.argv)) return ran(0, '')
+    const at = longOf(gitWhere(e)).toLowerCase()
     if (at !== root.toLowerCase() && !at.startsWith(`${root.toLowerCase()}/`)) return ran(128, '')
     if (line.includes('rev-parse --show-toplevel')) return ran(0, `${root}\n`)
     if (line.includes('rev-parse --abbrev-ref HEAD')) return ran(0, 'main\n')

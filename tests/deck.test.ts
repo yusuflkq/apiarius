@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { hunkText, hunksOf } from '../hooks/diff'
 import { filesOf, parseLog, parseNumstat, parseStatus } from '../hooks/git'
+import { isConfigList } from './tools'
 
 const HASH = 'a'.repeat(40)
 const NOW = 1_700_000_100_000
@@ -53,6 +54,7 @@ const APP_DIFF = [
 /** What git prints for each command the deck runs, in a repository at /repo. */
 function gitOut(argv: readonly string[]): { exitCode: number; stdout: string } {
   const line = argv.join(' ')
+  if (isConfigList(argv)) return { exitCode: 0, stdout: '' }
   if (line.includes('rev-parse --show-toplevel')) return { exitCode: 0, stdout: '/repo\n' }
   if (line.includes('rev-parse --abbrev-ref HEAD')) return { exitCode: 0, stdout: 'main\n' }
   if (line.includes('rev-parse --verify --quiet HEAD')) return { exitCode: 0, stdout: `${HASH}\n` }
