@@ -6,7 +6,7 @@
  * answers it as Claude Code would (or the deck's answer abandons it), model
  * steps the test words, and the permission events it raises.
  */
-import type { On, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, ToolCallResult } from 'claude-code'
+import type { CommandSpec, On, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult, ToolCallResult } from 'claude-code'
 import { mock, type Engine } from 'claude-code/testing'
 
 import type * as W from '../hooks/web'
@@ -64,6 +64,8 @@ export type World = {
   store?: Map<string, unknown>
   /** Each slash command the deck registered (`$.command.register`), by name. */
   commands: string[]
+  /** The same registrations whole: the name, the description, the hint and `immediate`. */
+  registered: CommandSpec[]
   /** Each pane opened (`$.ui.open`), as asked: its id, and the body rows it asked for. */
   opens: { id: string; rows?: number }[]
   /** Each permission check raised (`tool.check`: a call's, or a plugin's `$.tool.check`), its tool and input as asked. */
@@ -98,6 +100,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     verdict: 'ask',
     isDecided: false,
     commands: [],
+    registered: [],
     opens: [],
     checks: [],
     aborted: [],
@@ -125,6 +128,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => {
     w.commands.push(e.name)
+    w.registered.push({ ...e })
     return { value: { command: e.name } }
   })
   on('ui.panes', () => ({ value: [] }))

@@ -88,6 +88,45 @@ test('the deck registers /apiarius, the command its run hook answers', async ($,
   expect(w.commands).toEqual([deck('').command])
 })
 
+test('/apiarius is registered before session.start reads anything, so the menu has it from the start and through a reload; its hint leaves out the unlisted probe', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  // what the deck had registered when it first looked for its debug folder and read the person's prefs
+  const atDebug: string[][] = []
+  const atPrefs: string[][] = []
+  class Store extends Map<string, unknown> {
+    override get(key: string) {
+      if (key === 'prefs') atPrefs.push([...w.commands])
+      return super.get(key)
+    }
+  }
+  const w = newWorld({ store: new Store() })
+  Object.defineProperty(w, 'isDebug', {
+    get: () => {
+      atDebug.push([...w.commands])
+      return false
+    },
+  })
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await clock.advance(1000)
+  expect(atDebug[0]).toEqual(['apiarius'])
+  expect(atPrefs[0]).toEqual(['apiarius'])
+
+  // a reload runs session.start again: /apiarius is registered again first
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await clock.advance(1000)
+  expect(w.commands).toEqual(['apiarius', 'apiarius'])
+  expect(atPrefs[1]).toEqual(['apiarius', 'apiarius'])
+
+  const spec = w.registered[0]
+  expect(spec?.immediate).toBe(true)
+  expect(spec?.argumentHint).toBe('[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close]')
+  expect(spec?.argumentHint).not.toContain('probe')
+  // the probe still opens, typed in full
+  await $.command.run(deck('probe'))
+  expect(w.opens.map(one => one.id)).toContain('apiarius-probe')
+})
+
 test('the Dashboard: the header says the state, your request and model · mode · context · $ (the mode lit), and holds no keys; the tabs are Buttons with their digits as hotkeys, and nothing else has one', async ($, on) => {
   const { v2 } = await demo($, on)
   for (const surface of SURFACES) {

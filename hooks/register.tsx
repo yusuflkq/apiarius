@@ -3264,6 +3264,20 @@ function probeView(
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // /apiarius before anything else is awaited: a reload drops the old registration, and the menu (the terminal's
+    // typeahead, a desktop session's list) goes without /apiarius until this runs
+    try {
+      await $.command.register({
+        name: 'apiarius',
+        description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in the Browser pane)',
+        // now (the Dashboard's id), help (Settings), probe (a dev check) and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
+        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close]',
+        immediate: true,
+      })
+    } catch (error) {
+      $.ui.log(`could not add /apiarius: ${error instanceof Error ? error.message : String(error)}`)
+    }
+
     const now = await $.clock.now()
     cwd = e.cwd
     debug.loadedAt = now
@@ -3338,18 +3352,6 @@ export const register: Register = on => {
     // what a reload lost (the goal, an ended agent's result), read back from the transcripts: never awaited, it redraws when done
     void recoverLost($)
     timers.tick = $.clock.every(2500, () => void tick($))
-
-    try {
-      await $.command.register({
-        name: 'apiarius',
-        description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in the Browser pane)',
-        // now (the Dashboard's id), help (Settings), and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
-        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close|probe]',
-        immediate: true,
-      })
-    } catch (error) {
-      $.ui.log(`could not add /apiarius: ${error instanceof Error ? error.message : String(error)}`)
-    }
 
     return next(e)
   })
