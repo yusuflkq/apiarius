@@ -16,6 +16,8 @@ import type { DeckSnapshot } from '../types'
 export const NOW = 1_700_000_100_000
 export const PORT = 4321
 const PID = '4242'
+/** Apiarius's home in the tests (`APIARIUS_HOME`): each session's state folder is `<HOME>/web/<id>`. */
+export const HOME = '/home/me/.claude/apiarius'
 
 /** A child the test drives: what it prints, and when it ends. */
 export type Child = { request: ProcessSpawnRequest; print: (text: string) => void; end: () => void; isRead: boolean }
@@ -83,8 +85,14 @@ export type World = {
   nodeRuns: string[][]
   /** What /cost totals (`session.usage`'s `cost.usd`), when the test moves it; left out, $1.25. */
   costUsd?: number
-  /** The mod's `.debug/` folder is there: the deck writes its debug dump (`.debug/<sessionId>.json`) among the writes. */
+  /** The home's `debug/` folder is there: the deck writes its debug dump (`debug/<sessionId>.json`) among the writes. */
   isDebug?: boolean
+  /** The environment the deck reads (`$.env.get`); left out, `APIARIUS_HOME` alone (`HOME`): no registry folder but the home's. */
+  env?: Readonly<Record<string, string>>
+  /** Each request web/home.js was run with (the folder made private, removed, cleared, swept), as JSON. */
+  homeRequests: W.HomeRequest[]
+  /** web/home.js answers that it could not do what it was asked. */
+  isHomeRefused?: boolean
 }
 
 export function newWorld(extra: Partial<World> = {}): World {
@@ -112,8 +120,14 @@ export function newWorld(extra: Partial<World> = {}): World {
     checkFails: 0,
     invalidates: 0,
     nodeRuns: [],
+    homeRequests: [],
     ...extra,
   }
+}
+
+/** Whether a node run is web/home.js's, and its request. */
+export function homeRequestOf(argv: readonly string[]): W.HomeRequest | null {
+  return argv[0] === 'node' && /[\\/]web[\\/]home\.js$/.test(argv[1] ?? '') ? (JSON.parse(argv[2] ?? 'null') as W.HomeRequest) : null
 }
 
 /** Answers every engine call the deck makes, outside a repository; `restored` is the snapshot a reload finds. */
@@ -131,6 +145,7 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     })
     on('store.keys', () => ({ value: [...store.keys()] }))
   } else mock.store(on)
+  mock.env(on, w.env ?? { APIARIUS_HOME: HOME })
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => {
     w.commands.push(e.name)
@@ -162,13 +177,17 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [], cost: { usd: w.costUsd ?? 1.25 } } }))
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [] }))
-  on('process.run', ($, e) =>
-    e.argv[0] === 'node'
+  on('process.run', ($, e) => {
+    const request = homeRequestOf(e.argv)
+    if (request) w.homeRequests.push(request)
+    return request
+      ? { value: { exitCode: 0, stdout: w.isHomeRefused ? '{"ok":false,"why":"refused"}\n' : '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : e.argv[0] === 'node'
       ? (w.nodeRuns.push([...e.argv]), { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
       : w.git && e.argv[0] === 'git'
         ? { value: { stderr: '', ...(isConfigList(e.argv) ? (w.gitConfig?.(gitWhere(e)) ?? { exitCode: 0, stdout: '' }) : w.git(e.argv, gitWhere(e))), isStdoutTruncated: false, isStderrTruncated: false } }
-        : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } },
-  )
+        : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   const files = w.files
   if (files) {
     on('fs.read', ($, e) => {
@@ -183,8 +202,8 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
       return entries ? { value: entries.map(one => ({ ...one, size: 0, mtimeMs: 0, isLink: false })) } : { deny: 'no such folder' }
     })
   }
-  // the mod's `.debug/` folder, while the test lays it out: the deck dumps what it believes there
-  on('fs.exists', ($, e) => ({ value: w.isDebug === true && /[\\/]\.debug$/.test(e.path) }))
+  // the home's `debug/` folder, while the test lays it out: the deck dumps what it believes there
+  on('fs.exists', ($, e) => ({ value: w.isDebug === true && /[\\/]apiarius[\\/]debug$/.test(e.path) }))
   on('fs.stat', ($, e) => {
     const said = w.stat ? w.stat(e.path) : { size: 12, mtimeMs: NOW }
     return said ? { value: { kind: 'file', size: said.size, mtimeMs: said.mtimeMs, isLink: false } } : { deny: 'no such file' }
@@ -324,7 +343,7 @@ export async function work($: Engine): Promise<void> {
 
 /** Every state.json written, oldest first. */
 export function statesOf(w: World): W.WebState[] {
-  return w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as W.WebState)
+  return w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as W.WebState)
 }
 
 /** The latest state.json written. */

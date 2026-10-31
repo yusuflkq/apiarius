@@ -2,19 +2,22 @@ import type { On } from 'claude-code'
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 
 /**
- * The debug dump: while `<mod>/.debug/` exists the deck writes what it
- * believes to `.debug/<sessionId>.json` (each session its own file), about
- * 2 s after the data changes; while it is absent the deck writes nothing at
- * all. The file system is stubbed here.
+ * The debug dump: while `<home>/debug/` exists (Apiarius's home, never the
+ * mod's folder) the deck writes what it believes to `debug/<sessionId>.json`
+ * (each session its own file, made 0600 by web/home.js before its first
+ * write), about 2 s after the data changes; while it is absent the deck
+ * writes nothing at all. The file system is stubbed here.
  */
+const HOME = '/home/me/.claude/apiarius'
 
 const NOW = 1_700_000_100_000
 
-type Disk = { isDebug: boolean; looks: string[]; writes: { path: string; text: string }[] }
+type Disk = { isDebug: boolean; looks: string[]; writes: { path: string; text: string }[]; homeRuns: string[] }
 
-/** Answers every engine call the deck makes, outside a repository, with `.debug/` there or not as `disk` says. */
+/** Answers every engine call the deck makes, outside a repository, with the home's `debug/` there or not as `disk` says. */
 function world(on: On, disk: Disk) {
   mock.store(on)
+  mock.env(on, { HOME: '/home/me' })
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.panes', () => ({ value: [] }))
@@ -23,13 +26,21 @@ function world(on: On, disk: Disk) {
   on('session.model', () => ({ value: 'claude-test' }))
   on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [] } }))
   on('agent.list', () => ({ value: [] }))
-  on('process.run', () => ({ value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', ($, e) => {
+    // web/home.js makes the dump's file private first; git finds no repository
+    if (/[\\/]web[\\/]home\.js$/.test(e.argv[1] ?? '')) {
+      disk.homeRuns.push(e.argv[2] ?? '')
+      return { value: { exitCode: 0, stdout: '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('fs.exists', ($, e) => {
     disk.looks.push(e.path)
-    return { value: disk.isDebug && /[\\/]\.debug$/.test(e.path) }
+    return { value: disk.isDebug && e.path === `${HOME}/debug` }
   })
   on('fs.write', ($, e) => {
-    disk.writes.push({ path: e.path, text: e.text })
+    // the dump's writes alone: the registry's file in the home is another test's
+    if (e.path.startsWith(`${HOME}/debug/`)) disk.writes.push({ path: e.path, text: e.text })
     return { value: undefined }
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))
@@ -61,9 +72,9 @@ async function work($: Engine) {
   })
 }
 
-test('with no .debug folder the deck never writes its state, however long it runs', async ($, on) => {
+test('with no debug folder in the home the deck never writes its state, however long it runs', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
-  const disk: Disk = { isDebug: false, looks: [], writes: [] }
+  const disk: Disk = { isDebug: false, looks: [], writes: [], homeRuns: [] }
   world(on, disk)
 
   await work($)
@@ -71,13 +82,14 @@ test('with no .debug folder the deck never writes its state, however long it run
 
   // it looked (at the start and on its ticks), and found nothing to write to
   expect(disk.looks.length).toBeGreaterThan(1)
-  expect(disk.looks.every(path => /[\\/]\.debug$/.test(path))).toBe(true)
-  expect(disk.writes).toEqual([])
+  expect(disk.looks.every(path => path === `${HOME}/debug`)).toBe(true)
+  expect(disk.writes.filter(one => one.path.includes('/debug/'))).toEqual([])
+  expect(disk.homeRuns.some(run => run.includes('debug/'))).toBe(false)
 })
 
-test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s after the data changes, and stops once the folder goes', async ($, on) => {
+test('with the home`s debug folder the deck writes debug/<sessionId>.json there about 2 s after the data changes, and stops once the folder goes', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
-  const disk: Disk = { isDebug: true, looks: [], writes: [] }
+  const disk: Disk = { isDebug: true, looks: [], writes: [], homeRuns: [] }
   world(on, disk)
 
   await work($)
@@ -86,8 +98,11 @@ test('with the .debug folder the deck writes .debug/<sessionId>.json about 2 s a
 
   expect(disk.writes).toHaveLength(1)
   const [first] = disk.writes
-  // the session's own file: two sessions loading the mod never overwrite each other's dump
-  expect(first?.path).toMatch(/[\\/]\.debug[\\/]session-1\.json$/)
+  // the session's own file in the home's debug folder: two sessions loading the mod never overwrite each other's dump
+  expect(first?.path).toBe(`${HOME}/debug/session-1.json`)
+  // made 0600 before its first write, once
+  expect(disk.homeRuns.filter(run => run.includes('"debug/session-1.json"'))).toHaveLength(1)
+  expect(JSON.parse(disk.homeRuns.find(run => run.includes('debug/'))!)).toMatchObject({ op: 'prepare', home: HOME, files: ['debug/session-1.json'], isOwnHome: true })
   const state = JSON.parse(first?.text ?? '{}')
   expect(state.meta).toMatchObject({ loadedAt: NOW, writes: 1 })
   expect(state.counts).toMatchObject({ agents: 3, shownAgents: 1, goals: 1 })

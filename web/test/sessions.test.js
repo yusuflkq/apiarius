@@ -83,11 +83,12 @@ before(async () => {
   temps.push(root)
   registry = path.join(root, 'registry')
   fs.mkdirSync(registry)
-  const own = path.join(root, '.web', 'me-1')
+  // Apiarius's home as the mod lays it out: every session's folder in <home>/web, this server's own among them
+  const own = path.join(root, 'web', 'me-1')
   fs.mkdirSync(own, { recursive: true })
   fs.writeFileSync(path.join(own, 'state.json'), JSON.stringify({ v: 1, now: 1 }))
   // another session's folder, as the mod makes one, and its lazy files
-  const other = path.join(root, '.web', OTHER)
+  const other = path.join(root, 'web', OTHER)
   for (const sub of ['agents', 'patches', 'messages', 'gitdiffs']) fs.mkdirSync(path.join(other, sub), { recursive: true })
   fs.writeFileSync(path.join(other, 'state.json'), JSON.stringify({ v: 1, now: 2, v2: { v: 2, now: 2 } }))
   fs.writeFileSync(path.join(other, 'agents', 'main.json'), '{"v":2,"id":"main"}')
@@ -97,12 +98,31 @@ before(async () => {
   fs.writeFileSync(path.join(root, 'secret.json'), '{"secret":true}')
   listed(OTHER, other)
   // a stale one, an ended one, one naming a folder the deck does not make, one naming a folder no session's
-  fs.mkdirSync(path.join(root, '.web', 'stale-1'), { recursive: true })
-  fs.writeFileSync(path.join(root, '.web', 'stale-1', 'state.json'), '{"v":1}')
-  listed('stale-1', path.join(root, '.web', 'stale-1'), { heartbeatAt: Date.now() - 10 * 60_000 })
+  fs.mkdirSync(path.join(root, 'web', 'stale-1'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'web', 'stale-1', 'state.json'), '{"v":1}')
+  listed('stale-1', path.join(root, 'web', 'stale-1'), { heartbeatAt: Date.now() - 10 * 60_000 })
   listed('ended-1', other, { endedAt: Date.now() })
   listed('odd-1', root)
   listed('wrong-1', other)
+  // an earlier version's folder under the mod (`<mod>/.web/<id>`), and one named the same way anywhere else: neither is beside this one's
+  for (const [id, where] of [['old-1', path.join(root, 'mod', '.web', 'old-1')], ['far-1', path.join(root, 'elsewhere', 'web', 'far-1')]]) {
+    fs.mkdirSync(where, { recursive: true })
+    fs.writeFileSync(path.join(where, 'state.json'), '{"v":1,"secret":true}')
+    listed(id, where)
+  }
+  // a link in <home>/web named for a session, to a folder elsewhere, and one to another session's folder: refused once followed
+  const outside = path.join(root, 'outside')
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(outside, 'state.json'), '{"v":1,"secret":true}')
+  const LINK = process.platform === 'win32' ? 'junction' : 'dir' // a junction needs no rights on Windows
+  fs.symlinkSync(outside, path.join(root, 'web', 'link-1'), LINK)
+  listed('link-1', path.join(root, 'web', 'link-1'))
+  fs.symlinkSync(other, path.join(root, 'web', 'alias-1'), LINK)
+  listed('alias-1', path.join(root, 'web', 'alias-1'))
+  // a registry file naming the right folder by a way around (`..`): taken as the path it resolves to, which is the folder itself
+  listed('dots-1', path.join(root, 'web', 'x', '..', 'dots-1'))
+  fs.mkdirSync(path.join(root, 'web', 'dots-1'))
+  fs.writeFileSync(path.join(root, 'web', 'dots-1', 'state.json'), '{"v":1,"dots":true}')
   main = await start(own, ['--sessions', registry])
   plain = await start(own)
 })
@@ -124,9 +144,11 @@ test('/s/<id>/state serves a live session`s state from the folder its registry f
   assert.equal((await request(main.port, `/s/${OTHER}/patch/nope`)).status, 404)
 })
 
-test('/s/ refuses: no token, a session not listed, stale or ended, a folder not `.web/<its id>`, a path for an id, any other file; and a server with no registry serves none', async () => {
+test('/s/ refuses: no token, a session not listed, stale or ended, a folder not `<home>/web/<its id>` beside this one`s (an earlier version`s `.web`, one elsewhere, a link), a path for an id, any other file; and a server with no registry serves none', async () => {
   assert.equal((await request(main.port, `/s/${OTHER}/state`, { headers: {} })).status, 403)
-  for (const id of ['nobody', 'stale-1', 'ended-1', 'odd-1', 'wrong-1', '..%2F..%2Fsecret', 'a.b']) assert.equal((await request(main.port, `/s/${id}/state`)).status, 404, id)
+  assert.equal((await request(main.port, `/s/${OTHER}/state?t=${TOKEN}`, { headers: {} })).status, 403)
+  for (const id of ['nobody', 'stale-1', 'ended-1', 'odd-1', 'wrong-1', 'old-1', 'far-1', 'link-1', 'alias-1', '..%2F..%2Fsecret', 'a.b']) assert.equal((await request(main.port, `/s/${id}/state`)).status, 404, id)
+  assert.deepEqual(JSON.parse((await request(main.port, '/s/dots-1/state')).body), { v: 1, dots: true })
   assert.equal((await request(main.port, `/s/${OTHER}/agent/..%2F..%2F..%2Fsecret`)).status, 400)
   assert.equal((await request(main.port, `/s/${OTHER}/secret.json`)).status, 404)
   assert.equal((await request(main.port, `/s/${OTHER}/state/extra`)).status, 404)

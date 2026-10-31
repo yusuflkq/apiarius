@@ -775,7 +775,7 @@ export type DeckWebSaved = {
   token: string
   /** The port it listened on, taken again after a reload; 0 for none yet. */
   port: number
-  /** The folder it serves, `<mod>/.web/<sessionId>`. */
+  /** The folder it serves, `<home>/web/<sessionId>` (an earlier version's `<mod>/.web/<sessionId>` is let go). */
   dir: string
 }
 

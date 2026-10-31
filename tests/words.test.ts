@@ -26,7 +26,7 @@ const SCOUT_FILE = 'agent-2dx1'
 
 /** The v2 state of the latest state.json written. */
 function v2Of(w: World): W.WebStateV2 {
-  const states = w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path))
+  const states = w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path))
   const last = states[states.length - 1]
   if (!last) throw new Error('no state.json was written')
   return (JSON.parse(last.text) as { v2: W.WebStateV2 }).v2

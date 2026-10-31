@@ -7,7 +7,7 @@ import * as W from '../hooks/web'
 import type { DeckAgent, DeckData, DeckWebSaved } from '../types'
 
 /**
- * The web deck: what `.web/<sessionId>/state.json` holds (v1),
+ * The web deck: what `<home>/web/<sessionId>/state.json` holds (v1),
  * the patches written beside it once each, and `/apiarius web`: the server
  * started through `$.process.spawn` (stubbed here as a child the test
  * drives), its link answered, the Browser pane asked to open it, and the
@@ -17,6 +17,9 @@ import type { DeckAgent, DeckData, DeckWebSaved } from '../types'
 const NOW = 1_700_000_100_000
 const PORT = 4321
 const PID = '4242'
+/** Apiarius's home in these tests (`APIARIUS_HOME`). */
+const HOME = '/home/me/.claude/apiarius'
+const DIR = `${HOME}/web/session-1`
 
 // ---------------------------------------------------------------------------
 // webStateOf: pure.
@@ -280,9 +283,17 @@ test('avatars are 0 to 9 and stable per agent id; ids, models and lines read as 
     '',
   ])
   expect(W.webUrlOf(PORT, 'tok')).toBe(`http://127.0.0.1:${PORT}/?t=tok`)
-  expect(W.webDirOf('C:\\mod\\', 'a/b')).toBe('C:\\mod/.web/a_b')
-  expect(W.serverArgvOf('/mod/web/server.js', '/mod/.web/s', PID, 0)).toEqual(['node', '/mod/web/server.js', '--dir', '/mod/.web/s', '--parent', PID])
-  expect(W.serverArgvOf('/mod/web/server.js', '/mod/.web/s', '', PORT)).toEqual(['node', '/mod/web/server.js', '--dir', '/mod/.web/s', '--port', String(PORT)])
+  expect(W.webDirOf('C:\\Users\\sam\\.claude\\apiarius\\', 'a/b')).toBe('C:\\Users\\sam\\.claude\\apiarius/web/a_b')
+  expect(W.webDirOf('', 'a1')).toBe('')
+  expect(W.idOfWebDir(HOME, `${HOME}/web/a1`)).toBe('a1')
+  expect(W.idOfWebDir('C:\\h', 'C:\\h\\web\\a1\\')).toBe('a1')
+  expect([W.idOfWebDir(HOME, '/mod/.web/a1'), W.idOfWebDir(HOME, `${HOME}/web/a/b`), W.idOfWebDir(HOME, `${HOME}/web/..`), W.idOfWebDir('', '/web/a1')]).toEqual(['', '', '', ''])
+  expect(W.homeFileOf('a1', 'state.json')).toBe('web/a1/state.json')
+  expect(W.homeFileOf('../x', 'state.json')).toBe('')
+  expect(W.homeArgvOf('/mod/web/home.js', { op: 'remove', home: HOME, ids: ['a1'] })).toEqual(['node', '/mod/web/home.js', `{"op":"remove","home":"${HOME}","ids":["a1"]}`])
+  expect([W.isHomeDone('{"ok":true}\n'), W.isHomeDone('{"ok":false,"why":"x"}'), W.isHomeDone('4242\n'), W.isHomeDone('')]).toEqual([true, false, false, false])
+  expect(W.serverArgvOf('/mod/web/server.js', `${HOME}/web/s`, PID, 0)).toEqual(['node', '/mod/web/server.js', '--dir', `${HOME}/web/s`, '--parent', PID])
+  expect(W.serverArgvOf('/mod/web/server.js', `${HOME}/web/s`, '', PORT)).toEqual(['node', '/mod/web/server.js', '--dir', `${HOME}/web/s`, '--port', String(PORT)])
 })
 
 test("the server's lines: split chunks are buffered into whole lines, and only valid commands to agents the deck holds are routed", () => {
@@ -343,10 +354,14 @@ type World = {
   toasts: string[]
   opened: { server: string; tool: string; url: unknown }[]
   saved: DeckWebSaved[]
+  /** Each request web/home.js was run with. */
+  homeRequests: W.HomeRequest[]
+  /** web/home.js answers that it could not make the folder private. */
+  isHomeRefused: boolean
 }
 
 function newWorld(extra: Partial<World> = {}): World {
-  return { children: [], ready: [PORT], isMissing: false, hasBrowser: true, writes: [], sent: [], filled: [], toasts: [], opened: [], saved: [], ...extra }
+  return { children: [], ready: [PORT], isMissing: false, hasBrowser: true, writes: [], sent: [], filled: [], toasts: [], opened: [], saved: [], homeRequests: [], isHomeRefused: false, ...extra }
 }
 
 const EDIT_RESULT = {
@@ -362,6 +377,7 @@ const EDIT_RESULT = {
 /** Answers every engine call the deck makes, outside a repository; `saved` is what `$.state` kept of the web deck. */
 function world(on: On, w: World, saved?: DeckWebSaved) {
   mock.store(on)
+  mock.env(on, { APIARIUS_HOME: HOME })
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.panes', () => ({ value: [] }))
@@ -378,12 +394,15 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
   on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [], cost: { usd: 1.25 } } }))
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [] }))
-  // node prints its parent (the session's process); git finds no repository
-  on('process.run', ($, e) =>
-    e.argv[0] === 'node'
+  // web/home.js says it did what it was asked; node prints its parent (the session's process); git finds no repository
+  on('process.run', ($, e) => {
+    const isHome = e.argv[0] === 'node' && /[\\/]web[\\/]home\.js$/.test(e.argv[1] ?? '')
+    if (isHome) w.homeRequests.push(JSON.parse(e.argv[2] ?? 'null') as W.HomeRequest)
+    if (isHome) return { value: { exitCode: 0, stdout: w.isHomeRefused ? '{"ok":false,"why":"refused"}\n' : '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return e.argv[0] === 'node'
       ? { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-      : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } },
-  )
+      : { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('fs.exists', () => ({ value: false }))
   on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }))
   on('fs.write', ($, e) => {
@@ -394,6 +413,7 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
     w.sent.push({ to: e.to, text: e.text })
     return { isDelivered: true }
   })
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('prompt.fill', ($, e) => {
     w.filled.push(e.text)
     return { isFilled: true }
@@ -476,53 +496,112 @@ async function work($: Engine) {
 }
 
 function statesOf(w: World): { path: string; state: W.WebState }[] {
-  return w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => ({ path: one.path, state: JSON.parse(one.text) as W.WebState }))
+  return w.writes.filter(one => one.path === `${DIR}/state.json`).map(one => ({ path: one.path, state: JSON.parse(one.text) as W.WebState }))
 }
 
 function patchesOf(w: World): string[] {
   return w.writes.filter(one => /[\\/]patches[\\/]/.test(one.path)).map(one => one.path.replace(/^.*[\\/]patches[\\/]/, ''))
 }
 
-/** The page's link in an answer, and its token. */
-function linkOf(text: string | undefined): { url: string; token: string } {
-  const found = /\[Open the Apiarius deck\]\((http:\/\/127\.0\.0\.1:(\d+)\/\?t=([^)]+))\) in the Browser pane/.exec(text ?? '')
-  return { url: found?.[1] ?? '', token: decodeURIComponent(found?.[3] ?? '') }
+/** The page's link the deck last asked the Browser pane to open, and its token. */
+function linkOf(w: World): { url: string; token: string } {
+  const url = String(w.opened[w.opened.length - 1]?.url ?? '')
+  const found = /^http:\/\/127\.0\.0\.1:\d+\/\?t=(.+)$/.exec(url)
+  return { url: found ? url : '', token: decodeURIComponent(found?.[1] ?? '') }
 }
 
-test('/apiarius web starts the server once (node, web/server.js, its folder, the session pid, the token in its env), answers its link and opens it in the Browser pane', async ($, on) => {
+/** What the model reads of an answer: its text (a command's output reaches it) and its context. */
+function modelSees(answer: { text?: string; context?: readonly string[] }): string {
+  return [answer.text ?? '', ...(answer.context ?? [])].join('\n')
+}
+
+test('/apiarius web starts the server once (node, web/server.js, its folder in the home, the session pid, the token on its stdin) and opens the page in the Browser pane; the model reads no link and no token', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
   await work($)
-  // nothing is written for the web before /apiarius web
+  // nothing is written for the web before /apiarius web; the session's folder was made private at the start (the gone sessions' swept first)
   await clock.advance(3000)
   expect(statesOf(w)).toEqual([])
+  expect(w.homeRequests.map(one => one.op)).toEqual(['sweep', 'prepare'])
+  expect(w.homeRequests[0]).toMatchObject({ op: 'sweep', home: HOME, registry: `${HOME}/sessions`, keep: 'session-1', legacy: expect.stringMatching(/[\\/]\.web$/) })
+  expect(w.homeRequests[1]).toEqual({ op: 'prepare', home: HOME, id: 'session-1', files: [], isOwnHome: false })
 
   const answer = await $.command.run(deck('web'))
-  const { url, token } = linkOf(answer.text)
-  expect(answer.text).toBe(`[Open the Apiarius deck](${url}) in the Browser pane`)
+  await clock.settle()
+  const { url, token } = linkOf(w)
+  expect(w.opened[0]).toEqual({ server: 'Claude_Browser', tool: 'preview_start', url })
   expect(url).toBe(`http://127.0.0.1:${PORT}/?t=${encodeURIComponent(token)}`)
   expect(token).toMatch(/^[0-9a-f-]{36}$/)
-  expect(answer.context?.some(line => line.includes(url))).toBe(true)
+  // a command's text reaches the model as its output, and its context is the model's: neither holds the link, the port or the token
+  expect(answer.text).toBe('Apiarius web is running on this machine. It opens in the Browser pane; elsewhere, /apiarius shows its link (also under Settings) to open it in your browser.')
+  for (const said of [token, url, String(PORT), 'http', '?t=']) expect(modelSees(answer)).not.toContain(said)
 
   expect(w.children).toHaveLength(1)
-  const { argv, env } = w.children[0]!.request
+  const { argv, env, input } = w.children[0]!.request
   expect(argv[0]).toBe('node')
   expect(argv[1]).toMatch(/[\\/]web[\\/]server\.js$/)
-  expect(argv.slice(2, 4)).toEqual(['--dir', expect.stringMatching(/[\\/]\.web[\\/]session-1$/)])
-  expect(argv.slice(4)).toEqual(['--parent', PID])
-  expect(env).toEqual({ APIARIUS_TOKEN: token })
-  // the state was there before the server started, and $.state keeps the switch, token, port and folder
+  expect(argv.slice(2, 4)).toEqual(['--dir', DIR])
+  // the registry of sessions in the home, whose folders it may serve too (`<home>/web/<id>` beside its own)
+  expect(argv.slice(4)).toEqual(['--parent', PID, '--sessions', `${HOME}/sessions`])
+  // the token on stdin alone: never argv, never the environment
+  expect(input).toBe(`${token}\n`)
+  expect(env).toBeUndefined()
+  expect(argv.join(' ')).not.toContain(token)
+  // each file made 0600 before its first write, the state too; the state was there before the server started, and $.state keeps the switch, token, port and folder
+  const made = w.homeRequests.filter(one => one.op === 'prepare').flatMap(one => (one.op === 'prepare' ? one.files : []))
+  expect(made).toContain('web/session-1/state.json')
+  expect(made).toContain('web/session-1/agents/main.json')
+  expect(w.writes.filter(one => one.path.startsWith(`${DIR}/`)).every(one => made.includes(one.path.slice(HOME.length + 1)))).toBe(true)
   expect(statesOf(w).length).toBeGreaterThan(0)
-  expect(w.saved[w.saved.length - 1]).toEqual({ isOn: true, token, port: PORT, dir: argv[3] })
-  await clock.settle()
-  expect(w.opened[0]).toEqual({ server: 'Claude_Browser', tool: 'preview_start', url })
+  expect(w.saved[w.saved.length - 1]).toEqual({ isOn: true, token, port: PORT, dir: DIR })
 
   // again: the same link, no second server
   const again = await $.command.run(deck('web'))
-  expect(linkOf(again.text).url).toBe(url)
+  await clock.settle()
+  expect(linkOf(w).url).toBe(url)
+  expect(modelSees(again)).not.toContain(token)
   expect(w.children).toHaveLength(1)
   expect(w.children[0]?.isRead).toBe(true)
+})
+
+test('a home folder that cannot be made private writes nothing and starts no server', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld({ isHomeRefused: true })
+  world(on, w)
+  await work($)
+  const answer = await $.command.run(deck('web'))
+  await clock.advance(3000)
+  expect(answer.text).toContain('could not be made private')
+  expect(w.children).toHaveLength(0)
+  expect(w.writes.filter(one => one.path.startsWith(`${HOME}/web/`))).toEqual([])
+})
+
+test('session.end removes the state folder (after a /clear only empties it), and nothing is written after', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  await $.command.run(deck('web'))
+  await clock.advance(400)
+  // a /clear: the process goes on, under the id the deck started with; what the folder held of the conversation goes, the folder stays
+  await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  expect(w.homeRequests.filter(one => one.op === 'clear')).toEqual([{ op: 'clear', home: HOME, id: 'session-1' }])
+  expect(w.homeRequests.some(one => one.op === 'remove')).toBe(false)
+  await clock.advance(400)
+  // its state is written afresh, each file made 0600 again first
+  const prepares = w.homeRequests.filter(one => one.op === 'prepare')
+  expect(prepares[prepares.length - 1]).toMatchObject({ files: expect.arrayContaining(['web/session-1/state.json']) })
+  // the end: the server stops, the folder goes whole, and nothing is written there again
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'session-1', resume: { id: 'session-1' } } as never)
+  await clock.settle()
+  expect(w.homeRequests[w.homeRequests.length - 1]).toEqual({ op: 'remove', home: HOME, ids: ['session-1'] })
+  expect(w.children[0]?.isRead).toBe(false)
+  const written = w.writes.length
+  await $.tool.call({ tool: 'Read', file_path: '/work/a.md', agentId: 'agent-x1' } as never)
+  await clock.advance(3000)
+  expect(w.writes.slice(written).filter(one => one.path.startsWith(`${DIR}/`))).toEqual([])
+  expect((await $.command.run(deck('web'))).text).toContain('ended')
 })
 
 test('while on, state.json follows the data at most every 300 ms, and each edit`s patch is written once', async ($, on) => {
@@ -531,7 +610,8 @@ test('while on, state.json follows the data at most every 300 ms, and each edit`
   world(on, w)
   await work($)
   await $.command.run(deck('web'))
-  await clock.advance(400)
+  // the registry's first write of this session's file (within 2 s) moves the list's own row: let it settle
+  await clock.advance(3000)
   const before = statesOf(w).length
 
   // an edit: within 300 ms its patch, then the state naming it
@@ -559,7 +639,8 @@ test('while on, state.json follows the data at most every 300 ms, and each edit`
   expect(ids).toHaveLength(2)
   expect(patchesOf(w)).toEqual(ids.map(one => `${one}.diff`))
 
-  // nothing new: the 2.5 s ticks write nothing more
+  // nothing new: the 2.5 s ticks write nothing more (once the registry's file says the new edit)
+  await clock.advance(3000)
   const settled = statesOf(w).length
   await clock.advance(6000)
   expect(statesOf(w).length).toBe(settled)
@@ -603,7 +684,8 @@ test('state.json carries the v2 view model under `v2` beside v1, and each agent`
   expect(scoutFile.edits).toEqual([last.v2.changes.edits[0]!.id])
   expect(scoutFile.activity.map(one => [one.tool, one.ok])).toEqual([['Edit', true]])
 
-  // nothing new: neither the state nor a file is written again
+  // nothing new: neither the state nor a file is written again (once the registry's file says the edit)
+  await clock.advance(3000)
   const settled = [statesOf(w).length, w.writes.length]
   await clock.advance(6000)
   expect([statesOf(w).length, w.writes.length]).toEqual(settled)
@@ -655,17 +737,19 @@ test('without node the first read rejects: a toast, a text answer, and the deck 
 test('/apiarius web stop ends the child and the writes; a reload starts the server again with the same token on the same port', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ ready: [PORT] })
+  // what an earlier version kept: its folder under the mod, let go for the home's
   const kept: DeckWebSaved = { isOn: true, token: 'token-kept', port: PORT, dir: '/mod/.web/session-1' }
   world(on, w, kept)
   // a reload: session.start finds the web deck on, and starts its server again
   await work($)
   await clock.settle()
   expect(w.children).toHaveLength(1)
-  const { argv, env } = w.children[0]!.request
-  expect(argv.slice(2)).toEqual(['--dir', '/mod/.web/session-1', '--parent', PID, '--port', String(PORT)])
-  expect(env).toEqual({ APIARIUS_TOKEN: 'token-kept' })
-  const answer = await $.command.run(deck('web'))
-  expect(linkOf(answer.text)).toEqual({ url: `http://127.0.0.1:${PORT}/?t=token-kept`, token: 'token-kept' })
+  const { argv, input } = w.children[0]!.request
+  expect(argv.slice(2)).toEqual(['--dir', DIR, '--parent', PID, '--port', String(PORT), '--sessions', `${HOME}/sessions`])
+  expect(input).toBe('token-kept\n')
+  await $.command.run(deck('web'))
+  await clock.settle()
+  expect(linkOf(w)).toEqual({ url: `http://127.0.0.1:${PORT}/?t=token-kept`, token: 'token-kept' })
   expect(w.children).toHaveLength(1)
   expect(w.toasts.some(text => text.includes('another port'))).toBe(false)
 
@@ -685,7 +769,7 @@ test('a restart that cannot take its old port again takes another and says so; o
   const clock = mock.clock(on, { now: NOW })
   // the first child exits before its ready line, the second listens on 5555
   const w = newWorld({ ready: [] })
-  world(on, w, { isOn: true, token: 'token-kept', port: PORT, dir: '/mod/.web/session-1' })
+  world(on, w, { isOn: true, token: 'token-kept', port: PORT, dir: DIR })
   await work($)
   await clock.settle()
   expect(w.children).toHaveLength(1)
@@ -695,8 +779,9 @@ test('a restart that cannot take its old port again takes another and says so; o
   expect(w.children).toHaveLength(2)
   expect(w.children[1]!.request.argv).not.toContain('--port')
   expect(w.toasts.some(text => text.includes('another port'))).toBe(true)
-  const answer = await $.command.run(deck('web'))
-  expect(linkOf(answer.text).url).toBe('http://127.0.0.1:5555/?t=token-kept')
+  await $.command.run(deck('web'))
+  await clock.settle()
+  expect(linkOf(w).url).toBe('http://127.0.0.1:5555/?t=token-kept')
 })
 
 test('the pane: with no Browser pane to open the web deck in, its link shows as markdown under the header', async ($, on) => {

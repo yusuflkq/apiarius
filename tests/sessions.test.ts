@@ -26,7 +26,7 @@ import { bash } from './tools'
 import * as AV from '../web/avatars.mjs'
 import { SAMPLE_NOW, v2Session } from './v2session'
 import { sampleSessions } from './v2sessions'
-import { command, deck, lastState, newWorld, NOW, work, world, type World } from './world'
+import { command, deck, HOME, lastState, newWorld, NOW, work, world, type World } from './world'
 
 const REG = '/reg'
 /** The person's key in the test's store: every registry file and inbox file the test lays down as one of their decks would is sealed with it. */
@@ -34,9 +34,9 @@ const KEY = SL.keyOf('5e'.repeat(32))!
 /** This deck's process, as the world's node says it (tests/world.ts). */
 const PID = 4242
 const OTHER = 'other-1'
-const OTHER_DIR = '/other/.web/other-1'
+const OTHER_DIR = `${HOME}/web/other-1`
 const OLD = 'old-2'
-const OLD_DIR = '/old/.web/old-2'
+const OLD_DIR = `${HOME}/web/old-2`
 
 // ---------------------------------------------------------------------------
 // The registry and the list: pure.
@@ -49,29 +49,41 @@ function sampleState(): W.WebStateV2 {
 
 /** A registry file of another session, live at `now`. */
 function entry(id: string, extra: Partial<S.SessionEntry> = {}): S.SessionEntry {
-  return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, agents: 0, faces: [], live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `/x/.web/${id}`, inbox: true, ...extra }
+  return { v: 1, id, title: `Session ${id}`, cwd: `C:\\code\\${id}`, repo: '', surface: 'terminal', terminal: '', state: 'idle', need: null, needs: 0, working: 0, agents: 0, faces: [], live: '', costUsd: 0.5, startedAt: SAMPLE_NOW - 600_000, updatedAt: SAMPLE_NOW - 60_000, heartbeatAt: SAMPLE_NOW - 10_000, pid: 77, dir: `${HOME}/web/${id}`, inbox: true, ...extra }
 }
 
-test('the registry folder: APIARIUS_SESSIONS, else under CLAUDE_CONFIG_DIR, else ~/.claude; none with no home', () => {
+test('the registry folder: APIARIUS_SESSIONS, else in the home (APIARIUS_HOME, else apiarius under CLAUDE_CONFIG_DIR, else ~/.claude); none with no home', () => {
   expect(S.registryDirOf({ override: 'D:\\tmp\\reg\\', configDir: 'C:/cfg', home: 'C:/Users/sam' })).toBe('D:\\tmp\\reg')
   expect(S.registryDirOf({ configDir: 'C:/cfg/', home: 'C:/Users/sam' })).toBe('C:/cfg/apiarius/sessions')
   expect(S.registryDirOf({ home: 'C:\\Users\\sam' })).toBe('C:\\Users\\sam/.claude/apiarius/sessions')
+  expect(S.registryDirOf({ apiariusHome: '/data/api/', configDir: 'C:/cfg', home: '/home/sam' })).toBe('/data/api/sessions')
+  expect(S.registryDirOf({ override: '/reg', apiariusHome: '/data/api' })).toBe('/reg')
   expect(S.registryDirOf({})).toBe('')
+  // the home: APIARIUS_HOME, else apiarius under Claude Code's configuration folder
+  expect(S.homeDirOf({ apiariusHome: ' /data/api/ ', configDir: 'C:/cfg', home: '/home/sam' })).toBe('/data/api')
+  expect(S.homeDirOf({ configDir: 'C:/cfg/', home: '/home/sam' })).toBe('C:/cfg/apiarius')
+  expect(S.homeDirOf({ home: '/home/sam' })).toBe('/home/sam/.claude/apiarius')
+  expect(S.homeDirOf({ apiariusHome: '  ' })).toBe('')
   expect(S.entryPathOf('/reg', 'a1-b2')).toBe('/reg/a1-b2.json')
   expect(S.entryPathOf('/reg', '../x')).toBe('')
-  expect(S.inboxPathOf('/s/.web/a', 'me-1')).toBe('/s/.web/a/inbox/me-1.json')
-  // only a folder the deck makes, `.web/<its id>`, is read or written
-  expect(S.isStateDirOf('C:\\mod\\.web\\a1', 'a1')).toBe(true)
-  expect(S.isStateDirOf('C:/mod/.web/a1/', 'a1')).toBe(true)
-  expect(S.isStateDirOf('C:/mod/.web/b2', 'a1')).toBe(false)
-  expect(S.isStateDirOf('C:/Windows/System32', 'System32')).toBe(false)
-  expect(S.isStateDirOf('C:/mod/.web/../.web/a1', 'a1')).toBe(false)
+  expect(S.inboxPathOf('/s/web/a', 'me-1')).toBe('/s/web/a/inbox/me-1.json')
+  // only the folder the deck makes, `<home>/web/<its id>` under this deck's own home, is read or written
+  expect(S.isStateDirOf('C:\\Users\\sam\\.claude\\apiarius\\web\\a1', 'a1', 'C:\\Users\\sam/.claude/apiarius/web')).toBe(true)
+  expect(S.isStateDirOf(`${HOME}/web/a1/`, 'a1', `${HOME}/web`)).toBe(true)
+  expect(S.isStateDirOf(`${HOME}/web/b2`, 'a1', `${HOME}/web`)).toBe(false)
+  // an earlier version's folder under the mod, a folder elsewhere named the same way, a way around: none
+  expect(S.isStateDirOf('C:/mod/.web/a1', 'a1', `${HOME}/web`)).toBe(false)
+  expect(S.isStateDirOf('/tmp/evil/web/a1', 'a1', `${HOME}/web`)).toBe(false)
+  expect(S.isStateDirOf(`${HOME}/web/../web/a1`, 'a1', `${HOME}/web`)).toBe(false)
+  expect(S.isStateDirOf(`${HOME}/web/./a1`, 'a1', `${HOME}/web`)).toBe(false)
+  expect(S.isStateDirOf(`${HOME}/web/a1`, 'a1', '')).toBe(false)
+  expect(S.isStateDirOf(`${HOME}/web/..`, '..', `${HOME}/web`)).toBe(false)
 })
 
 test('a session`s file says what its header says: its request`s headline, its state, the first need in a line, its agents at work and in all (the first three at work by their ids, titles and statuses, no other), what it is doing, its spend', () => {
   const state = sampleState()
-  const one = S.entryOf(state, { surface: 'desktop', terminal: '', repo: 'acme-api', pid: 4242, dir: '/m/.web/s', updatedAt: SAMPLE_NOW - 1000, heartbeatAt: SAMPLE_NOW })
-  expect(one).toMatchObject({ v: 1, id: state.session.id, title: state.header.goal?.headline, state: 'waiting', needs: state.needs.length, costUsd: 4.12, pid: 4242, inbox: true, dir: '/m/.web/s', surface: 'desktop', repo: 'acme-api' })
+  const one = S.entryOf(state, { surface: 'desktop', terminal: '', repo: 'acme-api', pid: 4242, dir: `${HOME}/web/s`, updatedAt: SAMPLE_NOW - 1000, heartbeatAt: SAMPLE_NOW })
+  expect(one).toMatchObject({ v: 1, id: state.session.id, title: state.header.goal?.headline, state: 'waiting', needs: state.needs.length, costUsd: 4.12, pid: 4242, inbox: true, dir: `${HOME}/web/s`, surface: 'desktop', repo: 'acme-api' })
   // its agents: every row but the Orchestrator's and Claude Code's own loops, counted; the first three at work named for their faces, and no other's id goes in the file
   const agents = state.agents.filter((row): row is W.V2AgentRow => row.row === 'agent' && row.kind !== 'orchestrator' && row.kind !== 'engine')
   const atWork = agents.filter(row => row.status === 'running' || row.status === 'starting')
@@ -192,7 +204,7 @@ test('a deck not heard from lately: its row says when it was ("Last heard 2m ago
 
 test('a row`s faces: its agents at work, each drawn as its own deck draws it (its id the seed, its title the name), three at most, then how many more; none for the Orchestrator at work alone, whose dot says it, none from an older build`s file, none while it does not work or is quiet', () => {
   const { decks } = sampleSessions()
-  const fact = { surface: 'desktop' as const, terminal: '', repo: '', pid: 1, dir: '/x/.web/s', updatedAt: SAMPLE_NOW, heartbeatAt: SAMPLE_NOW }
+  const fact = { surface: 'desktop' as const, terminal: '', repo: '', pid: 1, dir: `${HOME}/web/s`, updatedAt: SAMPLE_NOW, heartbeatAt: SAMPLE_NOW }
   const rowOf = (state: W.WebStateV2) => S.sessionsViewOf([S.entryOf(state, fact)], null, SAMPLE_NOW).rows[0]!
   // builder and painter at work: their faces, in Monogram tiles as in their deck ("Bl", "Pn"), and in every other style the same
   const two = decks.find(deck => deck.state.header.goal?.headline === 'Apiarius terminal faces')!.state
@@ -218,7 +230,7 @@ test('a row`s faces: its agents at work, each drawn as its own deck draws it (it
 test('the spend in the list: /cost`s estimate, "≈$4.12", whole dollars from $100; a fork`s file says it is one, and its row that its spend counts its parent`s', () => {
   const now = SAMPLE_NOW
   const state = sampleState()
-  const facts = { surface: 'desktop' as const, terminal: '', repo: 'acme-api', pid: 4242, dir: '/m/.web/s', updatedAt: now - 1000, heartbeatAt: now }
+  const facts = { surface: 'desktop' as const, terminal: '', repo: 'acme-api', pid: 4242, dir: `${HOME}/web/s`, updatedAt: now - 1000, heartbeatAt: now }
   const fork = S.entryOf({ ...state, session: { ...state.session, isFork: true } }, facts)
   expect(fork.isFork).toBe(true)
   expect('isFork' in S.entryOf(state, facts)).toBe(false)
@@ -392,8 +404,8 @@ function inboxText(from: string, cmds: Record<string, unknown>[], extra: Partial
 /** The engine with the test's registry and another session listed (`other-1`, its deck the sample's Landing page copy), then the session started (by `begin`: session.start, or the world's `work`). */
 async function started($: Engine, on: On, w: World = newWorld(), d: Disk = { files: new Map() }, begin: ($: Engine) => Promise<void> = async one => void (await one.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' }))) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { APIARIUS_SESSIONS: REG })
   disk(on, d)
+  w.env ??= { APIARIUS_SESSIONS: REG, APIARIUS_HOME: HOME }
   // the person's key, as their decks keep it in the plugin's store
   w.store ??= new Map()
   if (!w.store.has(SL.KEY_STORE)) w.store.set(SL.KEY_STORE, KEY.hex)
@@ -428,9 +440,9 @@ function pane(surface: 'terminal' | 'desktop', bodyColumns = 84) {
   }
 }
 
-test('with no registry folder known (no home, as in every other test) the deck lists nothing and writes no file of the registry', async ($, on) => {
+test('with no registry folder known (no home) the deck lists nothing and writes no file of the registry', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
-  const w = newWorld()
+  const w = newWorld({ env: {} })
   world(on, w)
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await clock.advance(60_000)
@@ -442,7 +454,8 @@ test('the deck writes its own file at its start (its state folder, its process, 
   const first = ownEntries(w)
   expect(first.length).toBe(1)
   expect(first[0]).toMatchObject({ v: 1, id: 'session-1', cwd: '/work', surface: 'desktop', pid: 4242, inbox: true, heartbeatAt: NOW })
-  expect(S.isStateDirOf(first[0]!.dir, 'session-1')).toBe(true)
+  expect(S.isStateDirOf(first[0]!.dir, 'session-1', `${HOME}/web`)).toBe(true)
+  expect(first[0]!.dir).toBe(`${HOME}/web/session-1`)
   // the heartbeat: written again, its heartbeat moved; with nothing new, what it says and when it last changed stay
   await clock.advance(S.HEARTBEAT_MS)
   await clock.advance(S.HEARTBEAT_MS)
@@ -628,7 +641,7 @@ test('the list at any width: the title cuts beside "here", which never shrinks; 
 
 test('a fork`s row: its spend with "incl. its parent`s" under its word and its spend, ending where the spend does; both left out where the pane is narrow', async ($, on) => {
   const d: Disk = { files: new Map() }
-  listed(d, 'fork-3', '/fork/.web/fork-3', { state: 'idle', need: null, costUsd: 491.37, isFork: true })
+  listed(d, 'fork-3', `${HOME}/web/fork-3`, { state: 'idle', need: null, costUsd: 491.37, isFork: true })
   const { clock } = await started($, on, newWorld(), d)
   await $.command.run(deck('sessions'))
   await clock.advance(3000)
@@ -669,9 +682,9 @@ test('the list`s rows: a working session`s agents` faces (one image, each face a
     { id: 'a1b2c3d4e5f60718', title: 'scout', status: 'running' },
     { id: 'b2c3d4e5f6071829', title: 'builder', status: 'running' },
   ]
-  listed(d, 'busy-4', '/busy/.web/busy-4', { title: 'Busy one', state: 'working', need: null, working: 2, agents: 3, faces: atWork, live: '2 agents working · scout: Bash npm test' })
-  listed(d, 'hush-5', '/hush/.web/hush-5', { title: 'Hushed one', state: 'working', need: null, working: 1, agents: 1, faces: atWork.slice(0, 1), heartbeatAt: NOW })
-  listed(d, 'solo-6', '/solo/.web/solo-6', { title: 'lemme see the sessions', state: 'working', need: null, working: 0, agents: 0, live: 'Orchestrator: Bash git status' })
+  listed(d, 'busy-4', `${HOME}/web/busy-4`, { title: 'Busy one', state: 'working', need: null, working: 2, agents: 3, faces: atWork, live: '2 agents working · scout: Bash npm test' })
+  listed(d, 'hush-5', `${HOME}/web/hush-5`, { title: 'Hushed one', state: 'working', need: null, working: 1, agents: 1, faces: atWork.slice(0, 1), heartbeatAt: NOW })
+  listed(d, 'solo-6', `${HOME}/web/solo-6`, { title: 'lemme see the sessions', state: 'working', need: null, working: 0, agents: 0, live: 'Orchestrator: Bash git status' })
   const { clock } = await started($, on, newWorld(), d)
   await $.command.run(deck('sessions'))
   await clock.advance(3000)
@@ -930,13 +943,13 @@ test('an inbox whose writer`s registry file was mid-write when it was read is re
   const d: Disk = { files: new Map() }
   const { clock, w } = await started($, on, newWorld(), d)
   const dir = norm(ownEntries(w)[0]!.dir)
-  d.files.set(`${REG}/late-3.json`, '{"v":1,"id":"late-3","dir":"/late/.web/la')
+  d.files.set(`${REG}/late-3.json`, '{"v":1,"id":"late-3","dir":"/home/me/.claude/apiarius/web/la')
   d.files.set(`${dir}/inbox/late-3.json`, inboxText('late-3', []))
   await clock.advance(3000)
   const states = () => w.writes.filter(one => norm(one.path) === `${dir}/state.json`).length
   expect(states()).toBe(0)
   // its file whole now; its inbox the same file it was
-  listed(d, 'late-3', '/late/.web/late-3')
+  listed(d, 'late-3', `${HOME}/web/late-3`)
   await clock.advance(6000)
   expect(states()).toBeGreaterThan(0)
 })
@@ -988,9 +1001,9 @@ test('with the registry on, ticks that change nothing draw nothing again and wri
   await ui.unmount()
 })
 
-/** What the deck's latest debug dump says of the pane's window (`.debug/session-1.json`): the list, Chat's end, the moves it asked for. */
+/** What the deck's latest debug dump says of the pane's window (`<home>/debug/session-1.json`): the list, Chat's end, the moves it asked for. */
 function paneOf(w: World): { isListOpen: boolean; follow: { isShown: boolean; isAtEnd: boolean }; moves: number; latest: string[] } {
-  const dump = w.writes.filter(one => /[\\/]\.debug[\\/]session-1\.json$/.test(one.path)).at(-1)
+  const dump = w.writes.filter(one => norm(one.path) === `${HOME}/debug/session-1.json`).at(-1)
   if (!dump) throw new Error('no debug dump was written')
   return JSON.parse(dump.text).pane
 }
@@ -1055,7 +1068,7 @@ test('from the page: every command about another session goes into its inbox (it
   const d: Disk = { files: new Map() }
   const w = newWorld({ verdict: 'allow' })
   const QUIET = 'quiet-3'
-  const QUIET_DIR = '/quiet/.web/quiet-3'
+  const QUIET_DIR = `${HOME}/web/quiet-3`
   listed(d, OLD, OLD_DIR, { inbox: false })
   listed(d, QUIET, QUIET_DIR, { heartbeatAt: NOW - 95_000 })
   const { clock } = await started($, on, w, d, work)
@@ -1086,7 +1099,7 @@ test('from the page: every command about another session goes into its inbox (it
   command(child, { cmd: 'chat', id: 'x-2', agentId: 'main', text: 'Hello', session: OLD })
   command(child, { cmd: 'stopBackground', id: 'x-6', bgId: 'bash_1', session: QUIET })
   await clock.advance(1000)
-  const states = w.writes.filter(one => /[\\/]\.web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
+  const states = w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
   const acks = states.at(-1)?.v2.acks ?? []
   expect(acks.find(one => one.id === 'x-2')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it runs an older Apiarius" })
   expect(acks.find(one => one.id === 'x-6')).toMatchObject({ ok: false, status: 'failed', text: "Its deck isn't answering: it has not been heard from lately" })

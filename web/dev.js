@@ -3,9 +3,10 @@
  * fixed dev token and prints the URL to open.
  *
  * It serves a copy of the sample (web/fixtures/state.v2.json, with its lazy
- * files under web/fixtures/v2/) in a temp folder laid out as a session's
- * folder is: state.json holds the sample under `v2` as the mod writes it,
- * beside agents/, patches/, messages/ and gitdiffs/. Its times move to now,
+ * files under web/fixtures/v2/) in a temp home laid out as Apiarius's home
+ * is (`<home>/web/<sessionId>`, hooks/web.ts webDirOf): state.json holds the
+ * sample under `v2` as the mod writes it, beside agents/, patches/, messages/
+ * and gitdiffs/. Its times move to now,
  * so ages read as they would live. It plays the mod's part for the page's
  * commands: each gets its ack, a chat shows in the stream and its agent
  * answers a moment later, an answer resolves its question, Stop (stopAgent,
@@ -15,8 +16,8 @@
  * too.
  * Every session on the sample's machine (All sessions) comes along: the
  * sample's registry (web/fixtures/sessions.v2.json) in a registry folder the
- * server reads (`--sessions`), the other sessions' decks in `.web/<id>/`
- * beside it, and the list in the state; a command to one of them (an
+ * server reads (`--sessions`), the other sessions' decks in `web/<id>/`
+ * beside this one's, and the list in the state; a command to one of them (an
  * answer, a message, Stop, Stop turn, Cancel, Clear finished, a pick,
  * Review) plays on its own state and is acked there, as its deck would, or
  * refused where its deck reads no inbox.
@@ -47,7 +48,12 @@ const FIXTURES = (() => {
 const SAMPLE = path.join(FIXTURES, 'state.v2.json')
 const LAZY = path.join(FIXTURES, 'v2')
 const isStatic = process.argv.includes('--static')
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apiarius-dev-'))
+const SESSIONS = path.join(FIXTURES, 'sessions.v2.json')
+/** The temp home, and this session's folder in it as the mod makes one: `<home>/web/<the sample's own id>`. */
+const home = fs.mkdtempSync(path.join(os.tmpdir(), 'apiarius-dev-'))
+const ME = (() => { try { return String(JSON.parse(fs.readFileSync(SESSIONS, 'utf8')).me || 'dev-session') } catch { return 'dev-session' } })()
+const dir = path.join(home, 'web', /^[A-Za-z0-9_-]{1,100}$/.test(ME) ? ME : 'dev-session')
+fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
 const stateFile = path.join(dir, 'state.json')
 let state = null // the v2 state
 
@@ -88,8 +94,7 @@ function reset() {
 }
 
 // ---- every session on the sample's machine: the registry the server reads, and the other sessions' decks beside this one's
-const SESSIONS = path.join(FIXTURES, 'sessions.v2.json')
-const registry = path.join(dir, 'registry')
+const registry = path.join(home, 'sessions')
 /** The sample's registry (each file's `dir` the copy's), the list as this deck shows it, and the other sessions' states; null when the sample has none. */
 let others = null
 
@@ -102,8 +107,8 @@ function resetSessions() {
   const states = new Map()
   const entries = sample.entries.map(entry => {
     if (entry.id === sample.me || !entry.dir) return entry
-    // a session's folder as the mod makes one: .web/<its id>
-    const from = path.join(FIXTURES, entry.dir), to = path.join(dir, '.web', entry.id)
+    // a session's folder as the mod makes one: <home>/web/<its id>, beside this one's
+    const from = path.join(FIXTURES, entry.dir), to = path.join(home, 'web', entry.id)
     fs.rmSync(to, { recursive: true, force: true })
     fs.mkdirSync(path.join(to, 'agents'), { recursive: true })
     states.set(entry.id, shift(JSON.parse(fs.readFileSync(path.join(from, 'state.json'), 'utf8')), by))
@@ -118,7 +123,7 @@ function resetSessions() {
 function saveOthers() {
   if (!others) return
   for (const entry of others.entries) if (entry.id !== others.me && entry.dir) fs.writeFileSync(path.join(registry, `${entry.id}.json`), JSON.stringify({ ...entry, heartbeatAt: Date.now() }))
-  for (const [id, one] of others.states) fs.writeFileSync(path.join(dir, '.web', id, 'state.json'), JSON.stringify(one))
+  for (const [id, one] of others.states) fs.writeFileSync(path.join(home, 'web', id, 'state.json'), JSON.stringify(one))
 }
 setInterval(saveOthers, 60000).unref()
 
@@ -326,6 +331,6 @@ server.stdout.setEncoding('utf8').on('data', chunk => {
 let timer = null
 fs.watch(FIXTURES, (_, name) => { if (name === 'state.v2.json') { clearTimeout(timer); timer = setTimeout(reset, 150) } })
 
-const tidy = () => { try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* in use: the OS clears its temp */ } }
+const tidy = () => { try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* in use: the OS clears its temp */ } }
 server.on('exit', code => { tidy(); process.exit(code ?? 0) })
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK']) process.on(signal, () => { server.kill(); tidy(); process.exit(0) })

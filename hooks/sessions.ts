@@ -106,7 +106,7 @@ export type SessionEntry = {
   heartbeatAt: number
   /** Its process (the engine's), to tell when it is gone; null when its deck could not read it. */
   pid: number | null
-  /** Its state folder (`<mod>/.web/<sessionId>`): `state.json`, its lazy files and its inbox. */
+  /** Its state folder (`<home>/web/<sessionId>`, `homeDirOf`): `state.json`, its lazy files and its inbox. */
   dir: string
   /** Its deck reads view requests and commands from its inbox. */
   inbox: boolean
@@ -312,14 +312,25 @@ export function sessionFileOf(id: string): string {
 
 /**
  * The registry folder: `APIARIUS_SESSIONS` when set (the tests', and a
- * person's own choice), else `apiarius/sessions` under Claude Code's
- * configuration folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`); '' when no
- * home is known.
+ * person's own choice), else `sessions` in Apiarius's home (`homeDirOf`);
+ * '' when no home is known.
  */
-export function registryDirOf(env: { override?: string | undefined; configDir?: string | undefined; home?: string | undefined }): string {
+export function registryDirOf(env: { override?: string | undefined; apiariusHome?: string | undefined; configDir?: string | undefined; home?: string | undefined }): string {
   if (env.override && env.override.trim() !== '') return env.override.trim().replace(/[\\/]+$/, '')
+  const home = homeDirOf(env)
+  return home === '' ? '' : `${home}/sessions`
+}
+
+/**
+ * Apiarius's home, where all it keeps lies (the registry, each session's
+ * state folder, the debug dump), outside any project and the mod's own
+ * folder: `APIARIUS_HOME` when set, else `apiarius` under Claude Code's
+ * configuration folder; '' when no home is known.
+ */
+export function homeDirOf(env: { apiariusHome?: string | undefined; configDir?: string | undefined; home?: string | undefined }): string {
+  if (env.apiariusHome && env.apiariusHome.trim() !== '') return env.apiariusHome.trim().replace(/[\\/]+$/, '')
   const config = configDirOf(env)
-  return config === '' ? '' : `${config}/apiarius/sessions`
+  return config === '' ? '' : `${config}/apiarius`
 }
 
 /** Claude Code's configuration folder: `CLAUDE_CONFIG_DIR`, else `~/.claude`; '' when no home is known. */
@@ -342,10 +353,19 @@ export function inboxPathOf(dir: string, from: string): string {
   return dir !== '' && name !== '' ? `${dir.replace(/[\\/]+$/, '')}/inbox/${name}.json` : ''
 }
 
-/** Whether `dir` is a session's state folder as the deck makes them, `…/.web/<id>`: the only folders a viewer reads or writes. */
-export function isStateDirOf(dir: string, id: string): boolean {
-  const parts = dir.replace(/\\/g, '/').replace(/\/+$/, '').split('/')
-  return parts.length >= 3 && parts[parts.length - 1] === sessionFileOf(id) && parts[parts.length - 2] === '.web' && !parts.includes('..')
+/**
+ * Whether `dir` is session `id`'s state folder as the deck makes them,
+ * `<home>/web/<id>` under this deck's own home (`webRoot`, `<home>/web`): the
+ * only folders a viewer reads or writes. Any other path is refused, a
+ * folder elsewhere named the same way included.
+ */
+export function isStateDirOf(dir: string, id: string, webRoot: string): boolean {
+  const norm = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const name = sessionFileOf(id)
+  const root = norm(webRoot)
+  if (name === '' || root === '') return false
+  const parts = norm(dir).split('/')
+  return !parts.includes('..') && !parts.includes('.') && norm(dir) === `${root}/${name}`
 }
 
 /** Where a session runs, in words: "Desktop", "Terminal · Windows Terminal"; '' with no surface. */

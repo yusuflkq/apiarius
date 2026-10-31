@@ -1,5 +1,5 @@
 /**
- * The web deck's half of the mod: what `.web/<sessionId>/state.json` holds
+ * The web deck's half of the mod: what `<home>/web/<sessionId>/state.json` holds
  * (`webStateOf`, the v1 `WebState`, and beside it under
  * `v2` the one view model every surface draws, `deckStateOf`'s
  * `WebStateV2`), the patch, message and agent files written beside it, and
@@ -168,8 +168,11 @@ export const MOST_TEXT = 4000
 /** How often state.json is written at most while the data changes. */
 export const WEB_WRITE_MS = 300
 
-/** The folder under the mod's root that holds each session's files. */
-export const WEB_DIR = '.web'
+/** The folder under Apiarius's home (`SE.homeDirOf`) that holds each session's files, one folder each. */
+export const WEB_DIR = 'web'
+
+/** The folder under Apiarius's home the debug dump goes to, while it is there. */
+export const DEBUG_DIR = 'debug'
 
 /** A name safe as one path segment (a session's id, an edit's): `[A-Za-z0-9_-]` kept, anything else `_`. */
 export function fileNameOf(id: string): string {
@@ -177,9 +180,53 @@ export function fileNameOf(id: string): string {
   return name === '' ? 'session' : name
 }
 
-/** The session's folder: `<root>/.web/<sessionId>`. */
-export function webDirOf(root: string, sessionId: string): string {
-  return `${root.replace(/[\\/]+$/, '')}/${WEB_DIR}/${fileNameOf(sessionId || 'session')}`
+/** The session's folder: `<home>/web/<sessionId>`; '' with no home. */
+export function webDirOf(home: string, sessionId: string): string {
+  const root = home.replace(/[\\/]+$/, '')
+  return root === '' ? '' : `${root}/${WEB_DIR}/${fileNameOf(sessionId || 'session')}`
+}
+
+/**
+ * What the home helper (web/home.js, run with node, no shell) is asked:
+ * `prepare` the session's folder private (0700) with `files` (each by its
+ * place under the home, `web/<id>/…` or `debug/<id>.json`) made 0600 before
+ * the engine writes them, as its write keeps a file's mode; `remove` those
+ * sessions' folders; `clear` what a folder holds of the conversation; `sweep`
+ * the folders of sessions that are gone, and an earlier version's under the
+ * mod (`legacy`, `<mod>/.web`), `keep`'s own aside.
+ */
+export type HomeRequest =
+  | { op: 'prepare'; home: string; id: string; files: readonly string[]; isOwnHome: boolean }
+  | { op: 'remove'; home: string; ids: readonly string[] }
+  | { op: 'clear'; home: string; id: string }
+  | { op: 'sweep'; home: string; registry: string; keep: string; legacy: string }
+
+/** The helper's command line: node, web/home.js, the request as one JSON argument. */
+export function homeArgvOf(script: string, request: HomeRequest): string[] {
+  return ['node', script, JSON.stringify(request)]
+}
+
+/** Whether the helper said it did what it was asked: its one line `{"ok":true,…}`. */
+export function isHomeDone(stdout: string): boolean {
+  try {
+    const said = JSON.parse(stdout.trim()) as unknown
+    return typeof said === 'object' && said !== null && (said as { ok?: unknown }).ok === true
+  } catch {
+    return false
+  }
+}
+
+/** A file in the session's folder by its place under the home: `web/<id>/<file>` ('' for an id or a file no folder holds). */
+export function homeFileOf(sessionId: string, file: string): string {
+  return /^[A-Za-z0-9_-]{1,100}$/.test(sessionId) ? `${WEB_DIR}/${sessionId}/${file}` : ''
+}
+
+/** The session id a folder `<home>/web/<id>` is named for; '' for a folder not under that home's web. */
+export function idOfWebDir(home: string, dir: string): string {
+  const norm = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const root = `${norm(home)}/${WEB_DIR}/`
+  const rest = norm(dir).startsWith(root) ? norm(dir).slice(root.length) : ''
+  return /^[A-Za-z0-9_-]{1,100}$/.test(rest) && home.trim() !== '' ? rest : ''
 }
 
 /**
@@ -1925,7 +1972,11 @@ export function threadEndOf(state: WebState, agentId: string): string {
 
 // The server: how it is started, and what it prints back.
 
-/** The page's address: the server's port on 127.0.0.1, the token as `t`. */
+/**
+ * The page's address: the server's port on 127.0.0.1, the token as `t`. For
+ * the person's eyes alone (the pane's link, the Browser pane's preview_start):
+ * never in a command's text or context, which the model reads.
+ */
 export function webUrlOf(port: number, token: string): string {
   return `http://127.0.0.1:${port}/?t=${encodeURIComponent(token)}`
 }

@@ -52,11 +52,11 @@ import type { DashActions, DeckModel, DashModel } from './ui/types'
 import * as W from './web'
 
 /** What the environment says of where the registry and the session are: each variable as read, undefined where unset or unread. */
-export type RegistryEnv = { override?: string | undefined; configDir?: string | undefined; home?: string | undefined; wtSession?: string | undefined; termProgram?: string | undefined }
+export type RegistryEnv = { override?: string | undefined; apiariusHome?: string | undefined; configDir?: string | undefined; home?: string | undefined; wtSession?: string | undefined; termProgram?: string | undefined }
 
 /** What the deck's hooks module hands the registry: what it holds, and the engine's calls (the clock, the files, node, the session's surfaces and repository). */
 export type RegistryHost = {
-  /** `APIARIUS_SESSIONS`, `CLAUDE_CONFIG_DIR`, the home folder, `WT_SESSION` and `TERM_PROGRAM`, as the environment holds them. */
+  /** `APIARIUS_SESSIONS`, `APIARIUS_HOME`, `CLAUDE_CONFIG_DIR`, the home folder, `WT_SESSION` and `TERM_PROGRAM`, as the environment holds them. */
   env: () => Promise<RegistryEnv>
   now: () => Promise<number>
   read: (path: string) => Promise<string>
@@ -78,7 +78,7 @@ export type RegistryHost = {
   sessionId: () => string
   /** This session's v2 state as the screen stands, its list of sessions left out. */
   stateOf: (now: number) => W.WebStateV2
-  /** This session's state folder (`<mod>/.web/<sessionId>`), where its state goes while it is shared. */
+  /** This session's state folder (`<home>/web/<sessionId>`), where its state goes while it is shared. */
   dirOf: () => string
   /** The session's process id, as the deck read it ('' when it could not). */
   pidOf: () => Promise<string>
@@ -154,6 +154,8 @@ const KEY_AGAIN_MS = 5_000
 const reg = {
   /** The registry folder; '' while it is off (no home known, as in the tests). */
   dir: '',
+  /** Where every session's state folder is, `<home>/web`; '' while no home is known. */
+  webRoot: '',
   host: null as RegistryHost | null,
   heartbeat: undefined as Timer | undefined,
   writeTimer: undefined as Timer | undefined,
@@ -223,6 +225,8 @@ export async function startRegistry(host: RegistryHost): Promise<void> {
   reg.host = host
   const env = await host.env()
   reg.dir = S.registryDirOf(env)
+  const home = S.homeDirOf(env)
+  reg.webRoot = home === '' ? '' : `${home}/${W.WEB_DIR}`
   if (reg.dir === '') return
   reg.terminal = S.terminalOf(env)
   await readKey(await host.now())
@@ -709,7 +713,7 @@ export async function openSession(id: string, isSample = false): Promise<void> {
     return
   }
   const dir = sample ? `${sample.root}/web/fixtures/${entry.dir}` : entry.dir
-  if (!sample && !S.isStateDirOf(dir, id)) {
+  if (!sample && !S.isStateDirOf(dir, id, reg.webRoot)) {
     host.toast('Its deck names a folder Apiarius does not read: open it in its window.')
     return
   }
@@ -760,7 +764,7 @@ export function showHere(): void {
 async function askView(id: string, dir: string, until: number): Promise<void> {
   const me = reg.host?.sessionId() ?? ''
   const path = S.inboxPathOf(dir, me)
-  if (path === '' || !S.isStateDirOf(dir, id)) return
+  if (path === '' || !S.isStateDirOf(dir, id, reg.webRoot)) return
   const now = await io().now()
   const file = S.inboxWith(me, id, now, Math.max(until, reg.looks.get(id) ?? 0, reg.viewing?.id === id ? now + S.VIEW_MS : 0), reg.outbox.get(id) ?? [], null)
   reg.outbox.set(id, file.cmds)
@@ -1011,7 +1015,7 @@ export async function fromPage(session: string, cmd: Record<string, unknown>): P
   const now = await io().now()
   if (cmd.cmd === 'view') {
     const entry = reg.entries.get(session)
-    if (!entry || !S.isStateDirOf(entry.dir, session)) return 'No such session'
+    if (!entry || !S.isStateDirOf(entry.dir, session, reg.webRoot)) return 'No such session'
     reg.looks.set(session, now + S.VIEW_MS)
     await askView(session, entry.dir, now + S.VIEW_MS)
     return ''
@@ -1031,7 +1035,7 @@ async function sendToSession(id: string, cmd: Record<string, unknown>): Promise<
     return why
   }
   if (!host || !entry || !S.isLiveEntry(entry, now)) return fail('That session is not running any more')
-  if (!entry.inbox || !S.isStateDirOf(entry.dir, id)) return fail(`${S.NOT_ANSWERING}: it runs an older Apiarius`)
+  if (!entry.inbox || !S.isStateDirOf(entry.dir, id, reg.webRoot)) return fail(`${S.NOT_ANSWERING}: it runs an older Apiarius`)
   if (S.isQuietEntry(entry, now)) return fail(`${S.NOT_ANSWERING}: it has not been heard from lately`)
   const said = S.steeringCmdOf(cmd)
   if (!said) return fail(S.steeringRefusalOf(cmd))

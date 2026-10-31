@@ -64,8 +64,10 @@ let view: DeckView = M.defaultView()
 let git: G.GitState = G.emptyGit()
 let cwd = ''
 let sessionId = ''
-/** The mod's folder (`$.plugin.root`, no trailing separator): where each session's state folder lies (`.web/<sessionId>`). */
+/** The mod's folder (`$.plugin.root`, no trailing separator): where an earlier version kept each session's state folder (`.web/<sessionId>`), swept at the start. */
 let pluginRoot = ''
+/** Apiarius's home (`SE.homeDirOf`: `APIARIUS_HOME`, else `apiarius` under Claude Code's configuration folder), where each session's state folder lies (`<home>/web/<sessionId>`) and the debug dump goes; '' until read, or when no home is known. */
+let home = ''
 let usage: UsageInfo | null = null
 let usageAt = 0
 /** How this process's session began, as Claude Code's SessionStart said it just before `session.start`: '' until it has, and after a reload (its snapshot keeps `data.isFork`). */
@@ -566,25 +568,28 @@ function save($: EngineInterface) {
 }
 
 /**
- * The debug dump: while `<mod>/.debug/` exists, what the live deck believes
- * goes to `.debug/<sessionId>.json` about 2 s after the data changes, for a
- * person or an agent to read without a screenshot, each session to its own
- * file. The folder is looked for at session.start and on each tick, and
- * again right before each write: with it absent nothing is written
- * (`$.fs.write` would make it).
+ * The debug dump: while `<home>/debug/` exists (the person makes it), what
+ * the live deck believes goes to `debug/<sessionId>.json` in Apiarius's home
+ * about 2 s after the data changes, for a person to read without a
+ * screenshot, each session to its own file, made 0600 in a folder made 0700
+ * before the first write. The folder is looked for at session.start and on
+ * each tick, and again right before each write: with it absent nothing is
+ * written (`$.fs.write` would make it).
  */
-const DEBUG_DIR = '.debug'
 const DUMP_MS = 2000
-const debug = { isOn: false, loadedAt: 0, writes: 0 }
+const debug = { isOn: false, loadedAt: 0, writes: 0, isPrivate: false }
 
-function debugDirOf($: EngineInterface): string {
-  return `${$.plugin.root.replace(/[\\/]+$/, '')}/${DEBUG_DIR}`
+/** The debug folder, `<home>/debug`; '' with no home. */
+async function debugDirOf($: EngineInterface): Promise<string> {
+  const at = await homeOf($)
+  return at === '' ? '' : `${at}/${W.DEBUG_DIR}`
 }
 
 /** Whether the debug folder is there; a look that fails counts as absent. */
 async function hasDebugDir($: EngineInterface): Promise<boolean> {
   try {
-    return (await $.fs.exists(debugDirOf($))) === true
+    const dir = await debugDirOf($)
+    return dir !== '' && (await $.fs.exists(dir)) === true
   } catch {
     return false
   }
@@ -618,9 +623,13 @@ async function writeDump($: EngineInterface): Promise<void> {
       return
     }
     const now = await $.clock.now()
+    const name = W.fileNameOf(sessionId || 'state')
+    // the dump's file made 0600 (its folder 0700) before its first write: the engine's write keeps that mode
+    if (!debug.isPrivate) debug.isPrivate = await runHome($, { op: 'prepare', home, id: name, files: [`${W.DEBUG_DIR}/${name}.json`], isOwnHome: isHomeOwn })
+    if (!debug.isPrivate) return
     debug.writes += 1
     const state = { meta: { at: now, loadedAt: debug.loadedAt, writes: debug.writes }, ...debugStateOf(now) }
-    await $.fs.write(`${debugDirOf($)}/${W.fileNameOf(sessionId || 'state')}.json`, `${JSON.stringify(state, null, 2)}\n`)
+    await $.fs.write(`${await debugDirOf($)}/${name}.json`, `${JSON.stringify(state, null, 2)}\n`)
   } catch {
     // a dump that could not be written waits for the next change
   }
@@ -695,23 +704,78 @@ function debugStateOf(now: number) {
 
 /**
  * The web deck. `/apiarius web`, or the pane's Open dashboard,
- * starts `web/server.js` for the session, answers with the page's link and
- * tries to open it in the Desktop's Browser pane. While it is on, what the
- * deck holds goes to `.web/<sessionId>/state.json` at most every 300 ms after
- * a change (`W.webStateOf`, with the v2 view model under `v2`), each edit's
- * patch once beside it, each agent's file when it changed, and the page's
- * commands come back as lines on the server's stdout.
+ * starts `web/server.js` for the session and opens the page in the
+ * Desktop's Browser pane; its link (the token in it) is the person's alone,
+ * on the pane, never in what the model reads. While it is on, what the
+ * deck holds goes to `<home>/web/<sessionId>/state.json` at most every 300 ms
+ * after a change (`W.webStateOf`, with the v2 view model under `v2`), each
+ * edit's patch once beside it, each agent's file when it changed, and the
+ * page's commands come back as lines on the server's stdout.
+ *
+ * The folder is private (0700, each file 0600 before its first write, by
+ * web/home.js) and lives only as long as the session: removed at its end,
+ * emptied at a /clear, and a crashed session's swept at the next start.
  *
  * The child is the session's: `superviseWeb` runs from session.start, whose
  * `$` outlives every hook, and spawns it each time it is asked. Leaving its
  * loop (`/apiarius web stop`) or a reload of this module kills it, and its
- * `--parent` check ends it with the session's process (its stdin is closed
- * from the start, so stdin cannot tell it). A reload starts it again with
- * the token and port `$.state` kept: the open page reconnects by itself.
+ * `--parent` check ends it with the session's process (its stdin carries
+ * the token and then closes, so stdin cannot tell it). A reload starts it
+ * again with the token and port `$.state` kept: the open page reconnects
+ * by itself.
  */
 const WEB_STATE = { plugin: 'apiarius', key: 'web' } as const
 /** How long a start waits for the server's ready line. */
 const WEB_START_MS = 10_000
+
+/** Whether the home is Apiarius's own (no `APIARIUS_HOME`): then it is made 0700 too; a folder the person named stays as they keep it. */
+let isHomeOwn = false
+/** The registry folder as the environment names it (`SE.registryDirOf`), for the start's sweep: read with the home. */
+let homeRegistry = ''
+
+/** Apiarius's home (`home`), read from the environment once: '' when no home is known, and then nothing is kept on disk. */
+async function homeOf($: EngineInterface): Promise<string> {
+  if (home !== '') return home
+  const read = async (get: () => Promise<string | undefined>) => {
+    try {
+      return await get()
+    } catch {
+      return undefined
+    }
+  }
+  const env = {
+    override: await read(() => $.env.get('APIARIUS_SESSIONS')),
+    apiariusHome: await read(() => $.env.get('APIARIUS_HOME')),
+    configDir: await read(() => $.env.get('CLAUDE_CONFIG_DIR')),
+    home: (await read(() => $.env.get('USERPROFILE'))) ?? (await read(() => $.env.get('HOME'))),
+  }
+  home = SE.homeDirOf(env)
+  homeRegistry = SE.registryDirOf(env)
+  isHomeOwn = !(env.apiariusHome && env.apiariusHome.trim() !== '')
+  return home
+}
+
+/** Asks web/home.js (node, no shell) to keep the home private, or to remove what the session no longer needs; whether it did. */
+async function runHome($: EngineInterface, request: W.HomeRequest): Promise<boolean> {
+  if (request.home === '') return false
+  try {
+    const ran = await $.process.run(W.homeArgvOf(`${$.plugin.root.replace(/[\\/]+$/, '')}/web/home.js`, request), { timeoutMs: 10_000 })
+    return ran.exitCode === 0 && W.isHomeDone(ran.stdout)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * At session.start: the folders of sessions that are gone swept (a crash
+ * leaves its own; an earlier version's under the mod go too), then this
+ * session's own made private, with its inbox, before any deck writes there.
+ */
+async function startHome($: EngineInterface): Promise<void> {
+  if (home === '' || sessionId === '') return
+  await runHome($, { op: 'sweep', home, registry: homeRegistry, keep: sessionId, legacy: pluginRoot === '' ? '' : `${pluginRoot}/.web` })
+  if (await runHome($, { op: 'prepare', home, id: sessionId, files: [], isOwnHome: isHomeOwn })) web.isPrivate = true
+}
 
 const web: {
   /** On for this session, from the first /apiarius web until /apiarius web stop, as `$.state` keeps it. */
@@ -722,8 +786,18 @@ const web: {
   port: number
   /** The port a restart asked for again, until its ready line says which it got. */
   keptPort: number
-  /** The folder it serves (`<mod>/.web/<sessionId>`), fixed for the server's life. */
+  /** The folder it serves (`<home>/web/<sessionId>`), fixed for the server's life. */
   dir: string
+  /** The folder was made private (0700, by web/home.js) in this module's life: nothing is written in it before. */
+  isPrivate: boolean
+  /** The files in it made 0600 before their first write, by their place under the home. */
+  made: Set<string>
+  /** The session ended: its folder is gone, and nothing is written again. */
+  isEnded: boolean
+  /** Moves when the folder is emptied or removed: a write begun before writes no more of what it had. */
+  gen: number
+  /** The write under way, which an emptying or a removal waits for. */
+  writing: Promise<void>
   status: WebPane['status']
   /** Why it is not running, as the pane and `/apiarius web` say it; '' while it runs. */
   note: string
@@ -756,6 +830,11 @@ const web: {
   port: 0,
   keptPort: 0,
   dir: '',
+  isPrivate: false,
+  made: new Set(),
+  isEnded: false,
+  gen: 0,
+  writing: Promise.resolve(),
   status: 'off',
   note: '',
   opened: '',
@@ -797,9 +876,9 @@ function askWeb() {
   wake?.()
 }
 
-/** Whether the state folder is written: while the web deck is on, or another session's deck views this one (./registry). */
+/** Whether the state folder is written: while the web deck is on, or another session's deck views this one (./registry); never once the session ended. */
 function isSharing(): boolean {
-  return web.isOn || SR.isShared()
+  return !web.isEnded && (web.isOn || SR.isShared())
 }
 
 /** The data changed: the web deck's state is written within 300 ms while it is on (or this session is viewed); changes meanwhile ride along. */
@@ -812,14 +891,32 @@ function scheduleWeb($: EngineInterface) {
 }
 
 /**
+ * Makes the folder private (0700) and each of `files` (by its name in the
+ * folder) 0600 before its first write, in one call of web/home.js: the
+ * engine's write keeps an existing file's mode. Those made already are not
+ * asked again. False when it could not: then nothing is written.
+ */
+async function makePrivate($: EngineInterface, files: readonly string[]): Promise<boolean> {
+  const id = W.idOfWebDir(home, web.dir)
+  if (id === '') return false
+  const fresh = files.map(file => W.homeFileOf(id, file)).filter(file => file !== '' && !web.made.has(file))
+  if (web.isPrivate && fresh.length === 0) return true
+  if (!(await runHome($, { op: 'prepare', home, id, files: fresh, isOwnHome: isHomeOwn }))) return false
+  web.isPrivate = true
+  for (const file of fresh) web.made.add(file)
+  return true
+}
+
+/**
  * Writes what the page reads: each edit's patch not written yet
  * (`patches/<id>.diff`, once), each cut message's whole text not written yet
  * (`messages/<id>.md`, once: it is then marked saved and its whole text let
  * go), each agent's file that changed (`agents/<id>.json`, v2's), git's
  * diff of each uncommitted file not written yet (`gitdiffs/<id>.diff`,
  * once), then `state.json` (v1, and the v2 view model the pane draws under `v2`),
- * unless it says what the last write said (its time aside). One write at a
- * time: a change during one writes again after it.
+ * unless it says what the last write said (its time aside). Each file new
+ * to the folder is made 0600 first (`makePrivate`); nothing is written while
+ * that fails. One write at a time: a change during one writes again after it.
  */
 async function writeWeb($: EngineInterface): Promise<void> {
   if (!isSharing() || web.dir === '') return
@@ -828,23 +925,45 @@ async function writeWeb($: EngineInterface): Promise<void> {
     return
   }
   web.isWriting = true
+  let done = () => {}
+  web.writing = new Promise<void>(resolve => {
+    done = resolve
+  })
+  const gen = web.gen
+  // each file written only while the folder is still this write's: an emptying or a removal since stops it (the catch below)
+  const put = async (path: string, text: string) => {
+    if (gen !== web.gen || !isSharing()) throw new Error('the folder was emptied or removed')
+    await $.fs.write(path, text)
+  }
   try {
-    for (const patch of W.newPatchesOf(data, web.written)) {
-      await $.fs.write(`${web.dir}/patches/${patch.id}.diff`, patch.text)
+    const patches = W.newPatchesOf(data, web.written)
+    const messages = W.newMessageFilesOf(data)
+    const agents = W.agentFilesOf(data).filter(file => web.agentFiles.get(file.id) !== file.text)
+    const diffs = W.newGitDiffsOf(gitDiffs, web.gitDiffsWritten)
+    const names = [
+      'state.json',
+      'timeline.json',
+      ...patches.map(patch => `patches/${patch.id}.diff`),
+      ...messages.map(file => `messages/${file.id}.md`),
+      ...agents.map(file => `agents/${file.id}.json`),
+      ...diffs.map(diff => `gitdiffs/${diff.id}.diff`),
+    ]
+    if (!(await makePrivate($, names))) return
+    for (const patch of patches) {
+      await put(`${web.dir}/patches/${patch.id}.diff`, patch.text)
       web.written.add(patch.id)
     }
-    for (const file of W.newMessageFilesOf(data)) {
-      await $.fs.write(`${web.dir}/messages/${file.id}.md`, file.text)
+    for (const file of messages) {
+      await put(`${web.dir}/messages/${file.id}.md`, file.text)
       file.message.isSaved = true
       delete file.message.full
     }
-    for (const file of W.agentFilesOf(data)) {
-      if (web.agentFiles.get(file.id) === file.text) continue
-      await $.fs.write(`${web.dir}/agents/${file.id}.json`, file.text)
+    for (const file of agents) {
+      await put(`${web.dir}/agents/${file.id}.json`, file.text)
       web.agentFiles.set(file.id, file.text)
     }
-    for (const diff of W.newGitDiffsOf(gitDiffs, web.gitDiffsWritten)) {
-      await $.fs.write(`${web.dir}/gitdiffs/${diff.id}.diff`, diff.text)
+    for (const diff of diffs) {
+      await put(`${web.dir}/gitdiffs/${diff.id}.diff`, diff.text)
       web.gitDiffsWritten.add(diff.id)
     }
     const now = await $.clock.now()
@@ -852,7 +971,7 @@ async function writeWeb($: EngineInterface): Promise<void> {
     const timeline = T.timelineTextOf(T.timelineOf(data, v2Of(now)))
     const timelineKey = timeline.replace(/^\{"v":2,"now":\d+,/, '')
     if (timelineKey !== timelineWritten.key) {
-      await $.fs.write(`${web.dir}/timeline.json`, timeline)
+      await put(`${web.dir}/timeline.json`, timeline)
       timelineWritten.key = timelineKey
     }
     // a question the page may answer is one whose race runs in this module: none after a reload
@@ -860,13 +979,14 @@ async function writeWeb($: EngineInterface): Promise<void> {
     // both builds' times left out: a state that says nothing new is not written again
     const key = text.replace(/^\{"v":1,"now":\d+,/, '').replace(/,"v2":\{"v":2,"now":\d+,/, ',"v2":{')
     if (key !== web.lastKey) {
-      await $.fs.write(`${web.dir}/state.json`, text)
+      await put(`${web.dir}/state.json`, text)
       web.lastKey = key
     }
   } catch {
     // a write that failed waits for the next change
   } finally {
     web.isWriting = false
+    done()
     if (web.isWriteQueued) {
       web.isWriteQueued = false
       scheduleWeb($)
@@ -892,6 +1012,9 @@ async function enginePidOf($: EngineInterface): Promise<string> {
  * The session's web deck, for as long as this session.start is the latest:
  * picks up what `$.state` kept (a reload while it was on asks for the server
  * again, with its token and port), then runs the server each time it is asked.
+ * A folder kept that is no longer this session's (an earlier version's under
+ * the mod, or one a /clear's old id named) is let go, and removed when it is
+ * in the home: the server serves this session's own.
  */
 async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
   try {
@@ -900,7 +1023,12 @@ async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
       web.isOn = true
       web.token = value.token
       web.port = typeof value.port === 'number' && value.port > 0 ? value.port : 0
-      if (typeof value.dir === 'string' && value.dir !== '') web.dir = value.dir
+      const own = W.webDirOf(await homeOf($), sessionId)
+      if (typeof value.dir === 'string' && value.dir !== '' && value.dir !== own) {
+        const old = W.idOfWebDir(home, value.dir)
+        if (old !== '' && old !== sessionId) void runHome($, { op: 'remove', home, ids: [old] })
+      }
+      if (own !== '') web.dir = own
       web.status = 'starting'
       web.isAsked = true
     }
@@ -933,7 +1061,17 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
   const script = `${root}/web/server.js`
   web.status = 'starting'
   web.note = ''
-  if (web.dir === '') web.dir = W.webDirOf(root, sessionId)
+  if (web.dir === '') web.dir = W.webDirOf(await homeOf($), sessionId)
+  // no home to keep its state in, or none that could be made private: the deck stays native
+  if (web.dir === '' || !(await makePrivate($, []))) {
+    web.isOn = false
+    web.status = 'failed'
+    web.note = web.dir === '' ? 'No home folder is known (HOME), so the dashboard has nowhere to keep its state.' : 'Its state folder could not be made private, so the dashboard does not start.'
+    saveWeb($)
+    settleWeb(false)
+    redraw($)
+    return
+  }
   if (web.token === '') web.token = crypto.randomUUID()
   saveWeb($)
   redraw($)
@@ -1000,7 +1138,8 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
   let errors = ''
   let stop: (() => void) | undefined
   try {
-    const child = $.process.spawn({ argv, env: { APIARIUS_TOKEN: web.token } })
+    // the token on stdin, never argv or the environment, which other processes can read
+    const child = $.process.spawn({ argv, input: `${web.token}\n` })
     stop = () => {
       void child.return({ code: null, signal: null }).catch(() => undefined)
     }
@@ -1050,7 +1189,7 @@ function onWebLine($: EngineInterface, line: string): boolean {
     saveWeb($)
     settleWeb(true)
     // the page open before a reload knows the old port only
-    if (kept > 0 && kept !== said.port) $.ui.toast('Apiarius web started again on another port: /apiarius web gives its new link.')
+    if (kept > 0 && kept !== said.port) $.ui.toast('Apiarius web started again on another port: /apiarius web opens it again, and /apiarius shows its new link.')
     redraw($)
     return true
   }
@@ -1331,7 +1470,13 @@ async function ensureWeb($: EngineInterface): Promise<boolean> {
   })
 }
 
-/** Opens `url` in the Desktop's Browser pane: its server's preview_start over MCP (by either spelling of its name), else as a tool call; false when none takes it. */
+/**
+ * Opens `url` in the Desktop's Browser pane: its server's preview_start over
+ * MCP (by either spelling of its name), else as a tool call; false when none
+ * takes it. Neither records the call in the conversation: the model never
+ * sees the URL (checked with a headless session: the call's arguments and
+ * result reach the mod alone).
+ */
 async function openInBrowser($: EngineInterface, url: string): Promise<boolean> {
   try {
     const opened = await $.mcp.call('Claude_Browser', 'preview_start', { url })
@@ -1360,24 +1505,30 @@ async function showWeb($: EngineInterface, url: string): Promise<void> {
   redraw($)
 }
 
+/** What `/apiarius web` answers once the page is up: no link, since a command's text reaches the model as its output; the link is the pane's. */
+const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in the Browser pane; elsewhere, /apiarius shows its link (also under Settings) to open it in your browser.'
+
 /**
  * `/apiarius web` and the pane's Open dashboard: starts the web deck if it is
- * not running, then tries to open the page in the Browser pane (left to run:
- * the answer carries the link either way, and the model's context too, so
- * Claude can open it when asked). Without node the deck stays native.
+ * not running, then tries to open the page in the Browser pane (left to run).
+ * The page's link holds its token, which acts as the person, so it goes to
+ * the person alone: the Browser pane, and the deck's own link (`webPaneOf`,
+ * drawn on the pane, never sent to the model). The answer's text and
+ * context, which the model reads, say where it is, never the link. Without
+ * node the deck stays native.
  */
 async function openWeb($: EngineInterface): Promise<CommandRunResult> {
+  if (web.isEnded) return { text: 'This session has ended: Apiarius web starts again in a new one.' }
   const isUp = await ensureWeb($)
   if (!isUp) {
     const why = web.status === 'starting' ? "The dashboard's server did not answer within 10 s." : web.note || "The dashboard's server did not start."
     $.ui.toast(`Apiarius web: ${why}`)
     return { text: `${why} The deck stays in its pane: /apiarius.` }
   }
-  const url = W.webUrlOf(web.port, web.token)
-  void showWeb($, url)
+  void showWeb($, W.webUrlOf(web.port, web.token))
   return {
-    text: `[Open the Apiarius deck](${url}) in the Browser pane`,
-    context: [`The Apiarius dashboard of this session runs at ${url} (on this machine only; t is its access token). When the user asks to see it, open that URL in the Browser pane (preview_start with url).`],
+    text: WEB_OPENED_TEXT,
+    context: ['/apiarius web opened the Apiarius dashboard for the user. Its address is for the user alone; if they ask to see it again, tell them to run /apiarius web, which opens it itself.'],
   }
 }
 
@@ -1399,6 +1550,43 @@ function stopWeb($: EngineInterface): boolean {
   settleWeb(false)
   redraw($)
   return wasOn
+}
+
+/**
+ * A /clear or a resume: what the folder held of the conversation before (its
+ * state, patches, messages, agent files, git's diffs, Timeline) goes, its
+ * inbox kept, and what the deck wrote is forgotten, so the next write makes
+ * each file afresh (0600 again).
+ */
+async function clearWeb($: EngineInterface): Promise<void> {
+  const id = W.idOfWebDir(home, web.dir)
+  web.gen += 1
+  await web.writing
+  web.written.clear()
+  web.gitDiffsWritten.clear()
+  web.agentFiles.clear()
+  web.made.clear()
+  web.lastKey = ''
+  timelineWritten.key = ''
+  if (id !== '') await runHome($, { op: 'clear', home, id })
+}
+
+/**
+ * The session ended: the server stopped, nothing written again, and its
+ * state folder removed whole (the one the server served, and the one its
+ * id names, if a reload after a /clear moved it). A folder a crash left is
+ * swept at the next start instead.
+ */
+async function endWeb($: EngineInterface): Promise<void> {
+  web.isEnded = true
+  web.isAsked = false
+  web.gen += 1
+  timers.web?.cancel()
+  timers.web = undefined
+  web.stop?.()
+  await web.writing
+  const ids = [...new Set([W.idOfWebDir(home, web.dir), W.idOfWebDir(home, W.webDirOf(home, sessionId))])].filter(id => id !== '')
+  if (ids.length > 0) await runHome($, { op: 'remove', home, ids })
 }
 
 /** Puts a review request in the prompt box, for the person to send (the pane's Review). */
@@ -2431,7 +2619,7 @@ function toggleSessions($: EngineInterface) {
  * page's Show more, as the web page's `/message/<id>` serves it: the deck's
  * own copy while it holds one (whole under 700 characters; a longer one's
  * kept until the web deck writes it), else the file the web deck wrote
- * (`.web/<session>/messages/<id>.md`); in the sample, its own as read
+ * (`<home>/web/<session>/messages/<id>.md`); in the sample, its own as read
  * (`demo.v2Files`), else its file (web/fixtures/v2/messages). `onRead` gets
  * it, or null; then the pane draws.
  */
@@ -2445,8 +2633,9 @@ async function readMessage($: EngineInterface, id: string, onRead: (text: string
     else if (own && own.isSaved !== true && Array.from(own.text).length < M.LIMITS.messageChars) text = own.text
     else {
       const root = $.plugin.root.replace(/[\\/]+$/, '')
-      const dir = view.isDemo ? `${root}/web/fixtures/v2` : web.dir || W.webDirOf(root, sessionId)
+      const dir = view.isDemo ? `${root}/web/fixtures/v2` : web.dir || W.webDirOf(home, sessionId)
       try {
+        if (dir === '') throw new Error('no folder')
         text = await $.fs.read(`${dir}/messages/${id}.md`)
       } catch {
         // not on disk: the deck's own cut is the most there is
@@ -2789,6 +2978,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
   return {
     env: async () => ({
       override: await read(() => $.env.get('APIARIUS_SESSIONS')),
+      apiariusHome: await read(() => $.env.get('APIARIUS_HOME')),
       configDir: await read(() => $.env.get('CLAUDE_CONFIG_DIR')),
       home: (await read(() => $.env.get('USERPROFILE'))) ?? (await read(() => $.env.get('HOME'))),
       wtSession: await read(() => $.env.get('WT_SESSION')),
@@ -2808,7 +2998,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
     repoRoot: async () => (await $.session.repo())?.root ?? null,
     sessionId: () => sessionId,
     stateOf: now => v2Of(now),
-    dirOf: () => web.dir || (pluginRoot !== '' && sessionId !== '' ? W.webDirOf(pluginRoot, sessionId) : ''),
+    dirOf: () => web.dir || (sessionId !== '' ? W.webDirOf(home, sessionId) : ''),
     pidOf: async () => {
       if (web.pid === '') web.pid = await enginePidOf($)
       return web.pid
@@ -2820,7 +3010,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
     refresh: now => redrawIfChanged($, now),
     share: () => {
       // a deck views this session: its folder written from now, as for /apiarius web
-      if (web.dir === '' && pluginRoot !== '' && sessionId !== '') web.dir = W.webDirOf(pluginRoot, sessionId)
+      if (web.dir === '' && sessionId !== '') web.dir = W.webDirOf(home, sessionId)
       web.lastKey = ''
       web.agentFiles.clear()
       void readGitDiffs($)
@@ -3357,6 +3547,9 @@ export const register: Register = on => {
       sessionId = ''
     }
     pluginRoot = $.plugin.root.replace(/[\\/]+$/, '')
+    // Apiarius's home: the gone sessions' folders swept, this one's made private before any deck writes there (never awaited)
+    await homeOf($)
+    void startHome($)
     // every session on this machine: this deck's file in the registry, and the others' read (never awaited)
     void SR.startRegistry(registryHost($))
 
@@ -3399,20 +3592,23 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // a /clear or a resume: the process goes on, and the deck with it under the id it started with (no session.start comes); what the folder held of the conversation before goes
   on('session.end', { reason: ['clear', 'resume'] }, async ($, e, next) => {
     const result = await next(e)
     const now = await $.clock.now()
     data = M.emptyData(now)
     commit = null
     fileDiff = null
+    await clearWeb($)
     changed($)
     return result
   })
 
-  // the session ends (not a /clear or a resume, where the process goes on): its file in the registry goes
+  // the session ends (not a /clear or a resume, where the process goes on): its file in the registry goes, then its state folder
   on('session.end', async ($, e, next) => {
     const result = await next(e)
     await SR.endRegistry(e.reason)
+    if (e.reason !== 'clear' && e.reason !== 'resume') await endWeb($)
     return result
   })
 
