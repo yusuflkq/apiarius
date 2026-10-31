@@ -27,6 +27,7 @@ import type { DeckAck, DeckActivity, DeckAgent, DeckData, DeckMessage, DeckStatu
 import * as AV from '../web/avatars.mjs'
 import * as B from './background'
 import { addedFileHunks, countOf, filePatchesOf, hunksOf, patchOf, replaceHunks, type Hunk } from './diff'
+import * as FB from './files'
 import * as F from './format'
 import * as G from './git'
 import * as H from './hold'
@@ -2100,25 +2101,101 @@ function isInsideRoot(real: string, rootReal: string): boolean {
 }
 
 /**
- * What an untracked path at `abs` is, read without ever following a link and
- * never from outside the repository (`rootReal`, resolved once): a symbolic
- * link is shown as git shows one, its target's path and never the target's
- * content (`target`, '' when it leads nowhere); a path whose real place is
- * outside the repository is left out (`outside`); a regular file inside it
- * carries its `size`, for the caller to read. git, asked of a path that is a
- * link or leads outside, shows no diff of its content either.
+ * What an untracked path at `abs` is, as `$.fs.stat` sees it, never from
+ * outside the repository (`rootReal`, resolved once): a symbolic link is
+ * shown as git shows one, its target's path and never the target's content
+ * (`target`, '' when it leads nowhere); a path whose real place is outside
+ * the repository is left out (`outside`); a regular file inside it carries
+ * its `size` and time, for the caller to read through web/files.js
+ * (`readSafely`), which opens it without following a link anywhere, so a
+ * file swapped for a link after this look is refused there, never read
+ * through. git, asked of a path that is a link or leads outside, shows no
+ * diff of its content either.
  */
-type Untracked = { kind: 'link'; target: string } | { kind: 'file'; size: number } | { kind: 'outside' } | { kind: 'gone' }
+type Untracked = { kind: 'link'; target: string } | { kind: 'file'; size: number; mtimeMs: number } | { kind: 'outside' } | { kind: 'gone' }
 async function untrackedAt($: EngineInterface, abs: string, rootReal: string): Promise<Untracked> {
   try {
     const stat = await $.fs.stat(abs, { resolve: true })
     if (stat.isLink) return { kind: 'link', target: stat.realPath ?? '' }
     if (stat.realPath === undefined || !isInsideRoot(stat.realPath, rootReal)) return { kind: 'outside' }
     if (stat.kind !== 'file') return { kind: 'gone' }
-    return { kind: 'file', size: stat.size }
+    return { kind: 'file', size: stat.size, mtimeMs: stat.mtimeMs }
   } catch {
     return { kind: 'gone' }
   }
+}
+
+/** What web/files.js read of each file the deck reads safely (an untracked file, an attribute file), as it stood then: read again only once its size or time moves (`FB.keptOf`). */
+const fileBook: FB.FileBook = new Map()
+
+/** A file to read under a folder: its place there, its whole path, and its size and time as `$.fs.stat` saw them just before. */
+type Wanted = { place: string; abs: string; size: number; mtimeMs: number }
+
+/** web/files.js could not start at its last run (no node on PATH): a new file then shows no text, and says why. */
+let isNodeMissing = false
+
+/**
+ * Reads `wanted` under `root` through web/files.js (node, no shell), never
+ * with `$.fs.read`: each opened without following a link anywhere on the
+ * way, and read only as a regular file there. One `fileBook` holds as it
+ * stands now comes from there; the rest in one run (64 at most), so a
+ * refresh where nothing moved runs no node. A file the helper could not
+ * answer for is left out.
+ */
+async function readSafely($: EngineInterface, root: string, wanted: readonly Wanted[], most: number, textMost: number): Promise<Map<string, FB.FileRead>> {
+  const out = new Map<string, FB.FileRead>()
+  const fresh: Wanted[] = []
+  for (const one of wanted) {
+    const kept = FB.keptOf(fileBook, one.abs, one.size, one.mtimeMs, textMost)
+    if (kept) out.set(one.place, kept)
+    else fresh.push(one)
+  }
+  const script = `${$.plugin.root.replace(/[\\/]+$/, '')}/web/files.js`
+  for (let i = 0; i < fresh.length; i += FB.MOST_PATHS) {
+    const batch = fresh.slice(i, i + FB.MOST_PATHS)
+    const paths = batch.map(one => one.place)
+    let answer: Map<string, FB.FileRead> | null = null
+    try {
+      const ran = await $.process.run(FB.filesArgvOf(script), { stdin: FB.requestTextOf({ root, paths, most, textMost }), timeoutMs: 15_000, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
+      answer = ran.exitCode === 0 ? FB.answerOf(ran.stdout, paths) : null
+      isNodeMissing = false
+    } catch (error) {
+      isNodeMissing = /ENOENT|not found|failed to start/i.test(error instanceof Error ? error.message : String(error))
+      answer = null
+    }
+    if (!answer) continue
+    for (const one of batch) {
+      const read = answer.get(one.place)
+      if (!read) continue
+      FB.keep(fileBook, one.abs, one.size, one.mtimeMs, read)
+      out.set(one.place, read)
+    }
+  }
+  return out
+}
+
+/** An untracked file as the deck shows it: a link, one outside the repository, one gone, or what web/files.js read of it. */
+type UntrackedRead = Exclude<Untracked, { kind: 'file' }> | FB.FileRead
+
+/**
+ * The untracked files at `places` under `root`, as the deck shows them: a
+ * link as its target's path, one outside the repository or gone as such, one
+ * past `most` bytes as `big`, and each plain file read safely (`readSafely`),
+ * with its text when it is at most `textMost`.
+ */
+async function untrackedOf($: EngineInterface, root: string, places: readonly string[], most: number, textMost: number): Promise<Map<string, UntrackedRead>> {
+  const rootReal = await rootRealOf($, root)
+  const found = await Promise.all(places.map(async place => [place, await untrackedAt($, joinPath(root, place), rootReal)] as const))
+  const out = new Map<string, UntrackedRead>()
+  const wanted: Wanted[] = []
+  for (const [place, one] of found) {
+    if (one.kind !== 'file') out.set(place, one)
+    else if (one.size > most) out.set(place, { kind: 'big', size: one.size })
+    else wanted.push({ place, abs: joinPath(root, place), size: one.size, mtimeMs: one.mtimeMs })
+  }
+  const read = await readSafely($, root, wanted, most, textMost)
+  for (const one of wanted) out.set(one.place, read.get(one.place) ?? { kind: 'gone' })
+  return out
 }
 
 /** The diff a link shows: one added line, its target's path, as git shows a symbolic link (never the target's content). */
@@ -2126,19 +2203,10 @@ function linkHunks(target: string): Hunk[] {
   return addedFileHunks(`${target}\n`)
 }
 
-/** An untracked file's line count for its row, read safely (never through a link or from outside the repository); a link counts as its one line of target text, a file outside or too big is left uncounted. */
-async function lineCountOf($: EngineInterface, abs: string, rootReal: string): Promise<number | null> {
-  const found = await untrackedAt($, abs, rootReal)
-  if (found.kind === 'link') return found.target === '' ? 0 : 1
-  if (found.kind !== 'file' || found.size > 1_000_000) return null
-  try {
-    const text = await $.fs.read(abs)
-    if (text.includes('\u0000')) return null
-    if (text === '') return 0
-    return text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
-  } catch {
-    return null
-  }
+/** An untracked file's line count for its row: a link counts as its one line of target text; a file outside the repository, too big (past 1 MB), binary or unreadable is left uncounted. */
+function lineCountOf(read: UntrackedRead): number | null {
+  if (read.kind === 'link') return read.target === '' ? 0 : 1
+  return read.kind === 'file' ? read.lines : null
 }
 
 function scheduleGit($: EngineInterface, ms: number, isHeavy = false) {
@@ -2193,16 +2261,18 @@ async function refreshGit($: EngineInterface, isHeavy = false): Promise<void> {
     const numstat = await run(G.argv.numstat(headHash ? 'HEAD' : G.EMPTY_TREE))
     const rows = G.parseStatus(status.out)
     const untracked = new Map<string, number>()
-    const rootReal = await rootRealOf($, root)
-    await Promise.all(
-      rows
-        .filter(row => row.x === '?')
-        .slice(0, 30)
-        .map(async row => {
-          const lines = await lineCountOf($, joinPath(root, row.path), rootReal)
-          if (lines !== null) untracked.set(row.path, lines)
-        }),
+    // read once for both: the line counts, and while the web deck is on the text its diffs show (`readGitDiffs` then finds it kept)
+    const reads = await untrackedOf(
+      $,
+      root,
+      rows.filter(row => row.x === '?').slice(0, 30).map(row => row.path),
+      1_000_000,
+      isSharing() ? W.GIT_DIFF_MOST : 0,
     )
+    for (const [place, read] of reads) {
+      const lines = lineCountOf(read)
+      if (lines !== null) untracked.set(place, lines)
+    }
 
     const files = G.filesOf(rows, G.parseNumstat(numstat.out), untracked)
     const next: G.GitState = {
@@ -2292,20 +2362,11 @@ async function readGitDiffs($: EngineInterface): Promise<void> {
         }
       }
     }
-    const rootReal = await rootRealOf($, root)
-    for (const file of files.filter(one => one.isUntracked).slice(0, GIT_DIFF_UNTRACKED)) {
-      try {
-        const abs = joinPath(root, file.path)
-        const found = await untrackedAt($, abs, rootReal)
-        // a link shows as its target's path (git's own diff of one); its content, and a file outside the repository, are never read
-        if (found.kind === 'link') keep(file.path, linkHunks(found.target))
-        else if (found.kind === 'file' && found.size <= W.GIT_DIFF_MOST) {
-          const text = await $.fs.read(abs)
-          if (!text.includes('\u0000')) keep(file.path, addedFileHunks(text))
-        }
-      } catch {
-        // a file that cannot be read has no diff
-      }
+    const places = files.filter(one => one.isUntracked).slice(0, GIT_DIFF_UNTRACKED).map(one => one.path)
+    for (const [place, read] of await untrackedOf($, root, places, W.GIT_DIFF_MOST, W.GIT_DIFF_MOST)) {
+      // a link shows as its target's path (git's own diff of one); its content, and a file outside the repository, are never read; one that cannot be read has no diff
+      if (read.kind === 'link') keep(place, linkHunks(read.target))
+      else if (read.kind === 'file' && read.text !== undefined) keep(place, addedFileHunks(read.text))
     }
     // read in a repository the deck has since left: not this one's
     if (!R.sameRoot(root, git.root)) return
@@ -2333,24 +2394,25 @@ async function loadFileDiff($: EngineInterface, path: string): Promise<void> {
   if (!row) {
     found = { path, hunks: [], isBinary: false, note: 'This file has no uncommitted changes any more.', at: now }
   } else if (row.isUntracked) {
+    let read: UntrackedRead = { kind: 'gone' }
     try {
-      const abs = joinPath(root, path)
-      const place = await untrackedAt($, abs, await rootRealOf($, root))
-      if (place.kind === 'link') {
-        // a link shows as its target's path, the way git shows one (its one line of diff); its content is never read
-        found = { path, hunks: linkHunks(place.target), isBinary: false, at: now }
-      } else if (place.kind === 'outside') {
-        found = { path, hunks: [], isBinary: false, note: 'This file lies outside the repository.', at: now }
-      } else if (place.kind !== 'file') {
-        found = { path, hunks: [], isBinary: false, note: 'Could not read this new file.', at: now }
-      } else if (place.size > 2_000_000) {
-        found = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(place.size / 1024)} KB: too big to show.`, at: now }
-      } else {
-        const text = await $.fs.read(abs)
-        found = text.includes('\u0000') ? { path, hunks: [], isBinary: true, at: now } : { path, hunks: addedFileHunks(text), isBinary: false, at: now }
-      }
+      read = (await untrackedOf($, root, [path], 2_000_000, 2_000_000)).get(path) ?? read
     } catch {
-      found = { path, hunks: [], isBinary: false, note: 'Could not read this new file.', at: now }
+      // a file that cannot be read says so
+    }
+    if (read.kind === 'link') {
+      // a link shows as its target's path, the way git shows one (its one line of diff); its content is never read
+      found = { path, hunks: linkHunks(read.target), isBinary: false, at: now }
+    } else if (read.kind === 'outside') {
+      found = { path, hunks: [], isBinary: false, note: 'This file lies outside the repository.', at: now }
+    } else if (read.kind === 'big' || (read.kind === 'file' && read.text === undefined)) {
+      found = { path, hunks: [], isBinary: false, note: `New file, ${Math.round(read.size / 1024)} KB: too big to show.`, at: now }
+    } else if (read.kind === 'binary') {
+      found = { path, hunks: [], isBinary: true, at: now }
+    } else if (read.kind === 'file') {
+      found = { path, hunks: addedFileHunks(read.text ?? ''), isBinary: false, at: now }
+    } else {
+      found = { path, hunks: [], isBinary: false, note: isNodeMissing ? 'Could not read this new file: Apiarius reads new files with Node.js, which is not on PATH.' : 'Could not read this new file.', at: now }
     }
   } else {
     const paths = row.oldPath ? [row.oldPath, path] : [path]

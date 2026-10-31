@@ -10,7 +10,7 @@ import type { CommandSpec, On, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSp
 import { mock, type Engine } from 'claude-code/testing'
 
 import type * as W from '../hooks/web'
-import { gitWhere, isConfigList } from './tools'
+import { filesAnswerOf, filesRequestOf, gitWhere, isConfigList } from './tools'
 import type { DeckSnapshot } from '../types'
 
 export const NOW = 1_700_000_100_000
@@ -85,6 +85,12 @@ export type World = {
   nodeRuns: string[][]
   /** Each link "Open in browser" handed web/open.js on its stdin (it answers that it opened it). */
   browsed: string[]
+  /** Each place web/files.js was asked to read (an untracked file, an attribute file), by its whole path: it answers from `onDisk`, else `files`, as `fs.read` would. */
+  fileReads: string[]
+  /** What web/files.js finds on the disk, by whole path (`/` between parts, no drive), when the test says; left out, `files`. */
+  onDisk?: Readonly<Record<string, string>>
+  /** web/files.js's own answer for a file, by its whole path, when the test words one (a file it refused: `{ kind: 'refused', why }`); undefined, read from the disk. */
+  safeRead?: (abs: string) => Record<string, unknown> | undefined
   /** What /cost totals (`session.usage`'s `cost.usd`), when the test moves it; left out, $1.25. */
   costUsd?: number
   /** The home's `debug/` folder is there: the deck writes its debug dump (`debug/<sessionId>.json`) among the writes. */
@@ -123,6 +129,7 @@ export function newWorld(extra: Partial<World> = {}): World {
     invalidates: 0,
     nodeRuns: [],
     browsed: [],
+    fileReads: [],
     homeRequests: [],
     ...extra,
   }
@@ -187,6 +194,16 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
     if (e.argv[0] === 'node' && /[\\/]web[\\/]open\.js$/.test(e.argv[1] ?? '')) {
       w.browsed.push(e.init?.stdin ?? '')
       return { value: { exitCode: 0, stdout: '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    // the deck's safe reads: web/files.js, answered from the test's files
+    const reading = filesRequestOf(e)
+    if (reading) {
+      const root = reading.root.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '').replace(/\/+$/, '')
+      for (const place of reading.paths) w.fileReads.push(`${root}/${place}`)
+      const disk = w.onDisk ?? w.files
+      const said = JSON.parse(filesAnswerOf(reading, abs => disk?.[abs])) as { ok: true; files: Record<string, unknown>[] }
+      const files = said.files.map((one, i) => ({ ...(w.safeRead?.(`${root}/${reading.paths[i] ?? ''}`) ?? one), path: reading.paths[i] }))
+      return { value: { exitCode: 0, stdout: `${JSON.stringify({ ok: true, files })}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return request
       ? { value: { exitCode: 0, stdout: w.isHomeRefused ? '{"ok":false,"why":"refused"}\n' : '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }

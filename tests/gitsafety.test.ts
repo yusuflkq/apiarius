@@ -183,7 +183,7 @@ test('through the deck: a git too old to say where its settings come from (befor
   expect(w.toasts.filter(text => text.includes('git 2.26 or newer')).length).toBe(1)
 })
 
-test('through the deck: an untracked symbolic link is never read through (its diff is the target`s path, as git shows a link, never the target`s content), and an untracked file whose real place is outside the repository is left out, not read', async ($, on) => {
+test('through the deck: an untracked symbolic link is never read through (its diff is the target`s path, as git shows a link, never the target`s content), an untracked file whose real place is outside the repository is left out, not read, and a plain one is read through web/files.js alone, never `fs.read`', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const norm = (p: string) => p.replace(/\\/g, '/')
   // three untracked files: a link to a secret outside the repository, a plain file inside it, and one whose real place is outside (reached through a parent alias)
@@ -208,16 +208,15 @@ test('through the deck: an untracked symbolic link is never read through (its di
       return null
     },
   })
+  // what each path holds, for web/files.js (its safe reads) and for `fs.read` alike; a read of the link or of anything outside the repository would be a leak
+  const files: Record<string, string> = { '/work/inside.txt': 'hello\nworld\n', '/work/id_rsa': 'TOP-SECRET-KEY', '/secrets/id_rsa': 'TOP-SECRET-KEY', '/work/escape': 'ESCAPED-SECRET', '/elsewhere/escape': 'ESCAPED-SECRET' }
+  w.onDisk = files
   world(on, w)
-  // every read the deck makes is recorded; a read of the link or of anything outside the repository would be a leak
   const reads: string[] = []
   on('fs.read', ($, e) => {
     const p = norm(e.path)
     reads.push(p)
-    if (p === '/work/inside.txt') return { value: 'hello\nworld\n' }
-    if (p === '/work/id_rsa' || p === '/secrets/id_rsa') return { value: 'TOP-SECRET-KEY' }
-    if (p === '/work/escape' || p === '/elsewhere/escape') return { value: 'ESCAPED-SECRET' }
-    return { deny: 'no such file' }
+    return files[p] !== undefined ? { value: files[p] } : { deny: 'no such file' }
   })
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await $.command.run(deck('changes'))
@@ -240,9 +239,58 @@ test('through the deck: an untracked symbolic link is never read through (its di
   expect(drawn).toContain('outside the repository')
   expect(drawn).not.toContain('ESCAPED-SECRET')
   await ui.unmount()
-  // the deck read the plain file inside the repository, and never the link or anything outside
-  expect(reads).toContain('/work/inside.txt')
-  expect(reads.some(p => p === '/work/id_rsa' || p === '/secrets/id_rsa' || p === '/work/escape' || p === '/elsewhere/escape')).toBe(false)
+  // the deck read the plain file inside the repository through web/files.js, and never the link or anything outside; `fs.read` read no untracked file at all
+  expect(w.fileReads).toContain('/work/inside.txt')
+  expect(w.fileReads.some(p => p !== '/work/inside.txt')).toBe(false)
+  expect(reads.some(p => Object.hasOwn(files, p))).toBe(false)
+})
+
+test('through the deck: an untracked file swapped for a link after the deck`s look is refused by web/files.js and shows nothing of the link`s target; a file that did not move is read once, kept, and read again once its size or time moves', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  let mtime = NOW
+  const w = newWorld({
+    gitConfig: () => ({ exitCode: 0, stdout: '' }),
+    git: argv => {
+      const line = argv.join(' ')
+      if (line.includes('rev-parse --show-toplevel')) return { exitCode: 0, stdout: '/work\n' }
+      if (line.includes('rev-parse --abbrev-ref HEAD')) return { exitCode: 0, stdout: 'main\n' }
+      if (line.includes('rev-parse --verify')) return { exitCode: 0, stdout: `${'a'.repeat(40)}\n` }
+      if (line.includes('status --porcelain')) return { exitCode: 0, stdout: '?? notes.txt\0?? swapped.txt\0' }
+      return { exitCode: 0, stdout: '' }
+    },
+    // both look like plain files inside the repository to `fs.stat`
+    stat: path => (path.replace(/\\/g, '/') === '/work' ? { size: 0, mtimeMs: NOW, kind: 'dir', realPath: '/work' } : { size: 12, mtimeMs: mtime }),
+  })
+  // on the disk, as web/files.js finds them: swapped.txt became a link to a secret between the deck's look and the open, which refuses it (O_NOFOLLOW_ANY: ELOOP)
+  w.onDisk = { '/work/notes.txt': 'hello\nworld\n', '/work/swapped.txt': 'TOP-SECRET-KEY' }
+  w.safeRead = abs => (abs === '/work/swapped.txt' ? { kind: 'refused', why: 'a link on the way' } : undefined)
+  w.files = { '/work/swapped.txt': 'TOP-SECRET-KEY', '/work/notes.txt': 'TOP-SECRET-KEY' }
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await $.command.run(deck('changes'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount(pane('terminal'))
+  await ui.press({ key: W.fileKeyOf('swapped.txt') })
+  await clock.advance(1000)
+  await ui.redraw()
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('Could not read this new file.')
+  expect(drawn).not.toContain('TOP-SECRET-KEY')
+  // the row counts the plain one's lines, and none for the refused one
+  expect(drawn).toContain('+2')
+  // read once; a refresh where nothing moved runs no node for it (the refused one is asked again)
+  const asked = () => w.fileReads.filter(place => place === '/work/notes.txt').length
+  expect(asked()).toBe(1)
+  await clock.advance(7000)
+  await ui.redraw()
+  expect(asked()).toBe(1)
+  expect(w.fileReads.filter(place => place === '/work/swapped.txt').length).toBeGreaterThan(1)
+  // its time moved: read again
+  mtime = NOW + 5000
+  await clock.advance(7000)
+  await ui.redraw()
+  expect(asked()).toBe(2)
+  await ui.unmount()
 })
 
 test('through the deck: a file a repository named with control characters or a bidirectional override still draws, on the terminal and the desktop, each shown as U+FFFD', async ($, on) => {

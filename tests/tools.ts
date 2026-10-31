@@ -42,3 +42,32 @@ export const windowsTest: typeof test = isWindows ? test : () => undefined
 
 /** `test` on Linux and macOS, and no test on Windows: for the same rule as a `windowsTest`, spelled with their paths. */
 export const posixTest: typeof test = isWindows ? () => undefined : test
+
+/** Whether a run is web/files.js's (the deck reads an untracked file or an attribute file through it, never with `fs.read`), and its request. */
+export function filesRequestOf(e: { argv: readonly string[]; init?: { stdin?: string } | undefined }): { root: string; paths: string[]; most: number; textMost: number } | null {
+  if (!(e.argv[0] === 'node' && /[\\/]web[\\/]files\.js$/.test(e.argv[1] ?? ''))) return null
+  try {
+    return JSON.parse(e.init?.stdin ?? '') as { root: string; paths: string[]; most: number; textMost: number }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What web/files.js prints for `request`, in its place: each file's text by
+ * `textOf` (its whole path, `/` between parts and no drive; undefined, none
+ * there), counted and cut as the helper does.
+ */
+export function filesAnswerOf(request: { root: string; paths: string[]; most: number; textMost: number }, textOf: (abs: string) => string | undefined): string {
+  const root = request.root.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '').replace(/\/+$/, '')
+  const files = request.paths.map(place => {
+    const text = textOf(`${root}/${place}`)
+    if (text === undefined) return { path: place, kind: 'none' }
+    const size = new TextEncoder().encode(text).length
+    if (size > request.most) return { path: place, kind: 'big', size, mtimeMs: 0 }
+    if (text.includes('\u0000')) return { path: place, kind: 'binary', size, mtimeMs: 0 }
+    const lines = text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+    return { path: place, kind: 'file', size, mtimeMs: 0, lines, ...(size <= request.textMost ? { text } : {}) }
+  })
+  return `${JSON.stringify({ ok: true, files })}\n`
+}
