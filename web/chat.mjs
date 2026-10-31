@@ -1,7 +1,7 @@
 /* Apiarius's web page: Chat (#/chat, tab 2), the session as a group chat, and its composer. */
 import { h, icon, isLive, isRunning, oneLine, stateOf, statusOf } from './basics.mjs';
 import {
-  ACK_WAIT, ageOf, command, deafWhy, fullTextOf, fullTexts, isFinished, isOpen, IX, newCmdId, openAgent, S, sendState,
+  access, ACK_WAIT, ageOf, command, deafWhy, fullTextOf, fullTexts, isFinished, isOpen, IX, newCmdId, openAgent, S, sendState,
   StatusNote, toggle, ui, whereNote
 } from './state.mjs';
 import { Avatar, Dot, Markdown, nameOf, stop, whoAvatar } from './parts.mjs';
@@ -522,5 +522,8 @@ export function Composer(scope) {
       ToLine(scope, draft, to),
       h('span', { class: 'composer-status', role: 'status', 'aria-live': 'polite' },
         st && st.status === 'error' ? StatusNote({ tone: 'fail', icon: 'x', text: st.text }) : lastNote ? StatusNote(lastNote) : null),
-      h('span', { class: 'composer-keys' }, 'Enter sends · Shift+Enter adds a line')));
+      // the Browser pane's page, which Claude's tools can drive: what you send waits for your Send above the prompt in Claude Code
+      access.grade === 'pane'
+        ? h('span', { class: 'composer-keys', title: 'Claude can drive the Browser pane, so a message from here waits for one Send click above your prompt in Claude Code. In your own browser (Open in browser in the deck\'s Settings) it goes at once.' }, 'Enter sends · then press Send above your prompt in Claude Code')
+        : h('span', { class: 'composer-keys' }, 'Enter sends · Shift+Enter adds a line')));
 }

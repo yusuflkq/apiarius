@@ -41,7 +41,8 @@ function ReviewButton(scope, text, label = 'Ask for review') {
     const tidy = () => {
       if (ui.review.get(scope) !== sent) return;
       const now = sendState(sent, 'review');
-      if (now.busy) { setTimeout(tidy, 1000); return; }
+      // sending, or waiting for your Send above the prompt (the Browser pane's page): the note stays
+      if (now.busy || now.held) { setTimeout(tidy, 1000); return; }
       if (!sent.settled) { sent.settled = Date.now(); invalidate(); }
       if (Date.now() - sent.settled >= 8000) { ui.review.delete(scope); invalidate(); } else setTimeout(tidy, 1000);
     };

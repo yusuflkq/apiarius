@@ -446,7 +446,8 @@ function QuestionForm(n) {
   const st = answerState(c);
   const readOnly = !n.isAnswerable;
   const instant = qs.length === 1 && !qs[0].multiSelect;
-  const locked = readOnly || !!(st && (st.busy || st.done));
+  // one held for your Send above the prompt stays as sent until it went, or did not
+  const locked = readOnly || !!(st && (st.busy || st.done || st.held));
   const answers = {};
   qs.forEach((q, qi) => { const v = answerOf(q, qi, c); if (v) answers[q.question] = v.slice(0, 2000); });
   const ready = Object.keys(answers).length === qs.length;
@@ -478,6 +479,17 @@ function NoteBody(n) {
 
 const NEED_ICON = { question: 'help', permission: 'shield', notification: 'bell' };
 
+/**
+ * Who a need is from: its name, and, for any agent but the Orchestrator, what
+ * it is ("Agent", "Teammate"), so a question from an agent that named itself
+ * "Claude Code" never reads as Claude Code's own notification.
+ */
+export function askerOf(n) {
+  const a = IX && IX.byId.get(n.agent);
+  const kind = a ? a.kind : n.agent === 'main' ? 'orchestrator' : 'agent';
+  return { who: n.agentName || nameOf(n.agent), mark: kind === 'orchestrator' ? '' : kind === 'teammate' ? 'Teammate' : 'Agent' };
+}
+
 /** What a folded need says on its one line: its question, its command or path, its words. */
 export const needGist = n => (n.kind === 'question' ? n.questions.map(q => q.question).join(' · ') || n.text : n.kind === 'permission' ? n.command || n.path || n.text : n.text);
 
@@ -491,12 +503,13 @@ function NeedCard(n, first = true) {
   if (c) { const st = answerState(c); if (st && st.done) return AnsweredCard(c); }
   const open = ui.needOpen.has(n.id) ? ui.needOpen.get(n.id) : first || !!(c && c.touched);
   const flip = () => { ui.needOpen.set(n.id, !open); renderNow(); };
-  const who = n.agentName || nameOf(n.agent);
+  const { who, mark } = askerOf(n);
   const name = h('span', { key: 'who', class: 'need-who' }, IX.byId.has(n.agent) ? NameLink(n.agent, 0) : who);
-  const title = n.kind === 'question' ? [name, ' asks'] : n.kind === 'permission' ? [name, ' needs permission'] : h('span', { key: 'who', class: 'need-who' }, n.title || 'Claude Code');
+  const from = mark ? [h('span', { key: 'mark', class: 'need-mark' }, `${mark} `), name] : [name];
+  const title = n.kind === 'question' ? [...from, ' asks'] : n.kind === 'permission' ? [...from, ' needs permission'] : h('span', { key: 'who', class: 'need-who' }, n.title || 'Claude Code');
   return h('section', {
     key: `need:${n.id}`, id: `need-${n.id}`, class: `need need-${n.kind}${open ? ' open' : ' folded-need'}`, tabindex: '-1', 'data-nav': 'need',
-    'aria-label': n.kind === 'notification' ? n.title || 'Claude Code' : `${who} ${n.kind === 'question' ? 'asks' : 'needs permission'}`,
+    'aria-label': n.kind === 'notification' ? n.title || 'Claude Code' : `${mark ? `${mark} ` : ''}${who} ${n.kind === 'question' ? 'asks' : 'needs permission'}`,
     onKeyDown: e => {
       if (e.key !== 'Enter' || e.target !== e.currentTarget) return;
       e.preventDefault();

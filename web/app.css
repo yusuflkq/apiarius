@@ -388,6 +388,8 @@ button.goal:hover, .goal.open { background: var(--hover-2); }
 .need-ic { width: 17px; height: 17px; color: var(--wait-text); }
 .need-title { flex: 1; min-width: 0; font-size: 13.5px; color: var(--fg-2); overflow-wrap: anywhere; }
 .need-who, .need-who .who-link { font-weight: 600; color: var(--fg); }
+/* an agent's need says what it is ("Agent", "Teammate"): never read as Claude Code's own notification */
+.need-mark { color: var(--muted); font-weight: 500; }
 .need-type { flex: none; font: 11px var(--mono); color: var(--muted-2); }
 .need-age { flex: none; min-width: 3ch; font: 11px var(--mono); color: rgba(253, 230, 138, 0.62); text-align: right; }
 .need-where { font-size: 12px; color: var(--muted); }

@@ -53,12 +53,14 @@ function sample(change) {
  * plain object (a fresh one by default). Rendering is a no-op: the views are
  * read, not drawn.
  */
-function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
+function page({ hash = '', now = NOW, files = FILES, storage = {}, search = '?t=test-token', routes = {}, extra = {} } = {}) {
   const noop = () => {}
   const calls = []
   const reply = (status, body) => ({ ok: status < 300, status, json: async () => JSON.parse(body), text: async () => body })
   const fetch = async (url, init = {}) => {
-    calls.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
+    calls.push({ url, method: init.method || 'GET', headers: { ...(init.headers || {}) }, body: init.body ? JSON.parse(init.body) : null })
+    // a test's own answer for a route (POST /session, GET /state): [status, body]
+    if (routes[url]) { const [status, body] = routes[url](init); return reply(status, body) }
     if (url === '/cmd') return reply(200, '{"ok":true}')
     if (url.startsWith('/timeline')) return files.timeline === undefined ? reply(404, 'no such timeline\n') : reply(200, files.timeline)
     const m = /^\/(agent|patch|message|gitdiff)\/([^?]+)/.exec(url)
@@ -72,7 +74,7 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
     __deckTest: true,
     __avatars: AVATARS,
     __timeline: TIMELINE,
-    location: { search: '?t=test-token', hash },
+    location: { search, hash, href: `http://127.0.0.1:4321/${search}${hash}` },
     window: { addEventListener: noop },
     document: { title: '', querySelector: () => null, getElementById: () => null },
     localStorage: { getItem: k => (Object.prototype.hasOwnProperty.call(storage, k) ? storage[k] : null), setItem: (k, v) => { storage[k] = String(v) }, removeItem: k => { delete storage[k] } },
@@ -84,6 +86,8 @@ function page({ hash = '', now = NOW, files = FILES, storage = {} } = {}) {
     performance: { now: () => 0 },
     fetch,
     URLSearchParams,
+    URL,
+    ...extra,
   })
   vm.runInContext(SOURCE, context, { filename: 'page-script' })
   vm.runInContext(`Date.now = () => ${now}; renderNow = () => {}`, context)
@@ -228,11 +232,12 @@ test('Needs: oldest first, each with its age; the first open, the rest one line 
   assert.deepEqual(cards().map(c => c.p.id), [`need-${ASK_ONE}`, 'need-toolu_01BldB2', `need-${ASK_MANY}`, 'need-note_1792013520000_elicitation_dialog_main'])
   assert.deepEqual(cards().map(c => textOf(find(c, 'need-age')[0])), ['3m', '2m', '2m', '1m'])
   assert.deepEqual(cards().map(c => c.p.class.includes('open')), [true, false, false, false])
-  assert.equal(flat(textOf(find(cards()[1], 'need-head')[0])), 'builder needs permission npm test -- rateLimit Bash 2m')
+  // an agent's need says it is an agent's: never read as Claude Code's own notification
+  assert.equal(flat(textOf(find(cards()[1], 'need-head')[0])), 'Agent builder needs permission npm test -- rateLimit Bash 2m')
   assert.equal(flat(textOf(find(cards()[3], 'need-head')[0])), 'github The github MCP server is asking for your input 1m')
   // opened: the exact command, what it says it does, and where to answer it
   click(find(cards()[1], 'need-flip')[0])
-  assert.match(flat(textOf(cards()[1])), /^builder needs permission Bash 2m npm test -- rateLimit Run the limiter tests Answer in Claude Code\.$/)
+  assert.match(flat(textOf(cards()[1])), /^Agent builder needs permission Bash 2m npm test -- rateLimit Run the limiter tests Answer in Claude Code\.$/)
   assert.equal(find(cards()[1], 'permit-cmd').length, 1)
   click(find(cards()[3], 'need-head')[0])
   // its type in plain words beside its title ("MCP input", not elicitation_dialog)
@@ -1299,7 +1304,7 @@ test('the agent drawer: its task, live call, result and todos; Activity from /ag
   p.load(SAMPLE)
   assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: BUILDER })
   const drawer = () => p.view('Drawer()')
-  assert.match(flat(textOf(drawer())), /^builder general-purpose · sonnet-4\.5 · background waiting on you 29m started by Orchestrator 513k tokens b81c6f3 Message Chat with builder Stop builder needs permission Bash 2m npm test -- rateLimit/)
+  assert.match(flat(textOf(drawer())), /^builder general-purpose · sonnet-4\.5 · background waiting on you 29m started by Orchestrator 513k tokens b81c6f3 Message Chat with builder Stop Agent builder needs permission Bash 2m npm test -- rateLimit/)
   // the need above shows its call in flight already: no second line of it
   assert.equal(find(drawer(), 'live').length, 0)
   assert.match(flat(textOf(drawer())), /Task Write a sliding-window rate limiter in src\/rateLimit\.ts/)
@@ -1969,4 +1974,147 @@ test('Recent activity holds what the agents said among their calls, newest first
   // a click opens its agent
   click(said[1])
   assert.deepEqual({ ...p.run('route.drawer') }, { kind: 'agent', id: REVIEWER })
+})
+
+// ---- access: the link's one-time ticket, the handle it is traded for, and what the page says when it has none
+
+/** A tab's sessionStorage and history, kept in plain objects a test reads. */
+function tab(kept = {}) {
+  const replaced = []
+  return {
+    kept,
+    replaced,
+    extra: {
+      sessionStorage: { getItem: k => (Object.prototype.hasOwnProperty.call(kept, k) ? kept[k] : null), setItem: (k, v) => { kept[k] = String(v) }, removeItem: k => { delete kept[k] } },
+      history: { state: null, replaceState: (state, title, url) => replaced.push(url) },
+      EventSource: class { constructor(url) { this.url = url; tab.opened.push(url) } addEventListener() {} close() {} },
+    },
+  }
+}
+tab.opened = []
+
+const HANDLE = 'h'.repeat(43)
+
+test('the page trades its link`s ticket for a handle at once (POST /session, the ticket in a header), keeps the handle in the tab, and takes the ticket out of the address bar; every request then sends the handle, /events as h', async () => {
+  const t = tab()
+  const p = page({ search: '?t=p-0011223344556677-adec674903d619b39d62c67a42bb3d17', hash: '#/chat', extra: t.extra, routes: {
+    '/session': () => [200, JSON.stringify({ ok: true, handle: HANDLE, grade: 'pane' })],
+    '/state': () => [200, JSON.stringify(SAMPLE)],
+  } })
+  await p.run('connect()')
+  await settle()
+  const trade = p.calls.find(one => one.url === '/session')
+  assert.deepEqual([trade.method, trade.headers], ['POST', { 'X-Deck-Ticket': 'p-0011223344556677-adec674903d619b39d62c67a42bb3d17' }])
+  // out of the address bar, the route kept
+  assert.deepEqual(t.replaced, ['/#/chat'])
+  assert.equal(JSON.parse(t.kept['apiarius:handle']).handle, HANDLE)
+  assert.deepEqual(p.calls.find(one => one.url === '/state').headers, { 'X-Deck-Handle': HANDLE })
+  assert.equal(tab.opened[tab.opened.length - 1], `/events?h=${HANDLE}`)
+  assert.equal(p.run('access.grade'), 'pane')
+  // the Browser pane's page says where its words wait
+  assert.match(p.text('Composer("chat")'), /Enter sends · then press Send above your prompt in Claude Code$/)
+  // a reload: no ticket in the address, the tab's handle used, nothing traded
+  const again = page({ search: '', extra: t.extra, routes: { '/state': () => [200, JSON.stringify(SAMPLE)] } })
+  await again.run('connect()')
+  assert.equal(again.calls.some(one => one.url === '/session'), false)
+  assert.deepEqual(again.calls.find(one => one.url === '/state').headers, { 'X-Deck-Handle': HANDLE })
+  assert.equal(again.run('access.grade'), 'pane')
+  // your own browser's: messages go at once, so the foot says nothing of a Send above the prompt
+  const own = page({ search: '?t=f-0011223344556677-a284df635f2f16617d5887d94954f3f8', extra: tab().extra, routes: {
+    '/session': () => [200, JSON.stringify({ ok: true, handle: HANDLE, grade: 'full' })],
+    '/state': () => [200, JSON.stringify(SAMPLE)],
+  } })
+  await own.run('connect()')
+  assert.equal(own.run('access.grade'), 'full')
+  assert.match(own.text('Composer("chat")'), /Enter sends · Shift\+Enter adds a line$/)
+})
+
+test('a link used already, one the server never sealed, none at all, or a handle the server knows no more (it started again): the page says which, and to open it again from the deck', async () => {
+  const said = async (search, routes, kept = {}) => {
+    const p = page({ search, extra: tab(kept).extra, routes })
+    await p.run('connect()')
+    await settle()
+    assert.equal(p.run('conn.status'), 'denied')
+    return p.text('Page() || Unreachable()')
+  }
+  const refused = error => () => [403, JSON.stringify({ ok: false, error })]
+  assert.match(await said('?t=p-0011223344556677-adec674903d619b39d62c67a42bb3d17', { '/session': refused('used') }), /^This link was used already Each link opens one page\. Open it again from Claude Code: \/apiarius web for the Browser pane, or Open in browser in the deck's Settings for your own browser\.$/)
+  assert.match(await said('?t=p-0011223344556677-adec674903d619b39d62c67a42bb3d17', { '/session': refused('unknown') }), /^This link no longer works It is from before the deck's server started again/)
+  assert.match(await said('', {}), /^This page was opened without its link/)
+  // the server started again: the tab's handle is refused, and let go
+  const kept = { 'apiarius:handle': JSON.stringify({ handle: HANDLE, grade: 'full' }) }
+  assert.match(await said('', { '/state': () => [403, 'forbidden\n'] }, kept), /^This page needs opening again The deck's server started again, so the access this page had ended\./)
+  // the handle let go, why kept in its place: a reload still says it
+  assert.equal(kept['apiarius:handle'], JSON.stringify({ why: 'restarted' }))
+  assert.match(await said('', {}, kept), /^This page needs opening again /)
+})
+
+test('a message, an answer or Review the Browser pane`s page sent waits for your Send above the prompt: its ack says so under it, an answer`s form stays as sent, Review`s note stays; then the usual word once it went, or why not', async () => {
+  const p = page()
+  p.load(SAMPLE)
+  p.run('ui.drafts.set("chat", "Ship it")')
+  await p.run('sendChat("chat")')
+  const [chat] = p.commands()
+  const heldAck = id => ({ id, ok: true, status: 'held', text: 'Press Send above your prompt in Claude Code to send it', at: NOW })
+  p.load(sample(s => s.acks.push(heldAck(chat.id))))
+  assert.match(p.text('ChatPage()'), /Ship it Press Send above your prompt in Claude Code to send it/)
+  // sent: the usual word
+  p.load(sample(s => s.acks.push({ id: chat.id, ok: true, status: 'queued', text: 'Claude reads it when it finishes its current turn', at: NOW })))
+  assert.match(p.text('ChatPage()'), /Ship it Queued: Claude reads it when it finishes its current turn/)
+  // discarded above the prompt
+  p.load(sample(s => s.acks.push({ id: chat.id, ok: false, status: 'failed', text: 'Not sent: you discarded it above your prompt', at: NOW })))
+  assert.match(p.text('ChatPage()'), /Ship it Not sent: you discarded it above your prompt/)
+
+  // an answer held: the form stays as sent, its options locked, until it went
+  const q = page()
+  q.load(SAMPLE)
+  const first = () => find(q.view('NeedsSection()'), 'need')[0]
+  click(byText(first(), 'q-opt', 'Redis'))
+  await settle()
+  const [answer] = q.commands()
+  q.load(sample(s => s.acks.push(heldAck(answer.id))))
+  assert.match(flat(textOf(first())), /Press Send above your prompt in Claude Code to send it/)
+  assert.ok(find(first(), 'q-opt').every(o => o.p.disabled === true))
+
+  // Review held: its note stays while it waits
+  const r = page({ hash: '#/changes' })
+  r.load(SAMPLE)
+  const review = () => r.view(`ReviewButton('changes', 'Review the diff')`)
+  click(byText(review(), 'btn', 'Ask for review'))
+  click(byText(review(), 'btn', 'Ask Claude'))
+  await settle()
+  const sent = r.commands().find(one => one.cmd === 'review')
+  r.load(sample(s => s.acks.push(heldAck(sent.id))))
+  assert.match(flat(textOf(review())), /Press Send above your prompt in Claude Code to send it/)
+})
+
+test('an agent`s question or permission says it is an agent`s ("Agent builder asks"), so one that named itself "Claude Code" never reads as Claude Code`s own notification; the Orchestrator`s stays its own', () => {
+  const p = page()
+  p.load(sample(s => {
+    const builder = s.agents.find(a => a.id === BUILDER)
+    builder.title = 'Claude Code'
+    builder.name = 'Claude Code'
+    s.needs[1].agentName = 'Claude Code'
+  }))
+  const cards = () => find(p.view('NeedsSection()'), 'need')
+  assert.match(flat(textOf(find(cards()[0], 'need-head')[0])), /^Orchestrator asks /)
+  assert.match(flat(textOf(find(cards()[1], 'need-head')[0])), /^Agent Claude Code needs permission /)
+  assert.equal(cards()[1].p['aria-label'], 'Agent Claude Code needs permission')
+  // Claude Code's own notification: its title alone
+  assert.match(flat(textOf(find(cards()[3], 'need-head')[0])), /^github /)
+})
+
+test('a name holding a bidirectional override, embedding or isolate shows each as U+FFFD, as the pane does: an agent`s, a need`s, a chat row`s, a session`s', () => {
+  const p = page()
+  const evil = 'build‮gnp.exe⁦x⁩'
+  p.load(sample(s => {
+    Object.assign(s.agents.find(a => a.id === BUILDER), { title: evil, name: evil })
+    s.needs[1].agentName = evil
+    s.chat[0].who = evil
+  }))
+  const shown = 'build�gnp.exe�x�'
+  assert.equal(p.run(`IX.byId.get("${BUILDER}").title`), shown)
+  assert.equal(p.run('S.needs[1].agentName'), shown)
+  assert.equal(p.run('S.chat[0].who'), shown)
+  assert.doesNotMatch(p.text('NowPage()'), /[‪-‮⁦-⁩]/)
 })

@@ -7,7 +7,7 @@ import {
   navigate, newCmdId, openAgent, route, S, scrollSoon, setShut, toast, toggle, ui
 } from './state.mjs';
 import {
-  AvatarDot, AvatarStack, DiffStat, Dot, Empty, Glyph, inline, NameLink, nameOf, needGist, NeedsList, Outcome,
+  askerOf, AvatarDot, AvatarStack, DiffStat, Dot, Empty, Glyph, inline, NameLink, nameOf, needGist, NeedsList, Outcome,
   OutsideRows, PathText, resolvedCalls, Section, stop, whoAvatar
 } from './parts.mjs';
 import { KIND_WORD, modelLine, PlanSection, ROW_WORD } from './org.mjs';
@@ -335,11 +335,12 @@ function BackgroundSection() {
 // agents in each state, the plan's items done (only with a plan), the spend,
 // and what waits on you.
 
-/** What a need is, in one line: "Orchestrator asks: Which store…?", "builder needs permission: npm test". */
+/** What a need is, in one line: "Orchestrator asks: Which store…?", "Agent builder needs permission: npm test". */
 function needLine(n) {
-  const who = n.agentName || nameOf(n.agent);
-  if (n.kind === 'question') return `${who} asks: ${needGist(n)}`;
-  if (n.kind === 'permission') return `${who} needs permission: ${needGist(n)}`;
+  const { who, mark } = askerOf(n);
+  const from = mark ? `${mark} ${who}` : who;
+  if (n.kind === 'question') return `${from} asks: ${needGist(n)}`;
+  if (n.kind === 'permission') return `${from} needs permission: ${needGist(n)}`;
   return [n.title, n.text].filter(Boolean).join(': ');
 }
 

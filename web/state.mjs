@@ -125,6 +125,10 @@ export const arr = v => (Array.isArray(v) ? v : []);
 export const str = v => (typeof v === 'string' ? v : '');
 export const obj = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
 export const numOr = (v, d = null) => (typeof v === 'number' && isFinite(v) ? v : d);
+/** A bidirectional override, embedding or isolate (U+202A to U+202E, U+2066 to U+2069), which would make a name read in another order: shown as U+FFFD, as the pane does (hooks/ui/v2/text.ts). */
+const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;
+/** A name the page shows (an agent's, a session's, a tool's caller's): a string, each bidirectional control in it as U+FFFD. */
+const shownName = v => str(v).replace(BIDI, '\ufffd');
 
 const STATE_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle' };
 const ROW_STATUS = new Set(['starting', 'running', 'waiting', 'done', 'failed', 'idle']);
@@ -147,9 +151,9 @@ function needOf(n) {
   const kind = ['question', 'permission', 'notification'].includes(n.kind) ? n.kind : 'notification';
   const questions = questionsOf(n.questions);
   return {
-    id: n.id, kind, agent: str(n.agent) || 'main', agentName: str(n.agentName), at: numOr(n.at, 0), age: str(n.age), text: str(n.text),
+    id: n.id, kind, agent: str(n.agent) || 'main', agentName: shownName(n.agentName), at: numOr(n.at, 0), age: str(n.age), text: str(n.text),
     questions, isAnswerable: n.isAnswerable === true && kind === 'question' && questions.length > 0,
-    tool: str(n.tool), command: str(n.command), path: str(n.path), description: str(n.description), type: str(n.type), title: str(n.title),
+    tool: str(n.tool), command: str(n.command), path: str(n.path), description: str(n.description), type: str(n.type), title: shownName(n.title),
     // its type in words ("Permission prompt", "MCP input"); an earlier build's state has none: its type as sent
     typeText: str(n.typeText) || str(n.type),
   };
@@ -164,8 +168,8 @@ function rowOf(r) {
     row: 'agent', id: r.id, fileId: str(r.fileId) || r.id.replace(/[^A-Za-z0-9_-]/g, '_'),
     parent: typeof r.parent === 'string' && r.parent ? r.parent : null, depth: numOr(r.depth, 0),
     kind: ROW_KIND.has(r.kind) ? r.kind : 'agent', status: ROW_STATUS.has(r.status) ? r.status : 'idle', isStopped: r.isStopped === true,
-    name: str(r.name), description: str(r.description), type: str(r.type), shortId: str(r.shortId),
-    title: str(r.title) || str(r.name) || str(r.description) || str(r.type) || str(r.shortId) || r.id,
+    name: shownName(r.name), description: shownName(r.description), type: shownName(r.type), shortId: str(r.shortId),
+    title: shownName(str(r.title) || str(r.name) || str(r.description) || str(r.type) || str(r.shortId) || r.id),
     live: live && typeof live.tool === 'string' ? { tool: live.tool, text: str(live.text), at: numOr(live.at, 0) } : null,
     said: saidOf(r.said),
     startedAt: numOr(r.startedAt, 0), endedAt: numOr(r.endedAt, null), resumedAt: numOr(r.resumedAt, null), elapsed: str(r.elapsed),
@@ -197,8 +201,8 @@ const BG_KINDS = new Set(['shell', 'monitor', 'workflow', 'agent', 'other', 'cro
 function backgroundOf(b) {
   b = obj(b) || {};
   const rows = arr(b.rows).filter(x => x && typeof x.id === 'string' && x.id).map(x => ({
-    id: x.id, kind: BG_KINDS.has(x.kind) ? x.kind : 'other', what: str(x.what), title: str(x.title) || x.id, status: str(x.status) || 'running',
-    by: typeof x.by === 'string' && x.by ? x.by : null, byName: str(x.byName), at: numOr(x.at, 0), nextAt: numOr(x.nextAt, null),
+    id: x.id, kind: BG_KINDS.has(x.kind) ? x.kind : 'other', what: str(x.what), title: shownName(str(x.title) || x.id), status: str(x.status) || 'running',
+    by: typeof x.by === 'string' && x.by ? x.by : null, byName: shownName(x.byName), at: numOr(x.at, 0), nextAt: numOr(x.nextAt, null),
     schedule: str(x.schedule), recurring: x.recurring === true, when: str(x.when), stop: stopOf(x.stop),
   }));
   const scheduled = rows.filter(x => x.status === 'scheduled').length;
@@ -218,7 +222,7 @@ function planOf(p) {
   return { board, todos: todos && todos.items.length ? todos : null, approved, workflows };
 }
 
-const chatOf = m => ({ ...m, at: numOr(m.at, 0), from: str(m.from), to: typeof m.to === 'string' && m.to ? m.to : null, who: str(m.who), kind: str(m.kind) || 'chat', title: str(m.title), text: str(m.text), isCut: m.isCut === true, isCleared: m.isCleared === true, compaction: obj(m.compaction) ? { title: str(m.compaction.title), figures: str(m.compaction.figures) } : null });
+const chatOf = m => ({ ...m, at: numOr(m.at, 0), from: str(m.from), to: typeof m.to === 'string' && m.to ? m.to : null, who: shownName(m.who), kind: str(m.kind) || 'chat', title: shownName(m.title), text: str(m.text), isCut: m.isCut === true, isCleared: m.isCleared === true, compaction: obj(m.compaction) ? { title: str(m.compaction.title), figures: str(m.compaction.figures) } : null });
 
 function changesOf(c) {
   c = obj(c) || {};
@@ -239,7 +243,7 @@ function changesOf(c) {
 /** The newest tool calls of every agent, and what each said between them (`kind` 'said'), newest first. */
 function activityOf(list) {
   return arr(list).filter(x => x && typeof x.tool === 'string' && typeof x.agent === 'string' && x.agent && (x.kind !== 'said' || typeof x.text === 'string')).map(x => ({
-    id: str(x.id) || `${numOr(x.at, 0)}|${x.agent}|${x.tool}|${str(x.text)}`, at: numOr(x.at, 0), agent: x.agent, agentName: str(x.agentName),
+    id: str(x.id) || `${numOr(x.at, 0)}|${x.agent}|${x.tool}|${str(x.text)}`, at: numOr(x.at, 0), agent: x.agent, agentName: shownName(x.agentName),
     kind: x.kind === 'said' ? 'said' : 'call',
     tool: x.tool, text: str(x.text), ok: typeof x.ok === 'boolean' ? x.ok : null, ms: numOr(x.ms),
     refused: x.refused === 'denied' || x.refused === 'blocked' ? x.refused : null,
@@ -271,7 +275,7 @@ function inspectOf(i) {
   const tok = t => { t = obj(t) || {}; return { in: numOr(t.in, 0), out: numOr(t.out, 0), cacheRead: numOr(t.cacheRead, 0) }; };
   return {
     contextPercent: numOr(i.contextPercent), costUsd: numOr(i.costUsd),
-    agents: arr(i.agents).filter(a => a && typeof a.id === 'string').map(a => ({ id: a.id, title: str(a.title) || a.id, model: str(a.model), tokens: tok(a.tokens), requests: numOr(a.requests, 0), tools: numOr(a.tools, 0), errors: numOr(a.errors, 0) })),
+    agents: arr(i.agents).filter(a => a && typeof a.id === 'string').map(a => ({ id: a.id, title: shownName(str(a.title) || a.id), model: str(a.model), tokens: tok(a.tokens), requests: numOr(a.requests, 0), tools: numOr(a.tools, 0), errors: numOr(a.errors, 0) })),
     ...inspectMoreOf(i),
   };
 }
@@ -295,9 +299,9 @@ function inspectMoreOf(i) {
       text: c.text, total: nums(c.total, 0), max: nums(c.max, 0), percent: nums(c.percent, 0), autoCompactPercent: nums(c.autoCompactPercent), model: str(c.model), at: nums(c.at, 0),
       rows: arr(c.rows).filter(r => r && typeof r.name === 'string').map(r => ({ name: r.name, tokens: nums(r.tokens, 0), kind: ['used', 'free', 'buffer', 'deferred'].includes(r.kind) ? r.kind : 'used', hue: HUE_RE.test(str(r.hue)) ? r.hue : '#8a8a8a' })),
     } : null,
-    compactions: arr(i.compactions).filter(x => x && typeof x.agent === 'string').map(x => ({ id: str(x.id), at: nums(x.at, 0), agent: x.agent, agentName: str(x.agentName), trigger: str(x.trigger), figures: str(x.figures), text: str(x.text), summary: str(x.summary), skipped: typeof x.skipped === 'string' ? x.skipped : null })),
+    compactions: arr(i.compactions).filter(x => x && typeof x.agent === 'string').map(x => ({ id: str(x.id), at: nums(x.at, 0), agent: x.agent, agentName: shownName(x.agentName), trigger: str(x.trigger), figures: str(x.figures), text: str(x.text), summary: str(x.summary), skipped: typeof x.skipped === 'string' ? x.skipped : null })),
     permissions: {
-      decisions: arr(p.decisions).filter(d => d && typeof d.id === 'string' && typeof d.tool === 'string').map(d => ({ id: d.id, at: nums(d.at, 0), agent: str(d.agent) || 'main', agentName: str(d.agentName), tool: d.tool, target: str(d.target), outcome: OUTCOMES.has(d.outcome) ? d.outcome : 'allowed', by: str(d.by), text: str(d.text), why: str(d.why) })),
+      decisions: arr(p.decisions).filter(d => d && typeof d.id === 'string' && typeof d.tool === 'string').map(d => ({ id: d.id, at: nums(d.at, 0), agent: str(d.agent) || 'main', agentName: shownName(d.agentName), tool: d.tool, target: str(d.target), outcome: OUTCOMES.has(d.outcome) ? d.outcome : 'allowed', by: str(d.by), text: str(d.text), why: str(d.why) })),
       total: nums(p.total, 0), denied: nums(p.denied, 0), blocked: nums(p.blocked, 0), waiting: nums(p.waiting, 0),
     },
     loaded: l ? {
@@ -550,6 +554,8 @@ function ackState(ack, what = 'chat') {
     return { tone: 'fail', icon: 'x', text: lead(what === 'answer' ? 'Not answered' : 'Not delivered', text || 'Claude Code refused it') };
   }
   if (ack.status === 'answered') return { tone: 'done', icon: 'check', text: lead('Answered', text || 'Claude carries on') };
+  // in your voice from the Browser pane: it waits for your Send above the prompt in Claude Code
+  if (ack.status === 'held') return { tone: 'wait', icon: 'hand', text: ack.text || 'Press Send above your prompt in Claude Code to send it', held: true };
   // a review put in the prompt box: "In your prompt box: press Enter to send it"
   if (ack.status === 'delivered' && what === 'review') return { tone: 'done', icon: 'check', text: ack.text || 'In your prompt box' };
   if (ack.status === 'delivered') return { tone: 'done', icon: 'check', text: lead('Delivered', text || 'it reads it at its next step') };
@@ -861,8 +867,8 @@ function sessionsOf(x) {
     const state = STATE_TEXT[r.state] ? r.state : 'idle';
     const isQuiet = r.isQuiet === true;
     return {
-      id: r.id, isMe: r.isMe === true, title: str(r.title) || 'No request yet', state, stateText: isQuiet ? '' : str(r.stateText) || STATE_TEXT[state],
-      surface: str(r.surface), place: str(r.place), repo: str(r.repo), where: str(r.where) || [str(r.place), str(r.repo)].filter(Boolean).join(' · '), cwd: str(r.cwd),
+      id: r.id, isMe: r.isMe === true, title: shownName(r.title) || 'No request yet', state, stateText: isQuiet ? '' : str(r.stateText) || STATE_TEXT[state],
+      surface: str(r.surface), place: shownName(r.place), repo: shownName(r.repo), where: shownName(str(r.where) || [str(r.place), str(r.repo)].filter(Boolean).join(' · ')), cwd: str(r.cwd),
       need: !isQuiet && typeof r.need === 'string' && r.need ? r.need : null, needs: isQuiet ? 0 : numOr(r.needs, 0), say: str(r.say),
       working: numOr(r.working, 0), agents: numOr(r.agents, 0), faces: sessionFacesOf(r.faces),
       costUsd: numOr(r.costUsd), cost: str(r.cost), costNote: str(r.costNote), at: numOr(r.at, 0), startedAt: numOr(r.startedAt, 0),
