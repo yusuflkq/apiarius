@@ -1401,3 +1401,22 @@ test('another session`s Changes, shown: its agents` edits open on their patches 
   await ui.unmount()
   await terminal.unmount()
 })
+
+test('a FIFO (or anything but a plain file) where the registry holds a session`s file is never read: the deck looks first, so no read waits on one, and the sessions beside it list as ever', async ($, on) => {
+  const d: Disk = { files: new Map() }
+  const PIPE = 'pipe-7'
+  listed(d, PIPE, `${HOME}/web/${PIPE}`, { title: 'A pipe' })
+  const fifo = `${REG}/${PIPE}.json`
+  let isTried = false
+  // a read of it would never end, as a FIFO's open with no writer
+  d.hang = path => {
+    if (path === fifo) isTried = true
+    return path === fifo
+  }
+  const w = newWorld({ verdict: 'allow', stat: path => (norm(path) === fifo ? { size: 0, mtimeMs: NOW, kind: 'other' } : { size: 12, mtimeMs: NOW }) })
+  const { clock } = await started($, on, w, d, work)
+  await clock.advance(3000)
+  const states = w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 })
+  expect(states.at(-1)?.v2.sessions?.rows.map(row => row.id)).toEqual(['session-1', OTHER])
+  expect(isTried).toBe(false)
+})

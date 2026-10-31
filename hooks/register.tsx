@@ -3047,6 +3047,20 @@ function toggleSessions($: EngineInterface) {
 }
 
 /**
+ * A file read only as a plain file (the registry's, a session folder's: one
+ * another program of the person's could write into): a FIFO, a device, a
+ * folder or a link there is refused, never waited on or read through.
+ * The engine's read opens whatever is at the path, so a look comes first;
+ * these folders are the person's own (0700), and only their own programs
+ * could swap a file in between.
+ */
+async function readPlain($: EngineInterface, path: string): Promise<string> {
+  const stat = await $.fs.stat(path)
+  if (stat.isLink || stat.kind !== 'file') throw new Error('not a plain file')
+  return $.fs.read(path)
+}
+
+/**
  * The whole text of message `id` the state cut (`isCut`), for an agent
  * page's Show more, as the web page's `/message/<id>` serves it: the deck's
  * own copy while it holds one (whole under 700 characters; a longer one's
@@ -3068,7 +3082,7 @@ async function readMessage($: EngineInterface, id: string, onRead: (text: string
       const dir = view.isDemo ? `${root}/web/fixtures/v2` : web.dir || W.webDirOf(home, sessionId)
       try {
         if (dir === '') throw new Error('no folder')
-        text = await $.fs.read(`${dir}/messages/${id}.md`)
+        text = await readPlain($, `${dir}/messages/${id}.md`)
       } catch {
         // not on disk: the deck's own cut is the most there is
         text = own ? own.text : null
@@ -3423,7 +3437,7 @@ function registryHost($: EngineInterface): SR.RegistryHost {
       termProgram: await read(() => $.env.get('TERM_PROGRAM')),
     }),
     now: () => $.clock.now(),
-    read: path => $.fs.read(path),
+    read: path => readPlain($, path),
     write: (path, text) => $.fs.write(path, text),
     list: path => $.fs.list(path),
     stat: path => $.fs.stat(path),

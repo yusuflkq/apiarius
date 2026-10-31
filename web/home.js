@@ -54,6 +54,7 @@ const DEVICE = /^(con|prn|aux|nul|com\d|lpt\d)$/i // Windows device names: never
 const isWindows = process.platform === 'win32'
 const UID = typeof process.getuid === 'function' ? process.getuid() : null
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0
+const NONBLOCK = fs.constants.O_NONBLOCK || 0 // a FIFO planted where a file is read never holds the open
 
 const lstatOf = p => { try { return fs.lstatSync(p) } catch { return null } }
 /** Whether `stat` is a real folder (no link) this user owns. */
@@ -83,11 +84,16 @@ function privateFile(p) {
   fs.closeSync(fs.openSync(p, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600))
 }
 
-/** Writes `text` to `p` (0600, a link there removed first, never followed). */
+/** Writes `text` to `p` (0600, a link there removed first, never followed; a FIFO there never holds the open, and nothing but a regular file is written). */
 function writePrivate(p, text) {
   privateFile(p)
-  const fd = fs.openSync(p, fs.constants.O_WRONLY | fs.constants.O_TRUNC | NOFOLLOW)
-  try { fs.writeSync(fd, text) } finally { fs.closeSync(fd) }
+  const fd = fs.openSync(p, fs.constants.O_WRONLY | fs.constants.O_TRUNC | NOFOLLOW | NONBLOCK)
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`${p} is not a file of this user's`)
+    fs.writeSync(fd, text)
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 /** The home as given, absolute; null for none. */
@@ -194,11 +200,25 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true } catch (err) { return err.code === 'EPERM' }
 }
 
-/** A JSON file's value, read without following a link; null for anything else. */
+/** A JSON file's value, read without following a link and only as a regular file (it opens without blocking, so a FIFO there never holds it, and is read from what opened); null for anything else. */
 function jsonOf(p) {
   const stat = lstatOf(p)
   if (stat === null || !stat.isFile() || stat.size > 64 * 1024) return null
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null }
+  let fd
+  try {
+    fd = fs.openSync(p, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK)
+  } catch {
+    return null
+  }
+  try {
+    const opened = fs.fstatSync(fd)
+    if (!opened.isFile() || opened.size > 64 * 1024) return null
+    return JSON.parse(fs.readFileSync(fd, 'utf8'))
+  } catch {
+    return null
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 /** When something in session `name`'s folder was last touched: the newest of the folder's own time and its state and owner files' (a sharing session rewrites `state.json` often, so its folder is never judged stale). */

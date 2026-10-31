@@ -44,6 +44,9 @@ const path = require('path')
 const crypto = require('crypto')
 const net = require('net')
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0
+// a FIFO planted where a file is read never holds the open: what opened is read only as a regular file
+const NONBLOCK = fs.constants.O_NONBLOCK || 0
+const MAX_FILE = 16 * 1024 * 1024 // the most of a file the server reads: what the mod writes is far less
 
 const EMPTY = '{"v":1,"empty":true}'
 const MAX_BODY = 16 * 1024
@@ -175,7 +178,7 @@ function reload() {
   let next = EMPTY
   if (sig !== 'missing') {
     let text
-    try { text = fs.readFileSync(stateFile, 'utf8').trim() } catch { return false } // trim() drops a BOM too
+    try { text = readFileNoFollowSync(stateFile).trim() } catch { return false } // trim() drops a BOM too
     if (text !== '') {
       let value
       try { value = JSON.parse(text) } catch { return false }
@@ -255,12 +258,40 @@ function written(res, id, folder, ext, what, type = TEXT_TYPE) {
   readFileNoFollow(path.join(dir, folder, `${id}${ext}`), (err, text) => (err ? send(res, 404, `no such ${what}\n`) : send(res, 200, text, type)))
 }
 
-/** Reads a file as UTF-8 without following a symbolic link at its final component (a link planted in a session folder is refused, never read through); the callback is handed the open or read error otherwise. */
+/** Why a file that opened is not read: anything but a regular file (a FIFO, a device, a folder), or one past MAX_FILE. */
+function refusalOfStat(stat) {
+  if (!stat.isFile()) return Object.assign(new Error('not a regular file'), { code: 'EINVAL' })
+  return stat.size > MAX_FILE ? Object.assign(new Error('too big'), { code: 'EFBIG' }) : null
+}
+
+/**
+ * Reads a file as UTF-8 without following a symbolic link at its final
+ * component (a link planted in a session folder is refused, never read
+ * through), and only as a regular file: it opens without blocking (a FIFO
+ * there never holds a thread) and is read from what opened, once fstat says
+ * so. The callback is handed the error otherwise.
+ */
 function readFileNoFollow(file, cb) {
-  fs.open(file, fs.constants.O_RDONLY | NOFOLLOW, (err, fd) => {
+  fs.open(file, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK, (err, fd) => {
     if (err) return cb(err)
-    fs.readFile(fd, 'utf8', (readErr, text) => fs.close(fd, () => cb(readErr, text)))
+    fs.fstat(fd, (statErr, stat) => {
+      const refusal = statErr || refusalOfStat(stat)
+      if (refusal) return fs.close(fd, () => cb(refusal))
+      fs.readFile(fd, 'utf8', (readErr, text) => fs.close(fd, () => cb(readErr, text)))
+    })
   })
+}
+
+/** `readFileNoFollow` at once (the state's reload, a registry file): its text, or it throws. */
+function readFileNoFollowSync(file) {
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK)
+  try {
+    const refusal = refusalOfStat(fs.fstatSync(fd))
+    if (refusal) throw refusal
+    return fs.readFileSync(fd, 'utf8')
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -278,7 +309,7 @@ const isRecord = value => value !== null && typeof value === 'object' && !Array.
 function sessionDirOf(id) {
   if (!sessions || !SESSION_ID.test(id) || DEVICE.test(id)) return null
   let entry
-  try { entry = JSON.parse(fs.readFileSync(path.join(sessions, `${id}.json`), 'utf8')) } catch { return null }
+  try { entry = JSON.parse(readFileNoFollowSync(path.join(sessions, `${id}.json`))) } catch { return null }
   if (!isRecord(entry) || entry.id !== id || entry.endedAt !== undefined) return null
   if (!(typeof entry.heartbeatAt === 'number' && Date.now() - entry.heartbeatAt <= SESSION_LIVE_MS)) return null
   const shaped = path.join(webRoot, id)
