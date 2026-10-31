@@ -1,13 +1,26 @@
-# Apiarius
+<p align="center">
+  <img src="assets/banner.png" alt="Apiarius: see your agents and subagents at work, wherever you orchestrate them" width="720">
+</p>
 
-See what every agent and subagent in your Claude Code session is doing, live.
+<p align="center">
+  <a href="#install"><b>Install</b></a> &middot;
+  <a href="#what-you-see"><b>What you see</b></a> &middot;
+  <a href="#commands"><b>Commands</b></a> &middot;
+  <a href="#how-it-works"><b>How it works</b></a>
+</p>
 
-[![tests](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml/badge.svg)](https://github.com/yusuflkq/apiarius/actions/workflows/test.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/yusuflkq/apiarius/actions/workflows/test.yml"><img src="https://github.com/yusuflkq/apiarius/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
-![Four agents building a rate limiter, watched live in the Apiarius web deck](assets/demo.gif)
+<p align="center">
+  <img src="assets/demo.gif" alt="Apiarius in Claude Desktop, the terminal and the browser, then a team of agents building a rate limiter, watched live in the web deck">
+</p>
 
-Apiarius is a Claude Code mod for people who hand work to agents and subagents. `/apiarius` opens the deck: every agent in the session, what each one is doing, who started whom, what they tell each other and what they changed, updated as they work. It shows you how your orchestration actually plays out. The deck opens in the Claude Desktop side pane, in the terminal, or in your browser.
+When you run a team of agents, Claude Code doesn't make it easy to tell which ones are still working, which have finished and which are waiting on you. Apiarius is a mod that adds a live deck wherever you already work: the Claude Desktop side pane, the terminal or a browser tab. It shows every agent and subagent, what each one is doing right now, who started it, what they tell each other and which files each one changed. Nothing about your setup changes: install it, run `/apiarius` and keep working.
+
+Apiarius only shows what Claude Code is already doing. It reads the events Claude Code reports and what git says about your files, and passes every permission check, tool call and prompt through unchanged. It acts only when you press something on the deck, and then through Claude Code's own channels.
 
 ## Install
 
@@ -31,7 +44,7 @@ Then run `/apiarius`.
 The Dashboard has a card for each agent with what it is doing right now, then the session's figures, the plan, recent activity and the files the agents touched. When an agent asks you something, it shows at the top.
 
 - Chat shows the session as a group chat, including the messages agents send each other.
-- Org shows who started whom. Its Timeline gives each agent a row across the run with its work, its waits on you and its idle time.
+- Org shows who started whom, as a chart or as a timeline of each agent's run.
 - Changes shows git's diff of each uncommitted file next to each agent's own edits of it.
 - Each agent has a page with its task, to-do list, result, tool calls and edits.
 - Inspect shows what fills the context, every permission decision and who made it, what is loaded and the spend per agent.
@@ -40,13 +53,13 @@ The Dashboard has a card for each agent with what it is doing right now, then th
 
 When you do need to step in, you can answer Claude's questions, message an agent, or stop an agent, a background task or the turn, from the deck.
 
-| Chat | Changes |
+| In Claude Desktop | In the terminal |
 | :-: | :-: |
+| ![The deck's Org chart in the Claude Desktop side pane](assets/screenshots/desktop.png) | ![The deck beside Claude Code in the terminal](assets/screenshots/terminal.png) |
+| Chat | Changes |
 | ![Chat](assets/screenshots/web-chat.png) | ![Changes](assets/screenshots/web-changes.png) |
 | Org chart | Inspect |
 | ![Org chart](assets/screenshots/web-org.png) | ![Inspect](assets/screenshots/web-inspect.png) |
-| Claude Desktop side pane | Terminal |
-| ![The deck in the Claude Desktop side pane](assets/screenshots/pane-dashboard.png) | ![The deck in the terminal](assets/screenshots/terminal.png) |
 
 ## Commands
 
@@ -63,7 +76,6 @@ When you do need to step in, you can answer Claude's questions, message an agent
 | `/apiarius avatars [style]` | Lists the ten avatar styles, or picks one |
 | `/apiarius band` | Hides or shows the status line above the prompt |
 | `/apiarius close` | Closes the deck |
-| `/apiarius probe` | Toggles a test pane for mod authors |
 
 Keys work while the pane has the keyboard (click it, or press ctrl+x then tab): `1` to `6` switch tabs, `Enter` opens what has the focus, `b` goes back from an agent's page, and `s` opens All sessions. The web page adds a few of its own, listed under Help in its Settings.
 
@@ -74,6 +86,11 @@ Apiarius hooks Claude Code's events (tool calls, agent spawns, turns, messages, 
 When you step in, it acts only through Claude Code's own channels: answering the questions Claude asks you, delivering your messages, TaskStop for background agents and tasks, CronDelete for schedules, and the same abort as Esc for the turn. Stop and Cancel appear only where Claude Code's permission check allows that call, and the check runs again before each press. Apiarius never grants itself a permission and never answers a permission prompt. In auto mode, where Claude Code refuses a plugin's message to a subagent, the deck asks the Orchestrator to pass yours on, and that request shows in the chat.
 
 ## What it runs and stores
+
+Apiarius makes no network requests of its own, and its web page listens on 127.0.0.1 only.
+
+<details>
+<summary>Everything it runs, writes and reads</summary>
 
 Apiarius makes no network requests of its own. What it hands to Claude goes through Claude Code like anything you type: your messages to agents, your answers to Claude's questions, and a note with the web page's link. Nothing is sent anywhere else.
 
@@ -89,9 +106,11 @@ It writes:
 
 Claude Code's plugin storage keeps your preferences (avatar style, the band) and, for each session, the deck's snapshot and the web page's token and port, so a reload of the mod keeps its place. Apiarius reads the files agents edit, the session's transcript, Claude Code's settings for Inspect, and other sessions' registry files and state folders.
 
+</details>
+
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). To try a clone without installing it, run `claude --plugin-dir .` in its folder.
+See [CONTRIBUTING.md](CONTRIBUTING.md). To try a clone without installing it, run `claude --plugin-dir .` in its folder. `/apiarius probe` toggles a test pane for mod authors.
 
 ```
 claude plugin validate .
