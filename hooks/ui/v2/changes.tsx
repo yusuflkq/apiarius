@@ -81,7 +81,8 @@ export function changesTab(kit: Kit, state: WebStateV2, files: V2Files, model: D
 }
 
 function reviewText(root: string): string {
-  return `Review my uncommitted changes in ${root} (git -C "${root}" status, then git -C "${root}" diff HEAD and any new files) and point out bugs or risky edits before I commit.`
+  // a folder's name is anyone's to choose: quoted as data, never spelled into a command for Claude to copy into a shell
+  return `Review my uncommitted changes in the git repository at ${JSON.stringify(root)} (its status, its diff against HEAD and any new files) and point out bugs or risky edits before I commit.`
 }
 
 /**
