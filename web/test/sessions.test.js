@@ -20,7 +20,15 @@ const vm = require('node:vm')
 
 const WEB = path.join(__dirname, '..')
 const SERVER = path.join(WEB, 'server.js')
-const TOKEN = 'test-token-0123456789abcdef'
+/** The servers' secret, which seals their tickets; the tests trade a `full` one for the handle they send (web/server.js). */
+const SECRET = 'test-token-0123456789abcdef'
+const crypto = require('node:crypto')
+const ticketOf = grade => {
+  const nonce = crypto.randomBytes(8).toString('hex')
+  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${crypto.createHmac('sha256', Buffer.from(SECRET, 'utf8')).update(`apiarius/ticket/1|${grade}|${nonce}`).digest('hex').slice(0, 32)}`
+}
+/** Each server's handle, by its port. */
+const HANDLES = new Map()
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.json'), 'utf8'))
 const SESSIONS = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'sessions.v2.json'), 'utf8'))
 const byTitle = title => SESSIONS.entries.find(one => one.title === title)
@@ -34,9 +42,9 @@ const children = new Set()
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-/** Starts a server over `dir` with `args`; resolves with its port and the lines it printed after its ready line. */
+/** Starts a server over `dir` with `args`; resolves with its port and the commands it printed after its ready line, once a `full` ticket was traded for its handle. */
 function start(dir, args = []) {
-  const child = spawn(process.execPath, [SERVER, '--dir', dir, ...args], { env: { ...process.env, APIARIUS_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(process.execPath, [SERVER, '--dir', dir, ...args], { env: { ...process.env, APIARIUS_SECRET: SECRET }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   children.add(child)
   const server = { child, port: 0, lines: [] }
   let buffer = ''
@@ -47,14 +55,18 @@ function start(dir, args = []) {
       while ((at = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, at)
         buffer = buffer.slice(at + 1)
-        if (!server.port) { server.port = JSON.parse(line).ready; resolve(server) } else server.lines.push(line)
+        if (!server.port) { server.port = JSON.parse(line).ready; resolve(server) } else if (!/^\{"used":/.test(line)) server.lines.push(line)
       }
     })
     child.on('exit', code => { children.delete(child); if (!server.port) reject(new Error(`exited ${code}`)) })
+  }).then(async ready => {
+    const traded = await request(ready.port, '/session', { method: 'POST', headers: { 'X-Deck-Ticket': ticketOf('full'), Origin: `http://127.0.0.1:${ready.port}` } })
+    HANDLES.set(ready.port, JSON.parse(traded.body).handle)
+    return ready
   })
 }
 
-function request(port, target, { method = 'GET', headers = { 'X-Deck-Token': TOKEN }, body } = {}) {
+function request(port, target, { method = 'GET', headers = { 'X-Deck-Handle': HANDLES.get(port) }, body } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method, path: target, headers }, res => {
       let text = ''
@@ -65,7 +77,7 @@ function request(port, target, { method = 'GET', headers = { 'X-Deck-Token': TOK
   })
 }
 
-const post = (port, body) => request(port, '/cmd', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Deck-Token': TOKEN, Origin: `http://127.0.0.1:${port}` }, body: JSON.stringify(body) })
+const post = (port, body) => request(port, '/cmd', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Deck-Handle': HANDLES.get(port), Origin: `http://127.0.0.1:${port}` }, body: JSON.stringify(body) })
 
 let root = ''
 let registry = ''
@@ -146,7 +158,7 @@ test('/s/<id>/state serves a live session`s state from the folder its registry f
 
 test('/s/ refuses: no token, a session not listed, stale or ended, a folder not `<home>/web/<its id>` beside this one`s (an earlier version`s `.web`, one elsewhere, a link), a path for an id, any other file; and a server with no registry serves none', async () => {
   assert.equal((await request(main.port, `/s/${OTHER}/state`, { headers: {} })).status, 403)
-  assert.equal((await request(main.port, `/s/${OTHER}/state?t=${TOKEN}`, { headers: {} })).status, 403)
+  assert.equal((await request(main.port, `/s/${OTHER}/state?h=${HANDLES.get(main.port)}`, { headers: {} })).status, 403)
   for (const id of ['nobody', 'stale-1', 'ended-1', 'odd-1', 'wrong-1', 'old-1', 'far-1', 'link-1', 'alias-1', '..%2F..%2Fsecret', 'a.b']) assert.equal((await request(main.port, `/s/${id}/state`)).status, 404, id)
   assert.deepEqual(JSON.parse((await request(main.port, '/s/dots-1/state')).body), { v: 1, dots: true })
   assert.equal((await request(main.port, `/s/${OTHER}/agent/..%2F..%2F..%2Fsecret`)).status, 400)
@@ -190,7 +202,7 @@ test('POST /cmd passes every command about a session naming one (an answer, a me
   assert.equal((await post(plain.port, { cmd: 'view', session: OTHER })).status, 400)
   assert.equal((await post(plain.port, { cmd: 'stopAgent', agentId: 'x', session: OTHER })).status, 400)
   for (let i = 0; i < 40 && main.lines.length < count + sent.length; i++) await sleep(50)
-  assert.deepEqual(main.lines.slice(count).map(line => JSON.parse(line)), sent)
+  assert.deepEqual(main.lines.slice(count).map(line => JSON.parse(line)), sent.map(body => ({ ...body, grade: 'full' })))
 })
 
 // ------------------------------------------------------------------ the page

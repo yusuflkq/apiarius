@@ -1,4 +1,4 @@
-/* Apiarius's web page: the data. The server's token; the state shown and
+/* Apiarius's web page: the data. The page's access (its link's ticket, the handle it trades it for); the state shown and
  * the indexes built from it; the connection (SSE, and a reload of the state
  * when it fails); the acks of the page's commands; the files it loads on
  * demand; the router; the UI state that outlives a render; and All
@@ -11,11 +11,92 @@ import { Dot, Empty, Glyph, keptDrawerW, noteResolved, STATE_HUE, styleNow, urlO
 import { notePresses } from './now.mjs';
 import { invalidate, renderNow, scroller, shownKey } from './app.js';
 
-// The server's token, from the page's own address (a reload keeps it): every data request sends it as a header,
-// and /events alone as `t`, since an EventSource sends no header. The server sets no cookie.
-const TOKEN = new URLSearchParams(location.search).get('t') || '';
-export const AUTH = TOKEN ? { 'X-Deck-Token': TOKEN } : {};
-const QT = TOKEN ? `?t=${encodeURIComponent(TOKEN)}` : '';
+// ===================================================================== access
+// The page's link carries a one-time ticket (`t`). The page trades it at once
+// for a handle (POST /session, the ticket in a header), keeps the handle in this
+// tab's sessionStorage so a reload keeps working, and takes the ticket out of the
+// address bar. Every data request sends the handle as a header, and /events
+// alone as `h`, since an EventSource sends no header. The server sets no cookie.
+// The handle's grade is the link's: `pane` (the Desktop's Browser pane, which
+// Claude's tools can drive: each message in your voice waits for your Send
+// above the prompt in Claude Code) or `full` (your own browser: it goes at once).
+
+const TICKET = (() => { try { return new URLSearchParams(location.search).get('t') || ''; } catch { return ''; } })();
+const KEPT = 'apiarius:handle';
+/** Every data request's header, once the page has a handle. */
+export const AUTH = {};
+/** Where the page's access stands: its handle and grade, and, refused, why ('used', 'unknown', 'restarted', 'none'). */
+export const access = { handle: '', grade: '', why: '', ticket: TICKET };
+
+function keepHandle(handle, grade) {
+  access.handle = handle;
+  access.grade = grade === 'full' ? 'full' : 'pane';
+  AUTH['X-Deck-Handle'] = handle;
+  try { sessionStorage.setItem(KEPT, JSON.stringify({ handle, grade: access.grade })); } catch { /* no storage: a reload needs the deck's link again */ }
+}
+
+/** The handle this tab kept before a reload, if any; or why it has none any more, so a reload still says it. */
+function keptHandle() {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(KEPT) || 'null');
+    if (kept && typeof kept.handle === 'string' && /^[A-Za-z0-9_-]{43}$/.test(kept.handle)) keepHandle(kept.handle, kept.grade);
+    else if (kept && typeof kept.why === 'string' && !access.why) access.why = kept.why;
+  } catch { /* none, or unreadable */ }
+}
+
+/** The handle let go (the server refused it, or the link), and why, kept in the tab in its place. */
+function dropHandle(why) {
+  access.handle = '';
+  access.why = why;
+  delete AUTH['X-Deck-Handle'];
+  try { sessionStorage.setItem(KEPT, JSON.stringify({ why })); } catch { /* none */ }
+}
+
+/** The ticket out of the address bar, the route kept: it opens one page, and the bar is what a screen or a copy shows. */
+function scrubTicket() {
+  try {
+    const url = new URL(location.href);
+    if (!url.searchParams.has('t')) return;
+    url.searchParams.delete('t');
+    history.replaceState(history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch { /* no history here (the tests' page) */ }
+}
+
+/**
+ * Trades the link's ticket for a handle, once: true once the page has one.
+ * A ticket the server refuses (used once already, or one it never sealed: an
+ * earlier server's) says why; one that could not reach it is tried again.
+ */
+async function trade() {
+  if (!access.ticket) {
+    if (!access.handle) keptHandle();
+    if (!access.handle && !access.why) access.why = 'none';
+    return !!access.handle;
+  }
+  scrubTicket();
+  let res;
+  try {
+    res = await fetch('/session', { method: 'POST', headers: { 'X-Deck-Ticket': access.ticket }, cache: 'no-store' });
+  } catch {
+    return null; // the server is not answering: tried again
+  }
+  let data = null;
+  try { data = await res.json(); } catch { /* not JSON */ }
+  access.ticket = '';
+  if (res.ok && data && typeof data.handle === 'string') {
+    access.why = '';
+    keepHandle(data.handle, data.grade);
+    return true;
+  }
+  // a link used once already: this tab may hold the handle it was traded for (a reload of a page whose address kept it)
+  keptHandle();
+  if (access.handle) return true;
+  dropHandle(data && data.error === 'used' ? 'used' : 'unknown');
+  return false;
+}
+
+// a reload: the handle this tab traded for before is the page's until the server says otherwise
+if (!TICKET) keptHandle();
 
 /** The latest v2 state, and the indexes built from it. */
 export let S = null;
@@ -361,13 +442,19 @@ function setConn(status) {
 export async function connect() {
   clearTimeout(conn.timer);
   conn.retryAt = 0;
+  if (!access.handle) {
+    const traded = await trade();
+    if (traded === null) return retry();
+    if (!traded) { setConn('denied'); return; }
+  }
   let res;
   try {
     res = await fetch('/state', { headers: AUTH, cache: 'no-store' });
   } catch {
     return retry();
   }
-  if (res.status === 403) { setConn('denied'); return; }
+  // the server knows the handle no more: it started again, with a new secret
+  if (res.status === 403) { dropHandle('restarted'); setConn('denied'); return; }
   if (!res.ok) return retry();
   try { apply(JSON.parse(await res.text())); } catch { /* a torn write: the stream sends the next one */ }
   follow();
@@ -375,7 +462,7 @@ export async function connect() {
 
 function follow() {
   if (conn.es) conn.es.close();
-  const es = (conn.es = new EventSource(`/events${QT}`));
+  const es = (conn.es = new EventSource(`/events?h=${encodeURIComponent(access.handle)}`));
   es.addEventListener('state', e => {
     try { apply(JSON.parse(e.data)); } catch { return; }
     conn.fails = 0;
@@ -422,7 +509,7 @@ export async function command(body) {
   if (!res.ok || (data && data.ok === false)) {
     const code = data && (data.error || data.message);
     const plain = {
-      forbidden: 'The deck refused it: this page\'s link is stale. Reload the page.',
+      forbidden: 'The deck refused it: its server started again, so this page needs opening again from Claude Code (/apiarius web, or Open in browser in the deck\'s Settings).',
       'too large': 'That is too long to send.',
       'bad command': 'The deck could not read that message.',
     }[code];

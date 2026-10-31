@@ -13,7 +13,8 @@ const path = require('node:path')
 
 const DEV = path.join(__dirname, '..', 'dev.js')
 const FIXTURES = path.join(__dirname, '..', 'fixtures')
-const TOKEN = 'apiarius-dev-token'
+/** dev.js's ticket: a full one (`f-<nonce>-<seal>`), traded for a handle as the page does. */
+const TICKET = /^f-[0-9a-f]{16}-[0-9a-f]{32}$/
 const temps = []
 const children = new Set()
 
@@ -39,16 +40,16 @@ function run(args, tmp) {
     child.stdout.setEncoding('utf8').on('data', chunk => {
       out += chunk
       const link = /http:\/\/127\.0\.0\.1:(\d+)\/\?t=(\S+)/.exec(out)
-      if (link) { clearTimeout(timer); resolve({ child, port: Number(link[1]), token: link[2] }) }
+      if (link) { clearTimeout(timer); resolve({ child, port: Number(link[1]), ticket: link[2] }) }
     })
     child.stderr.setEncoding('utf8').on('data', chunk => { err += chunk })
     child.on('exit', code => { children.delete(child); clearTimeout(timer); resolve({ code, stderr: err }) })
   })
 }
 
-function get(port, target) {
+function get(port, target, { method = 'GET', headers = { 'X-Deck-Handle': handle } } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: target, headers: { 'X-Deck-Token': TOKEN } }, res => {
+    const req = http.request({ host: '127.0.0.1', port, method, path: target, headers }, res => {
       let text = ''
       res.setEncoding('utf8').on('data', chunk => { text += chunk }).on('end', () => resolve({ status: res.statusCode, body: text }))
     })
@@ -56,6 +57,9 @@ function get(port, target) {
     req.end()
   })
 }
+
+/** The handle the last link was traded for. */
+let handle = ''
 
 /** A sample of our own in a folder laid out as web/fixtures is (no sessions sample): web/fixtures' state with its goal's headline changed, and its lazy files. */
 function ownSample(headline) {
@@ -71,7 +75,10 @@ test('dev.js --fixtures <dir> serves the sample in that folder, its lazy files w
   const sample = ownSample('Served from another folder')
   const dev = await run(['--static', '--fixtures', sample], tempDir())
   assert.ok(dev.port, `dev.js exited ${dev.code}: ${dev.stderr}`)
-  assert.equal(dev.token, TOKEN)
+  assert.match(dev.ticket, TICKET)
+  const traded = await get(dev.port, '/session', { method: 'POST', headers: { 'X-Deck-Ticket': dev.ticket, Origin: `http://127.0.0.1:${dev.port}` } })
+  handle = JSON.parse(traded.body).handle
+  assert.equal(JSON.parse(traded.body).grade, 'full')
   const state = JSON.parse((await get(dev.port, '/state')).body)
   assert.equal(state.v2.header.goal.headline, 'Served from another folder')
   assert.equal(state.v2.sessions, undefined)
@@ -88,5 +95,5 @@ test('dev.js --fixtures stops at once on a folder with no sample, or with no fol
   assert.match(none.stderr, /no state\.v2\.json in /)
   const bare = await run(['--fixtures'], tempDir())
   assert.equal(bare.code, 2)
-  assert.match(bare.stderr, /usage: node web\/dev\.js \[--static\] \[--fixtures <dir>\]/)
+  assert.match(bare.stderr, /usage: node web\/dev\.js \[--static\] \[--pane\] \[--fixtures <dir>\]/)
 })

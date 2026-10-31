@@ -4,14 +4,26 @@
  * messages cut for the state and the agents' page files, live updates over
  * SSE, and turns the page's commands into stdout lines for the mod.
  *
- *   node web/server.js --dir <home>/web/<sessionId> --parent <pid> [--sessions <registry>]   (the token on stdin)
+ *   node web/server.js --dir <home>/web/<sessionId> --parent <pid> [--sessions <registry>]   (the secret on stdin)
  *
- * The token comes as the first line of stdin (the mod's `input`), or from
- * `APIARIUS_TOKEN` (web/dev.js and the tests): never argv, which other
- * processes can read. Every data route and POST /cmd needs it, in the
- * `X-Deck-Token` header, or as `t` for /events alone (an EventSource sends no
- * header); the page's own files (index.html, app.js, app.css, the .mjs it
- * imports) hold no data and need none, so no cookie is ever set.
+ * The secret comes as the first line of stdin (the mod's `input`), or from
+ * `APIARIUS_SECRET` (web/dev.js and the tests): never argv, which other
+ * processes can read. The mod makes a new one for every start, so nothing an
+ * earlier server handed out works on this one.
+ *
+ * Access, in two steps. The mod signs one-time tickets with the secret
+ * (`ticketOf`: HMAC-SHA256, hooks/web.ts mints the same), each of a grade:
+ * `pane` for the page it opens in the Desktop's Browser pane, which Claude's
+ * tools can drive, and `full` for the person's own browser. A link carries
+ * one as `t`; the page trades it at once (POST /session, the ticket in the
+ * `X-Deck-Ticket` header) for a handle of the same grade, and a ticket used
+ * once is refused after (the mod hears of each use: `{"used":…}`). Every data
+ * route and POST /cmd needs a handle, in the `X-Deck-Handle` header, or as
+ * `h` for /events alone (an EventSource sends no header); the page's own
+ * files (index.html, app.js, app.css, the .mjs it imports) hold no data and
+ * need none, so no cookie is ever set. Each command printed carries the
+ * grade of the handle that sent it (`grade`), which the mod trusts: it holds
+ * a `pane` page's words for the person's own Send above the prompt.
  *
  * With `--sessions` (the registry of every session on this machine,
  * hooks/sessions.ts) it also serves another session's state and lazy files
@@ -20,7 +32,8 @@
  * (`<home>/web/<sessionId>`, still there once every link is followed).
  *
  * Plain Node (22+), no dependencies. stdout carries the ready line
- * `{"ready":<port>}` and then one `{"cmd":…}` line per command, nothing else;
+ * `{"ready":<port>}`, then one `{"cmd":…,"grade":…}` line per command and one
+ * `{"used":<nonce>,"grade":…}` line per ticket traded, nothing else;
  * diagnostics go to stderr. It exits with the parent, on a signal, or when
  * its stdin pipe closes.
  */
@@ -35,6 +48,11 @@ const NOFOLLOW = fs.constants.O_NOFOLLOW || 0
 const EMPTY = '{"v":1,"empty":true}'
 const MAX_BODY = 16 * 1024
 const MAX_CLIENTS = 50 // the live (SSE) connections at once: the page keeps one; a cap so no client holds them all
+const MAX_HANDLES = 64 // the handles kept at once (a page each, a reload keeps its own): past it the oldest goes
+const MAX_USED = 10_000 // the tickets remembered as used: past it every ticket is refused (no secret lives that long)
+const TICKET = /^([pf])-([0-9a-f]{16})-([0-9a-f]{32})$/ // a ticket: its grade (p: pane, f: full), its nonce, its seal (hooks/web.ts ticketOf)
+const GRADES = { p: 'pane', f: 'full' }
+const HANDLE = /^[A-Za-z0-9_-]{43}$/ // a handle: 32 random bytes, base64url
 const MAX_TEXT = 4000
 const MAX_ANSWERS = 4 // AskUserQuestion asks 1 to 4 questions at once
 const MAX_ANSWER = 2000 // a question's text, and an answer's
@@ -73,7 +91,7 @@ const PAGE = {
 }
 // Scripts only from the page's own files, so agent text the page shows can never run as code; no other page may frame it.
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-// On every answer: never cached, never sniffed, no Referer (the page's address holds the token), never framed, and nothing of it for another origin to load or keep a handle on.
+// On every answer: never cached, never sniffed, no Referer (the page's address may hold its ticket a moment), never framed, and nothing of it for another origin to load or keep a handle on.
 const HEADERS = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
@@ -84,7 +102,7 @@ const HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
 }
 
-// ---- the command line, and the token (from stdin or the environment, never argv)
+// ---- the command line, and the secret (from stdin or the environment, never argv)
 const log = message => process.stderr.write(`apiarius server: ${message}\n`)
 const fail = message => { log(message); process.exit(2) }
 
@@ -106,11 +124,34 @@ if (parent !== null && !(Number.isInteger(parent) && parent > 0)) fail('--parent
 let wanted = args.port === undefined ? 0 : Number(args.port)
 if (!(Number.isInteger(wanted) && wanted >= 0 && wanted < 65536)) fail('--port must be a port number')
 
-// Compares digests, so a check takes the same time whatever the guess.
-const digest = text => crypto.createHash('sha256').update(text).digest()
-let TOKEN = null // the token's digest, once read
-const isToken = value => TOKEN !== null && typeof value === 'string' && value !== '' && crypto.timingSafeEqual(digest(value), TOKEN)
-const tokenOk = token => typeof token === 'string' && token.length >= 16 && !/[\u0000-\u0020\u007f]/.test(token)
+let SECRET = null // the secret's bytes, once read: what each ticket is sealed with
+const secretOk = secret => typeof secret === 'string' && secret.length >= 16 && !/[\u0000-\u0020\u007f]/.test(secret)
+
+/** A ticket's seal: the first 32 hex digits of HMAC-SHA256(secret, "apiarius/ticket/1|<grade>|<nonce>"), the grade spelled whole, as hooks/web.ts ticketOf makes it. */
+const sealOf = (grade, nonce) => crypto.createHmac('sha256', SECRET).update(`apiarius/ticket/1|${grade}|${nonce}`).digest('hex').slice(0, 32)
+
+/** A ticket's grade and nonce when its seal is this secret's (compared in constant time); null for any other text. */
+function ticketOf(value) {
+  const found = SECRET !== null && typeof value === 'string' ? TICKET.exec(value) : null
+  if (!found) return null
+  const [, letter, nonce, seal] = found
+  const grade = GRADES[letter]
+  return crypto.timingSafeEqual(Buffer.from(sealOf(grade, nonce)), Buffer.from(seal)) ? { grade, nonce } : null
+}
+
+const used = new Set() // the nonces of the tickets traded: each opens one page
+const handles = new Map() // handle → its grade, oldest first
+
+/** A new handle of `grade` for a ticket just traded; the oldest let go past MAX_HANDLES. */
+function newHandle(grade) {
+  const handle = crypto.randomBytes(32).toString('base64url')
+  handles.set(handle, grade)
+  while (handles.size > MAX_HANDLES) handles.delete(handles.keys().next().value)
+  return handle
+}
+
+/** The grade of a handle this server gave out (`pane` or `full`); null for any other value. */
+const gradeOf = value => (typeof value === 'string' && HANDLE.test(value) ? handles.get(value) ?? null : null)
 
 let port = 0
 
@@ -325,9 +366,10 @@ function commandOf(value) {
   return null
 }
 
-/** POST /cmd: only the page itself may send one (the token header, which no other site can set, and its own Origin). */
+/** POST /cmd: only the page itself may send one (a handle in its header, which no other site can set, and its own Origin); printed with the handle's grade. */
 function command(req, res, host) {
-  if (!isToken(req.headers['x-deck-token']) || (req.headers.origin ?? '').toLowerCase() !== `http://${host}`) {
+  const grade = gradeOf(req.headers['x-deck-handle'])
+  if (grade === null || (req.headers.origin ?? '').toLowerCase() !== `http://${host}`) {
     return send(res, 403, '{"ok":false,"error":"forbidden"}', JSON_TYPE)
   }
   const tooBig = () => { send(res, 413, '{"ok":false,"error":"too large"}', JSON_TYPE); req.resume() }
@@ -345,9 +387,28 @@ function command(req, res, host) {
     let cmd = null
     try { cmd = commandOf(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch {}
     if (!cmd) return send(res, 400, '{"ok":false,"error":"bad command"}', JSON_TYPE)
-    process.stdout.write(`${JSON.stringify(cmd)}\n`) // one line: JSON.stringify escapes every newline
+    process.stdout.write(`${JSON.stringify({ ...cmd, grade })}\n`) // one line: JSON.stringify escapes every newline
     send(res, 200, '{"ok":true}', JSON_TYPE)
   })
+}
+
+/**
+ * POST /session: the page trades its link's ticket (the `X-Deck-Ticket`
+ * header, from its own Origin) for a handle of the ticket's grade, once: a
+ * ticket used before is refused (`used`), as is one this secret never
+ * sealed (`unknown`: an earlier server's, or none). The mod hears of each
+ * use, so a link it shows that was used is made anew.
+ */
+function session(req, res, host) {
+  req.resume() // a body says nothing here
+  if ((req.headers.origin ?? '').toLowerCase() !== `http://${host}`) return send(res, 403, '{"ok":false,"error":"forbidden"}', JSON_TYPE)
+  const ticket = ticketOf(req.headers['x-deck-ticket'])
+  if (ticket === null) return send(res, 403, '{"ok":false,"error":"unknown"}', JSON_TYPE)
+  if (used.has(ticket.nonce) || used.size >= MAX_USED) return send(res, 403, '{"ok":false,"error":"used"}', JSON_TYPE)
+  used.add(ticket.nonce)
+  const handle = newHandle(ticket.grade)
+  process.stdout.write(`${JSON.stringify({ used: ticket.nonce, grade: ticket.grade })}\n`)
+  send(res, 200, JSON.stringify({ ok: true, handle, grade: ticket.grade }), JSON_TYPE)
 }
 
 function handle(req, res) {
@@ -358,15 +419,16 @@ function handle(req, res) {
   const url = new URL(`http://deck${req.url.startsWith('/') ? req.url : `/${req.url}`}`) // '//x' stays a path, never a host
   const route = url.pathname
   if (route === '/cmd' && req.method === 'POST') return command(req, res, host)
-  // The page's own files hold no data: served to any page on this host and port, the token left to the page (state.mjs reads `t` from the address).
+  if (route === '/session' && req.method === 'POST') return session(req, res, host)
+  // The page's own files hold no data: served to any page on this host and port, the ticket left to the page (state.mjs reads `t` from the address and trades it).
   if (req.method === 'GET' && PAGE[route]) return page(res, PAGE[route])
   if (req.method === 'GET' && route === '/favicon.ico') return res.writeHead(204).end()
 
-  // Everything else needs the token: the header, or `t` for /events alone, which an EventSource opens with no header.
-  if (!isToken(req.headers['x-deck-token']) && !(route === '/events' && isToken(url.searchParams.get('t')))) return send(res, 403, 'forbidden\n')
+  // Everything else needs a handle: the header, or `h` for /events alone, which an EventSource opens with no header.
+  if (gradeOf(req.headers['x-deck-handle']) === null && !(route === '/events' && gradeOf(url.searchParams.get('h')) !== null)) return send(res, 403, 'forbidden\n')
 
-  if (req.method !== 'GET' || route === '/cmd') {
-    res.setHeader('Allow', route === '/cmd' ? 'POST' : 'GET')
+  if (req.method !== 'GET' || route === '/cmd' || route === '/session') {
+    res.setHeader('Allow', route === '/cmd' || route === '/session' ? 'POST' : 'GET')
     return send(res, 405, 'method not allowed\n')
   }
   if (route === '/state') return send(res, 200, state, JSON_TYPE)
@@ -400,13 +462,13 @@ function isAlive(pid) {
 
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGBREAK']) process.on(signal, quit)
 process.stdout.on('error', quit) // EPIPE: nobody reads the commands any more
-// The token on stdin is followed by its end (the mod's `input`): that end says
+// The secret on stdin is followed by its end (the mod's `input`): that end says
 // nothing. Without one, only a pipe that closes later says the parent let go:
 // stdin 'ignore' (the null device) or a pipe closed from the start ends at
 // once, and a terminal belongs to a person: those leave it to the pid check.
-const fromEnv = process.env.APIARIUS_TOKEN ?? ''
+const fromEnv = process.env.APIARIUS_SECRET ?? ''
 if (fromEnv === '') {
-  readToken()
+  readSecret()
 } else if (process.stdin instanceof net.Socket && !process.stdin.isTTY) {
   const ended = () => { if (process.uptime() > 1) quit() }
   process.stdin.on('end', ended).on('close', ended).on('error', ended).resume()
@@ -434,15 +496,15 @@ server.on('error', err => {
   process.exit(1)
 })
 
-/** Takes the token (16 characters or more, one line, nothing blank in it) and starts listening; a bad one exits. */
-function begin(token) {
-  if (!tokenOk(token)) fail('the token must come on stdin or as APIARIUS_TOKEN: 16 characters or more, on one line')
-  TOKEN = digest(token)
+/** Takes the secret (16 characters or more, one line, nothing blank in it) and starts listening; a bad one exits. */
+function begin(secret) {
+  if (!secretOk(secret)) fail('the secret must come on stdin or as APIARIUS_SECRET: 16 characters or more, on one line')
+  SECRET = Buffer.from(secret, 'utf8')
   server.listen(wanted, '127.0.0.1')
 }
 
-/** The token as stdin's first line, or all of it once it ends; none within 10 s exits. */
-function readToken() {
+/** The secret as stdin's first line, or all of it once it ends; none within 10 s exits. */
+function readSecret() {
   let text = ''
   let isTaken = false
   const take = line => {
@@ -451,14 +513,14 @@ function readToken() {
     clearTimeout(timer)
     begin(line.replace(/\r$/, ''))
   }
-  const timer = setTimeout(() => fail('no token on stdin'), 10_000)
+  const timer = setTimeout(() => fail('no secret on stdin'), 10_000)
   process.stdin.setEncoding('utf8')
   process.stdin.on('data', chunk => {
     if (isTaken) return
     text += chunk
     const at = text.indexOf('\n')
     if (at >= 0) take(text.slice(0, at))
-    else if (text.length > 1000) fail('no token on stdin')
+    else if (text.length > 1000) fail('no secret on stdin')
   })
   process.stdin.on('end', () => take(text)).on('error', () => take(text)).resume()
 }

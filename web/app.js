@@ -35,7 +35,7 @@
  */
 import { clamp, create, h, icon, patch } from './basics.mjs';
 import {
-  closeDrawer, conn, connect, isWide, IX, navigate, parseRoute, PeerWait, retryNow, route, S, saveScroll, scrollSoon,
+  access, closeDrawer, conn, connect, isWide, IX, navigate, parseRoute, PeerWait, retryNow, route, S, saveScroll, scrollSoon,
   SessionsPage, setRoute, setShut, switchView, TABS, toast, toggleSessions, ui
 } from './state.mjs';
 import { Avatar, Dot, Drawer, drawerStyle, Empty, Header } from './parts.mjs';
@@ -69,9 +69,20 @@ function ConnBanner() {
   }
   if (st === 'denied' && S) {
     return h('div', { class: 'connbar connbar-idle', role: 'status' }, icon('octagon'),
-      h('span', null, h('strong', null, 'This page lost access.'), ' The deck\'s link changed; run /apiarius web in Claude Code to open it again.'));
+      h('span', null, h('strong', null, 'This page lost access.'), ` ${deniedText().why} ${OPEN_AGAIN}`));
   }
   return null;
+}
+
+/** Where a page is opened again: the deck's own links, each for one page. */
+const OPEN_AGAIN = 'Open it again from Claude Code: /apiarius web for the Browser pane, or Open in browser in the deck\'s Settings for your own browser.';
+
+/** Why the page has no access, in words, by what the server said (state.mjs `access.why`). */
+function deniedText() {
+  if (access.why === 'used') return { title: 'This link was used already', why: 'Each link opens one page.' };
+  if (access.why === 'restarted') return { title: 'This page needs opening again', why: 'The deck\'s server started again, so the access this page had ended.' };
+  if (access.why === 'none') return { title: 'This page was opened without its link', why: 'The deck opens it with a link of its own.' };
+  return { title: 'This link no longer works', why: 'It is from before the deck\'s server started again, or not one of its own.' };
 }
 
 function Loading() {
@@ -83,10 +94,11 @@ function Loading() {
 
 function Unreachable() {
   const denied = conn.status === 'denied';
+  const said = denied ? deniedText() : null;
   return h('div', { key: 'unreachable', class: 'page' },
     h('div', { class: 'card' }, Empty(denied ? 'octagon' : 'wifiOff',
-      denied ? 'This link no longer works' : 'Can\'t reach the deck',
-      denied ? 'The deck needs the link it opened with. Run /apiarius web in Claude Code to open it again.' : 'The deck server is not answering. If the Claude Code session ended, run /apiarius web in a new one.',
+      denied ? said.title : 'Can\'t reach the deck',
+      denied ? `${said.why} ${OPEN_AGAIN}` : 'The deck server is not answering. If the Claude Code session ended, run /apiarius web in a new one.',
       denied ? null : h('button', { class: 'btn btn-sm', type: 'button', onClick: retryNow }, icon('refresh'), 'Try again'))));
 }
 
@@ -339,9 +351,8 @@ function boot() {
   setInterval(() => { if (conn.status === 'reconnecting') invalidate(); }, 1000);
 
   renderNow();
-  connect();
-  // a reload on another session's deck reads it again
-  if (route.session) switchView(route.session);
+  // a reload on another session's deck reads it again, once the page has traded its link for a handle
+  connect().finally(() => { if (route.session) switchView(route.session); });
 }
 
 // web/test/page.test.js runs the page without a browser (web/test/page-script.js) and drives its views itself: it boots nothing then.

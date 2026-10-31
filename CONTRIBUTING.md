@@ -28,7 +28,7 @@ node web/fixtures/make-v2.mjs --check                   # the sample data is cur
 - The sample data in `web/fixtures/` is built by the mod's own code. When a change alters what the deck shows, run `node web/fixtures/make-v2.mjs` to write it again, and commit the result with the change.
 - The mod's tests feed it Windows paths, so CI runs `claude plugin test` on Windows only.
 - To type-check, open the mod once in an interactive session, which writes Claude Code's types to `.claude-plugin/types/`. Then run `npx --package typescript@5.6.3 tsc -p .`.
-- `node web/dev.js` serves the dashboard on the sample data and prints its URL.
+- `node web/dev.js` serves the dashboard on the sample data and prints a link (each link opens one page; it prints the next). `--pane` gives the Browser pane's kind of link, whose messages wait until you press Enter in its terminal, as they wait for Send above the prompt.
 
 ## Commits
 

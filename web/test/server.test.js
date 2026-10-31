@@ -12,7 +12,20 @@ const os = require('node:os')
 const path = require('node:path')
 
 const SERVER = path.join(__dirname, '..', 'server.js')
-const TOKEN = 'test-token-0123456789abcdef'
+const crypto = require('node:crypto')
+/** The secret the servers here start with: what their tickets are sealed with, never a credential itself. */
+const SECRET = 'test-token-0123456789abcdef'
+
+/** A ticket of `grade` for a server started with `secret`, as hooks/web.ts ticketOf makes one: `<p|f>-<nonce>-<seal>`. */
+function ticketOf(grade, nonce = crypto.randomBytes(8).toString('hex'), secret = SECRET) {
+  const seal = crypto.createHmac('sha256', Buffer.from(secret, 'utf8')).update(`apiarius/ticket/1|${grade}|${nonce}`).digest('hex').slice(0, 32)
+  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${seal}`
+}
+
+/** Each server's `full` handle (what most tests read and send with), by its port. */
+const HANDLES = new Map()
+/** The handle header for the server on `port`. */
+const authOf = port => ({ 'X-Deck-Handle': HANDLES.get(port) ?? '' })
 const EMPTY = '{"v":1,"empty":true}'
 const STATE = { v: 1, now: 1, agents: [{ id: 'main', status: 'running' }] }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -47,16 +60,16 @@ function waitFor(subscribe, check, ms, what) {
 /**
  * Starts a server; resolves once it printed its ready line. `lines` collects
  * what it prints after. `stdin`: 'pipe' kept open, 'closed' (a pipe ended at
- * once), 'ignore', or 'token' (the token as its first line, then its end, as
+ * once), 'ignore', or 'token' (the secret as its first line, then its end, as
  * the mod's $.process.spawn gives it with `input`; `input` says what else).
  */
-function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_TOKEN: TOKEN }, input = `${TOKEN}\n` } = {}) {
+function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_SECRET: SECRET }, input = `${SECRET}\n`, handle = true } = {}) {
   const argv = [SERVER, '--dir', dir, ...args]
-  const child = spawn(process.execPath, argv, { env: { ...process.env, APIARIUS_TOKEN: '', ...env }, stdio: [['closed', 'token'].includes(stdin) ? 'pipe' : stdin, 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(process.execPath, argv, { env: { ...process.env, APIARIUS_SECRET: '', ...env }, stdio: [['closed', 'token'].includes(stdin) ? 'pipe' : stdin, 'pipe', 'pipe'], windowsHide: true })
   if (stdin === 'closed') child.stdin.end()
   if (stdin === 'token') child.stdin.end(input)
   children.add(child)
-  const server = { child, lines: [], first: null, port: 0, stderr: '', exited: false, listeners: new Set() }
+  const server = { child, lines: [], used: [], first: null, port: 0, stderr: '', exited: false, listeners: new Set() }
   const notify = () => { for (const fn of [...server.listeners]) fn() }
   server.on = fn => { server.listeners.add(fn); return () => server.listeners.delete(fn) }
   let buffer = ''
@@ -68,6 +81,8 @@ function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_TOKEN: TOKEN }
       const line = buffer.slice(0, at)
       buffer = buffer.slice(at + 1)
       if (server.first === null) server.first = line
+      // a ticket traded: its own list, so `lines` holds the commands alone
+      else if (/^\{"used":/.test(line)) server.used.push(JSON.parse(line))
       else server.lines.push(line)
     }
     notify()
@@ -77,7 +92,19 @@ function start({ dir, args = [], stdin = 'pipe', env = { APIARIUS_TOKEN: TOKEN }
   return waitFor(server.on, () => {
     if (server.first !== null) { server.port = JSON.parse(server.first).ready; return server }
     if (server.exited) throw new Error(`the server exited with ${server.code}: ${server.stderr}`)
-  }, 5000, 'ready line')
+  }, 5000, 'ready line').then(async ready => {
+    // as the page does at load: a full ticket traded for a handle, which the tests send
+    if (handle) { ready.handle = (await trade(ready.port, ticketOf('full'))).handle; HANDLES.set(ready.port, ready.handle) }
+    return ready
+  })
+}
+
+/** POST /session, as the page trades its link's ticket: what the server answered, parsed, with its status. */
+async function trade(port, ticket, headers = {}) {
+  const res = await request(port, { method: 'POST', path: '/session', headers: { 'X-Deck-Ticket': ticket, Origin: `http://127.0.0.1:${port}`, ...headers } })
+  let body = null
+  try { body = JSON.parse(res.body) } catch {}
+  return { status: res.status, ...(body || {}) }
 }
 
 const exitOf = (server, ms) => waitFor(server.on, () => (server.exited ? server.code : undefined), ms, 'exit')
@@ -96,7 +123,7 @@ function request(port, { method = 'GET', path: target = '/state', headers = {}, 
 }
 
 /** Opens /events; `next()` resolves with the next `event: state` payload. */
-function events(port, headers = { 'X-Deck-Token': TOKEN }) {
+function events(port, headers = authOf(port)) {
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/events', headers }, res => {
       const stream = { res, got: [], read: 0, listeners: new Set(), close: () => req.destroy() }
@@ -123,7 +150,7 @@ function events(port, headers = { 'X-Deck-Token': TOKEN }) {
 const post = (port, body, headers = {}) => request(port, {
   method: 'POST',
   path: '/cmd',
-  headers: { 'Content-Type': 'application/json', 'X-Deck-Token': TOKEN, Origin: `http://127.0.0.1:${port}`, ...headers },
+  headers: { 'Content-Type': 'application/json', ...authOf(port), Origin: `http://127.0.0.1:${port}`, ...headers },
   body: typeof body === 'string' ? body : JSON.stringify(body),
 })
 
@@ -164,12 +191,12 @@ after(async () => {
   }
 })
 
-test('refuses to start without a token, or with bad arguments', async () => {
+test('refuses to start without a secret, or with bad arguments', async () => {
   await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'closed' }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'ignore' }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'token', input: 'short\n' }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), env: {}, stdin: 'token', input: 'has a space 0123456789\n' }), /exited with 2/)
-  await assert.rejects(start({ dir: tempDir(), env: { APIARIUS_TOKEN: 'short' } }), /exited with 2/)
+  await assert.rejects(start({ dir: tempDir(), env: { APIARIUS_SECRET: 'short' } }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--parent', 'abc'] }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--port', '70000'] }), /exited with 2/)
   await assert.rejects(start({ dir: tempDir(), args: ['--verbose', '1'] }), /exited with 2/)
@@ -178,21 +205,24 @@ test('refuses to start without a token, or with bad arguments', async () => {
 test('prints the ready line first, with the port it listens on', async () => {
   assert.match(main.first, /^\{"ready":\d+\}$/)
   assert.ok(main.port > 0)
-  assert.equal((await request(main.port, { headers: { 'X-Deck-Token': TOKEN } })).status, 200)
+  assert.equal((await request(main.port, { headers: authOf(main.port) })).status, 200)
 })
 
-test('takes the token as the first line of stdin, as the mod gives it, and stays up once stdin ends', async () => {
+test('takes the secret as the first line of stdin, as the mod gives it, and stays up once stdin ends; the secret itself opens nothing', async () => {
   const server = await start({ dir: tempDir(), env: {}, stdin: 'token' })
-  await sleep(1500) // its stdin ended at once, after the token: that says nothing of the parent
+  await sleep(1500) // its stdin ended at once, after the secret: that says nothing of the parent
   assert.equal(server.exited, false)
-  assert.equal((await request(server.port, { headers: { 'X-Deck-Token': TOKEN } })).status, 200)
-  assert.equal((await request(server.port, { headers: { 'X-Deck-Token': 'wrong-token-0123456789' } })).status, 403)
-  // the token is in no argument another process could read
-  assert.ok(!server.child.spawnargs.join(' ').includes(TOKEN))
+  assert.equal((await request(server.port, { headers: authOf(server.port) })).status, 200)
+  assert.equal((await request(server.port, { headers: { 'X-Deck-Handle': 'wrong-handle-0123456789' } })).status, 403)
+  // the secret seals tickets: as a handle, a token of old or a ticket in a header it is refused
+  for (const headers of [{ 'X-Deck-Handle': SECRET }, { 'X-Deck-Token': SECRET }, { 'X-Deck-Ticket': SECRET }]) assert.equal((await request(server.port, { headers })).status, 403, Object.keys(headers)[0])
+  assert.equal((await head(server.port, `/events?t=${SECRET}`)).status, 403)
+  // the secret is in no argument another process could read
+  assert.ok(!server.child.spawnargs.join(' ').includes(SECRET))
   server.child.kill()
 })
 
-/** Every data route, with what it answers with the token: the state, the stream, each lazy file, another session's, Org's Timeline. */
+/** Every data route, with what it answers with a handle: the state, the stream, each lazy file, another session's, Org's Timeline. */
 const DATA = [['/state', 200], ['/events', 200], ['/patch/toolu_01Abc-d_9', 200], ['/gitdiff/1kejm2g-1kfevo4-4g', 200], ['/message/1791970900000-14-main-you', 200], ['/agent/main', 200], ['/timeline', 404], ['/s/other-1/state', 404], ['/nope', 404]]
 /** The page's scripts: app.js and every module of its own it imports (./page-script.js), then the two the mod imports too. */
 const SCRIPTS = [...require('./page-script').modules(), 'avatars.mjs', 'timeline.mjs']
@@ -207,37 +237,111 @@ function head(port, target, headers = {}) {
   })
 }
 
-test('the page`s own files need no token; every data route refuses without it (403), and answers with the header', async () => {
+test('the page`s own files need no handle; every data route refuses without one (403), and answers with the header', async () => {
   for (const target of STATIC) {
     const res = await head(main.port, target)
     assert.ok([200, 204].includes(res.status), `${target}: ${res.status}`)
   }
   for (const [target, status] of DATA) {
     assert.equal((await head(main.port, target)).status, 403, target)
-    assert.equal((await head(main.port, target, { 'X-Deck-Token': 'wrong-token-0123456789' })).status, 403, target)
-    assert.equal((await head(main.port, target, { 'X-Deck-Token': TOKEN })).status, status, target)
+    assert.equal((await head(main.port, target, { 'X-Deck-Handle': 'wrong-handle-0123456789' })).status, 403, target)
+    assert.equal((await head(main.port, target, authOf(main.port))).status, status, target)
   }
-  // not GET: refused without the token too, whatever the path
+  // not GET: refused without a handle too, whatever the path
   for (const method of ['PUT', 'DELETE', 'HEAD', 'OPTIONS']) assert.equal((await request(main.port, { method, path: '/state' })).status, 403, method)
   assert.equal((await request(main.port, { method: 'POST', path: '/' })).status, 403)
 })
 
-test('the t param stands for the header on /events alone (an EventSource sends none); on any other route it is refused', async () => {
-  assert.equal((await head(main.port, `/events?t=${TOKEN}`)).status, 200)
-  assert.equal((await head(main.port, '/events?t=wrong-token-0123456789')).status, 403)
-  for (const [target] of DATA.filter(([one]) => one !== '/events')) assert.equal((await head(main.port, `${target}?t=${encodeURIComponent(TOKEN)}`)).status, 403, target)
+test('the h param stands for the header on /events alone (an EventSource sends none); on any other route it is refused', async () => {
+  assert.equal((await head(main.port, `/events?h=${main.handle}`)).status, 200)
+  assert.equal((await head(main.port, '/events?h=wrong-handle-0123456789')).status, 403)
+  // a ticket opens nothing but its trade
+  assert.equal((await head(main.port, `/events?t=${ticketOf('full')}`)).status, 403)
+  for (const [target] of DATA.filter(([one]) => one !== '/events')) assert.equal((await head(main.port, `${target}?h=${encodeURIComponent(main.handle)}`)).status, 403, target)
 })
 
-test('no cookie: none is ever set, and one that carries the token opens nothing', async () => {
-  for (const target of [...STATIC, `/?t=${TOKEN}`, `/state?t=${TOKEN}`, `/events?t=${TOKEN}`]) {
-    assert.equal((await head(main.port, target, { 'X-Deck-Token': TOKEN })).headers['set-cookie'], undefined, target)
+test('no cookie: none is ever set, and one that carries a handle opens nothing', async () => {
+  for (const target of [...STATIC, `/?t=${ticketOf('full')}`, `/state?h=${main.handle}`, `/events?h=${main.handle}`]) {
+    assert.equal((await head(main.port, target, authOf(main.port))).headers['set-cookie'], undefined, target)
     assert.equal((await head(main.port, target)).headers['set-cookie'], undefined, target)
   }
-  for (const cookie of [`deck_t_${main.port}=${TOKEN}`, `deck_t=${TOKEN}`, `t=${TOKEN}`]) assert.equal((await head(main.port, '/state', { Cookie: cookie })).status, 403, cookie)
+  for (const cookie of [`deck_h_${main.port}=${main.handle}`, `deck_h=${main.handle}`, `h=${main.handle}`]) assert.equal((await head(main.port, '/state', { Cookie: cookie })).status, 403, cookie)
+})
+
+test('a ticket trades once for a handle of its grade (POST /session, from its own Origin), and the mod hears of it; used again, sealed with another secret, of another shape or from another origin, it is refused', async () => {
+  const used = main.used.length
+  const pane = ticketOf('pane')
+  const full = ticketOf('full')
+  const gotPane = await trade(main.port, pane)
+  const gotFull = await trade(main.port, full)
+  assert.equal(gotPane.status, 200)
+  assert.equal(gotPane.grade, 'pane')
+  assert.match(gotPane.handle, /^[A-Za-z0-9_-]{43}$/)
+  assert.equal(gotFull.grade, 'full')
+  assert.notEqual(gotPane.handle, gotFull.handle)
+  // each handle reads the state
+  for (const handle of [gotPane.handle, gotFull.handle]) assert.equal((await request(main.port, { headers: { 'X-Deck-Handle': handle } })).status, 200)
+  // one page per ticket: the same one again is refused, whatever its grade
+  for (const ticket of [pane, full]) assert.deepEqual(await trade(main.port, ticket), { status: 403, ok: false, error: 'used' })
+  // never sealed with this server's secret (an earlier start's, a guess), another shape, none
+  const nonce = '00112233aabbccdd'
+  for (const ticket of [ticketOf('full', nonce, 'another-secret-0123456789'), ticketOf('pane', nonce).replace(/^p/, 'f'), `full-${nonce}-${'0'.repeat(32)}`, ticketOf('full', 'xyz'), `${ticketOf('full', nonce)}x`, '', SECRET]) {
+    assert.deepEqual(await trade(main.port, ticket), { status: 403, ok: false, error: 'unknown' }, ticket)
+  }
+  // another origin, or none: refused, and the ticket stays unused
+  const fresh = ticketOf('full')
+  assert.equal((await trade(main.port, fresh, { Origin: 'http://evil.example' })).status, 403)
+  assert.equal((await trade(main.port, fresh, { Origin: '' })).status, 403)
+  assert.equal((await trade(main.port, fresh)).status, 200)
+  // a GET of it opens nothing
+  assert.equal((await request(main.port, { path: '/session' })).status, 403)
+  assert.equal((await request(main.port, { path: '/session', headers: authOf(main.port) })).status, 405)
+  // the mod hears each trade by its nonce and grade, so a link it shows that was used is made anew
+  await waitFor(main.on, () => (main.used.length >= used + 3 ? true : undefined), 2000, 'used lines')
+  assert.deepEqual(main.used.slice(used), [{ used: pane.split('-')[1], grade: 'pane' }, { used: full.split('-')[1], grade: 'full' }, { used: fresh.split('-')[1], grade: 'full' }])
+})
+
+test('the seal is hooks/web.ts`s: a known secret and nonce give the ticket its test gives', () => {
+  assert.equal(ticketOf('pane', '0011223344556677'), 'p-0011223344556677-adec674903d619b39d62c67a42bb3d17')
+  assert.equal(ticketOf('full', '0011223344556677'), 'f-0011223344556677-a284df635f2f16617d5887d94954f3f8')
+})
+
+test('each command printed carries the grade of the handle that sent it: pane from the Browser pane`s link, full from your own browser`s; a body that names a grade itself is refused', async () => {
+  const { handle: pane } = await trade(main.port, ticketOf('pane'))
+  const count = main.lines.length
+  const chat = { cmd: 'chat', id: 'g-1', agentId: 'main', text: 'Ship it' }
+  assert.equal((await post(main.port, chat, { 'X-Deck-Handle': pane })).status, 200)
+  assert.equal((await post(main.port, { ...chat, id: 'g-2' })).status, 200)
+  assert.equal((await post(main.port, { cmd: 'stopAgent', id: 'g-3', agentId: 'b81c6f3e2a9d4c17' }, { 'X-Deck-Handle': pane })).status, 200)
+  for (const grade of ['full', 'pane']) assert.equal((await post(main.port, { ...chat, grade }, { 'X-Deck-Handle': pane })).status, 400, grade)
+  assert.equal((await post(main.port, { cmd: 'chat', session: 'other-1', agentId: 'main', text: 'hi', grade: 'full' }, { 'X-Deck-Handle': pane })).status, 400)
+  await waitFor(main.on, () => (main.lines.length >= count + 3 ? true : undefined), 2000, 'command lines')
+  assert.deepEqual(main.lines.slice(count), [
+    '{"cmd":"chat","id":"g-1","agentId":"main","text":"Ship it","grade":"pane"}',
+    '{"cmd":"chat","id":"g-2","agentId":"main","text":"Ship it","grade":"full"}',
+    '{"cmd":"stopAgent","id":"g-3","agentId":"b81c6f3e2a9d4c17","grade":"pane"}',
+  ])
+})
+
+test('every start is a new secret: what an earlier server handed out, its tickets and its handles, opens nothing on the next', async () => {
+  const first = await start({ dir: tempDir(), env: { APIARIUS_SECRET: 'first-secret-0123456789' }, handle: false })
+  const ticket = ticketOf('full', undefined, 'first-secret-0123456789')
+  const { handle } = await trade(first.port, ticket)
+  assert.equal((await request(first.port, { headers: { 'X-Deck-Handle': handle } })).status, 200)
+  first.child.kill()
+  await exitOf(first, 3000)
+  // the next start, on the same port, with its own secret: the page's old handle is refused (it says to open it again), and its link too
+  const next = await start({ dir: tempDir(), env: { APIARIUS_SECRET: 'second-secret-0123456789' }, args: ['--port', String(first.port)], handle: false })
+  assert.equal(next.port, first.port)
+  assert.equal((await request(next.port, { headers: { 'X-Deck-Handle': handle } })).status, 403)
+  assert.equal((await head(next.port, `/events?h=${handle}`)).status, 403)
+  assert.deepEqual(await trade(next.port, ticket), { status: 403, ok: false, error: 'unknown' })
+  assert.equal((await trade(next.port, ticketOf('full', undefined, 'second-secret-0123456789'))).status, 200)
+  next.child.kill()
 })
 
 test('every answer: no framing (frame-ancestors none, X-Frame-Options DENY), no Referer, same-origin COOP and CORP, never cached or sniffed', async () => {
-  for (const [target, headers] of [['/', {}], ['/app.js', {}], ['/state', { 'X-Deck-Token': TOKEN }], ['/state', {}], ['/nope', { 'X-Deck-Token': TOKEN }], ['/events', { 'X-Deck-Token': TOKEN }]]) {
+  for (const [target, headers] of [['/', {}], ['/app.js', {}], ['/state', authOf(main.port)], ['/state', {}], ['/nope', authOf(main.port)], ['/events', authOf(main.port)]]) {
     const res = await head(main.port, target, headers)
     assert.match(res.headers['content-security-policy'], /(^|; )frame-ancestors 'none'(;|$)/, target)
     assert.match(res.headers['content-security-policy'], /(^|; )script-src 'self'(;|$)/, target)
@@ -251,14 +355,14 @@ test('every answer: no framing (frame-ancestors none, X-Frame-Options DENY), no 
 })
 
 test('421 on a Host other than 127.0.0.1:<port> or localhost:<port>', async () => {
-  const auth = { 'X-Deck-Token': TOKEN }
+  const auth = authOf(main.port)
   assert.equal((await request(main.port, { headers: { ...auth, Host: 'evil.example' } })).status, 421)
   assert.equal((await request(main.port, { headers: { ...auth, Host: `evil.example:${main.port}` } })).status, 421)
   assert.equal((await request(main.port, { headers: { ...auth, Host: '127.0.0.1:1' } })).status, 421)
   assert.equal((await request(main.port, { headers: { ...auth, Host: `localhost:${main.port}` } })).status, 200)
 })
 
-test('serves the page files with their types, no token needed (app.js, every module it imports, the avatar library and the timeline`s layout scripts), or 404 while one is missing', async () => {
+test('serves the page files with their types, no handle needed (app.js, every module it imports, the avatar library and the timeline`s layout scripts), or 404 while one is missing', async () => {
   const types = { '/': ['index.html', 'text/html'], '/app.css': ['app.css', 'text/css'] }
   for (const file of SCRIPTS) types[`/${file}`] = [file, 'text/javascript']
   for (const [target, [file, type]] of Object.entries(types)) {
@@ -276,15 +380,15 @@ test('every page file is under 256 KiB: the plugin directory reviews a bigger on
 })
 
 test('/state serves the current state; a missing or empty file serves {"v":1,"empty":true}', async () => {
-  const res = await request(main.port, { headers: { 'X-Deck-Token': TOKEN } })
+  const res = await request(main.port, { headers: authOf(main.port) })
   assert.equal(res.headers['content-type'], 'application/json; charset=utf-8')
   assert.deepEqual(JSON.parse(res.body), STATE)
   const bareDir = tempDir()
   const bare = await start({ dir: bareDir })
-  assert.equal((await request(bare.port, { headers: { 'X-Deck-Token': TOKEN } })).body, EMPTY)
+  assert.equal((await request(bare.port, { headers: authOf(bare.port) })).body, EMPTY)
   fs.writeFileSync(path.join(bareDir, 'state.json'), '')
   await sleep(1300)
-  assert.equal((await request(bare.port, { headers: { 'X-Deck-Token': TOKEN } })).body, EMPTY)
+  assert.equal((await request(bare.port, { headers: authOf(bare.port) })).body, EMPTY)
 })
 
 test('SSE: the full state on connect, then an event after state.json is rewritten', async () => {
@@ -311,7 +415,7 @@ test('a half-written state.json is skipped, then read once complete', async () =
     writeState('{"v":1,"now":3,"agents":[{"id":"ma')
     await sleep(1300) // past the debounce and a poll
     assert.equal(stream.got.length, stream.read, 'no event for a torn file')
-    assert.deepEqual(JSON.parse((await request(main.port, { headers: { 'X-Deck-Token': TOKEN } })).body), before)
+    assert.deepEqual(JSON.parse((await request(main.port, { headers: authOf(main.port) })).body), before)
     writeState('') // a truncate before the write is torn too, once a state was read
     await sleep(1300)
     assert.equal(stream.got.length, stream.read, 'no event for an emptied file')
@@ -324,7 +428,7 @@ test('a half-written state.json is skipped, then read once complete', async () =
 })
 
 test('/patch serves a patch by id and refuses anything else', async () => {
-  const auth = { 'X-Deck-Token': TOKEN }
+  const auth = authOf(main.port)
   const res = await request(main.port, { path: '/patch/toolu_01Abc-d_9', headers: auth })
   assert.equal(res.status, 200)
   assert.equal(res.headers['content-type'], 'text/plain; charset=utf-8')
@@ -337,8 +441,8 @@ test('/patch serves a patch by id and refuses anything else', async () => {
   }
 })
 
-test('/gitdiff serves git`s own diff of a file by id, with the token only, and refuses anything else', async () => {
-  const auth = { 'X-Deck-Token': TOKEN }
+test('/gitdiff serves git`s own diff of a file by id, with a handle only, and refuses anything else', async () => {
+  const auth = authOf(main.port)
   assert.equal((await request(main.port, { path: '/gitdiff/1kejm2g-1kfevo4-4g' })).status, 403)
   const res = await request(main.port, { path: '/gitdiff/1kejm2g-1kfevo4-4g', headers: auth })
   assert.equal(res.status, 200)
@@ -356,8 +460,8 @@ test('/gitdiff serves git`s own diff of a file by id, with the token only, and r
   }
 })
 
-test('/message serves a cut message`s whole text by id, with the token only, and refuses anything else', async () => {
-  const auth = { 'X-Deck-Token': TOKEN }
+test('/message serves a cut message`s whole text by id, with a handle only, and refuses anything else', async () => {
+  const auth = authOf(main.port)
   assert.equal((await request(main.port, { path: '/message/1791970900000-14-main-you' })).status, 403)
   const res = await request(main.port, { path: '/message/1791970900000-14-main-you', headers: auth })
   assert.equal(res.status, 200)
@@ -372,8 +476,8 @@ test('/message serves a cut message`s whole text by id, with the token only, and
   }
 })
 
-test('/agent serves an agent`s page file by id as JSON, with the token only, and refuses anything else', async () => {
-  const auth = { 'X-Deck-Token': TOKEN }
+test('/agent serves an agent`s page file by id as JSON, with a handle only, and refuses anything else', async () => {
+  const auth = authOf(main.port)
   assert.equal((await request(main.port, { path: '/agent/b81c6f3e2a9d4c17' })).status, 403)
   const res = await request(main.port, { path: '/agent/b81c6f3e2a9d4c17', headers: auth })
   assert.equal(res.status, 200)
@@ -394,8 +498,8 @@ test('/agent serves an agent`s page file by id as JSON, with the token only, and
   assert.equal((await request(main.port, { path: '/agent/b81c6f3e2a9d4c17', headers: auth })).body, next)
 })
 
-test('/timeline serves Org`s Timeline (timeline.json beside the state) as JSON, with the token only; none written yet is a 404', async () => {
-  const auth = { 'X-Deck-Token': TOKEN }
+test('/timeline serves Org`s Timeline (timeline.json beside the state) as JSON, with a handle only; none written yet is a 404', async () => {
+  const auth = authOf(main.port)
   const file = path.join(dir, 'timeline.json')
   assert.equal((await request(main.port, { path: '/timeline', headers: auth })).status, 404)
   const text = '{"v":2,"now":1792013580000,"startedAt":1792011180000,"tools":["Read"],"lanes":[],"marks":[],"messages":[],"background":[]}\n'
@@ -424,7 +528,7 @@ test('POST /cmd passes clearFinished and showCleared on in exactly their shapes 
   ]
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body))
   await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"clearFinished","id":"cl-1"}', '{"cmd":"clearFinished"}', '{"cmd":"showCleared","id":"cl-2"}', '{"cmd":"showCleared"}'])
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"clearFinished","id":"cl-1","grade":"full"}', '{"cmd":"clearFinished","grade":"full"}', '{"cmd":"showCleared","id":"cl-2","grade":"full"}', '{"cmd":"showCleared","grade":"full"}'])
 })
 
 test('POST /cmd passes stopAgent and abortTurn on in exactly their shapes, with the page`s id', async () => {
@@ -456,11 +560,11 @@ test('POST /cmd passes stopAgent and abortTurn on in exactly their shapes, with 
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
   await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
   assert.deepEqual(main.lines.slice(count), [
-    '{"cmd":"stopAgent","id":"s-1","agentId":"b81c6f3e2a9d4c17"}',
-    '{"cmd":"stopAgent","agentId":"main"}',
-    '{"cmd":"abortTurn","id":"t-1"}',
-    '{"cmd":"abortTurn","id":"t-2","turnId":"turn-7c1e"}',
-    '{"cmd":"abortTurn","turnId":"turn_8"}',
+    '{"cmd":"stopAgent","id":"s-1","agentId":"b81c6f3e2a9d4c17","grade":"full"}',
+    '{"cmd":"stopAgent","agentId":"main","grade":"full"}',
+    '{"cmd":"abortTurn","id":"t-1","grade":"full"}',
+    '{"cmd":"abortTurn","id":"t-2","turnId":"turn-7c1e","grade":"full"}',
+    '{"cmd":"abortTurn","turnId":"turn_8","grade":"full"}',
   ])
 })
 
@@ -482,7 +586,7 @@ test('POST /cmd passes stopBackground on in exactly its shape: a background row`
   ]
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
   await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"stopBackground","id":"st-1","bgId":"bash_7"}', '{"cmd":"stopBackground","bgId":"cron_4e1"}'])
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"stopBackground","id":"st-1","bgId":"bash_7","grade":"full"}', '{"cmd":"stopBackground","bgId":"cron_4e1","grade":"full"}'])
 })
 
 test('POST /cmd passes avatarStyle on in exactly its shape: a style`s id, lowercase letters, with the page`s id', async () => {
@@ -502,7 +606,7 @@ test('POST /cmd passes avatarStyle on in exactly its shape: a style`s id, lowerc
   ]
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
   await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"avatarStyle","id":"a-1","style":"critter"}', '{"cmd":"avatarStyle","style":"robot"}'])
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"avatarStyle","id":"a-1","style":"critter","grade":"full"}', '{"cmd":"avatarStyle","style":"robot","grade":"full"}'])
 })
 
 test('POST /cmd passes selectRepo on in exactly its shape: a root on one line ("" follows the work), with the page`s id', async () => {
@@ -519,7 +623,7 @@ test('POST /cmd passes selectRepo on in exactly its shape: a root on one line ("
   ]
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 80))
   await waitFor(main.on, () => (main.lines.length >= count + good.length ? true : undefined), 2000, 'command lines')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"selectRepo","id":"rp-1","root":"C:/Users/sam/Documents/apiarius"}', '{"cmd":"selectRepo","root":""}'])
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"selectRepo","id":"rp-1","root":"C:/Users/sam/Documents/apiarius","grade":"full"}', '{"cmd":"selectRepo","root":"","grade":"full"}'])
 })
 
 test('POST /cmd: every command may carry the page`s id, which is printed with it; a bad id is refused', async () => {
@@ -543,10 +647,10 @@ test('POST /cmd: every command may carry the page`s id, which is printed with it
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body))
   await waitFor(main.on, () => (main.lines.length >= count + 4 ? true : undefined), 2000, 'command lines')
   assert.deepEqual(main.lines.slice(count), [
-    '{"cmd":"chat","id":"c-lz4k2-1ab9","agentId":"main","text":"And the changelog?"}',
-    '{"cmd":"review","id":"r_7","text":"Review the diff"}',
-    '{"cmd":"ping","id":"p"}',
-    '{"cmd":"chat","agentId":"main","text":"no id is fine too"}',
+    '{"cmd":"chat","id":"c-lz4k2-1ab9","agentId":"main","text":"And the changelog?","grade":"full"}',
+    '{"cmd":"review","id":"r_7","text":"Review the diff","grade":"full"}',
+    '{"cmd":"ping","id":"p","grade":"full"}',
+    '{"cmd":"chat","agentId":"main","text":"no id is fine too","grade":"full"}',
   ])
 })
 
@@ -585,23 +689,24 @@ test('POST /cmd checks an answer: a call id, 1 to 4 answers, each question and a
   await waitFor(main.on, () => (main.lines.length >= count + 3 ? true : undefined), 2000, 'command lines')
   const printed = main.lines.slice(count)
   assert.equal(printed.length, 3, 'only the good ones were printed')
-  assert.deepEqual(printed.map(line => JSON.parse(line)), good)
-  assert.equal(printed[0], `{"cmd":"answer","id":"a-1","callId":"${callId}","answers":{"Which store should the limiter use?":"Redis"}}`)
+  assert.deepEqual(printed.map(line => JSON.parse(line)), good.map(body => ({ ...body, grade: 'full' })))
+  assert.equal(printed[0], `{"cmd":"answer","id":"a-1","callId":"${callId}","answers":{"Which store should the limiter use?":"Redis"},"grade":"full"}`)
   assert.ok(printed.every(line => !line.includes('\n')))
 })
 
-test('POST /cmd refuses another origin and a missing token header', async () => {
+test('POST /cmd refuses another origin and a missing handle header', async () => {
   const ping = { cmd: 'ping' }
-  const cookie = `deck_t_${main.port}=${TOKEN}`
+  const cookie = `deck_h_${main.port}=${main.handle}`
   assert.equal((await post(main.port, ping, { Origin: 'http://evil.example' })).status, 403)
   assert.equal((await post(main.port, ping, { Origin: `http://localhost:${main.port}` })).status, 403) // not the Host it was sent to
   assert.equal((await post(main.port, ping, { Origin: '' })).status, 403)
-  assert.equal((await post(main.port, ping, { 'X-Deck-Token': '', Cookie: cookie })).status, 403) // a cookie is not enough
-  assert.equal((await post(main.port, ping, { 'X-Deck-Token': 'wrong-token-0123456789' })).status, 403)
+  assert.equal((await post(main.port, ping, { 'X-Deck-Handle': '', Cookie: cookie })).status, 403) // a cookie is not enough
+  assert.equal((await post(main.port, ping, { 'X-Deck-Handle': 'wrong-handle-0123456789' })).status, 403)
+  assert.equal((await post(main.port, ping, { 'X-Deck-Handle': '', 'X-Deck-Ticket': ticketOf('full') })).status, 403) // a ticket is traded first
   const count = main.lines.length
   assert.equal((await post(main.port, { cmd: 'ping' })).status, 200)
   await waitFor(main.on, () => (main.lines.length > count ? true : undefined), 2000, 'command line')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"ping"}'], 'only the allowed one was printed')
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"ping","grade":"full"}'], 'only the allowed one was printed')
 })
 
 test('POST /cmd prints each valid command to stdout as one line', async () => {
@@ -618,9 +723,9 @@ test('POST /cmd prints each valid command to stdout as one line', async () => {
   }
   await waitFor(main.on, () => (main.lines.length >= count + 3 ? true : undefined), 2000, 'command lines')
   assert.deepEqual(main.lines.slice(count), [
-    '{"cmd":"chat","agentId":"a3f9c21b","text":"Use the memory store.\\nNot Redis."}',
-    '{"cmd":"review","text":"Review the diff in src/app.ts"}',
-    '{"cmd":"ping"}',
+    '{"cmd":"chat","agentId":"a3f9c21b","text":"Use the memory store.\\nNot Redis.","grade":"full"}',
+    '{"cmd":"review","text":"Review the diff in src/app.ts","grade":"full"}',
+    '{"cmd":"ping","grade":"full"}',
   ])
 })
 
@@ -638,10 +743,10 @@ test('POST /cmd refuses malformed, unknown and oversized commands', async () => 
   ]
   for (const body of bad) assert.equal((await post(main.port, body)).status, 400, JSON.stringify(body).slice(0, 60))
   assert.equal((await post(main.port, { cmd: 'review', text: 'x'.repeat(17 * 1024) })).status, 413)
-  assert.equal((await request(main.port, { path: '/cmd', headers: { 'X-Deck-Token': TOKEN } })).status, 405)
+  assert.equal((await request(main.port, { path: '/cmd', headers: authOf(main.port) })).status, 405)
   assert.equal((await post(main.port, { cmd: 'ping' })).status, 200)
   await waitFor(main.on, () => (main.lines.length > count ? true : undefined), 2000, 'command line')
-  assert.deepEqual(main.lines.slice(count), ['{"cmd":"ping"}'], 'nothing refused was printed')
+  assert.deepEqual(main.lines.slice(count), ['{"cmd":"ping","grade":"full"}'], 'nothing refused was printed')
 })
 
 test('exits when the --parent process dies', { timeout: 15000 }, async () => {
@@ -667,7 +772,7 @@ test('stays up when its stdin is closed from the start, or the null device', asy
     const server = await start({ dir: tempDir(), stdin })
     await sleep(1500)
     assert.equal(server.exited, false, stdin)
-    assert.equal((await request(server.port, { headers: { 'X-Deck-Token': TOKEN } })).status, 200, stdin)
+    assert.equal((await request(server.port, { headers: authOf(server.port) })).status, 200, stdin)
     server.child.kill()
   }
 })
@@ -680,7 +785,7 @@ test('--port takes the port asked for, or one the OS picks when it is taken', as
   await exitOf(taken, 3000)
   const again = await start({ dir: tempDir(), args: ['--port', String(free)] })
   assert.equal(again.port, free)
-  assert.equal((await request(free, { headers: { 'X-Deck-Token': TOKEN } })).status, 200)
+  assert.equal((await request(free, { headers: authOf(free) })).status, 200)
 })
 
 test('exits on SIGTERM', async () => {

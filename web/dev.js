@@ -1,6 +1,10 @@
 /**
  * The web deck on the v2 sample: `node web/dev.js` runs the server with a
- * fixed dev token and prints the URL to open.
+ * fixed dev secret and prints a link to open (a link opens one page, as the
+ * mod's do: once its page traded it, the next one is printed). `--pane` prints
+ * the Browser pane's kind of link instead: what the page then sends in your
+ * voice is held as the mod holds it, until Enter here plays your Send above
+ * the prompt (d and Enter, Discard).
  *
  * It serves a copy of the sample (web/fixtures/state.v2.json, with its lazy
  * files under web/fixtures/v2/) in a temp home laid out as Apiarius's home
@@ -29,12 +33,21 @@
  */
 'use strict'
 const { spawn } = require('child_process')
+const crypto = require('crypto')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const TOKEN = 'apiarius-dev-token'
-const USAGE = 'usage: node web/dev.js [--static] [--fixtures <dir>]'
+/** The dev server's secret: its tickets are sealed with it (web/server.js), as the mod's are with one made for every start. */
+const SECRET = 'apiarius-dev-secret'
+const USAGE = 'usage: node web/dev.js [--static] [--pane] [--fixtures <dir>]'
+/** The grade of the links printed: the Browser pane's with --pane, your own browser's otherwise. */
+const GRADE = process.argv.includes('--pane') ? 'pane' : 'full'
+/** A one-time ticket of `grade`, as hooks/web.ts ticketOf makes one. */
+const ticketOf = grade => {
+  const nonce = crypto.randomBytes(8).toString('hex')
+  return `${grade === 'full' ? 'f' : 'p'}-${nonce}-${crypto.createHmac('sha256', Buffer.from(SECRET, 'utf8')).update(`apiarius/ticket/1|${grade}|${nonce}`).digest('hex').slice(0, 32)}`
+}
 /** The sample's folder: web/fixtures, or the one `--fixtures` names. */
 const FIXTURES = (() => {
   const at = process.argv.indexOf('--fixtures')
@@ -308,12 +321,32 @@ function play(cmd) {
   }
 }
 
+// ---- what a --pane page sends in your voice, held as the mod holds it (hooks/hold.ts): Enter here plays your Send above the prompt
+const VOICE = new Set(['chat', 'review', 'answer'])
+const held = []
+function hold(cmd) {
+  held.push(cmd)
+  ack(cmd.id, true, 'held', 'Press Send above your prompt in Claude Code to send it')
+  save()
+  console.log(`dev: held ${cmd.cmd} ${JSON.stringify(cmd.text || cmd.answers || '')}: Enter sends it, d and Enter discards it`)
+}
+process.stdin.setEncoding('utf8').on('data', chunk => {
+  for (const line of chunk.split('\n').slice(0, -1)) {
+    const cmd = held.shift()
+    if (!cmd) continue
+    if (line.trim().toLowerCase() === 'd') { ack(cmd.id, false, 'failed', 'Not sent: you discarded it above your prompt'); save(); console.log('dev: discarded'); continue }
+    console.log('dev: sent')
+    play(cmd)
+  }
+})
+
 // ---- the server
 const args = [path.join(__dirname, 'server.js'), '--dir', dir, '--parent', String(process.pid), '--sessions', registry]
 reset()
 // stdin stays a pipe: the server leaves when it closes, so it goes when this process does
-const server = spawn(process.execPath, args, { env: { ...process.env, APIARIUS_TOKEN: TOKEN }, stdio: ['pipe', 'pipe', 'inherit'] })
+const server = spawn(process.execPath, args, { env: { ...process.env, APIARIUS_SECRET: SECRET }, stdio: ['pipe', 'pipe', 'inherit'] })
 
+let port = 0
 let buffer = ''
 server.stdout.setEncoding('utf8').on('data', chunk => {
   buffer += chunk
@@ -322,9 +355,16 @@ server.stdout.setEncoding('utf8').on('data', chunk => {
     const line = buffer.slice(0, at)
     buffer = buffer.slice(at + 1)
     const ready = /^\{"ready":(\d+)\}$/.exec(line)
-    if (ready) { console.log(`Apiarius (dev${isStatic ? ', static' : ''}): http://127.0.0.1:${ready[1]}/?t=${TOKEN}`); continue }
+    if (ready) { port = Number(ready[1]); console.log(`Apiarius (dev${isStatic ? ', static' : ''}${GRADE === 'pane' ? ', as the Browser pane' : ''}): http://127.0.0.1:${port}/?t=${ticketOf(GRADE)}`); continue }
+    // a link was traded: it opens one page, so the next one is printed
+    if (/^\{"used":/.test(line)) { console.log(`next link: http://127.0.0.1:${port}/?t=${ticketOf(GRADE)}`); continue }
     console.log(`command: ${line}`)
-    if (!isStatic) { try { play(JSON.parse(line)) } catch (err) { console.error(`dev: ${err.message}`) } }
+    if (isStatic) continue
+    try {
+      const { grade, ...cmd } = JSON.parse(line)
+      if (grade !== 'full' && VOICE.has(cmd.cmd)) hold(cmd)
+      else play(cmd)
+    } catch (err) { console.error(`dev: ${err.message}`) }
   }
 })
 
