@@ -44,13 +44,31 @@ jobs:
       - name: Validate the plugin and its marketplace
         run: claude plugin validate --strict --profile directory .
 
-      # The mod's tests feed it Windows paths (drive letters, backslashes, 8.3
-      # short names), and Claude Code resolves a path for a file call the way
-      # the host does, so on Linux those paths read as relative ones. They run
-      # on Windows only.
+      # One test file at a time: the kit gives a test 5 s of wall time, and
+      # with every file at once on the runner's few cores a busy test outruns
+      # it. Claude Code resolves a file call's path the way the host does, so
+      # a test of a path only Windows spells (a drive letter, an 8.3 short
+      # name) runs on Windows alone, and its twin with POSIX paths on Linux.
       - name: Mod tests
-        if: runner.os == 'Windows'
-        run: claude plugin test .
+        shell: bash
+        run: |
+          shopt -s nullglob
+          held=$(mktemp -d)
+          mv tests/*.test.ts tests/*.test.tsx "$held"/
+          failed=()
+          for file in "$held"/*; do
+            name=$(basename "$file")
+            cp "$file" tests/
+            echo "::group::$name"
+            claude plugin test . || failed+=("$name")
+            echo "::endgroup::"
+            rm "tests/$name"
+          done
+          mv "$held"/* tests/
+          if [ ${#failed[@]} -ne 0 ]; then
+            echo "::error::Failing test files: ${failed[*]}"
+            exit 1
+          fi
 
       - name: Web server and page tests
         run: node --test web/test/

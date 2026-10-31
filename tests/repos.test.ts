@@ -1,8 +1,8 @@
 import type { On } from 'claude-code'
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test, type Engine } from 'claude-code/testing'
 
 import * as R from '../hooks/repos'
-import { gitWhere, isConfigList } from './tools'
+import { gitWhere, isConfigList, posixTest, windowsTest } from './tools'
 
 const HASH = 'b'.repeat(40)
 const NOW = 1_700_000_100_000
@@ -30,6 +30,8 @@ const DISK: Record<string, { branch: string; status: string; numstat: string }> 
   'C:/Users/Me/proj': { branch: 'trunk', status: ' M src/app.ts\0', numstat: '1\t1\tsrc/app.ts\0' },
   'C:/Users/Me/Documents/apiarius': { branch: 'main', status: ' M hooks/repos.ts\0', numstat: '2\t1\thooks/repos.ts\0' },
   'C:/Users/Me/Documents/site': { branch: 'main', status: ' M index.html\0', numstat: '1\t1\tindex.html\0' },
+  '/home/me/Documents/apiarius': { branch: 'main', status: ' M hooks/repos.ts\0', numstat: '2\t1\thooks/repos.ts\0' },
+  '/home/me/Documents/site': { branch: 'main', status: ' M index.html\0', numstat: '1\t1\tindex.html\0' },
 }
 
 /** A session's directory as the test lays it out: its children by name (a dot in one names a file), and the `.git` of each that holds one, with when it last changed. */
@@ -220,24 +222,33 @@ async function picksOf(ui: { findAll: (q: { type: 'Button' }) => Promise<{ key?:
   return (await ui.findAll({ type: 'Button' })).map(button => button.key ?? '').filter(key => key.startsWith('changes:pick:'))
 }
 
-test('a chat in a directory that is no repository says so, naming it, and offers the repositories directly inside it (looked for once, no git run, the one changed last first, at most 8); a pick pins Changes there, Follow the work lets go, and an agent`s edit is followed', async ($, on) => {
+/** A chat's Documents folder, as the deck cleans it (`dir`) and as the host spells it (`native`), with the host's separator. */
+type Documents = { dir: string; native: string; sep: '\\' | '/' }
+
+const WINDOWS_DOCUMENTS: Documents = { dir: 'C:/Users/Me/Documents', native: 'C:\\Users\\Me\\Documents', sep: '\\' }
+const POSIX_DOCUMENTS: Documents = { dir: '/home/me/Documents', native: '/home/me/Documents', sep: '/' }
+
+const NEARBY = 'a chat in a directory that is no repository says so, naming it, and offers the repositories directly inside it (looked for once, no git run, the one changed last first, at most 8); a pick pins Changes there, Follow the work lets go, and an agent`s edit is followed'
+
+/** NEARBY's run, the chat in the Documents folder `at`. */
+async function nearby($: Engine, on: On, at: Documents) {
   const clock = mock.clock(on, { now: NOW })
   const runs: Run[] = []
   const lists: string[] = []
   const repos = ['apiarius', 'site', ...Array.from({ length: 8 }, (_, i) => `old${i}`)]
   const folder: Folder = {
-    dir: 'C:/Users/Me/Documents',
+    dir: at.dir,
     children: ['notes', ...repos, '.config', 'node_modules', 'todo.md'],
     // a hidden folder and node_modules are not looked into, whatever they hold
     gits: { ...Object.fromEntries(repos.map((name, i) => [name, NOW - (i + 1) * 60_000])), '.config': NOW, node_modules: NOW },
   }
   world(on, runs, folder, lists)
 
-  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\Me\\Documents' })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: at.native })
   await $.command.run(deck('changes'))
   await clock.advance(1000)
 
-  const offered = ['apiarius', 'site', 'old0', 'old1', 'old2', 'old3', 'old4', 'old5'].map(name => `changes:pick:C:/Users/Me/Documents/${name}`)
+  const offered = ['apiarius', 'site', 'old0', 'old1', 'old2', 'old3', 'old4', 'old5'].map(name => `changes:pick:${at.dir}/${name}`)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount(pane(surface))
     expect((await ui.find({ key: 'changes:repo' }))?.text).toBe('This chat runs in Documents, which isn’t a git repository. Changes follows the repository an agent edits in.')
@@ -249,8 +260,8 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   }
   // looked for once, by a listing and a stat a child: git runs in none of them
   await clock.advance(120_000)
-  expect(lists).toEqual(['C:\\Users\\Me\\Documents'])
-  expect(runs.filter(run => run.cwd !== 'C:\\Users\\Me\\Documents')).toEqual([])
+  expect(lists).toEqual([at.native])
+  expect(runs.filter(run => run.cwd !== at.native)).toEqual([])
 
   // a pick: the usual git view of it, pinned, with a quiet way back
   const ui = await $.ui.mount(pane('desktop'))
@@ -263,7 +274,7 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   expect(await ui.find({ key: 'file:hooks/repos.ts' })).toBeDefined()
   expect((await ui.find({ key: 'changes:follow' }))?.props).toMatchObject({ label: 'Follow the work', plain: true, dimColor: true })
   expect(await picksOf(ui)).toEqual([])
-  expect(runs.some(run => run.cwd === 'C:/Users/Me/Documents/apiarius' && run.line.includes('status --porcelain'))).toBe(true)
+  expect(runs.some(run => run.cwd === `${at.dir}/apiarius` && run.line.includes('status --porcelain'))).toBe(true)
 
   // Follow the work: the pin let go, the picks again
   await ui.press({ key: 'changes:follow' })
@@ -273,7 +284,7 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   expect(await picksOf(ui)).toEqual(offered)
 
   // an agent edits in one of them: Changes follows it, no pin to let go
-  await $.tool.call(edit('C:\\Users\\Me\\Documents\\site\\index.html'))
+  await $.tool.call(edit([at.native, 'site', 'index.html'].join(at.sep)))
   await clock.advance(1000)
   await ui.redraw()
   expect((await ui.find({ key: 'changes:repo' }))?.text).toContain('site ⎇ main')
@@ -281,8 +292,12 @@ test('a chat in a directory that is no repository says so, naming it, and offers
   expect(await ui.find({ key: 'changes:follow' })).toBeUndefined()
   expect(await ui.find({ key: 'file:index.html' })).toBeDefined()
   await ui.unmount()
-  expect(lists).toEqual(['C:\\Users\\Me\\Documents'])
-})
+  expect(lists).toEqual([at.native])
+}
+
+windowsTest(NEARBY, ($, on) => nearby($, on, WINDOWS_DOCUMENTS))
+
+posixTest(`${NEARBY}, on Linux and macOS`, ($, on) => nearby($, on, POSIX_DOCUMENTS))
 
 test('repos: a session`s directory in no repository is looked into once for the repositories directly inside it, the one changed last first, at most 8; one in a repository offers none', async () => {
   const book = R.emptyBook('C:\\Users\\Me\\Documents')

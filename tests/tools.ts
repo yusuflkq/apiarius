@@ -8,6 +8,7 @@
  * reads the call's arguments as BashArgs. Either way the tests type-check.
  */
 import type { Args } from 'claude-code'
+import { test } from 'claude-code/testing'
 
 /** Where one of the deck's git runs runs: the folder it hands git (`git -C <folder>`, from the session's own folder), else the run's own working folder. */
 export function gitWhere(e: { argv: readonly string[]; init?: { cwd?: string } | undefined }): string {
@@ -26,3 +27,18 @@ export type BashArgs = { command: string; description?: string; timeout?: number
 export function bash(args: BashArgs & { tool_use_id?: string; agentId?: string }): Args<'tool.call'> {
   return { tool: 'Bash', ...args } as unknown as Args<'tool.call'>
 }
+
+/**
+ * Whether the tests run on Windows, read off this file's own address
+ * (`file:///C:/…`, or `file://server/…` on a share); an address the kit does
+ * not give counts as Windows. Claude Code resolves the path of a file call
+ * the way the host does, so `C:\Users\…` is absolute on Windows alone: on
+ * Linux and macOS it reads as a path inside the mod's folder.
+ */
+export const isWindows = !/^file:\/\/\/(?![a-z]:)/i.test(String((import.meta as { url?: unknown }).url ?? ''))
+
+/** `test` on Windows, and no test elsewhere (the kit has no skip): for a file call's path with a drive letter or an 8.3 short name. */
+export const windowsTest: typeof test = isWindows ? test : () => undefined
+
+/** `test` on Linux and macOS, and no test on Windows: for the same rule as a `windowsTest`, spelled with their paths. */
+export const posixTest: typeof test = isWindows ? () => undefined : test

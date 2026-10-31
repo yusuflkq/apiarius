@@ -1,10 +1,10 @@
 import type { Args, On } from 'claude-code'
-import { expect, mock, test, type MockClock } from 'claude-code/testing'
+import { expect, mock, test, type Engine, type MockClock } from 'claude-code/testing'
 
 import { emptyGit, type FileRow } from '../hooks/git'
 import * as M from '../hooks/model'
 import type { DeckAgent, DeckData, DeckSnapshot, DeckStatus } from '../types'
-import { bash, gitWhere, isConfigList } from './tools'
+import { bash, gitWhere, isConfigList, posixTest, windowsTest } from './tools'
 
 const HASH = 'c'.repeat(40)
 /** On a minute's edge, so a test's first minute is whole. */
@@ -452,9 +452,10 @@ function inLoop<T extends object>(agentId: string, call: T): T & { agentId: stri
 /**
  * The QA run's engine, in Claude Code's place: a named spawn is
  * `agent-<name>`; git sees one repository at `root`, from its own spelling
- * or the 8.3 short one (`short`) as real git does, and prints `root`; and
- * `fs.stat` with `resolve` answers the long spelling, as Windows does.
- * `saved` collects each snapshot the deck keeps.
+ * or another (`short`: an 8.3 short name, or a link to it) as real git
+ * does, and prints `root`; and `fs.stat` with `resolve` answers git's
+ * spelling, as the file system does. `saved` collects each snapshot the
+ * deck keeps.
  */
 function qaWorld(on: On, saved: DeckSnapshot[], options: { root?: string; short?: string } = {}) {
   const root = options.root ?? '/repo'
@@ -562,39 +563,67 @@ test('QA 2: an agent that ends through SubagentHandback has its report as its re
   expect(data.messages.filter(message => message.kind === 'result').map(message => [message.from, message.to, message.text])).toEqual([['agent-fixer', M.MAIN, REPORT]])
 })
 
-test('QA 3: an edit spelled with an 8.3 short path (DEVELO~1) reads as git spells it: relative to the repository, and by its agent', async ($, on) => {
+/**
+ * A repository as git prints it (`root`), another spelling of it that git
+ * never prints but a call may give (`short`), and a folder outside it
+ * (`home`, as the host spells it); `sep` the host's separator.
+ */
+type Spelling = { root: string; short: string; home: string; sep: '\\' | '/' }
+
+/** Windows: the 8.3 short name of the folder the repository sits in. */
+const SHORT_NAME: Spelling = { root: 'C:/Users/developer/demo', short: 'C:/Users/DEVELO~1/demo', home: 'C:\\Users\\developer\\Documents', sep: '\\' }
+
+/** Linux and macOS: a link to it, as macOS's /var is /private/var, its temp folders under it. */
+const LINKED: Spelling = { root: '/private/var/demo', short: '/var/demo', home: '/Users/developer/Documents', sep: '/' }
+
+/** `rel` inside the repository by its short spelling, as the host spells a path. */
+function shortOf(spelling: Spelling, rel: string): string {
+  return (rel === '' ? spelling.short : `${spelling.short}/${rel}`).replace(/\//g, spelling.sep)
+}
+
+/** QA 3: an agent edits a file by its short spelling, from a chat outside the repository. */
+async function editShort($: Engine, on: On, spelling: Spelling) {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []
-  qaWorld(on, saved, { root: 'C:/Users/developer/demo', short: 'C:/Users/DEVELO~1/demo' })
+  qaWorld(on, saved, { root: spelling.root, short: spelling.short })
 
-  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\developer\\Documents' })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: spelling.home })
   await $.agent.spawn(named('fixer'))
-  await $.tool.call(inLoop('agent-fixer', { tool: 'Edit' as const, file_path: 'C:\\Users\\DEVELO~1\\demo\\src\\token.js', old_string: 'before', new_string: 'after' }))
+  await $.tool.call(inLoop('agent-fixer', { tool: 'Edit' as const, file_path: shortOf(spelling, 'src/token.js'), old_string: 'before', new_string: 'after' }))
   await clock.advance(5000)
 
   const data = lastOf(saved).data
-  expect(data.edits.map(edit => [edit.path, edit.abs])).toEqual([['src/token.js', 'C:/Users/developer/demo/src/token.js']])
+  expect(data.edits.map(edit => [edit.path, edit.abs])).toEqual([['src/token.js', `${spelling.root}/src/token.js`]])
   // what the Changes tab's "by fixer" reads: the agents that edited git's path
   expect(M.editorsOf(data, 'src/token.js').map(M.labelOf)).toEqual(['fixer'])
-})
+}
 
-test('QA 5: a read in a directory spelled with an 8.3 short name (DEVELO~1) shows its file relative to the repository, never an absolute path cut from the left', async ($, on) => {
+/** QA 5: an agent reads two files by their short spelling, in a chat that runs there. */
+async function readShort($: Engine, on: On, spelling: Spelling) {
   const clock = mock.clock(on, { now: NOW })
   const saved: DeckSnapshot[] = []
-  qaWorld(on, saved, { root: 'C:/Users/developer/demo', short: 'C:/Users/DEVELO~1/demo' })
+  qaWorld(on, saved, { root: spelling.root, short: spelling.short })
 
   // the session's cwd itself is the short spelling, as a temp folder's often is
-  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: 'C:\\Users\\DEVELO~1\\demo' })
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: shortOf(spelling, '') })
   await clock.advance(1000)
   await $.agent.spawn(named('mapper'))
-  await $.tool.call(inLoop('agent-mapper', { tool: 'Read' as const, file_path: 'C:\\Users\\DEVELO~1\\demo\\src\\token.js' }))
-  await $.tool.call(inLoop('agent-mapper', { tool: 'Read' as const, file_path: 'C:\\Users\\DEVELO~1\\demo\\test\\token.test.js' }))
+  await $.tool.call(inLoop('agent-mapper', { tool: 'Read' as const, file_path: shortOf(spelling, 'src/token.js') }))
+  await $.tool.call(inLoop('agent-mapper', { tool: 'Read' as const, file_path: shortOf(spelling, 'test/token.test.js') }))
   await clock.advance(5000)
 
   const mapper = M.agentOf(lastOf(saved).data, 'agent-mapper')
   expect(mapper?.recent.map(one => one.target)).toEqual(['src/token.js', 'test/token.test.js'])
   expect(M.lastActionOf(mapper!)?.text).toBe('Read test/token.test.js')
-})
+}
+
+windowsTest('QA 3: an edit spelled with an 8.3 short path (DEVELO~1) reads as git spells it: relative to the repository, and by its agent', ($, on) => editShort($, on, SHORT_NAME))
+
+posixTest('QA 3 on Linux and macOS: an edit spelled through a link (/var/demo for /private/var/demo) reads as git spells it: relative to the repository, and by its agent', ($, on) => editShort($, on, LINKED))
+
+windowsTest('QA 5: a read in a directory spelled with an 8.3 short name (DEVELO~1) shows its file relative to the repository, never an absolute path cut from the left', ($, on) => readShort($, on, SHORT_NAME))
+
+posixTest('QA 5 on Linux and macOS: a read in a directory spelled through a link (/var/demo for /private/var/demo) shows its file relative to the repository, never an absolute path cut from the left', ($, on) => readShort($, on, LINKED))
 
 test('QA 4: a name two agents carried (a reviewer finished, another spawned) resolves to the newest live one', async () => {
   const data = M.emptyData(NOW)
