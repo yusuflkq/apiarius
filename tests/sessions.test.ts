@@ -1109,7 +1109,7 @@ test('from the page: every command about another session goes into its inbox (it
   expect(states.at(-1)?.v2.sessions?.rows.map(row => row.id)).toEqual(['session-1', OLD, OTHER, QUIET])
 })
 
-test('from the Browser pane`s page, words in your voice for another session wait here first: nothing goes into its inbox until your Send above the prompt, then it goes sealed as ever (its deck takes it at once); Stop turn for it goes at once', async ($, on) => {
+test('from the Browser pane`s page, everything for another session but viewing it waits here first, Stop turn too: nothing goes into its inbox until your Send above the prompt, then it goes sealed as ever (its deck takes it at once); from your own browser`s it goes at once', async ($, on) => {
   const d: Disk = { files: new Map() }
   const w = newWorld({ verdict: 'allow' })
   const { clock } = await started($, on, w, d, work)
@@ -1121,16 +1121,23 @@ test('from the Browser pane`s page, words in your voice for another session wait
   }
   command(child, { cmd: 'chat', id: 'p-1', agentId: 'main', text: 'Go ahead and rebuild', session: OTHER }, 'pane')
   command(child, { cmd: 'abortTurn', id: 'p-2', turnId: 'turn_9', session: OTHER }, 'pane')
+  command(child, { cmd: 'clearFinished', id: 'p-3', session: OTHER }, 'pane')
+  command(child, { cmd: 'view', session: OTHER }, 'pane')
   await clock.advance(1000)
-  // Stop turn speaks for nobody: in its inbox at once; the message waits here
-  expect(inboxOf()).toEqual([{ cmd: 'abortTurn', id: 'p-2', turnId: 'turn_9' }])
+  // Stop turn and Clear finished wait here with the message: nothing in its inbox, a view at once (it names no command)
+  expect(inboxOf()).toEqual([])
   const acks = () => (w.writes.filter(one => /[\\/]web[\\/]session-1[\\/]state\.json$/.test(one.path)).map(one => JSON.parse(one.text) as { v2: W.WebStateV2 }).at(-1)?.v2.acks ?? [])
-  expect(acks().find(one => one.id === 'p-1')).toMatchObject({ status: 'held' })
+  for (const id of ['p-1', 'p-2', 'p-3']) expect(acks().find(one => one.id === id)).toMatchObject({ status: 'held' })
   const band = await $.ui.mount({ plugin: 'apiarius', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 100, scroll: { offset: 0, bodyRows: 8 }, view: {} } })
-  expect(JSON.stringify(await band.drawn())).toContain('“Go ahead and rebuild”')
+  const drawn = JSON.stringify(await band.drawn())
+  expect(drawn).toContain('“Go ahead and rebuild”')
+  expect(drawn).toContain('stops the turn in ')
+  expect(drawn).toContain('clears what finished in ')
+  await band.press({ key: 'held:send:h2' })
   await band.press({ key: 'held:send:h1' })
+  await band.press({ key: 'held:discard:h3' })
   await clock.advance(1000)
-  // your Send: sealed into its inbox, as a page in your own browser would have sent it
+  // your Send: sealed into its inbox, as a page in your own browser would have sent it; the discarded one never goes
   const written = w.writes.filter(one => norm(one.path) === `${OTHER_DIR}/inbox/session-1.json`).at(-1)?.text ?? ''
   expect(SL.openedOf(KEY, SL.INBOX, written)).toMatchObject({ from: 'session-1', to: OTHER })
   expect(inboxOf()).toEqual([
@@ -1139,7 +1146,13 @@ test('from the Browser pane`s page, words in your voice for another session wait
   ])
   // nothing of it ran here
   expect(w.submitted.some(one => one.text === 'Go ahead and rebuild')).toBe(false)
+  expect(w.aborted).toEqual([])
   expect(acks().find(one => one.id === 'p-1')).toMatchObject({ status: 'queued', text: 'Sent to its deck' })
+  expect(acks().find(one => one.id === 'p-3')).toMatchObject({ ok: false, status: 'failed' })
+  // from your own browser's page, Stop turn for it goes at once
+  command(child, { cmd: 'abortTurn', id: 'f-1', session: OTHER }, 'full')
+  await clock.advance(1000)
+  expect(inboxOf().map(one => one.id)).toEqual(['p-2', 'p-1', 'f-1'])
   await band.unmount()
 })
 

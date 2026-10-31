@@ -9,12 +9,15 @@
  * would answer a band Button.
  *
  * Above that line, a row for each thing the Browser pane's web page sent in
- * your voice (../hold, `DeckModel.held`): `Web page → Orchestrator: “fix the
- * flaky test”  [Send] [Discard]`, a long one with More to show it whole.
- * Those rows show whatever else does (the band hidden, nothing at work):
- * your Send is the only way they go. The first row's Send takes the focus
- * when you move it into the band (a click; ctrl+x tab on the terminal), so
- * Enter sends it.
+ * your voice, or for another session's deck (../hold, `DeckModel.held`):
+ * `Web page → Orchestrator: “fix the flaky test”  [Send] [Discard]`. A long
+ * or many-line one shows its start and More, and its Send only once More
+ * opened it, so its whole text is on screen when you press Send. Those rows
+ * show whatever else does (the band hidden, nothing at work): your Send is
+ * the only way they go. No row takes the focus itself (no `autoFocus`): you
+ * move into the band (a click; ctrl+x tab on the terminal) and Tab to a
+ * Send, so an Enter meant for the prompt never sends a row that appeared
+ * just then.
  *
  * Pure: Kit, the band, the rows and Actions come from the hooks module.
  */
@@ -35,11 +38,11 @@ export function bandView(kit: Kit, band: V2Band | null | undefined, actions: Ban
   if (!hasLine && held.length === 0) return null
   return (
     <Box flexDirection="column">
-      {held.map((row, i) => heldRow(kit, row, i === 0, actions))}
+      {held.map(row => heldRow(kit, row, actions))}
       {held.length > 0 && kit.surface === 'terminal' ? (
         <Box key="held:keys">
           <Text color={P.muted2} wrap="truncate-end">
-            ctrl+x tab, then Enter, sends the first · Tab moves on
+            ctrl+x tab, then Tab to a Send and Enter · a long one's Send shows once More opens it
           </Text>
         </Box>
       ) : null}
@@ -71,8 +74,8 @@ function statusLine(kit: Kit, band: V2Band, actions: BandActions): RenderElement
   )
 }
 
-/** One row waiting for your Send: who sent it and to whom, its words (cut to the row; More shows them whole), Send and Discard. */
-function heldRow(kit: Kit, row: HeldRow, isFirst: boolean, actions: BandActions): RenderElement {
+/** One row waiting for your Send: who sent it and to whom, its words (cut to the row; More shows them whole), Send (a long one's once it is open) and Discard. */
+function heldRow(kit: Kit, row: HeldRow, actions: BandActions): RenderElement {
   const { Box, Text, Button } = kit
   const isBare = row.isOpen || row.text === ''
   return (
@@ -94,9 +97,11 @@ function heldRow(kit: Kit, row: HeldRow, isFirst: boolean, actions: BandActions)
             <Button key={`held:more:${row.key}`} label={row.isOpen ? 'Less' : 'More'} plain dimColor onPress={() => actions.toggleHeld(row.key)} />
           </Box>
         ) : null}
-        <Box flexShrink={0}>
-          <Button key={`held:send:${row.key}`} label="Send" variant="primary" {...(isFirst ? { autoFocus: true as const } : {})} onPress={() => actions.sendHeld(row.key)} />
-        </Box>
+        {row.isLong && !row.isOpen ? null : (
+          <Box flexShrink={0}>
+            <Button key={`held:send:${row.key}`} label="Send" variant="primary" onPress={() => actions.sendHeld(row.key)} />
+          </Box>
+        )}
         <Box flexShrink={0}>
           <Button key={`held:discard:${row.key}`} label="Discard" onPress={() => actions.discardHeld(row.key)} />
         </Box>

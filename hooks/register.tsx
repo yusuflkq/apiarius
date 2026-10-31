@@ -1202,8 +1202,9 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
  * from the page, checked against the model (`W.routeOf`) and acted on:
  * `chat` through `sendChat`, `review` through `sendReview`, `answer` to the
  * question it names (`answerCall`, the pane's resolver too). One in your
- * voice from a `pane` page waits for your Send above the prompt instead
- * (`holdFromPage`). A command with an `id` gets an ack, the page's word on
+ * voice from a `pane` page, and every one of its for another session's
+ * deck but `view` (`H.isHeld`), waits for your Send above the prompt
+ * instead (`holdFromPage`). A command with an `id` gets an ack, the page's word on
  * what came of it; one refused gets why. Anything else is ignored. Answers
  * whether it was the ready line.
  */
@@ -1231,8 +1232,8 @@ function onWebLine($: EngineInterface, line: string): boolean {
     redraw($)
     return true
   }
-  // in your voice from the Browser pane's page: it waits for your Send above the prompt
-  if (said.grade !== 'full' && H.isVoice(said.cmd)) {
+  // in your voice from the Browser pane's page, or any press of it for another session's deck: it waits for your Send above the prompt
+  if (said.grade !== 'full' && H.isHeld(said.cmd, sessionId)) {
     void holdFromPage($, said.cmd)
     return false
   }
@@ -1265,25 +1266,28 @@ function heldToOf(cmd: Record<string, unknown>): string {
 }
 
 /**
- * A command in your voice from the Browser pane's page: checked as it would
- * be once sent (one refused now is refused at once, never held), then held
- * in the band for your Send, its ack saying so; refused while `H.MOST_HELD`
- * wait already. One for another session's deck waits here too, and goes
- * into its inbox once you press Send.
+ * A command in your voice from the Browser pane's page, or any press of it
+ * for another session's deck (a Stop there too): checked as it would be
+ * once sent (one refused now is refused at once, never held), then held in
+ * the band for your Send, its ack saying so; refused while `H.MOST_HELD`
+ * wait already. One for another session's deck goes into its inbox once
+ * you press Send.
  */
 async function holdFromPage($: EngineInterface, cmd: Record<string, unknown>): Promise<void> {
   const ackId = W.cmdIdOf(cmd)
   const other = SE.sessionCmdOf(cmd, sessionId)
-  const route = other ? null : W.routeOf(cmd, data)
+  // one that names another session it cannot go to is never run as this one's
+  const isElsewhere = !other && typeof cmd.session === 'string' && cmd.session !== '' && cmd.session !== sessionId
+  const route = other || isElsewhere ? null : W.routeOf(cmd, data)
   // an answer to a question that no longer waits here is refused at once, as it would be once sent
   const gone = route?.kind === 'answer' ? answerGoneOf(route.callId) : ''
-  const refusal = other ? (SE.steeringCmdOf(other.cmd) ? '' : SE.steeringRefusalOf(other.cmd)) : route === null ? W.refusalOf(cmd, data) : gone
+  const refusal = isElsewhere ? SE.steeringRefusalOf(cmd) : other ? (SE.steeringCmdOf(other.cmd) ? '' : SE.steeringRefusalOf(other.cmd)) : route === null ? W.refusalOf(cmd, data) : gone
   if (refusal !== '' || held.items.length >= H.MOST_HELD) {
     void ack($, ackId, 'failed', refusal || H.FULL_TEXT)
     return
   }
   const now = await $.clock.now()
-  const agentOfOther = other && other.cmd.cmd === 'chat' && other.cmd.agentId !== M.MAIN ? ` · ${F.trunc(F.oneLine(String(other.cmd.agentId)), 40)}` : ''
+  const agentOfOther = other && (other.cmd.cmd === 'chat' || other.cmd.cmd === 'stopAgent') && other.cmd.agentId !== M.MAIN ? ` · ${F.trunc(F.oneLine(String(other.cmd.agentId)), 40)}` : ''
   const to = other ? `${SR.sessionNameOf(other.session)}${agentOfOther}` : heldToOf(cmd)
   held.seq += 1
   held.items.push(H.heldOf(other ? other.cmd : cmd, `h${held.seq}`, now, other?.session ?? '', to))
@@ -1309,9 +1313,12 @@ function takeHeld(key: string): H.Held | undefined {
  * Your Send on a held row: the command runs exactly as a page in your own
  * browser would have run it at once (its checks again, its ack under the
  * page's id); one for another session's deck goes into its inbox, sealed,
- * as ever.
+ * as ever. A long or many-line one goes only while its row is open (More).
  */
 function sendHeld($: EngineInterface, key: string): void {
+  // a long or many-line one goes only once it is open, its whole text on screen (the band draws its Send only then)
+  const shown = H.heldRowsOf(held.items.filter(one => one.key === key), held.open)[0]
+  if (!shown || (shown.isLong && !shown.isOpen)) return
   const item = takeHeld(key)
   if (!item) return
   if (item.session === '') {

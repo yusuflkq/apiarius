@@ -58,11 +58,12 @@ test('the Browser pane`s page: a message to the Orchestrator, one to an agent an
     const drawn = JSON.stringify(await ui.drawn())
     expect(drawn).toContain('Web page')
     for (const words of ['→ Orchestrator: ', '“fix the flaky test”', '→ scout: ', '“look in src/range.js first”', 'asks for a review: ', '“Review the uncommitted changes”']) expect(drawn).toContain(words)
-    expect((await ui.find({ key: 'held:send:h1' }))?.props).toMatchObject({ label: 'Send', variant: 'primary', autoFocus: true })
-    expect((await ui.find({ key: 'held:send:h2' }))?.props.autoFocus).toBeUndefined()
+    expect((await ui.find({ key: 'held:send:h1' }))?.props).toMatchObject({ label: 'Send', variant: 'primary' })
+    // no row takes the focus itself: an Enter meant for the prompt never presses a Send that appeared just then
+    for (const key of ['held:send:h1', 'held:send:h2', 'held:send:h3', 'held:discard:h1']) expect((await ui.find({ key }))?.props.autoFocus).toBeUndefined()
     // no hotkey: a bare digit in an empty prompt would press a band Button
     for (const key of ['held:send:h1', 'held:discard:h1']) expect((await ui.find({ key }))?.props.hotkey).toBeUndefined()
-    expect(drawn.includes('ctrl+x tab, then Enter, sends the first')).toBe(surface === 'terminal')
+    expect(drawn.includes('ctrl+x tab, then Tab to a Send and Enter')).toBe(surface === 'terminal')
     await ui.unmount()
   }
 
@@ -137,7 +138,7 @@ test('what waits goes unsent after ten minutes; at most five wait, the next refu
   await after.unmount()
 })
 
-test('the band shows what waits even while you hid it (/apiarius band), and only that then; a long one shows its start, More shows it whole', async ($, on) => {
+test('the band shows what waits even while you hid it (/apiarius band), and only that then; a long one shows its start and More, and its Send only once More shows it whole', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -158,11 +159,32 @@ test('the band shows what waits even while you hid it (/apiarius band), and only
   expect(drawn).not.toContain('1 working')
   expect(await ui.find({ key: 'band:open' })).toBeUndefined()
   expect((await ui.find({ key: 'held:more:h1' }))?.props).toMatchObject({ label: 'More', plain: true })
+  // its tail is not on screen yet: no Send to press
+  expect(await ui.find({ key: 'held:send:h1' })).toBeUndefined()
+  expect(await ui.find({ key: 'held:discard:h1' })).toBeDefined()
   await ui.press({ key: 'held:more:h1' })
   await ui.redraw()
   drawn = JSON.stringify(await ui.drawn())
   expect(drawn).toContain(long)
   expect((await ui.find({ key: 'held:more:h1' }))?.props.label).toBe('Less')
+  expect((await ui.find({ key: 'held:send:h1' }))?.props.label).toBe('Send')
+  // Less again: Send goes with the tail
+  await ui.press({ key: 'held:more:h1' })
+  await ui.redraw()
+  expect(await ui.find({ key: 'held:send:h1' })).toBeUndefined()
+  await ui.unmount()
+  // a many-line one too, however short
+  command(w.children[0], { cmd: 'chat', id: 'l-2', agentId: 'main', text: 'ok\nrm -rf ~' }, 'pane')
+  await clock.settle()
+  await clock.advance(400)
+  ui = await band($)
+  expect(await ui.find({ key: 'held:send:h2' })).toBeUndefined()
+  await ui.press({ key: 'held:more:h2' })
+  await ui.redraw()
+  expect(JSON.stringify(await ui.drawn())).toContain('rm -rf ~')
+  await ui.press({ key: 'held:send:h2' })
+  await clock.settle()
+  expect(spoken(w)).toEqual(['ok\nrm -rf ~'])
   await ui.unmount()
 })
 
@@ -276,9 +298,15 @@ test('a ticket is sealed as web/server.js checks it: a known secret and nonce gi
   expect(W.parseLine('{"used":"../x"}')).toBeNull()
 })
 
-test('what holds, pure: the commands in your voice (a message, Review, an answer), their words and rows, the long ones, and when they go unsent', () => {
+test('what holds, pure: the commands in your voice (a message, Review, an answer), and every one for another session`s deck but viewing it; their words and rows, the long ones, and when they go unsent', () => {
   expect(['chat', 'review', 'answer'].map(cmd => H.isVoice({ cmd }))).toEqual([true, true, true])
   expect(['stopAgent', 'abortTurn', 'stopBackground', 'clearFinished', 'showCleared', 'selectRepo', 'avatarStyle', 'view', 'ping'].some(cmd => H.isVoice({ cmd }))).toBe(false)
+  // for this session a press speaks for nobody and runs at once; for another session's deck it waits, but a view
+  expect(['stopAgent', 'abortTurn', 'stopBackground', 'clearFinished', 'showCleared', 'selectRepo', 'avatarStyle'].some(cmd => H.isHeld({ cmd }, 'me-1') || H.isHeld({ cmd, session: 'me-1' }, 'me-1'))).toBe(false)
+  expect(['stopAgent', 'abortTurn', 'stopBackground', 'clearFinished', 'showCleared', 'selectRepo', 'chat'].every(cmd => H.isHeld({ cmd, session: 'other-1' }, 'me-1'))).toBe(true)
+  expect(H.isHeld({ cmd: 'view', session: 'other-1' }, 'me-1')).toBe(false)
+  const stop = H.heldRowsOf([H.heldOf({ cmd: 'abortTurn', id: 's-1', turnId: 't9' }, 'h9', NOW, 'other-1', 'acme-api'), H.heldOf({ cmd: 'selectRepo', id: 's-2', root: '/r/billing\u202e' }, 'h10', NOW, 'other-1', 'acme-api')], new Set())
+  expect(stop.map(row => [row.what, row.text, row.isLong])).toEqual([['stops the turn in acme-api', '', false], ["shows billing� in acme-api's Changes", '', false]])
   expect(H.wordsOf({ cmd: 'answer', answers: { 'Which store?': 'Redis' } })).toBe('Redis')
   expect(H.wordsOf({ cmd: 'answer', answers: { 'Which store?': 'Redis', 'Which routes?': '/health' } })).toBe('Which store? Redis; Which routes? /health')
   const chat = H.heldOf({ cmd: 'chat', id: 'c-1', agentId: 'main', text: 'line one\nline two ‮' }, 'h1', NOW, '', 'Orchestrator')
