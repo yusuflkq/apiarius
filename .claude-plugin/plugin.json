@@ -6,6 +6,10 @@
   "author": { "name": "Yusuf", "url": "https://github.com/yusuflkq" },
   "homepage": "https://github.com/yusuflkq/apiarius",
   "repository": "https://github.com/yusuflkq/apiarius",
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://github.com/yusuflkq/apiarius#readme",
+  "supportUrl": "https://github.com/yusuflkq/apiarius/issues",
+  "privacyPolicyUrl": "https://github.com/yusuflkq/apiarius#privacy",
   "license": "MIT",
   "keywords": ["claude-code", "mod", "agents", "subagents", "multi-agent", "dashboard", "observability", "diffs"],
   "types": "./types/index.d.ts"

@@ -42,7 +42,7 @@ jobs:
           claude --version
 
       - name: Validate the plugin and its marketplace
-        run: claude plugin validate --strict .
+        run: claude plugin validate --strict --profile directory .
 
       # The mod's tests feed it Windows paths (drive letters, backslashes, 8.3
       # short names), and Claude Code resolves a path for a file call the way
