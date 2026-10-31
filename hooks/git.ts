@@ -415,14 +415,14 @@ export type StatusRow = { x: string; y: string; path: string; oldPath?: string }
  * What git printed of a repository's own (a path, with `-z` as it lies on
  * the disk; a commit's author, subject or message), as the deck keeps and
  * shows it: each control character (C0, DEL, C1; a message's newlines and
- * tabs kept, with `isLines`) and each bidirectional override, embedding or
- * isolate as U+FFFD. What a repository chose then neither breaks a drawing
+ * tabs kept, with `isLines`) and each bidirectional control (an override,
+ * embedding, isolate or mark) as U+FFFD. What a repository chose then neither breaks a drawing
  * (every surface refuses a control character in text) nor reads in an
  * order other than its own; git, asked of such a path, finds no such file,
  * so it shows with no diff.
  */
 export function shownOf(text: string, isLines = false): string {
-  return text.replace(isLines ? /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g : /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '\ufffd')
+  return text.replace(isLines ? /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g : /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '\ufffd')
 }
 
 export function parseStatus(out: string): StatusRow[] {

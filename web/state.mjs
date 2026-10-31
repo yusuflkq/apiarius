@@ -125,8 +125,8 @@ export const arr = v => (Array.isArray(v) ? v : []);
 export const str = v => (typeof v === 'string' ? v : '');
 export const obj = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
 export const numOr = (v, d = null) => (typeof v === 'number' && isFinite(v) ? v : d);
-/** A bidirectional override, embedding or isolate (U+202A to U+202E, U+2066 to U+2069), which would make a name read in another order: shown as U+FFFD, as the pane does (hooks/ui/v2/text.ts). */
-const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;
+/** A bidirectional control (an override, embedding or isolate, U+202A to U+202E and U+2066 to U+2069, or a mark, U+200E, U+200F and U+061C), which would make a name read in another order: shown as U+FFFD, as the pane does (hooks/ui/v2/text.ts). */
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 /** A name the page shows (an agent's, a session's, a tool's caller's): a string, each bidirectional control in it as U+FFFD. */
 const shownName = v => str(v).replace(BIDI, '\ufffd');
 

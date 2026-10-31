@@ -52,11 +52,12 @@ export function money(usd: number | undefined): string {
 }
 
 /**
- * The bidirectional overrides, embeddings and isolates (U+202A to U+202E,
- * U+2066 to U+2069): a file name or a line holding one reads in an order
- * other than its own ("Trojan Source"), so each shows as U+FFFD instead.
+ * The bidirectional controls: the overrides, embeddings and isolates
+ * (U+202A to U+202E, U+2066 to U+2069) and the marks (U+200E, U+200F,
+ * U+061C). A file name or a line holding one reads in an order other than
+ * its own ("Trojan Source"), so each shows as U+FFFD instead.
  */
-const BIDI = /[\u202a-\u202e\u2066-\u2069]/g
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 
 /** Collapses whitespace and strips control characters (C0, DEL and C1: a terminal takes ESC and CSI as commands) so text fits one row; a bidirectional control shows as U+FFFD. */
 export function oneLine(text: string): string {

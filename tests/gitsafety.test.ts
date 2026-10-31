@@ -9,6 +9,7 @@
  */
 import { expect, mock, test } from 'claude-code/testing'
 
+import * as F from '../hooks/format'
 import * as G from '../hooks/git'
 import * as W from '../hooks/web'
 import { isConfigList } from './tools'
@@ -110,6 +111,9 @@ test('a repository`s own filter drivers: each switched off, required no more; th
 test('names a repository chose, as git prints them: a path`s control characters and bidirectional controls each U+FFFD, a commit`s author, subject and message the same, its message`s lines kept', () => {
   expect(G.shownOf('src/a\u001b[31mb\u009b.ts')).toBe('src/a�[31mb�.ts')
   expect(G.shownOf('invoice‮fdp.exe')).toBe('invoice�fdp.exe')
+  // the marks too: left-to-right, right-to-left, the Arabic letter mark
+  expect(G.shownOf('a\u200eb\u200fc\u061cd')).toBe('a�b�c�d')
+  expect(F.oneLine('a\u200eb\u200fc\u061cd')).toBe('a�b�c�d')
   expect(G.parseStatus(' M ok.ts\0?? a\u0007b\0R  new\u0085.ts\0old⁦.ts\0')).toEqual([
     { x: ' ', y: 'M', path: 'ok.ts' },
     { x: '?', y: '?', path: 'a�b' },

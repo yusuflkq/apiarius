@@ -2104,17 +2104,17 @@ test('an agent`s question or permission says it is an agent`s ("Agent builder as
   assert.match(flat(textOf(find(cards()[3], 'need-head')[0])), /^github /)
 })
 
-test('a name holding a bidirectional override, embedding or isolate shows each as U+FFFD, as the pane does: an agent`s, a need`s, a chat row`s, a session`s', () => {
+test('a name holding a bidirectional override, embedding, isolate or mark shows each as U+FFFD, as the pane does: an agent`s, a need`s, a chat row`s, a session`s', () => {
   const p = page()
-  const evil = 'build‮gnp.exe⁦x⁩'
+  const evil = 'build‮gnp.exe⁦x⁩\u200e\u200f\u061c'
   p.load(sample(s => {
     Object.assign(s.agents.find(a => a.id === BUILDER), { title: evil, name: evil })
     s.needs[1].agentName = evil
     s.chat[0].who = evil
   }))
-  const shown = 'build�gnp.exe�x�'
+  const shown = 'build�gnp.exe�x����'
   assert.equal(p.run(`IX.byId.get("${BUILDER}").title`), shown)
   assert.equal(p.run('S.needs[1].agentName'), shown)
   assert.equal(p.run('S.chat[0].who'), shown)
-  assert.doesNotMatch(p.text('NowPage()'), /[‪-‮⁦-⁩]/)
+  assert.doesNotMatch(p.text('NowPage()'), /[‪-‮⁦-⁩\u200e\u200f\u061c]/)
 })
