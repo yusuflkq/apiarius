@@ -12,7 +12,7 @@ Apiarius only shows what Claude Code is already doing. It reads the events Claud
 
 ## Install
 
-This GitHub repository is its own plugin marketplace: its `.claude-plugin/marketplace.json` lists Apiarius. You add the repository once and install from it.
+This GitHub repository is its own plugin marketplace: its `.claude-plugin/marketplace.json` lists Apiarius, and an install copies only its `plugin/` folder. You add the repository once and install from it.
 
 In a Claude Code session in the terminal, run:
 
@@ -121,13 +121,13 @@ A dump of what the deck believes helps with a bug. Create the folder `~/.claude/
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). To try a clone without installing it, run `claude --plugin-dir .` in its folder. `/apiarius probe` toggles a test pane for mod authors.
+See [CONTRIBUTING.md](CONTRIBUTING.md). To try a clone without installing it, run `claude --plugin-dir plugin` in its folder. `/apiarius probe` toggles a test pane for mod authors.
 
 ```
-claude plugin validate .
-scripts/test.sh          # the mod's tests, one file at a time
-node --test web/test/    # the server and page tests
-node web/dev.js          # the web page on sample data; prints its link
+claude plugin validate plugin
+scripts/test.sh                 # the mod's tests, one file at a time
+node --test tests/web/          # the server and page tests
+node plugin/web/dev.js          # the web page on sample data; prints its link
 ```
 
 ## License
