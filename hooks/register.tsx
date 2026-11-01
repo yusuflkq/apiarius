@@ -4401,7 +4401,7 @@ export const register: Register = on => {
         let plan = typeof record?.plan === 'string' ? record.plan : typeof input.plan === 'string' ? input.plan : ''
         if (plan.trim() === '' && typeof record?.filePath === 'string' && record.filePath !== '') plan = await $.fs.read(record.filePath)
         if (plan.trim() !== '') {
-          // as Claude wrote it, for the plan it is; and split into steps for the screens of earlier builds
+          // as Claude wrote it, for the plan it is; and split into steps
           M.noteApproved(data, plan, agentId, end)
           M.notePlan(data, plan, end)
         }

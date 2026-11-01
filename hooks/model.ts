@@ -1365,7 +1365,7 @@ function waitingCallOf(data: DeckData, kind: string, message: string, agentId: s
  * `agent_id`, when it carried one): in `data.needs` (the same notice of the
  * same loop and call again replaces the older; the newest 20 kept), its
  * words as Claude Code wrote them, and the newest on the Orchestrator for
- * the screens of earlier builds (`needs`). Answers the note.
+ * its waits (`needs`). Answers the note.
  */
 export function noteNeeds(data: DeckData, note: { kind: string; text: string; at: number; agent?: string; title?: string }): DeckNeeds | undefined {
   const main = agentOf(data, MAIN)
@@ -1388,7 +1388,7 @@ export function noteNeeds(data: DeckData, note: { kind: string; text: string; at
   return needs
 }
 
-/** A note as the screens of earlier builds read it on the Orchestrator: never without words. */
+/** A note as the Orchestrator keeps it (`needs`): never without words. */
 function shownNeedsOf(needs: DeckNeeds): DeckNeeds {
   return needs.text !== '' ? { ...needs } : { ...needs, text: 'Claude is waiting for you' }
 }
