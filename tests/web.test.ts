@@ -542,7 +542,7 @@ test('/apiarius web pane starts the server once (node, web/server.js, its folder
   await clock.advance(3000)
   expect(statesOf(w)).toEqual([])
   expect(w.homeRequests.map(one => one.op)).toEqual(['sweep', 'prepare'])
-  expect(w.homeRequests[0]).toMatchObject({ op: 'sweep', home: HOME, registry: `${HOME}/sessions`, keep: 'session-1', legacy: expect.stringMatching(/[\\/]\.web$/) })
+  expect(w.homeRequests[0]).toMatchObject({ op: 'sweep', home: HOME, registry: `${HOME}/sessions`, keep: 'session-1' })
   expect(w.homeRequests[1]).toEqual({ op: 'prepare', home: HOME, id: 'session-1', files: [], isOwnHome: false, registry: `${HOME}/sessions` })
 
   const answer = await $.command.run(deck('web pane'))
@@ -764,7 +764,7 @@ test('without node the first read rejects: a toast, a text answer, and the deck 
 test('/apiarius web stop ends the child and the writes; a reload starts the server again on the same port with a new secret, never one kept', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld({ ready: [PORT] })
-  // what an earlier version kept: its folder under the mod, let go for the home's, and its token, used no more
+  // what a reload finds kept: a folder that is not the home's, let go for the home's, and a token, used no more
   const kept = { isOn: true, token: 'token-kept', port: PORT, dir: '/mod/.web/session-1' } as DeckWebSaved
   world(on, w, kept)
   // a reload: session.start finds the web deck on, and starts its server again

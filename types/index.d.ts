@@ -774,7 +774,7 @@ export type DeckWebSaved = {
   isOn: boolean
   /** The port it listened on, taken again after a reload (a page open on it then hears the server refuse its old handle, and says to open it again); 0 for none yet. Its secret is never kept: every start makes a new one. */
   port: number
-  /** The folder it serves, `<home>/web/<sessionId>` (an earlier version's `<mod>/.web/<sessionId>` is let go). */
+  /** The folder it serves, `<home>/web/<sessionId>`. */
   dir: string
 }
 

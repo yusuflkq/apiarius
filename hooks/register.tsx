@@ -66,7 +66,7 @@ let view: DeckView = M.defaultView()
 let git: G.GitState = G.emptyGit()
 let cwd = ''
 let sessionId = ''
-/** The mod's folder (`$.plugin.root`, no trailing separator): where an earlier version kept each session's state folder (`.web/<sessionId>`), swept at the start. */
+/** The mod's folder (`$.plugin.root`, no trailing separator). */
 let pluginRoot = ''
 /** Apiarius's home (`SE.homeDirOf`: `APIARIUS_HOME`, else `apiarius` under Claude Code's configuration folder), where each session's state folder lies (`<home>/web/<sessionId>`) and the debug dump goes; '' until read, or when no home is known. */
 let home = ''
@@ -781,12 +781,12 @@ async function runHome($: EngineInterface, request: W.HomeRequest): Promise<bool
 
 /**
  * At session.start: the folders of sessions that are gone swept (a crash
- * leaves its own; an earlier version's under the mod go too), then this
- * session's own made private, with its inbox, before any deck writes there.
+ * leaves its own), then this session's own made private, with its inbox,
+ * before any deck writes there.
  */
 async function startHome($: EngineInterface): Promise<void> {
   if (home === '' || sessionId === '') return
-  await runHome($, { op: 'sweep', home, registry: homeRegistry, keep: sessionId, legacy: pluginRoot === '' ? '' : `${pluginRoot}/.web` })
+  await runHome($, { op: 'sweep', home, registry: homeRegistry, keep: sessionId })
   // the registry folder named too, so it and this session's file in it are made private (0700/0600) however the race with the registry writer goes
   if (await runHome($, { op: 'prepare', home, id: sessionId, files: [], isOwnHome: isHomeOwn, ...(homeRegistry !== '' ? { registry: homeRegistry } : {}) })) web.isPrivate = true
 }
@@ -1034,9 +1034,9 @@ async function enginePidOf($: EngineInterface): Promise<string> {
  * The session's web deck, for as long as this session.start is the latest:
  * picks up what `$.state` kept (a reload while it was on asks for the server
  * again, on its port), then runs the server each time it is asked.
- * A folder kept that is no longer this session's (an earlier version's under
- * the mod, or one a /clear's old id named) is let go, and removed when it is
- * in the home: the server serves this session's own.
+ * A folder kept that is no longer this session's (one a /clear's old id
+ * named) is let go, and removed when it is in the home: the server serves
+ * this session's own.
  */
 async function superviseWeb($: EngineInterface, epoch: number): Promise<void> {
   try {

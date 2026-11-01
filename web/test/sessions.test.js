@@ -1,7 +1,7 @@
 /**
  * Every session on this machine on the web (All sessions): the server serves
  * another session's state and lazy files under /s/<id>/ (only a live
- * session's, only from a `.web/<id>` folder its registry file names) and
+ * session's, only from a `<home>/web/<id>` folder its registry file names) and
  * passes a chat, an answer or a view naming a session on to the mod; the page
  * lists the sessions (#/sessions), opens one's deck read-only (#/s/<id>/…)
  * under "Viewing <title>", reads its files from /s/<id>/, and sends an
@@ -116,7 +116,7 @@ before(async () => {
   listed('ended-1', other, { endedAt: Date.now() })
   listed('odd-1', root)
   listed('wrong-1', other)
-  // an earlier version's folder under the mod (`<mod>/.web/<id>`), and one named the same way anywhere else: neither is beside this one's
+  // a folder under the mod (`<mod>/.web/<id>`), and one named the same way anywhere else: neither is beside this one's
   for (const [id, where] of [['old-1', path.join(root, 'mod', '.web', 'old-1')], ['far-1', path.join(root, 'elsewhere', 'web', 'far-1')]]) {
     fs.mkdirSync(where, { recursive: true })
     fs.writeFileSync(path.join(where, 'state.json'), '{"v":1,"secret":true}')
@@ -156,7 +156,7 @@ test('/s/<id>/state serves a live session`s state from the folder its registry f
   assert.equal((await request(main.port, `/s/${OTHER}/patch/nope`)).status, 404)
 })
 
-test('/s/ refuses: no token, a session not listed, stale or ended, a folder not `<home>/web/<its id>` beside this one`s (an earlier version`s `.web`, one elsewhere, a link), a path for an id, any other file; and a server with no registry serves none', async () => {
+test('/s/ refuses: no token, a session not listed, stale or ended, a folder not `<home>/web/<its id>` beside this one`s (one under the mod, one elsewhere, a link), a path for an id, any other file; and a server with no registry serves none', async () => {
   assert.equal((await request(main.port, `/s/${OTHER}/state`, { headers: {} })).status, 403)
   assert.equal((await request(main.port, `/s/${OTHER}/state?h=${HANDLES.get(main.port)}`, { headers: {} })).status, 403)
   for (const id of ['nobody', 'stale-1', 'ended-1', 'odd-1', 'wrong-1', 'old-1', 'far-1', 'link-1', 'alias-1', '..%2F..%2Fsecret', 'a.b']) assert.equal((await request(main.port, `/s/${id}/state`)).status, 404, id)

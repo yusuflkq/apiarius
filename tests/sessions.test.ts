@@ -71,7 +71,7 @@ test('the registry folder: APIARIUS_SESSIONS, else in the home (APIARIUS_HOME, e
   expect(S.isStateDirOf('C:\\Users\\sam\\.claude\\apiarius\\web\\a1', 'a1', 'C:\\Users\\sam/.claude/apiarius/web')).toBe(true)
   expect(S.isStateDirOf(`${HOME}/web/a1/`, 'a1', `${HOME}/web`)).toBe(true)
   expect(S.isStateDirOf(`${HOME}/web/b2`, 'a1', `${HOME}/web`)).toBe(false)
-  // an earlier version's folder under the mod, a folder elsewhere named the same way, a way around: none
+  // a folder under the mod, a folder elsewhere named the same way, a way around: none
   expect(S.isStateDirOf('C:/mod/.web/a1', 'a1', `${HOME}/web`)).toBe(false)
   expect(S.isStateDirOf('/tmp/evil/web/a1', 'a1', `${HOME}/web`)).toBe(false)
   expect(S.isStateDirOf(`${HOME}/web/../web/a1`, 'a1', `${HOME}/web`)).toBe(false)

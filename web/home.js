@@ -24,12 +24,11 @@
  * - `remove` {home, ids}: those sessions' folders gone, whole.
  * - `clear` {home, id}: what a folder holds of the conversation gone (all but
  *   its inbox and owner.json), after a /clear.
- * - `sweep` {home, keep, legacy}: the folders of sessions that are gone
- *   (`orphanOf`, by each folder's own owner.json), and an earlier version's
- *   under the mod (`legacy`, `<mod>/.web`), but `keep`'s own.
+ * - `sweep` {home, keep}: the folders of sessions that are gone
+ *   (`orphanOf`, by each folder's own owner.json), but `keep`'s own.
  *
  * It never follows a symbolic link to delete or chmod: only a real folder
- * that is a direct child of `<home>/web` (or `legacy`) and named as a session
+ * that is a direct child of `<home>/web` and named as a session
  * id is ever removed, as `lstat` sees it, and a removal deletes the links in
  * it, never what they point to. It prints one line, `{"ok":true,...}` or
  * `{"ok":false,"why":...}`, and exits 0 either way.
@@ -253,7 +252,7 @@ function orphanOf(dir, name, now) {
   return now - folder.mtimeMs > NEW_MS
 }
 
-function sweep({ home: given, keep = '', legacy = '' }) {
+function sweep({ home: given, keep = '' }) {
   const home = homeOf(given)
   if (home === null) return { ok: false, why: 'no home' }
   const now = Date.now()
@@ -263,13 +262,6 @@ function sweep({ home: given, keep = '', legacy = '' }) {
     for (const one of fs.readdirSync(root, { withFileTypes: true })) {
       if (!one.isDirectory() || one.name === keep || !isSessionName(one.name)) continue
       if (orphanOf(path.join(root, one.name), one.name, now) && removeChild(root, one.name)) removed.push(one.name)
-    }
-  }
-  // an earlier version's folders under the mod (`<mod>/.web/<id>`): this session's own goes, another's once it is no live session's
-  if (typeof legacy === 'string' && path.isAbsolute(legacy) && isOwnDir(lstatOf(legacy))) {
-    for (const one of fs.readdirSync(legacy, { withFileTypes: true })) {
-      if (!one.isDirectory() || !isSessionName(one.name)) continue
-      if ((one.name === keep || orphanOf(path.join(legacy, one.name), one.name, now)) && removeChild(legacy, one.name)) removed.push(`legacy:${one.name}`)
     }
   }
   return { ok: true, removed }

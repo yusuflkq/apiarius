@@ -196,14 +196,13 @@ export function webDirOf(home: string, sessionId: string): string {
  * it made 0600 (fixing any left looser) before the registry writer's first
  * write, whichever runs first; `remove` those sessions' folders; `clear`
  * what a folder holds of the conversation; `sweep` the folders of sessions
- * that are gone, and an earlier version's under the mod (`legacy`,
- * `<mod>/.web`), `keep`'s own aside.
+ * that are gone, `keep`'s own aside.
  */
 export type HomeRequest =
   | { op: 'prepare'; home: string; id: string; files: readonly string[]; isOwnHome: boolean; registry?: string }
   | { op: 'remove'; home: string; ids: readonly string[] }
   | { op: 'clear'; home: string; id: string }
-  | { op: 'sweep'; home: string; registry: string; keep: string; legacy: string }
+  | { op: 'sweep'; home: string; registry: string; keep: string }
 
 /** The helper's command line: node, web/home.js, the request as one JSON argument. */
 export function homeArgvOf(script: string, request: HomeRequest): string[] {

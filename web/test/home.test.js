@@ -235,17 +235,11 @@ test('sweep removes the folders of sessions that are gone, by their owner`s own 
   fs.writeFileSync(path.join(outside, 'precious.txt'), 'keep me')
   fs.symlinkSync(outside, path.join(web, 'link-1'), LINK)
   fs.writeFileSync(path.join(web, 'file-1'), 'a file')
-  // an earlier version's folders under the mod: this session's own goes, a dead one's goes, a live one's stays
-  const legacy = path.join(root, 'mod', '.web')
-  leftFolder(legacy, 'mine-1', { mtime: old })
-  leftFolder(legacy, 'gone-2', { mtime: old })
-  leftFolder(legacy, 'live-2', { pid: process.pid })
 
-  const said = run({ op: 'sweep', home, registry, keep: 'mine-1', legacy })
+  const said = run({ op: 'sweep', home, registry, keep: 'mine-1' })
   assert.equal(said.ok, true)
-  assert.deepEqual(said.removed.sort(), ['crashed-1', 'legacy:gone-2', 'legacy:mine-1', 'listed-1', 'orphan-1', 'planted-1'])
+  assert.deepEqual(said.removed.sort(), ['crashed-1', 'listed-1', 'orphan-1', 'planted-1'])
   assert.deepEqual(fs.readdirSync(web).sort(), ['alive-1', 'busy-1', 'file-1', 'fresh-1', 'link-1', 'mine-1'])
-  assert.deepEqual(fs.readdirSync(legacy), ['live-2'])
   assert.deepEqual(fs.readdirSync(outside).sort(), ['inner', 'precious.txt'])
 })
 
