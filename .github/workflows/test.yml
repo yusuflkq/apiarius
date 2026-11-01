@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,10 +49,18 @@ jobs:
       # runner's few cores a busy test outruns it. Claude Code resolves a file
       # call's path the way the host does, so a test of a path only Windows
       # spells (a drive letter, an 8.3 short name) runs on Windows alone, and
-      # its twin with POSIX paths on Linux.
+      # its twin with POSIX paths on Linux and macOS.
       - name: Mod tests
         shell: bash
         run: bash scripts/test.sh
+
+      # tsc against the types this Claude Code writes when it loads the mod,
+      # from a short signed-out session in a pseudo-terminal (`script`, which
+      # the Windows runner lacks).
+      - name: Type-check
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/typecheck.sh --fresh
 
       - name: Web server and page tests
         run: node --test web/test/

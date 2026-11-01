@@ -68,7 +68,12 @@ function inLoop<T extends object>(agentId: string, call: T): T & { agentId: stri
   return { ...call, agentId }
 }
 
-/** A call of a tool this build's table does not list (SubagentHandback). */
+/**
+ * A call of a tool the generated table may not list: SubagentHandback, which
+ * no table does, or Grep, which a session whose search goes through its shell
+ * leaves out (.claude-plugin/types is written from the tools of the session
+ * that loaded the mod, as ./tools says of Bash).
+ */
 function untyped(call: Record<string, unknown>): Args<'tool.call'> {
   return call as unknown as Args<'tool.call'>
 }
@@ -459,7 +464,7 @@ test('loops with no spawn fold away: the engine`s housekeeping, and a Workflow`s
   await $.tool.call(inLoop('fork-compact', { tool: 'Read' as const, file_path: '/repo/src/a.ts' }))
   // the Orchestrator starts a workflow: loops seen now are its agents
   await $.tool.call({ tool: 'Workflow', tool_use_id: 'toolu_wf', script: SCRIPT })
-  await $.tool.call(inLoop('wf-loop-1', { tool: 'Grep' as const, pattern: 'retry' }))
+  await $.tool.call(untyped(inLoop('wf-loop-1', { tool: 'Grep', pattern: 'retry' })))
   await $.agent.spawn(spawnOf({ toolUseId: 'toolu_wf', description: 'Scan the CI logs', workflow: 'wf_run1' }))
   await clock.advance(2000)
 
