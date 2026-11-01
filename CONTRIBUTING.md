@@ -14,6 +14,30 @@ Type `/apiarius` in that session to open the deck. Claude Code watches a folder 
 
 Only one plugin of a name loads. If you installed Apiarius from its marketplace too, turn that copy off first with `claude plugin disable apiarius@apiarius`. A clone keeps its own plugin storage, and so its own sealing key: its decks don't list or steer sessions that run an installed copy. To keep a test session's files apart from your own, set `APIARIUS_HOME` to a scratch folder.
 
+## Code map
+
+Data flows one way: Claude Code's events into one model of the session, that model into one view model, and the view model onto each surface.
+
+- `hooks/hooks.json` names the one hooks module Claude Code loads, `hooks/register.tsx`. It hooks the events, holds the session's `DeckData` and handles `/apiarius`. It is the only file with `$` calls besides `hooks/inspectHooks.ts`, so the modules below stay pure.
+- `hooks/model.ts` turns each event into a change to `DeckData`: agents, calls, edits, messages, what waits on you. Beside it: `hooks/background.ts` (background shells, agents and schedules), `hooks/inspect.ts` (Inspect's records), `hooks/lane.ts` and `hooks/timeline.ts` (Org's Timeline), `hooks/repos.ts` (which repository a file belongs to).
+- `hooks/web.ts` has `deckStateOf`, which builds `WebStateV2` from `DeckData`, git's state and the usage. Every surface draws that one view model. `webStateOf` wraps it as the web page's `state.json`.
+- The pane and the terminal draw it with `hooks/views.tsx` and `hooks/ui/v2/`: `deck.tsx` is the header and the tabs, `now.tsx`, `chat.tsx`, `org.tsx`, `changes.tsx`, `inspect.tsx` and `settings.tsx` are the tabs, and `page.tsx` is an agent's page. `hooks/ui/band.tsx` is the line above the prompt.
+- The web page draws the same model: `web/app.js` and `web/state.mjs`, then a file a tab (`web/now.mjs`, `chat.mjs`, `org.mjs`, `changes.mjs`, `inspect.mjs`, `settings.mjs`). `web/avatars.mjs` and `web/timeline.mjs` are shared with the pane.
+- Git: `hooks/git.ts` builds every git command and its guards, and `register.tsx` runs them (`runGit`, `refreshGit`). `web/files.js` reads untracked and attribute files without following links.
+- The web server: `register.tsx` starts and watches `web/server.js` (`superviseWeb`, `writeWeb`) and runs the page's commands (`runCommand`). `hooks/hold.ts` holds what the Browser pane's page sends in your voice, `web/open.js` opens your own browser, and `web/home.js` keeps the home folders private.
+- The registry of sessions: `hooks/registry.ts` (live) and `hooks/sessions.ts` (pure) write and read `sessions/<id>.json` and the inboxes, sealed by `hooks/seal.ts`.
+
+Which tests cover what (each `tests/<name>.test.ts`):
+
+- The model: `model`, `data`, `engine`, `live`, `scenario`, `words`, `clean`, `recover`, `questions`, `talk`, `background`, `clear`, `outside`.
+- `deckStateOf` and the view model: `v2`, `inspect`, `timeline`.
+- The pane and the terminal: `pane`, `deck`, `now`, `chat`, `org`, `orgtab`, `orgrender`, `agentpage`, `changes`, `fit`, `press`, `avatars`, `probe`.
+- Git: `gitsafety`, `repos`, and `tests/gitpoc.test.mjs`, which runs real git against hostile repositories with `node --test`.
+- The web deck: `web`, `hold`, `debug`, and `web/test/` for the server, the page and the Node scripts.
+- Other sessions: `sessions`, `seal`.
+
+The shared fakes are `tests/world.ts`, which answers the engine's calls for a live deck, and `tests/v2session.ts`, a sample session's data. `web/fixtures/` is the sample the web page and `/apiarius demo` show, built by `web/fixtures/make-v2.mjs` from the mod's own code.
+
 ## Checks
 
 CI runs these on every push and pull request to `main` (`.github/workflows/test.yml`). Run them before you open a pull request:
