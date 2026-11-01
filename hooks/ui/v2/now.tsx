@@ -2,6 +2,8 @@
  * Now, the deck's first screen: the dashboard, on the v2 state's own data,
  * top to bottom as the web deck's page lays it out:
  *
+ * - In a session with nothing in it yet (`isFreshOf`), one quiet line on
+ *   what to do, gone once anything happens.
  * - Needs you (./needs): only when Claude Code holds something on you.
  * - Agents (./dash): a card each, in rows of as many as fit, every line of a
  *   card a press that opens the agent's page; the finished ones behind one
@@ -49,6 +51,18 @@ const plansOpen = new Set<number>()
 /** On a terminal short of rows: the section whose folded head was pressed last, which gets the room first; '' for none. */
 const fit = { first: '' }
 
+/** What Now says first in a session with nothing in it yet. */
+export const FIRST_RUN = 'Ask Claude to start some agents, and you’ll see them work here.'
+
+/**
+ * Whether `state` is a session with nothing in it yet: no request of yours,
+ * nothing waiting on you, no call, no message, and no agent but the
+ * Orchestrator. Another session's deck never is.
+ */
+export function isFreshOf(state: WebStateV2): boolean {
+  return !state.peer && state.header.goal === null && state.needs.length === 0 && state.activity.length === 0 && state.chat.length === 0 && state.agents.every(row => row.row === 'agent' && row.kind === 'orchestrator')
+}
+
 /** An element's key, as a drawing holds it. */
 function keyOf(el: RenderElement): string {
   const node = el as unknown as { key?: unknown; props?: { key?: unknown } }
@@ -81,6 +95,7 @@ export function nowTab(kit: Kit, state: WebStateV2, collapsed: readonly string[]
           }
         : sectionFold(collapsed, id, summary)
     const parts: { el: RenderElement | null; isShut: boolean }[] = [
+      { el: isFreshOf(state) ? <Box key="now:first">{quiet(kit, FIRST_RUN)}</Box> : null, isShut: false },
       { el: needsSection(kit, state, state.needs, actions, 'now', needCards, needLines), isShut: false },
       { el: agentsSection(kit, state, actions, fold(FOLD.agents, agentsFoldOf(state)), openOrg, openFolds, agentRows), isShut: shut.has(FOLD.agents) },
       // what runs when no agent is talking (./background), only while something does or is scheduled

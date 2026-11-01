@@ -18,7 +18,7 @@ import { expect, mock, test, type Engine } from 'claude-code/testing'
 
 import * as M from '../hooks/model'
 import * as D from '../hooks/ui/v2/dashModel'
-import { nowFocusKeys } from '../hooks/ui/v2/now'
+import { FIRST_RUN, isFreshOf, nowFocusKeys } from '../hooks/ui/v2/now'
 import * as W from '../hooks/web'
 import { IDS, SAMPLE_NOW, v2Session } from './v2session'
 import { deck, newWorld, world } from './world'
@@ -118,6 +118,35 @@ function nodesOf(node: unknown): number {
 }
 
 const FIGURES: W.V2Figures = { running: 1, waiting: 2, done: 3, failed: 1, stopped: 1, plan: { done: 1, total: 3 }, costUsd: 4.12, tokens: 2_305_400, contextPercent: 41, minutes: 40, needs: 4 }
+
+test('a session with nothing in it yet says what to do in one quiet line, on the terminal and the desktop, and says it no more once you asked for something; the sample and another session`s deck never say it', async ($, on) => {
+  const clock = mock.clock(on, { now: SAMPLE_NOW })
+  on('ui.focus', () => ({}))
+  const w = newWorld()
+  world(on, w)
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await $.command.run(deck(''))
+  await clock.advance(500)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    expect((await ui.find({ key: 'now:first' }))?.text).toBe(FIRST_RUN)
+    await ui.unmount()
+  }
+  await $.prompt.submit({ text: 'Fix the off-by-one in src/range.js', origin: { kind: 'composer' }, wait: false })
+  await $.turn.start({ text: 'Fix the off-by-one in src/range.js', turnId: 't1' })
+  await clock.advance(500)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount(pane(surface))
+    expect(await ui.find({ key: 'now:first' })).toBeUndefined()
+    await ui.unmount()
+  }
+  expect(FIRST_RUN).not.toContain('demo')
+  const sample = sampleState()
+  expect(isFreshOf(sample)).toBe(false)
+  const empty = { ...sample, header: { ...sample.header, goal: null }, needs: [], activity: [], chat: [], agents: sample.agents.filter(row => row.row === 'agent' && row.kind === 'orchestrator') }
+  expect(isFreshOf(empty)).toBe(true)
+  expect(isFreshOf({ ...empty, peer: { where: 'Terminal', canSteer: true, why: '' } })).toBe(false)
+})
 
 test('cards a row follow the width: clamp(floor((cols + 1) / 33), 1, 6): one below 65 cells, two at the usual 68 to 84, three at 120, four at 160, six at the widest', () => {
   expect([40, 64, 65, 68, 84, 97, 98, 120, 131, 160, 164, 197, 244].map(D.cardsPerRow)).toEqual([1, 1, 2, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6])
