@@ -267,46 +267,32 @@ test('a restored view is healed field by field, and a reload keeps the tracked a
   data.agents.push(M.newAgent('agent-old', 'agent', 'scout', NOW, { status: 'running', parentId: M.MAIN }))
   const spawned = M.addMessage(data, { from: M.MAIN, to: 'agent-old', kind: 'spawn', text: 'look around', at: NOW })
 
-  // a fresh view selects nothing: no detail until a row is picked
-  expect(M.defaultView().agent).toBe('')
   expect(M.healView(undefined)).toEqual(M.defaultView())
   expect(M.healView('agents')).toEqual(M.defaultView())
-  expect(
-    M.healView({ tab: 'flow', agent: 'agent-old', agentPane: 'chat', file: 7, showFiles: 'no', isBandHidden: true, map: 'sideways', message: 'gone' }, data),
-  ).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'chat', isBandHidden: true })
+  expect(M.healView({ file: 7, commit: 'abc1234', isBandHidden: true, collapsed: ['dash:files', 7, '', 'dash:files'] }, data)).toEqual({ ...M.defaultView(), commit: 'abc1234', isBandHidden: true, collapsed: ['dash:files'] })
   // an agent page names an agent the deck holds (the sample's are the sample's), and the sample is a flag
   expect(M.healView({ page: 'agent-old', isDemo: 'yes' }, data)).toMatchObject({ page: 'agent-old', isDemo: false })
   expect(M.healView({ page: 'agent-gone' }, data).page).toBe('')
   expect(M.healView({ page: 'demo-agent', isDemo: true }, data)).toMatchObject({ page: 'demo-agent', isDemo: true })
-  // an agent it no longer holds is let go: nothing selected; a saved selection it holds stays, the Orchestrator's too
-  expect(M.healView({ tab: 'stats', map: 'wire', agent: 'agent-gone', message: spawned.id }, data)).toEqual({
-    ...M.defaultView(),
-    tab: 'stats',
-    map: 'wire',
-    agent: '',
-    message: spawned.id,
-  })
-  expect(M.healView({ agent: M.MAIN }, data).agent).toBe(M.MAIN)
 
-  // what an older build kept: no map, no message, no task book
-  const { tasks: _tasks, ...olderData } = data
-  const older = {
+  // a snapshot with fields left out: no task book, and a view of a few fields
+  const { tasks: _tasks, ...partData } = data
+  const partial = {
     v: M.SNAPSHOT_VERSION,
-    data: olderData,
-    view: { tab: 'graph', agent: 'agent-old', agentPane: 'activity', file: '', commit: '', filter: 'all', showFiles: false, isBandHidden: false },
+    data: partData,
+    view: { file: '', commit: '', isBandHidden: false, collapsed: ['dash:files'] },
   }
   const clock = mock.clock(on, { now: NOW + 5_000 })
   const saved: DeckSnapshot[] = []
-  world(on, clock, { saved, restored: older })
+  world(on, clock, { saved, restored: partial })
 
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/repo' })
   await $.command.run(deck(''))
   await clock.advance(2000)
   const kept = lastOf(saved)
   expect(kept.v).toBe(M.SNAPSHOT_VERSION)
-  // its graph tab is the Agents tab now (Classic); /apiarius opens v2's Now, the earlier build's fields left as they were
-  expect(M.healView(older.view, kept.data).tab).toBe('agents')
-  expect(kept.view).toEqual({ ...M.defaultView(), tab: 'agents', agent: 'agent-old', agentPane: 'activity', showFiles: false })
+  // /apiarius opens v2's Now, the fields it kept left as they were
+  expect(kept.view).toEqual({ ...M.defaultView(), collapsed: ['dash:files'] })
   expect(kept.data.agents.map(agent => agent.id)).toEqual([M.YOU, M.MAIN, 'agent-old'])
   expect(kept.data.messages.map(message => message.id)).toEqual([spawned.id])
   expect(kept.data.tasks).toEqual({})
@@ -413,10 +399,6 @@ test('messages: a pick opens the agent a message went to (its sender for one sen
     { id: M.YOU, sent: 1, received: 0, last: NOW + 4 },
   ])
   expect(M.talkOf(data, 'nobody')).toEqual([])
-
-  // the map's view and the picked message are part of the view a reload keeps
-  expect(M.defaultView()).toMatchObject({ map: 'tree', message: '' })
-  expect(M.MAP_VIEWS).toEqual(['tree', 'wire'])
 })
 
 // The QA live run's four bugs, each replayed as QA met it. Each fails on the build before its fix.

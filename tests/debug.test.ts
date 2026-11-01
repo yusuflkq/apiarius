@@ -112,7 +112,7 @@ test('with the home`s debug folder the deck writes debug/<sessionId>.json there 
   // as v2 has it: your latest request in your words, what needs you (nothing), no plan Claude did not make
   expect(state.header).toMatchObject({ state: 'working', goal: { headline: 'Fix the off-by-one in src/range.js' } })
   expect([state.needs, state.plan]).toEqual([[], null])
-  expect(state.view).toMatchObject({ page: '', v2: { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false }, focus: '', isDemo: false })
+  expect(state.view).toMatchObject({ page: '', v2: { tab: 'now', openFolds: [], chatFilter: '' }, focus: '', isDemo: false })
   // each loop as Claude Code gave it, nothing made up for it
   expect(state.agents.find((agent: { id: string }) => agent.id === 'agent-x1')).toMatchObject({ name: 'scout', description: 'Find the bug', type: 'Explore', origin: 'agent', status: 'running', parent: 'main', background: true, current: null, recent: [], answer: null })
   expect(state.chat).toContainEqual({ from: 'main', to: 'agent-x1', who: 'Orchestrator → scout', kind: 'spawn', text: 'Find the off-by-one in src/range.js' })

@@ -5,7 +5,7 @@
  */
 import type { Elements, RenderSurface } from 'claude-code'
 
-import type { DeckData, DeckTab, DeckView, DeckView2 } from '../../types'
+import type { DeckData, DeckView, DeckView2 } from '../../types'
 import type { CommitDetail, FileDiff, GitState } from '../git'
 import type { HeldRow } from '../hold'
 import type { SessionRowV2, SessionsV2 } from '../sessions'
@@ -102,8 +102,8 @@ export type Actions = {
    */
   sendChat: (agentId: string, text: string, ackId?: string) => void
   review: (text: string) => void
-  /** The band's Open: this session's deck (out of the sample, off an agent's page and Inspect) on that tab, the pane opened; a v1 tab lands on the v2 tab it folded into (`M.v2TabOf`). */
-  open: (tab: DeckTab | DeckView2['tab']) => void
+  /** The band's Open: this session's deck (out of the sample, off an agent's page) on that tab, the pane opened. */
+  open: (tab: DeckView2['tab']) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
   selectRepo: (root: string) => void
   /** "Open in browser" (the header's, `o`, and Settings'), as `/apiarius web`: starts the web deck first when it is not running (never in the Browser pane; a press while it starts does nothing), then a new `full` link to the page, opened in your own browser by the system's opener (a toast when it could not). */

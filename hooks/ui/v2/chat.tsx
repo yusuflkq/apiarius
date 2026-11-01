@@ -966,7 +966,7 @@ function theirsOf(ctx: Ctx, entry: Entry, showTo: boolean, most = FOLD_ROWS): Re
   const title = row.title && row.kind === 'message' ? flat(clean(row.title)) : ''
   const words = wordsOf(ctx, entry, foldWidth(kit, 'theirs'), most)
   const go = (callId: string) => () => {
-    actions.setV2View({ tab: 'now', isInspectOpen: false })
+    actions.setV2View({ tab: 'now' })
     actions.reveal(`needs:${callId}`, 'start')
     actions.focusNext(1, [needKeyOf(callId)])
   }

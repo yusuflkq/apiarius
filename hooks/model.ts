@@ -10,14 +10,12 @@ import type {
   DeckAck,
   DeckActivity,
   DeckAgent,
-  DeckAgentPane,
   DeckData,
   DeckDuring,
   DeckEdit,
   DeckFile,
   DeckGoal,
   DeckKind,
-  DeckMapView,
   DeckMessage,
   DeckMessageKind,
   DeckNeeds,
@@ -28,7 +26,6 @@ import type {
   DeckStatus,
   DeckStepHow,
   DeckStepStatus,
-  DeckTab,
   DeckTask,
   DeckTodoItem,
   DeckView,
@@ -54,51 +51,6 @@ export const ENGINE_NAME = 'Claude Code'
  * agents, and `healData` / `healView` fill or fix what an older shape lacks.
  */
 export const SNAPSHOT_VERSION = 2
-
-/** The pane's tabs, in the order the tab row draws them (keys 1 to 4). */
-export const TABS: readonly DeckTab[] = ['dashboard', 'org', 'plan', 'changes']
-
-/**
- * The views off the tab row, kept so nothing is lost: Stats, and Classic
- * (`agents`: the summary and outline of earlier builds). `/apiarius stats` and
- * `/apiarius classic` still open them, and a saved view on one keeps it.
- */
-export const UNLISTED_TABS: readonly DeckTab[] = ['stats', 'agents']
-
-/** Every tab a view may be on: the tab row's, then the unlisted. */
-const ALL_TABS: readonly DeckTab[] = [...TABS, ...UNLISTED_TABS]
-export const AGENT_PANES: readonly DeckAgentPane[] = ['activity', 'edits', 'chat']
-export const MAP_VIEWS: readonly DeckMapView[] = ['tree', 'wire']
-
-/**
- * Earlier builds' tabs, by the tab that took each one's place, so a saved
- * view or a typed `/apiarius overview` still lands; and `classic`, the name the
- * Agents tab went by on the tab row.
- */
-export const OLD_TABS: ReadonlyMap<string, DeckTab> = new Map<string, DeckTab>([
-  ['overview', 'stats'],
-  ['diffs', 'changes'],
-  ['commits', 'changes'],
-  ['graph', 'agents'],
-  ['flow', 'agents'],
-  ['classic', 'agents'],
-])
-
-/** The tab `name` is: one of the tab row's or the unlisted, or the one an earlier build's name became; undefined for anything else. */
-export function tabNamed(name: unknown): DeckTab | undefined {
-  if (typeof name !== 'string') return undefined
-  return ALL_TABS.find(tab => tab === name) ?? OLD_TABS.get(name)
-}
-
-/** The tab a `/apiarius` argument asks for: a tab's name or its start (`c`), the tab row's before the unlisted, today's names before earlier builds'. */
-export function tabFor(arg: string): DeckTab | undefined {
-  const wanted = arg.trim().toLowerCase()
-  if (wanted === '') return undefined
-  const tab = ALL_TABS.find(one => one.startsWith(wanted))
-  if (tab) return tab
-  for (const [old, now] of OLD_TABS) if (old.startsWith(wanted)) return now
-  return undefined
-}
 
 export const LIMITS = {
   recent: 14,
@@ -216,26 +168,15 @@ export function emptyData(now: number): DeckData {
   }
 }
 
-/** A fresh view: the Dashboard, no agent page over it, nothing selected in Classic (no detail until a row is picked), agents' panes on Diffs. */
+/** A fresh view: the Dashboard, no agent page over it. */
 export function defaultView(): DeckView {
   return {
-    tab: 'dashboard',
-    agent: '',
-    agentPane: 'edits',
     file: '',
     commit: '',
-    filter: 'all',
-    showFiles: true,
     isBandHidden: false,
     avatarStyle: AV.DEFAULT_STYLE,
-    map: 'tree',
-    message: '',
-    folded: [],
-    zoom: '',
-    isDetailsOpen: false,
     page: '',
     isDemo: false,
-    planOpen: [],
     collapsed: [],
     v2: defaultView2(),
   }
@@ -243,7 +184,7 @@ export function defaultView(): DeckView {
 
 /** The v2 screens' own state as a fresh pane has it: the Dashboard (`now`), nothing unfolded, all of Chat, nothing cleared. */
 export function defaultView2(): DeckView2 {
-  return { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, cleared: [], clearedAt: 0 }
+  return { tab: 'now', openFolds: [], chatFilter: '', cleared: [], clearedAt: 0 }
 }
 
 /** What Org shows, as `view.v2.orgView` keeps it: the Timeline once picked, else the chart (the field left out). */
@@ -276,12 +217,6 @@ export function clearedWith(current: DeckView2, ids: readonly string[], at: numb
 /** The v2 tabs, in their keys' order (1 Dashboard, 2 Chat, 3 Org, 4 Changes, 5 Inspect, 6 Settings); the Dashboard's id stays `now`. */
 export const V2_TABS: readonly DeckView2['tab'][] = ['now', 'chat', 'org', 'changes', 'inspect', 'settings']
 
-/** The v2 tab a tab of either build is: Changes, Chat, Org, Inspect and Settings stay as they are; Stats goes to Inspect (its Spend); the Dashboard, Plan and Classic fold into the Dashboard (`now`). */
-export function v2TabOf(tab: DeckTab | DeckView2['tab']): DeckView2['tab'] {
-  if (tab === 'stats') return 'inspect'
-  return tab === 'changes' || tab === 'chat' || tab === 'org' || tab === 'inspect' || tab === 'settings' ? tab : 'now'
-}
-
 /** The names `/apiarius` takes for a v2 tab beside the tabs' own ids: the Dashboard's (its id is `now`), and Help, which Settings holds. */
 export const V2_TAB_NAMES: ReadonlyMap<string, DeckView2['tab']> = new Map<string, DeckView2['tab']>([
   ['dashboard', 'now'],
@@ -291,8 +226,7 @@ export const V2_TAB_NAMES: ReadonlyMap<string, DeckView2['tab']> = new Map<strin
 /**
  * The v2 tab a `/apiarius` argument asks for: `now` (or `dashboard`), `chat`,
  * `org`, `changes`, `inspect` or `settings` (or `help`), or the start of
- * one (`c` is Chat, `i` Inspect); else an earlier build's tab, where it went
- * (`v2TabOf` of `tabFor`: `stats` is Inspect). Undefined for anything else.
+ * one (`c` is Chat, `i` Inspect). Undefined for anything else.
  */
 export function v2TabFor(arg: string): DeckView2['tab'] | undefined {
   const wanted = arg.trim().toLowerCase()
@@ -300,8 +234,7 @@ export function v2TabFor(arg: string): DeckView2['tab'] | undefined {
   const tab = V2_TABS.find(one => one.startsWith(wanted))
   if (tab) return tab
   for (const [name, named] of V2_TAB_NAMES) if (name.startsWith(wanted)) return named
-  const old = tabFor(wanted)
-  return old ? v2TabOf(old) : undefined
+  return undefined
 }
 
 /** The fold rows `view.v2.openFolds` keeps open at most, the oldest dropped first. */
@@ -311,49 +244,18 @@ const OPEN_FOLDS_KEPT = 50
  * The v2 screens' state with `patch` laid over it, each field checked as a
  * reload's would be (a tab of the six, fold ids and a filter as strings,
  * the oldest folds dropped past 50); what `patch` leaves out stays.
- *
- * Inspect is a tab of its own now: `isInspectOpen` stays false, and a
- * `true` (a view an earlier build saved) opens Inspect.
  */
 export function view2With(current: DeckView2, patch: unknown): DeckView2 {
   const p = patch && typeof patch === 'object' ? (patch as Record<string, unknown>) : {}
   return {
-    tab: p.isInspectOpen === true ? 'inspect' : oneOf(p.tab, V2_TABS, current.tab),
+    tab: oneOf(p.tab, V2_TABS, current.tab),
     openFolds: Array.isArray(p.openFolds) ? [...new Set(p.openFolds.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-OPEN_FOLDS_KEPT) : current.openFolds,
     chatFilter: typeof p.chatFilter === 'string' ? p.chatFilter : current.chatFilter,
-    isInspectOpen: false,
     cleared: Array.isArray(p.cleared) ? [...new Set(p.cleared.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-CLEARED_KEPT) : current.cleared,
     clearedAt: typeof p.clearedAt === 'number' && Number.isFinite(p.clearedAt) && p.clearedAt >= 0 ? p.clearedAt : current.clearedAt,
     ...orgViewOf(p.orgView, current.orgView),
     ...activityViewOf(p.activityView, current.activityView),
   }
-}
-
-/** The outline folds `view.folded` keeps at most, the oldest dropped first. */
-const FOLDS_KEPT = 200
-
-/** The Plan tab's open rows and texts `view.planOpen` keeps at most, the oldest dropped first. */
-const PLAN_OPEN_KEPT = 100
-
-/**
- * The Plan tab's disclosures (`view.planOpen`) with `id` opened, or folded
- * when `isOpen` is false; toggled when `isOpen` is left out. A reopened one
- * moves to the end, so the oldest go first past PLAN_OPEN_KEPT.
- */
-export function planOpenWith(open: readonly string[], id: string, isOpen?: boolean): string[] {
-  const rest = open.filter(one => one !== id)
-  const isWanted = isOpen ?? !open.includes(id)
-  return (isWanted && id !== '' ? [...rest, id] : rest).slice(-PLAN_OPEN_KEPT)
-}
-
-/** A plan step's id in `DeckView.planOpen`. */
-export function stepOpenId(key: string): string {
-  return `step:${key}`
-}
-
-/** The key of a plan step's row in the Plan tab's drawing: what `openStep` scrolls to. */
-export function stepRowKey(key: string): string {
-  return `plan:step:${key}`
 }
 
 /** The sections `view.collapsed` keeps folded at most, the oldest dropped first. */
@@ -376,12 +278,9 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback
 }
 
 /**
- * A view restored from a snapshot, field by field: one missing, of another
- * type, or naming a tab or map view this build lacks takes its default; an
- * earlier build's tab name becomes the tab that took its place (`tabNamed`).
- * With `data`, an agent or a message it no longer holds is let go too; a
- * selected file (`file:…`) or plan step (its key, or `step:` and its key)
- * stays while it is a step of the plan, or names itself one.
+ * A view restored from a snapshot, field by field: one missing, or of
+ * another type, takes its default. With `data`, an agent page on an agent
+ * it no longer holds is let go too.
  */
 export function healView(value: unknown, data?: DeckData): DeckView {
   const base = defaultView()
@@ -390,37 +289,19 @@ export function healView(value: unknown, data?: DeckData): DeckView {
   const text = (field: unknown, fallback: string) => (typeof field === 'string' ? field : fallback)
   const flag = (field: unknown, fallback: boolean) => (typeof field === 'boolean' ? field : fallback)
   const view: DeckView = {
-    tab: tabNamed(v.tab) ?? base.tab,
-    agent: text(v.agent, base.agent),
-    agentPane: oneOf(v.agentPane, AGENT_PANES, base.agentPane),
     file: text(v.file, base.file),
     commit: text(v.commit, base.commit),
-    filter: text(v.filter, base.filter),
-    showFiles: flag(v.showFiles, base.showFiles),
     isBandHidden: flag(v.isBandHidden, base.isBandHidden),
     avatarStyle: AV.styleOf(v.avatarStyle),
-    map: oneOf(v.map, MAP_VIEWS, base.map),
-    message: text(v.message, base.message),
-    // the outline's folds: strings only, each once, the newest kept
-    folded: Array.isArray(v.folded) ? [...new Set(v.folded.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-FOLDS_KEPT) : base.folded,
-    zoom: text(v.zoom, base.zoom),
-    isDetailsOpen: flag(v.isDetailsOpen, base.isDetailsOpen),
     page: text(v.page, base.page),
     isDemo: flag(v.isDemo, base.isDemo),
-    // the Plan tab's open rows and texts: strings only, each once, the newest kept
-    planOpen: Array.isArray(v.planOpen) ? [...new Set(v.planOpen.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-PLAN_OPEN_KEPT) : base.planOpen,
     // the sections folded to their heading: strings only, each once, the newest kept
     collapsed: Array.isArray(v.collapsed) ? [...new Set(v.collapsed.filter((one): one is string => typeof one === 'string' && one !== ''))].slice(-COLLAPSED_KEPT) : base.collapsed,
     // the v2 screens' own, each field as it would be set
     v2: view2With(base.v2, v.v2),
   }
-  if (data) {
-    const isRow = (id: string) => id.startsWith('file:') || id.startsWith('step:') || planOf(data).steps.some(step => step.key === id)
-    if (view.agent !== '' && !agentOf(data, view.agent) && !isRow(view.agent)) view.agent = base.agent
-    // an agent page of this session's names one it holds; the sample's agents are the sample's
-    if (view.page !== '' && !view.isDemo && !agentOf(data, view.page)) view.page = base.page
-    if (view.message !== '' && !data.messages.some(message => message.id === view.message)) view.message = ''
-  }
+  // an agent page of this session's names one it holds; the sample's agents are the sample's
+  if (data && view.page !== '' && !view.isDemo && !agentOf(data, view.page)) view.page = base.page
   return view
 }
 

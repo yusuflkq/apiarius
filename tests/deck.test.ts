@@ -171,12 +171,12 @@ test('/apiarius opens the pane on the Dashboard; Changes shows git`s files (one 
     await ui.press({ key: `commit:${HASH}` })
     expect(await ui.find({ key: 'changes:review' })).toBeDefined()
 
-    // the old views' commands land where they went: Stats on Inspect (its Spend), Classic on the Dashboard
-    await $.command.run(deck('stats'))
+    // /apiarius inspect opens Inspect (its Spend among it), /apiarius dashboard the Dashboard
+    await $.command.run(deck('inspect'))
     await ui.redraw()
     expect((await ui.find({ key: 'tab:inspect' }))?.props.dimColor).toBe(false)
     expect((await ui.find({ key: 'inspect' }))?.text).toContain('SPEND')
-    await $.command.run(deck('classic'))
+    await $.command.run(deck('dashboard'))
     await ui.redraw()
     expect(await ui.find({ key: 'inspect' })).toBeUndefined()
     expect((await ui.find({ key: 'tab:now' }))?.props.dimColor).toBe(false)

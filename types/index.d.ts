@@ -652,27 +652,12 @@ export type DeckData = {
 }
 
 /**
- * The pane's tabs: the Dashboard, the org chart, the Plan and Changes on the
- * tab row; Stats and Classic (`agents`: the summary and the full outline of
- * earlier builds) off it, opened by `/apiarius stats` and `/apiarius classic`.
- * Older builds' names (overview, diffs, commits, graph, flow) and `classic`
- * are read as these by `tabNamed`.
- */
-export type DeckTab = 'dashboard' | 'org' | 'plan' | 'agents' | 'changes' | 'stats'
-
-/** What the selected agent's detail shows: its exact diffs, its conversation, or its recent tool calls. */
-export type DeckAgentPane = 'activity' | 'edits' | 'chat'
-
-/** How the Agents tab draws the delegation: a tidy tree, or one lane per participant. */
-export type DeckMapView = 'tree' | 'wire'
-
-/**
  * What the v2 screens keep of their own in the pane:
  * the tab open (Dashboard, Chat, Org, Changes, Inspect, Settings; keys 1 to
  * 6), the fold rows opened and Chat's filter. The agent page open is `page`.
  */
 export type DeckView2 = {
-  /** The tab open: `now` is the Dashboard (its id from before it was renamed, so `/apiarius now` and saved views still land). */
+  /** The tab open: `now` is the Dashboard. */
   tab: 'now' | 'chat' | 'org' | 'changes' | 'inspect' | 'settings'
   /**
    * The fold rows opened, by their id: a tree's (`fold:` and the parent's
@@ -697,26 +682,11 @@ export type DeckView2 = {
   orgView?: 'chart' | 'timeline'
   /** What an agent page's Activity lists: its calls alone once "Calls only" is picked (`calls`); absent, its calls with their words between them (a patch of `words` goes back to that, and leaves the field out). */
   activityView?: 'calls' | 'words'
-  /**
-   * Inspect over the tab, as earlier builds had it: always false now, as
-   * Inspect is a tab of its own. A view saved with `true`, or a patch that
-   * sets it, opens Inspect (`M.view2With`).
-   */
-  isInspectOpen: boolean
 }
 
 export type DeckView = {
-  tab: DeckTab
-  /**
-   * What the Agents tab's detail block shows (`select`): an agent's id, a
-   * plan step's key or a file's key; '' when none is (the Orchestrator's shows).
-   */
-  agent: string
-  agentPane: DeckAgentPane
   file: string
   commit: string
-  filter: string
-  showFiles: boolean
   isBandHidden: boolean
   /**
    * The style the deck draws agents' avatars in (web/avatars.mjs
@@ -726,31 +696,10 @@ export type DeckView = {
    * follow it.
    */
   avatarStyle: string
-  /** The delegation map's view. */
-  map: DeckMapView
-  /** The id of the message picked in the messages log; '' when none is. */
-  message: string
-  /**
-   * The person's own folds of outline branches (agent ids, plan step keys,
-   * group ids), which win over the defaults (finished subtrees, background
-   * and "+N done" rows folded): an id folds its branch, `+` and an id keeps
-   * it open. Oldest first, at most 200.
-   */
-  folded: string[]
-  /** The branch the outline is zoomed on (an agent id or a step key); '' for all. */
-  zoom: string
-  /** The Agents tab shows the full outline (Details) instead of its summary. */
-  isDetailsOpen: boolean
   /** The agent whose page shows over the tab in view (Back returns to the tab); '' for none. */
   page: string
   /** The pane shows the sample (`/apiarius demo`, web/fixtures/state.json) in place of this session. */
   isDemo: boolean
-  /**
-   * What the Plan tab has open: `step:` and a step's key for its row, `goal`
-   * for the goal's whole words, `result:` and an agent's id for its whole
-   * result. Oldest first, at most 100; everything else stays folded.
-   */
-  planOpen: string[]
   /**
    * The sections folded to their heading and a one-line summary, by their id
    * (the dashboard's `FOLD`): the Dashboard's `dash:goal`, `dash:agents`,

@@ -1852,8 +1852,8 @@ export function fileKeyOf(path: string): string {
  * (`fileKeyOf`). None on Chat, Org (its screen passes its own keys to
  * `focusNext`), an agent's page (`page` its id) or Inspect.
  */
-export function focusKeysOf(state: Pick<WebStateV2, 'needs' | 'agents' | 'changes'>, view2: Pick<DeckView2, 'tab' | 'openFolds' | 'isInspectOpen'>, page: string): string[] {
-  if (page !== '' || view2.isInspectOpen) return []
+export function focusKeysOf(state: Pick<WebStateV2, 'needs' | 'agents' | 'changes'>, view2: Pick<DeckView2, 'tab' | 'openFolds'>, page: string): string[] {
+  if (page !== '') return []
   if (view2.tab === 'changes') return state.changes.files.map(file => fileKeyOf(file.path))
   if (view2.tab !== 'now') return []
   const open = new Set(view2.openFolds)

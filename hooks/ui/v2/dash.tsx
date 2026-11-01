@@ -558,7 +558,7 @@ function filesSection(kit: Kit, state: WebStateV2, actions: DashActions, width: 
   const { Button } = kit
   const groups = fileGroupsOf(state, MOST_FILES)
   const total = groups.insideCount + groups.outside.length
-  const link = total > 0 ? <Button key="now:changes" label="Changes →" plain dimColor onPress={() => actions.setV2View({ tab: 'changes', isInspectOpen: false })} /> : null
+  const link = total > 0 ? <Button key="now:changes" label="Changes →" plain dimColor onPress={() => actions.setV2View({ tab: 'changes' })} /> : null
   const head = foldHead(kit, fold, 'Files', groups.insideCount > 0 ? groups.insideCount : null, actions, link)
   if (!fold.isOpen) return section(kit, 'now:files', head, null, width)
   const rows: (RenderElement | null)[] = []
@@ -616,7 +616,7 @@ function fileRow(kit: Kit, state: WebStateV2, row: FileRow, actions: DashActions
   const { Box, Text, Button } = kit
   const adv = advanceOf(kit)
   const open = () => {
-    actions.setV2View({ tab: 'changes', isInspectOpen: false })
+    actions.setV2View({ tab: 'changes' })
     if (row.changesPath === '' && (state.changes.repo === null || row.isOutside)) {
       openEditsOf(row.path)
       actions.reveal(editsKeyOf(row.path))

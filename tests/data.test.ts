@@ -812,7 +812,6 @@ test('an older snapshot heals field by field: new fields take their defaults, wr
   const bare = M.healData(JSON.parse(JSON.stringify(noGoals)) as DeckData, NOW)
   expect(bare.goals).toEqual([])
   expect(JSON.parse(JSON.stringify(bare))).toEqual(bare)
-  expect(M.healView({ folded: ['a', 7, 'a', ''], zoom: 'step:todo:t1' })).toMatchObject({ folded: ['a'], zoom: 'step:todo:t1' })
 })
 
 test('a snapshot restored with the old cut gets those labels made again, siblings in spawn order; a label whose words changed since stays as it was fixed', () => {

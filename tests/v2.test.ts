@@ -634,29 +634,26 @@ test('the commands v2 adds: stopAgent only for a background agent or a teammate 
 // ---------------------------------------------------------------------------
 // The pane's side of v2: its own view state, its lazy files, the sample, the commands.
 
-test('the v2 screens` own state in the pane: the Dashboard (`now`), nothing unfolded, all of Chat; each field set as it is checked, the rest kept, healed from a snapshot; Inspect open is the Inspect tab now', () => {
+test('the v2 screens` own state in the pane: the Dashboard (`now`), nothing unfolded, all of Chat; each field set as it is checked, the rest kept, healed from a snapshot', () => {
   const fresh = M.defaultView().v2
   const none = { cleared: [], clearedAt: 0 }
-  expect(fresh).toEqual({ tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, ...none })
+  expect(fresh).toEqual({ tab: 'now', openFolds: [], chatFilter: '', ...none })
   const set = M.view2With(fresh, { tab: 'chat', chatFilter: 'agent-x1' })
-  expect(set).toEqual({ tab: 'chat', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false, ...none })
+  expect(set).toEqual({ tab: 'chat', openFolds: [], chatFilter: 'agent-x1', ...none })
   // a tab of none of the five (the Dashboard's id is `now`), folds that are no strings, a filter that is none: kept as they were
-  expect(M.view2With(set, { tab: 'dashboard', openFolds: ['fold:main', 7, '', 'fold:main', 'fold:b'], chatFilter: 3, isInspectOpen: 'yes' })).toEqual({ tab: 'chat', openFolds: ['fold:main', 'fold:b'], chatFilter: 'agent-x1', isInspectOpen: false, ...none })
+  expect(M.view2With(set, { tab: 'dashboard', openFolds: ['fold:main', 7, '', 'fold:main', 'fold:b'], chatFilter: 3 })).toEqual({ tab: 'chat', openFolds: ['fold:main', 'fold:b'], chatFilter: 'agent-x1', ...none })
   expect(M.view2With(set, { openFolds: Array.from({ length: 60 }, (_, i) => `fold:${i}`) }).openFolds).toHaveLength(50)
   expect(M.view2With(set, { tab: 'settings' }).tab).toBe('settings')
   expect(M.view2With(set, { tab: 'inspect' }).tab).toBe('inspect')
-  // Inspect over a tab, as an earlier build kept it, opens Inspect, a tab of its own
-  expect(M.view2With(set, { isInspectOpen: true })).toEqual({ tab: 'inspect', openFolds: [], chatFilter: 'agent-x1', isInspectOpen: false, ...none })
   // what Clear finished hid: ids as strings, each once, the newest 500, and when; anything else kept as it was
   expect(M.view2With(set, { cleared: ['a1', 7, '', 'a1', 'a2'], clearedAt: 1000 })).toMatchObject({ cleared: ['a1', 'a2'], clearedAt: 1000 })
   expect(M.view2With(set, { cleared: 'a1', clearedAt: -1 })).toMatchObject(none)
   expect(M.view2With(set, { cleared: Array.from({ length: 600 }, (_, i) => `a${i}`) }).cleared).toHaveLength(500)
   expect(M.clearedWith(M.view2With(set, { cleared: ['a1'], clearedAt: 5 }), ['a2', 'a1'], 9)).toMatchObject({ cleared: ['a1', 'a2'], clearedAt: 9 })
-  // a reload: a view of an earlier build has none, a saved one keeps its own
-  expect(M.healView({ tab: 'plan' }).v2).toEqual(fresh)
-  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: false } }).v2).toEqual({ tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', isInspectOpen: false, ...none })
-  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: [], chatFilter: '', isInspectOpen: true } }).v2).toEqual({ tab: 'inspect', openFolds: [], chatFilter: '', isInspectOpen: false, ...none })
-  expect(M.healView({ ...M.defaultView(), v2: { tab: 'now', openFolds: [], chatFilter: '', isInspectOpen: false, cleared: ['a1'], clearedAt: 1000 } }).v2).toMatchObject({ cleared: ['a1'], clearedAt: 1000 })
+  // a reload: a view with none takes the fresh one, a saved one keeps its own
+  expect(M.healView({}).v2).toEqual(fresh)
+  expect(M.healView({ ...M.defaultView(), v2: { tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between' } }).v2).toEqual({ tab: 'changes', openFolds: ['fold:main'], chatFilter: 'between', ...none })
+  expect(M.healView({ ...M.defaultView(), v2: { tab: 'now', openFolds: [], chatFilter: '', cleared: ['a1'], clearedAt: 1000 } }).v2).toMatchObject({ cleared: ['a1'], clearedAt: 1000 })
 })
 
 test('the lazy files as the pane opens them: an agent`s file, a patch and a cut message`s whole text by the ids the state names, from the live deck or as read', () => {
@@ -748,11 +745,11 @@ test('j and k move among the rows a v2 screen draws, by their Buttons` keys: Now
   const session = v2Session()
   const state = W.deckStateOf(session.data, session.git, session.usage, session.now, session.sessionId, session.cwd, session.answerable)
   const needs = state.needs.map(need => `need:${need.id}`)
-  const now = { tab: 'now' as const, openFolds: [] as string[], isInspectOpen: false }
+  const now = { tab: 'now' as const, openFolds: [] as string[] }
   expect(W.focusKeysOf(state, now, '')).toEqual([...needs, 'agent:main', `agent:${IDS.builder}`, `fold:${IDS.builder}`, `agent:${IDS.reviewer}`, 'fold:main'])
   expect(W.focusKeysOf(state, { ...now, openFolds: ['fold:main'] }, '')).toEqual([...needs, 'agent:main', `agent:${IDS.builder}`, `fold:${IDS.builder}`, `agent:${IDS.reviewer}`, 'fold:main', `agent:${IDS.researcher}`, `agent:${IDS.docs}`, `agent:${IDS.scout}`])
   expect(W.focusKeysOf(state, { ...now, tab: 'changes' }, '')).toEqual(state.changes.files.map(file => `file:${file.path}`))
-  expect([W.focusKeysOf(state, { ...now, tab: 'chat' }, ''), W.focusKeysOf(state, now, IDS.builder), W.focusKeysOf(state, { ...now, isInspectOpen: true }, '')]).toEqual([[], [], []])
+  expect([W.focusKeysOf(state, { ...now, tab: 'chat' }, ''), W.focusKeysOf(state, now, IDS.builder), W.focusKeysOf(state, { ...now, tab: 'inspect' }, '')]).toEqual([[], [], []])
   expect([W.needKeyOf('toolu_1'), W.agentKeyOf('main'), W.fileKeyOf('src/a.ts')]).toEqual(['need:toolu_1', 'agent:main', 'file:src/a.ts'])
 
   // one row on, held at either end; from none (or one gone), j takes the first and k the last
@@ -829,19 +826,17 @@ test('an answer in the sample stays there: its need goes, a choice row from you 
   expect([done.state.header.state, done.state.header.stateText, rowOf(done.state, M.MAIN).status, done.state.needs]).toEqual(['working', 'Working', 'running', []])
 })
 
-test('/apiarius`s v2 tabs: dashboard (or now), chat, org, changes, inspect and settings (or help), or the start of one; an earlier build`s tab lands on the one it folded into', () => {
+test('/apiarius`s v2 tabs: dashboard (or now), chat, org, changes, inspect and settings (or help), or the start of one', () => {
   expect(M.V2_TABS).toEqual(['now', 'chat', 'org', 'changes', 'inspect', 'settings'])
   expect([M.v2TabFor('now'), M.v2TabFor('n'), M.v2TabFor('c'), M.v2TabFor('chat'), M.v2TabFor('chan'), M.v2TabFor(' Changes '), M.v2TabFor('o'), M.v2TabFor('Org')]).toEqual(['now', 'now', 'chat', 'chat', 'changes', 'changes', 'org', 'org'])
   expect([M.v2TabFor('dashboard'), M.v2TabFor('Dashboard'), M.v2TabFor('dash'), M.v2TabFor('d')]).toEqual(['now', 'now', 'now', 'now'])
   expect([M.v2TabFor('settings'), M.v2TabFor('s'), M.v2TabFor('help'), M.v2TabFor('h')]).toEqual(['settings', 'settings', 'settings', 'settings'])
-  expect([M.v2TabFor('inspect'), M.v2TabFor('Inspect'), M.v2TabFor('i'), M.v2TabFor('stats')]).toEqual(['inspect', 'inspect', 'inspect', 'inspect'])
-  expect([M.v2TabFor('org'), M.v2TabFor('plan'), M.v2TabFor('classic'), M.v2TabFor('diffs')]).toEqual(['org', 'now', 'now', 'changes'])
+  expect([M.v2TabFor('inspect'), M.v2TabFor('Inspect'), M.v2TabFor('i')]).toEqual(['inspect', 'inspect', 'inspect'])
   expect([M.v2TabFor(''), M.v2TabFor('web'), M.v2TabFor('demo'), M.v2TabFor('nowhere')]).toEqual([undefined, undefined, undefined, undefined])
-  expect([M.v2TabOf('dashboard'), M.v2TabOf('changes'), M.v2TabOf('chat'), M.v2TabOf('stats'), M.v2TabOf('org'), M.v2TabOf('plan'), M.v2TabOf('inspect'), M.v2TabOf('settings')]).toEqual(['now', 'changes', 'chat', 'inspect', 'org', 'now', 'inspect', 'settings'])
   expect([M.view2With(M.defaultView2(), { tab: 'org' }).tab, M.view2With(M.defaultView2(), { tab: 'plan' }).tab]).toEqual(['org', 'now'])
 })
 
-test('/apiarius dashboard (or now), chat, org, changes, inspect and settings open the pane on that v2 tab, /apiarius stats on Inspect, /apiarius help on Settings, and /apiarius alone on the Dashboard; each choice is kept', async ($, on) => {
+test('/apiarius dashboard (or now), chat, org, changes, inspect and settings open the pane on that v2 tab, /apiarius help on Settings, and /apiarius alone on the Dashboard; each choice is kept', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -854,14 +849,13 @@ test('/apiarius dashboard (or now), chat, org, changes, inspect and settings ope
   const v2After = async (args: string) => {
     await $.command.run(deck(args))
     await clock.advance(2000)
-    return (saved[saved.length - 1] as { view: { v2: { tab: string; isInspectOpen: boolean } } }).view.v2
+    return (saved[saved.length - 1] as { view: { v2: { tab: string } } }).view.v2
   }
-  expect(await v2After('chat')).toMatchObject({ tab: 'chat', isInspectOpen: false })
-  expect(await v2After('changes')).toMatchObject({ tab: 'changes', isInspectOpen: false })
-  expect(await v2After('inspect')).toMatchObject({ tab: 'inspect', isInspectOpen: false })
-  expect(await v2After('c')).toMatchObject({ tab: 'chat', isInspectOpen: false })
-  expect(await v2After('stats')).toMatchObject({ tab: 'inspect', isInspectOpen: false })
-  expect(await v2After('')).toMatchObject({ tab: 'now', isInspectOpen: false })
+  expect(await v2After('chat')).toMatchObject({ tab: 'chat' })
+  expect(await v2After('changes')).toMatchObject({ tab: 'changes' })
+  expect(await v2After('inspect')).toMatchObject({ tab: 'inspect' })
+  expect(await v2After('c')).toMatchObject({ tab: 'chat' })
+  expect(await v2After('')).toMatchObject({ tab: 'now' })
   expect(await v2After('help')).toMatchObject({ tab: 'settings' })
   expect(await v2After('settings')).toMatchObject({ tab: 'settings' })
   expect(await v2After('changes')).toMatchObject({ tab: 'changes' })

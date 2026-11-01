@@ -229,7 +229,7 @@ const orgDown = new Set<RenderSurface>()
 
 /** Whether this surface's Org lists the agents instead of its chart: the chart failed there and Org has not been left since. */
 function isOrgDownOn(surface: RenderSurface): boolean {
-  if (view.v2.tab !== 'org' || view.page !== '' || view.v2.isInspectOpen) orgDown.delete(surface)
+  if (view.v2.tab !== 'org' || view.page !== '') orgDown.delete(surface)
   return orgDown.has(surface)
 }
 
@@ -550,18 +550,6 @@ function sendTitleOf(from: string, text: string): string {
   return found?.summary ?? ''
 }
 
-/**
- * A placeholder row took its agent's id: what the view held of it (the
- * selection, a fold, a zoom, as the id or inside a key) follows it.
- */
-function renameInView(from: string, to: string) {
-  if (from === to) return
-  const swap = (value: string) => (value === from || value === `+${from}` || value.endsWith(`:${from}`) ? `${value.slice(0, value.length - from.length)}${to}` : value)
-  view.agent = swap(view.agent)
-  view.zoom = swap(view.zoom)
-  view.folded = view.folded.map(swap)
-}
-
 /** Keeps the model in `$.state`, so a reload of this module picks it up again; while the debug folder is there, dumps it too, and while the web deck is on, writes its state. */
 function save($: EngineInterface) {
   dataGen += 1
@@ -667,7 +655,7 @@ function debugStateOf(now: number) {
       turns: data.turns,
     },
     git: { root: git.root, isRepo: git.isRepo, checkedAt: git.checkedAt, files: git.files.map(file => file.path) },
-    view: { tab: view.tab, page: view.page, v2: view.v2, focus: paneFocus, isDemo: view.isDemo },
+    view: { page: view.page, v2: view.v2, focus: paneFocus, isDemo: view.isDemo },
     // how the pane's window stands for the deck: whether the list of sessions shows, Chat's end kept to, and the moves the deck asked for
     pane: { isListOpen: SR.isListOpen(), follow: { ...chatFollow }, moves: paneMoves.count, latest: paneMoves.latest },
     // what every surface draws, as v2 has it: the header (your latest request, the word, the turn), what needs you, the plan's sources, the chat's latest rows
@@ -3139,7 +3127,7 @@ function scrollToStart($: EngineInterface) {
  */
 function keepChat($: EngineInterface, now: number) {
   const isListOpen = SR.isListOpen()
-  const state = !isListOpen && view.v2.tab === 'chat' && view.page === '' && !view.v2.isInspectOpen ? shownV2Of(now) : null
+  const state = !isListOpen && view.v2.tab === 'chat' && view.page === '' ? shownV2Of(now) : null
   const step = followStep(chatFollow, state ? chatEndOf(state, view.v2.chatFilter) : null, isListOpen)
   if (step === 'end') scrollToEnd($)
   else if (step === 'start') scrollToStart($)
@@ -3247,9 +3235,9 @@ async function focusNeed($: EngineInterface): Promise<void> {
     $.ui.toast('Nothing needs you')
     return
   }
-  if (view.v2.tab !== 'now' || view.page !== '' || view.v2.isInspectOpen) {
+  if (view.v2.tab !== 'now' || view.page !== '') {
     view.page = ''
-    view.v2 = M.view2With(view.v2, { tab: 'now', isInspectOpen: false })
+    view.v2 = M.view2With(view.v2, { tab: 'now' })
     changed($)
   }
   await focusOn($, key)
@@ -3338,11 +3326,11 @@ function actionsFor($: EngineInterface): DeckActions {
     openSessions: () => toggleSessions($),
     closeSessions: () => SR.closeList(),
     openSession: id => void SR.openSession(id, view.isDemo),
-    // the band's Open: this session's deck on that tab (a v1 tab on the v2 tab it folded into), off a page and Inspect
+    // the band's Open: this session's deck on that tab, off a page
     open: tab => {
       SR.showHere()
       leaveDemo()
-      view.v2 = M.view2With(view.v2, { tab: M.v2TabOf(tab), isInspectOpen: false })
+      view.v2 = M.view2With(view.v2, { tab })
       view.page = ''
       changed($)
       void openPane($)
@@ -3468,7 +3456,7 @@ async function loadDemo($: EngineInterface, isFresh: boolean): Promise<string> {
   view.isDemo = true
   if (isFresh) {
     view.page = ''
-    view.v2 = M.view2With(view.v2, { tab: 'now', isInspectOpen: false })
+    view.v2 = M.view2With(view.v2, { tab: 'now' })
   }
   demo.v2 = null
   demo.v2Files = W.v2FilesFrom({ agents: {}, patches: {}, messages: {} })
@@ -4068,7 +4056,7 @@ export const register: Register = on => {
       await $.command.register({
         name: 'apiarius',
         description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in your browser)',
-        // now (the Dashboard's id), help (Settings), probe (a dev check) and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
+        // now (the Dashboard's id), help (Settings) and probe (a dev check) still open, unlisted
         argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close]',
         immediate: true,
       })
@@ -4226,7 +4214,7 @@ export const register: Register = on => {
       if (why) return { text: why }
       return isShown ? {} : { text: 'Apiarius is open and waiting for room: widen the window, or press ctrl+x then tab.' }
     }
-    // anything else is this session's deck: /apiarius alone the Dashboard; dashboard (or now), chat, org, changes or settings (inspect, help and stats too), or an earlier build's tab, on the one it folded into
+    // anything else is this session's deck: /apiarius alone the Dashboard; dashboard (or now), chat, org, changes or settings (inspect and help too)
     leaveDemo()
     view.page = ''
     // /apiarius chat takes the pane to Chat's newest message, though Chat showed already
@@ -4383,7 +4371,7 @@ export const register: Register = on => {
             : Array.isArray(record?.content)
               ? (record.content as unknown[]).map(block => (block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string' ? (block as { text: string }).text : '')).join('\n')
               : ''
-        const settled = M.settleAgentCall(data, {
+        M.settleAgentCall(data, {
           toolUseId: e.tool_use_id,
           ...(typeof record?.agentId === 'string' && record.agentId !== '' ? { agentId: record.agentId } : {}),
           isStarted: ok,
@@ -4393,7 +4381,6 @@ export const register: Register = on => {
           isRemote: status === 'remote_launched',
           at: end,
         })
-        if (settled?.from !== undefined) renameInView(settled.from, settled.agent.id)
       } catch {
         // the call's agent stands as its spawn left it
       }
@@ -4472,7 +4459,7 @@ export const register: Register = on => {
       } else if (result.agentId) {
         if (parentId !== M.MAIN) M.seeLoop(data, parentId, now)
         // the row its Agent call made takes the agent's id: the same row, never a second one
-        const { agent, from } = M.noteSpawn(data, {
+        const { agent } = M.noteSpawn(data, {
           toolUseId: e.tool_use_id,
           agentId: result.agentId,
           parentId,
@@ -4486,7 +4473,6 @@ export const register: Register = on => {
           background: e.background === true,
           at: now,
         })
-        if (from !== undefined) renameInView(from, agent.id)
         if (e.resume) {
           // resumed, though the deck never saw it start (a reload lost it): its words a message, once
           agent.resumedAt = now
