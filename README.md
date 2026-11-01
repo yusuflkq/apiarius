@@ -23,7 +23,7 @@ In a Claude Code session in the terminal, run:
 
 The install shows what the plugin adds and asks where to install it. Install for you (user scope) puts it in every project.
 
-From your shell, without starting a session, one command adds the marketplace and installs Apiarius for you. It needs Claude Code 2.1.292 or later.
+From your shell, without starting a session, one command adds the marketplace and installs Apiarius for you.
 
 ```
 claude plugin install apiarius --marketplace yusuflkq/apiarius

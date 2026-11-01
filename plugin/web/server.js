@@ -14,18 +14,18 @@
  * Access, in two steps. The mod signs one-time tickets with the secret
  * (`ticketOf`: HMAC-SHA256, hooks/web.ts mints the same), each of a grade:
  * `pane` for the page it opens in the Desktop's Browser pane, which Claude's
- * tools can drive, and `full` for the person's own browser. A link carries
+ * tools can drive, and `full` for the user's own browser. A link carries
  * one as `t`; the page trades it at once (POST /session, the ticket in the
- * `X-Deck-Ticket` header) for a handle of the same grade, and a ticket used
- * once is refused after (the mod hears of each use: `{"used":…}`), as is one
- * past the deadline it carries, sealed with it (the link the system's opener
- * opens, whose arguments other programs can read while it runs: 30 s). Every data
+ * `X-Deck-Ticket` header) for a handle of the same grade. A ticket is refused
+ * once used (the mod hears of each use: `{"used":…}`), and so is one past the
+ * deadline sealed into it (the link the system's opener opens carries a 30 s
+ * one, since other programs can read the opener's arguments while it runs). Every data
  * route and POST /cmd needs a handle, in the `X-Deck-Handle` header, or as
  * `h` for /events alone (an EventSource sends no header); the page's own
  * files (index.html, app.js, app.css, the .mjs it imports) hold no data and
  * need none, so no cookie is ever set. Each command printed carries the
  * grade of the handle that sent it (`grade`), which the mod trusts: it holds
- * a `pane` page's words for the person's own Send above the prompt.
+ * a `pane` page's words until the user presses Send above the prompt.
  *
  * With `--sessions` (the registry of every session on this machine,
  * hooks/sessions.ts) it also serves another session's state and lazy files
@@ -498,10 +498,11 @@ function isAlive(pid) {
 
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGBREAK']) process.on(signal, quit)
 process.stdout.on('error', quit) // EPIPE: nobody reads the commands any more
-// The secret on stdin is followed by its end (the mod's `input`): that end says
-// nothing. Without one, only a pipe that closes later says the parent let go:
-// stdin 'ignore' (the null device) or a pipe closed from the start ends at
-// once, and a terminal belongs to a person: those leave it to the pid check.
+// When the secret comes on stdin (the mod's `input`), stdin ends right after
+// it, so that end says nothing. Otherwise, only a pipe that closes later means
+// the parent let go: stdin 'ignore' (the null device) or a pipe closed from
+// the start ends at once, and a terminal belongs to a user, so those cases
+// are left to the pid check.
 const fromEnv = process.env.APIARIUS_SECRET ?? ''
 if (fromEnv === '') {
   readSecret()

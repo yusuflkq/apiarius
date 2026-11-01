@@ -1213,17 +1213,18 @@ export function nowOf(agent: DeckAgent): string {
 }
 
 /**
- * The status the deck draws: `waiting` while the engine waits on the person
+ * The status the deck draws: `waiting` while the engine waits on the user
  * for it (a needs-you note) or its loop is held; `running` for a starting,
  * pending or running loop; `done` once it completed; `failed` once it failed
  * or was stopped; `idle` between turns, and always for you and outside peers.
  *
- * Without `data` the note counts where it is kept, on the Orchestrator. With
- * it, it counts on the agent whose call waits: a subagent's permission prompt
- * makes that subagent `waiting`, not the Orchestrator, and so does a call of
- * its held on you (`pending`: a question, a permission prompt). With it too, a loop
- * held while a child agent of its own is at work (a background subagent's
- * foreground Agent call) is `running`: busy, nothing waits on you.
+ * Without `data`, a needs-you note counts only where it is kept, on the
+ * Orchestrator. With `data`, it counts on the agent whose call waits: a
+ * subagent's permission prompt makes that subagent `waiting`, not the
+ * Orchestrator, and so does any of its calls waiting on you (`pending`: a
+ * question, a permission prompt). Also with `data`, a loop held while a
+ * child agent of its own is at work (a background subagent's foreground
+ * Agent call) is `running`: it is busy, and nothing waits on you.
  */
 export function statusOf(agent: DeckAgent, data?: DeckData): DeckShownStatus {
   if (agent.kind === 'you' || agent.kind === 'peer') return 'idle'
@@ -1360,12 +1361,12 @@ function waitingCallOf(data: DeckData, kind: string, message: string, agentId: s
 }
 
 /**
- * Notes that the engine waits on the person, with the agent and the call
- * that wait when they can be told (`agent` is the notification's own
- * `agent_id`, when it carried one): in `data.needs` (the same notice of the
- * same loop and call again replaces the older; the newest 20 kept), its
- * words as Claude Code wrote them, and the newest on the Orchestrator for
- * its waits (`needs`). Answers the note.
+ * Notes that the engine is waiting on the user, with the agent and call that
+ * are waiting when they can be identified (`agent` is the notification's own
+ * `agent_id`, when it carried one). The note goes in `data.needs` with its
+ * words as Claude Code wrote them (a note of the same kind for the same loop
+ * and call replaces the older one; the newest 20 are kept), and the newest
+ * note also becomes the Orchestrator's `needs`. Returns the note.
  */
 export function noteNeeds(data: DeckData, note: { kind: string; text: string; at: number; agent?: string; title?: string }): DeckNeeds | undefined {
   const main = agentOf(data, MAIN)
@@ -1531,10 +1532,11 @@ export function dropPending(data: DeckData, id: string): DeckPending | undefined
 }
 
 /**
- * Agent `id`'s loop moved on (another step, another call, its turn's end):
- * every call of its noted as held on you has ended, save those in `open`,
- * whose ends are still to come (the calls in flight the deck saw start). A
- * reload leaves the others behind with no end to see. Answers whether any went.
+ * Agent `id`'s loop moved on (another step, another call, its turn's end), so
+ * every call of its noted as waiting on you has ended, except those in
+ * `open`, whose ends are still to come (the calls in flight the deck saw
+ * start). The others were left by a reload, which loses their end events.
+ * Returns whether any were dropped.
  */
 export function dropStale(data: DeckData, id: string, open: ReadonlySet<string>): boolean {
   const kept = data.pending.filter(item => item.agentId !== id || open.has(item.id))
@@ -1618,9 +1620,10 @@ export function waitsOnYou(data: DeckData, id: string): boolean {
 }
 
 /**
- * The status every screen draws for `agent`: `statusOf`, save that waiting
- * (amber) is only ever the one the engine waits on you for. A loop held on
- * anything else (its own background work) is work going on: it runs.
+ * The status every screen draws for `agent`: `statusOf`, except that waiting
+ * (amber) shows only when the engine waits on you for this agent. A loop
+ * held on anything else (its own background work) is busy, so it shows as
+ * running.
  */
 export function shownStatusOf(agent: DeckAgent, data: DeckData): DeckShownStatus {
   const status = statusOf(agent, data)
@@ -2442,12 +2445,13 @@ export type AgentCallEnd = {
 }
 
 /**
- * Settles the row an Agent call made once the call returns: bound to the
- * agent its result names when no spawn bound it; gone when no agent started
- * (the call was refused, or failed before one did: there is no agent, only
- * its caller's failed call), and idle when it runs in a cloud session, with
- * no word the agent never said; a foreground agent's report recorded and
- * its row ended. Undefined when no row stands.
+ * Settles the row an Agent call made once the call returns. If no spawn
+ * bound it, it is bound to the agent the result names. If no agent started
+ * (the call was refused, or failed before one did), the row is removed:
+ * there is no agent, only its caller's failed call. If the agent runs in a
+ * cloud session, the row goes idle, with no words recorded that the agent
+ * never said. A foreground agent's report is recorded and its row ended.
+ * Undefined when there is no row.
  */
 export function settleAgentCall(data: DeckData, end: AgentCallEnd): { agent: DeckAgent; from?: string } | undefined {
   const row = data.agents.find(agent => agent.toolUseId === end.toolUseId)
@@ -2749,11 +2753,11 @@ export function recoverGoal(messages: readonly TranscriptMessage[]): { text: str
 }
 
 /**
- * Records the goal `recoverGoal` found, while none is in hand, as `recovered`.
- * It takes over what the deck held with no goal (the agents, the board's
- * tasks, the Workflow runs), so the plan and the summary count as before, and
- * dates from the earliest of that work and the Orchestrator's todo list, now
- * at the latest. Undefined while a goal is in hand.
+ * Records the goal `recoverGoal` found, with origin `recovered`, when no goal
+ * is in hand. It takes over what the deck held with no goal (the agents, the
+ * board's tasks, the Workflow runs), so the plan and the summary count as
+ * before. Its start time is the earliest of that work and the Orchestrator's
+ * todo list, and never later than now. Undefined while a goal is in hand.
  */
 export function noteRecoveredGoal(data: DeckData, recovered: { text: string; headline: string }, now: number): DeckGoal | undefined {
   if (goalOf(data)) return undefined
@@ -3905,7 +3909,7 @@ export function unwrapMessage(text: string): { text: string; from?: string } {
   return from ? { text: body, from } : { text: body }
 }
 
-/** How long after its send a delivery may come and still be its echo: 20 seconds; while its envelope names the very sender, ECHO_SENDER_MS (a message waits for its receiver's next tool round, past a long call). */
+/** How long after its send a delivery may arrive and still count as that send's echo: 20 seconds, or ECHO_SENDER_MS when its envelope names that same sender (a message waits for the receiver's next tool round, which may come only after a long call). */
 export const ECHO_MS = 20_000
 export const ECHO_SENDER_MS = 15 * 60_000
 

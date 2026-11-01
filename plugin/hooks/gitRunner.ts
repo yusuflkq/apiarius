@@ -440,11 +440,11 @@ let isNodeMissing = false
 
 /**
  * Reads `wanted` under `root` through web/files.js (node, no shell), never
- * with `$.fs.read`: each opened without following a link anywhere on the
- * way, and read only as a regular file there. One `fileBook` holds as it
- * stands now comes from there; the rest in one run (64 at most), so a
- * refresh where nothing moved runs no node. A file the helper could not
- * answer for is left out.
+ * with `$.fs.read`: each file is opened without following a link anywhere on
+ * its path, and read only if it is a regular file. A file `fileBook` holds
+ * with the same size and time is answered from there; the rest are read in
+ * runs of at most 64, so a refresh where nothing changed starts no node. A
+ * file the helper could not answer for is left out.
  */
 async function readSafely($: EngineInterface, root: string, wanted: readonly Wanted[], most: number, textMost: number): Promise<Map<string, FB.FileRead>> {
   const out = new Map<string, FB.FileRead>()
