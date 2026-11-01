@@ -114,7 +114,7 @@ let cwd = ''
 let sessionId = ''
 let usage: UsageInfo | null = null
 let usageAt = 0
-/** How this process's session began, as Claude Code's SessionStart said it just before `session.start`: '' until it has, and after a reload (its snapshot keeps `data.isFork`). */
+/** The `source` of Claude Code's SessionStart for this process's session, which arrives just before `session.start`; '' until it arrives, and after a reload, when the snapshot's `data.isFork` stands in for it. */
 let startedAs = ''
 let isPaneOpen = false
 const timers: { save?: Timer; tick?: Timer; dump?: Timer } = {}
@@ -304,10 +304,10 @@ export function redraw($: EngineInterface) {
 }
 
 /**
- * The tree the pane and the band drew last, handed back while what they draw
- * from is the same (hooks/renderMemo.ts): a draw the engine asks for on its own,
- * as when a click gives the pane the keyboard, then keeps every Button's press
- * handle, so that click lands. `redraw` clears it.
+ * The trees the pane and the band drew last, returned again while their
+ * inputs are unchanged (hooks/renderMemo.ts). When the engine redraws on its
+ * own (as when a click gives the pane the keyboard), every Button keeps its
+ * press handle, so that click still lands. `redraw` clears it.
  */
 const drawn = newRenderMemo()
 
@@ -377,7 +377,7 @@ export function redrawIfChanged($: EngineInterface, now: number) {
 /** What Claude Code showed of a step's thinking as it streamed, read from its chunks: their text, and the block the last came in. */
 type Thinking = { text: string; block: number }
 
-/** Adds a thinking chunk's text to what was read of the step's; a new block starts on a line of its own. Past what a word keeps, the rest goes unread. */
+/** Appends a thinking chunk's text to the step's text so far, with a blank line before a new block. Once the text passes `M.LIMITS.wordChars` (the most a kept word holds), later chunks are ignored. */
 function keepThinking(kept: Thinking, chunk: { index: number; text: string }): void {
   if (kept.text.length > M.LIMITS.wordChars) return
   if (kept.block !== -1 && chunk.index !== kept.block && kept.text !== '') kept.text += '\n\n'
@@ -486,24 +486,24 @@ async function respell($: EngineInterface, activity: DeckActivity, tool: string,
 let expansion: { headline: string; at: number } | null = null
 
 /**
- * A prompt gone in whose turn may start yet: its words, whether they are the
- * person's own, whether it came over a running turn, whether its submit has
- * resolved, and the slash command it runs as typed ("/review the diff"), when
- * the engine said it runs one.
+ * A submitted prompt whose turn may still start: its text, whether the words
+ * are the user's own, whether it was submitted during a running turn, whether
+ * its submit has resolved, and the slash command it runs as typed ("/review
+ * the diff"), when the engine said it runs one.
  */
 type Submitted = { text: string; isTheirs: boolean; isQueued: boolean; isSettled: boolean; command?: string }
 
 /**
- * The prompts submitted whose turn may start yet, newest last (at most 20).
+ * The submitted prompts whose turn may still start, newest last (at most 20).
  * The engine starts a prompt's turn inside `prompt.submit`'s `next(e)`, so
- * its `turn.start` comes before the submit's hook goes on: each is noted
- * before `next(e)`, and the turn it starts finds it by its words. (Read
- * after `next(e)`, a turn took the prompt before it for its own: after a
- * notification's turn, your next prompt was taken for no words of yours.)
+ * `turn.start` fires before the submit hook resumes. Each prompt is noted
+ * before `next(e)`, and the turn it starts finds it by its text. (Noted after
+ * `next(e)`, a turn matched the prompt before its own: after a notification's
+ * turn, your next prompt was treated as having no words of yours.)
  */
 const submitted: Submitted[] = []
 
-/** Notes a prompt going in, before its turn can start. One submitted while the session is idle starts its turn at once, so any other such left (a local command's, which starts none) is let go. */
+/** Notes a submitted prompt before its turn can start. A prompt submitted while the session is idle starts its turn at once, so any earlier idle-submitted entry still left (a local command's, which starts no turn) is dropped. */
 function noteSubmitted(text: string, isTheirs: boolean, isQueued: boolean, command: string): Submitted {
   if (!isQueued) for (let i = submitted.length - 1; i >= 0; i--) if (submitted[i]?.isQueued === false) submitted.splice(i, 1)
   const entry: Submitted = { text: text.trim(), isTheirs, isQueued, isSettled: false, ...(command ? { command } : {}) }
@@ -519,11 +519,11 @@ function dropSubmitted(entry: Submitted) {
 }
 
 /**
- * The prompt a turn of the main loop's starts with, let go once found: the
- * newest submitted in its words; else, as a hook may have rewritten them,
- * the one submitted while idle whose submit is still under way. Undefined
- * for a turn no prompt.submit came before (one a background task's
- * notification starts).
+ * Finds and removes the prompt a main-loop turn starts with: the newest one
+ * submitted with the same text; failing that (a hook may have rewritten the
+ * text), the newest one submitted while idle whose submit is still under
+ * way. Undefined for a turn with no prompt.submit before it (one started by
+ * a background task's notification).
  */
 function takeSubmitted(text: string): Submitted | undefined {
   const said = text.trim()
@@ -534,10 +534,10 @@ function takeSubmitted(text: string): Submitted | undefined {
 }
 
 /**
- * Your prompts typed while a turn of the main loop's ran, logged when they
- * were submitted (`prompt.submit` with that turn's `turnId`): the turn one
- * starts, when the engine runs it as a turn of its own, logs it no second
- * time. The newest 20.
+ * Your prompts typed during a running main-loop turn, logged when they were
+ * submitted (`prompt.submit` with that turn's `turnId`). If the engine later
+ * runs one as a turn of its own, that turn does not log it again. The
+ * newest 20.
  */
 const typedMidTurn: string[] = []
 
@@ -550,9 +550,9 @@ function noteTypedMidTurn(text: string) {
 }
 
 /**
- * Whether a turn of the main loop's starts with prompts of yours logged
- * already as you typed them over the turn before (its words one of them, or
- * those queued together): they are let go, logged once.
+ * Whether a main-loop turn starts with prompts you typed during the turn
+ * before, which were logged then (its text is one of them, or several queued
+ * together). Matches are removed, so each is logged only once.
  */
 function takeTypedMidTurn(text: string): boolean {
   const said = text.trim()
@@ -578,8 +578,8 @@ const sendTitles: { id: string; from: string; text: string; summary: string }[] 
 
 /**
  * The sends under way (`session.send` before its `next(e)` resolves), each
- * to whom and with which words: a send that wakes a finished agent raises
- * that agent's resume inside it, and the send logs the one message.
+ * with its recipient and text. A send that wakes a finished agent raises
+ * that agent's resume inside it, and only the send logs the message.
  */
 const sendsInFlight: { from: string; to: string; text: string }[] = []
 
@@ -1034,9 +1034,10 @@ async function sendReview($: EngineInterface, text: string, ackId: string): Prom
 }
 
 /**
- * What the deck submitted to the Orchestrator as your words, logged as your
- * message when it was sent: the turn it starts logs it no second time. Each
- * is marked once its `prompt.submit` passes with the deck's own origin.
+ * Prompts the deck submitted to the Orchestrator in your words. Each was
+ * logged as your message when sent, so the turn it starts does not log it
+ * again. Each is marked once its `prompt.submit` passes with the deck's own
+ * origin.
  */
 const deckPrompts: { text: string; isSubmitted: boolean }[] = []
 
@@ -1081,7 +1082,7 @@ function markDeckPrompt(text: string) {
   if (entry) entry.isSubmitted = true
 }
 
-/** Whether a turn starts with the deck's own prompt (one marked submitted first, else one of the same words): it is let go, logged already. */
+/** Whether a turn starts with one of the deck's own prompts (a marked one first, else any with the same text); if so it is removed, since it was logged already. */
 function takeDeckPrompt(text: string): boolean {
   const said = text.trim()
   if (said === '') return false
@@ -1110,11 +1111,12 @@ async function restore($: EngineInterface, now: number): Promise<boolean> {
 
 
 /**
- * The agents you messaged from the deck and await a reply from, by id: when
- * the message went (`since`), and whether a step of theirs has started since
- * (`isRead`: they had the chance to read it). Their first step started after
- * the message that says anything is the reply; a run that read it and ended
- * without a word for you lets it go. A reload forgets them.
+ * The agents you messaged from the deck and are awaiting a reply from, by
+ * id: when the message was sent (`since`), and whether one of their steps
+ * has started since (`isRead`: they had the chance to read it). The first
+ * step started after the message that says anything is the reply; if a run
+ * read it and ended without a word for you, the entry is dropped. A reload
+ * forgets them.
  */
 const replies = new Map<string, { since: number; isRead: boolean }>()
 
@@ -1545,11 +1547,12 @@ function scrollToEnd($: EngineInterface) {
 }
 
 /**
- * Takes the pane to its top at once, before the screen drawn now is up:
- * what ends the end Chat kept to (the engine and the Desktop keep a window
- * taken to its end there through every draw after, whatever it shows, until
- * a move takes it off), so the screen in Chat's place neither opens at its
- * foot nor follows it as it grows. A reveal a press asked for lands after it.
+ * Scrolls the pane to its top at once, before the screen being drawn now is
+ * up. This releases the pane from Chat's end: once a window is scrolled to
+ * its end, the engine and the Desktop keep it there through every later
+ * draw, whatever it shows, until a scroll moves it. So the screen replacing
+ * Chat neither opens at its bottom nor follows it as it grows. A
+ * scroll-into-view that a press asked for lands after this.
  */
 function scrollToStart($: EngineInterface) {
   noteMove('start')
@@ -1576,12 +1579,12 @@ function keepChat($: EngineInterface, now: number) {
 }
 
 /**
- * `s`, the header's title or its count of sessions, `/apiarius sessions`: the
- * list of sessions dropped over the tabs (./registry), or shut. As it
- * drops, Chat's end is let go (./ui/v2/chat's `listStep`): you are up at
- * the list, and no drawing moves the pane while it shows. A pane kept at
- * Chat's end goes to its top at once, where the list drops, which ends the
- * end the engine and the Desktop kept it on.
+ * `s`, the header's title or its count of sessions, `/apiarius sessions`:
+ * opens the list of sessions over the tabs (./registry), or closes it. When
+ * it opens, Chat stops keeping to its end (./ui/v2/chat's `listStep`): you
+ * are up at the list, and no drawing moves the pane while it shows. A pane
+ * that was kept at Chat's end scrolls to its top at once, where the list
+ * opens, which releases it from the end the engine and the Desktop held it at.
  */
 export function toggleSessions($: EngineInterface) {
   SR.toggleList()
@@ -2134,14 +2137,14 @@ type QuestionEnd = 'deck' | 'engine' | 'idle' | 'gone'
 /** How the latest questions ended, by call id: what an answer from the page that comes too late is told. */
 const questionEnds = new Map<string, QuestionEnd>()
 
-/** The tool calls in flight whose start this module saw: their ends are still to come, so a note of one held on you is never stale. */
+/** The tool calls in flight whose start this module saw. Their ends are still to come, so a note that one of them is waiting on you is never stale. */
 const openCalls = new Set<string>()
 
 /**
- * The calls `tool.check` put to the mode's decider (an `ask`), by
- * tool_use_id, until their end: one becomes a permission prompt held on you
- * when the dialog for it shows (`classic.PermissionRequest`). An ask alone
- * proves nothing: the auto-mode classifier and a headless host get it too.
+ * The calls `tool.check` sent to the permission mode's decider (an `ask`),
+ * by tool_use_id, until they end. One becomes a permission prompt waiting on
+ * you when its dialog shows (`classic.PermissionRequest`). An ask alone
+ * proves nothing: the auto-mode classifier and a headless host get asks too.
  */
 const asks = new Map<string, { tool: string; input: unknown; agentId: string }>()
 
@@ -2636,7 +2639,7 @@ export const register: Register = on => {
       // a call is work: an ended agent (a message woke it) or an idle teammate runs again
       if (M.isEnded(agent.status) || agent.status === 'idle') M.reopen(agent, start)
       delete agent.endedAt
-      // the agent the engine waited on for the person moved on; a call of its a reload left noted as held on you has ended
+      // a new call means the agent no longer waits on you: clear its needs-you notes, and drop its calls a reload left marked as waiting on you (they have ended)
       M.clearNeeds(data, { kind: 'start', agent: agentId })
       M.dropStale(data, agentId, openCalls)
       if (e.tool_use_id) openCalls.add(e.tool_use_id)
@@ -2645,7 +2648,7 @@ export const register: Register = on => {
       const activity = M.activityOf(e.tool_use_id, tool, said, currentGit().root || null, start, data.board)
       M.beginTool(data, agent, activity)
       inspectCalled(data, tool, input, start)
-      // the call goes on at once; its target follows when the file system spells a new directory
+      // the call is recorded at once; if its directory is not resolved yet, its target is rewritten once the file system resolves it
       if (file && !isSpelledOf(file)) void respell($, activity, tool, input, file)
     } catch {
       agent = undefined
@@ -2896,7 +2899,7 @@ export const register: Register = on => {
         const said = expansion !== null && now - expansion.at < 10_000 ? expansion.headline : ''
         expansion = null
         if (kind !== 'event') isChanged = M.noteGoal(data, kind, { text: e.text, origin: e.origin.kind, at: now, ...(kind === 'goal' && said ? { headline: said } : {}) }) !== undefined
-        // typed over the running turn: logged now, as it went in, and by the turn it may start no second time (a slash command run alone as the command you ran)
+        // typed during a running turn: log it now, as submitted, and note it so the turn it may start does not log it again (a slash command run alone is logged as the command you ran)
         if (e.turnId !== undefined && !isDecks && M.isUsersWords(e.origin)) {
           const words = 'text' in result && typeof result.text === 'string' ? result.text : e.text
           const logged = M.addPrompt(data, { text: words, at: now, ...(command ? { command } : {}) })
@@ -2958,7 +2961,7 @@ export const register: Register = on => {
         main.status = 'running'
         main.lastAt = now
       }
-      // a turn whose prompt came from elsewhere (an agent's hand-back, already its result) is no prompt of yours, nor one that
+      // the prompt is not yours if it came from elsewhere (an agent's hand-back, already recorded as its result) or if it
       // opens with a notice: a background agent's <task-notification> can start a turn with no prompt.submit before it
       const isTheirs = (prompt?.isTheirs ?? true) && !M.isNoticeText(e.text)
       // your words from the deck were logged when you sent them; a relay of them to a subagent goes in no Talk of the Orchestrator's
@@ -2982,7 +2985,7 @@ export const register: Register = on => {
 
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId ?? M.MAIN
-    // its loop takes another step: every call of its last one has ended, so none a reload left noted is held on you
+    // a new step means every call of the loop's last step has ended, so drop its calls a reload left marked as waiting on you
     const isStale = data.pending.length > 0 && M.dropStale(data, id, openCalls)
     // you messaged it from the deck: a step it starts now may read your words, and answer them
     const awaited = e.agentId !== undefined ? replies.get(e.agentId) : undefined
@@ -3097,8 +3100,8 @@ export const register: Register = on => {
     return result
   })
 
-  // a subagent starting again (one the deck saw end) runs; one it never saw spawn waits for its first call. Claude Code raises it for an
-  // agent's run alone: a loop the deck took for the engine's own is that agent, the list naming the rest of it
+  // a subagent the deck saw end runs again; one it never saw spawn waits for its first call. Claude Code raises this only for agents'
+  // runs, so a loop the deck took for the engine's own is that agent, and the agent list is read for the rest of its details
   on('classic.SubagentStart', async ($, e, next) => {
     try {
       const isEngine = M.isEngineLoopId(data, e.agent_id)
@@ -3111,8 +3114,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // a subagent stopped: its row ends at once, and with no report handed back its last message is its result. A loop no spawn, no list and no
-  // SubagentStart named that the list still leaves out was Claude Code's own (a prompt suggestion, whose last words are its guess at your next prompt): forgotten
+  // a subagent stopped: its row ends at once, and with no report handed back its last message is its result. A loop that no spawn, agent
+  // list or SubagentStart named, and that the list still leaves out, was Claude Code's own (a prompt suggestion, whose last words guess your next prompt): forget it
   on('classic.SubagentStop', async ($, e, next) => {
     const seen = await $.clock.now()
     const result = await next(e)
@@ -3190,7 +3193,7 @@ export const register: Register = on => {
   })
 
   on('session.send', async ($, e, next) => {
-    // a resume this send causes (its agent had finished) is raised inside next(e): it knows the send logs the message
+    // if this send wakes a finished agent, the resume is raised inside next(e): this entry tells the resume that the send logs the message
     const flight = { from: e.agentId ?? M.MAIN, to: typeof e.to === 'string' ? e.to : '', text: e.text }
     sendsInFlight.push(flight)
     let result: Awaited<ReturnType<typeof next>>
@@ -3246,7 +3249,7 @@ export const register: Register = on => {
         } else if (!('plugin' in origin && origin.plugin === $.plugin.name)) {
           const unwrapped = M.unwrapMessage(e.text)
           const named = 'teammate' in origin ? origin.teammate : unwrapped.from
-          // a sender no agent of the session is keeps the name it went by; with none, the delivery's own kind
+          // a sender that is no agent of the session keeps the name it gave; with no name, the sender is the delivery's kind (a coordinator's is the main loop)
           const from = named ? (M.resolveRecipient(data, named)?.id ?? F.trunc(F.oneLine(named), 120)) : origin.kind === 'coordinator' ? M.MAIN : origin.kind
           if (unwrapped.text.trim() !== '') M.addMessage(data, { from, to, kind: 'message', text: unwrapped.text, at: now })
         }

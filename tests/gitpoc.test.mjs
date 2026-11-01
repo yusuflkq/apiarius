@@ -28,7 +28,7 @@ import { createRequire } from 'node:module'
 
 const G = await import(process.env.GITPOC_MODULE ? pathToFileURL(path.resolve(process.env.GITPOC_MODULE)).href : new URL('../plugin/hooks/git.ts', import.meta.url).href)
 const isOld = typeof G.repoConfigOf !== 'function'
-/** A module that reads every attribute file git lists before a command that reads the working tree, and its filter settings again after (fix/round3 on); an older one reads three. */
+/** The current git.ts: it reads every attribute file git lists before a command that reads the working tree, and the filter settings again after. An older one reads three. */
 const isListing = typeof G.attrPlacesOf === 'function'
 /** web/files.js, which reads the attribute files as the deck does (never through a link). */
 const FILES = createRequire(import.meta.url)('../plugin/web/files.js')

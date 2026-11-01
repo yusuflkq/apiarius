@@ -151,7 +151,7 @@ const web: {
   made: Set<string>
   /** The session ended: its folder is gone, and nothing is written again. */
   isEnded: boolean
-  /** Moves when the folder is emptied or removed: a write begun before writes no more of what it had. */
+  /** Bumped when the folder is emptied or removed, so a write that began earlier stops writing what it had. */
   gen: number
   /** The write under way, which an emptying or a removal waits for. */
   writing: Promise<void>
@@ -258,7 +258,7 @@ export function shareWeb($: EngineInterface): void {
   scheduleWeb($)
 }
 
-/** The web deck's supervisor, a session.start's (`superviseWeb`): the one before it stops, and the deck is on again at once when a reload found it on. */
+/** Starts the web deck's supervisor for a session.start (`superviseWeb`): the previous supervisor stops, and if a reload finds the deck was on, it comes on again at once. */
 export function startSupervisor($: EngineInterface): void {
   web.epoch += 1
   const wake = web.wake
@@ -599,15 +599,15 @@ async function spawnWeb($: EngineInterface, argv: readonly string[]): Promise<We
 
 /**
  * A whole line from the server: its ready line (the port it listens on); a
- * ticket traded (the terminal's link, once used, is made anew); or a command
+ * ticket traded (the terminal's link, once used, is replaced); or a command
  * from the page, checked against the model (`W.routeOf`) and acted on:
  * `chat` through `sendChat`, `review` through `sendReview`, `answer` to the
- * question it names (`answerCall`, the pane's resolver too). One in your
- * voice from a `pane` page, and every one of its for another session's
- * deck but `view` (`H.isHeld`), waits for your Send above the prompt
- * instead (`holdFromPage`). A command with an `id` gets an ack, the page's word on
- * what came of it; one refused gets why. Anything else is ignored. Answers
- * whether it was the ready line.
+ * question it names (`answerCall`, which the pane uses too). A command in
+ * your voice from a `pane` page, and every command from such a page for
+ * another session's deck except `view` (`H.isHeld`), is held for your Send
+ * above the prompt instead (`holdFromPage`). A command with an `id` gets an
+ * ack, the page's word on what came of it; a refused one gets the reason.
+ * Anything else is ignored. Returns whether it was the ready line.
  */
 function onWebLine($: EngineInterface, line: string): boolean {
   const said = W.parseLine(line)
