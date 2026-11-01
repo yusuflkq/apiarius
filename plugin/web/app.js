@@ -356,5 +356,5 @@ function boot() {
   connect().finally(() => { if (route.session) switchView(route.session); });
 }
 
-// web/test/page.test.js runs the page without a browser (web/test/page-script.js) and drives its views itself: it boots nothing then.
+// tests/web/page.test.js, at the repository root, runs the page without a browser (tests/web/page-script.js) and drives its views itself: it boots nothing then.
 if (!globalThis.__deckTest) boot();

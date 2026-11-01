@@ -13,7 +13,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const HOME_JS = path.join(__dirname, '..', 'home.js')
+const HOME_JS = path.join(__dirname, '..', '..', 'plugin', 'web', 'home.js')
 const isWindows = process.platform === 'win32'
 const LINK = isWindows ? 'junction' : 'dir' // a junction needs no rights on Windows
 const temps = []

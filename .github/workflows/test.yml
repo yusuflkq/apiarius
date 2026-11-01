@@ -41,8 +41,14 @@ jobs:
           node --version
           claude --version
 
-      - name: Validate the plugin and its marketplace
-        run: claude plugin validate --strict --profile directory .
+      # The marketplace at the top lists the plugin, which lives in plugin/:
+      # all an install copies. The directory's checks take the plugin's folder
+      # (they read the README at the repository's top).
+      - name: Validate the marketplace
+        run: claude plugin validate --strict .
+
+      - name: Validate the plugin
+        run: claude plugin validate --strict --profile directory plugin
 
       # One test file at a time, by the script contributors run too: the kit
       # gives a test 5 s of wall time, and with every file at once on the
@@ -63,7 +69,7 @@ jobs:
         run: bash scripts/typecheck.sh --fresh
 
       - name: Web server and page tests
-        run: node --test web/test/
+        run: node --test tests/web/
 
       # Real git against hostile repositories: no command the deck runs may run what a repository's own settings name.
       - name: Git against hostile repositories
@@ -71,4 +77,4 @@ jobs:
         run: node --test tests/gitpoc.test.mjs
 
       - name: Sample data matches its builder
-        run: node web/fixtures/make-v2.mjs --check
+        run: node plugin/web/fixtures/make-v2.mjs --check

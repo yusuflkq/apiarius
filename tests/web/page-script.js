@@ -10,7 +10,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
-const WEB = path.join(__dirname, '..')
+const WEB = path.join(__dirname, '..', '..', 'plugin', 'web')
 /** A module's import of another of the page's files, `import * as AV from './avatars.mjs';` or `import { a, b } from './state.mjs';` (on lines of their own, CRLF too: a Windows checkout's). */
 const IMPORT = /^import\s+(?:\*\s+as\s+\w+|\{[^}]*\})\s+from\s+'\.\/([\w.-]+)';\r?\n/gm
 /** What the mod imports too: handed in, never read here. */

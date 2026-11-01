@@ -11,8 +11,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const DEV = path.join(__dirname, '..', 'dev.js')
-const FIXTURES = path.join(__dirname, '..', 'fixtures')
+const DEV = path.join(__dirname, '..', '..', 'plugin', 'web', 'dev.js')
+const FIXTURES = path.join(__dirname, '..', '..', 'plugin', 'web', 'fixtures')
 /** dev.js's ticket: a full one (`f-<nonce>-<seal>`), traded for a handle as the page does. */
 const TICKET = /^f-[0-9a-f]{16}-[0-9a-f]{32}$/
 const temps = []
@@ -95,5 +95,5 @@ test('dev.js --fixtures stops at once on a folder with no sample, or with no fol
   assert.match(none.stderr, /no state\.v2\.json in /)
   const bare = await run(['--fixtures'], tempDir())
   assert.equal(bare.code, 2)
-  assert.match(bare.stderr, /usage: node web\/dev\.js \[--static\] \[--pane\] \[--fixtures <dir>\]/)
+  assert.match(bare.stderr, /usage: node plugin\/web\/dev\.js \[--static\] \[--pane\] \[--fixtures <dir>\]/)
 })

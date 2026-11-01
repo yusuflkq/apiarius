@@ -3,6 +3,6 @@
   "description": "Apiarius, a Claude Code mod that shows what every agent and subagent in a session is doing as it works.",
   "owner": { "name": "Yusuf", "url": "https://github.com/yusuflkq" },
   "plugins": [
-    { "name": "apiarius", "source": "./" }
+    { "name": "apiarius", "source": "./plugin" }
   ]
 }

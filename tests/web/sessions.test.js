@@ -18,7 +18,7 @@ const os = require('node:os')
 const path = require('node:path')
 const vm = require('node:vm')
 
-const WEB = path.join(__dirname, '..')
+const WEB = path.join(__dirname, '..', '..', 'plugin', 'web')
 const SERVER = path.join(WEB, 'server.js')
 /** The servers' secret, which seals their tickets; the tests trade a `full` one for the handle they send (web/server.js). */
 const SECRET = 'test-token-0123456789abcdef'
@@ -207,7 +207,7 @@ test('POST /cmd passes every command about a session naming one (an answer, a me
 
 // ------------------------------------------------------------------ the page
 
-const AVATARS = require('../avatars.mjs')
+const AVATARS = require('../../plugin/web/avatars.mjs')
 const SOURCE = require('./page-script').pageScript()
 const NOW = SAMPLE.now
 
@@ -227,7 +227,7 @@ function page({ hash = '', others = {}, files = {} } = {}) {
   }
   const location = { search: '?t=test-token', hash }
   const context = vm.createContext({
-    __deckTest: true, __avatars: AVATARS, __timeline: require('../timeline.mjs'), location, window: { addEventListener: noop }, document: { title: '', querySelector: () => null, getElementById: () => null },
+    __deckTest: true, __avatars: AVATARS, __timeline: require('../../plugin/web/timeline.mjs'), location, window: { addEventListener: noop }, document: { title: '', querySelector: () => null, getElementById: () => null },
     localStorage: { getItem: () => null, setItem: noop }, requestAnimationFrame: () => 1, cancelAnimationFrame: noop, setTimeout: () => 1, clearTimeout: noop, setInterval: () => 1,
     performance: { now: () => 0 }, fetch, URLSearchParams,
   })

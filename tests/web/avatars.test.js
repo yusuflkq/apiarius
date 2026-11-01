@@ -8,7 +8,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 
-const A = require('../avatars.mjs')
+const A = require('../../plugin/web/avatars.mjs')
 
 const STATUSES = ['starting', 'running', 'waiting', 'done', 'failed', 'idle', 'stopped', 'no-such-status']
 const AGENTS = [

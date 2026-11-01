@@ -13,10 +13,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
 
-const WEB = path.join(__dirname, '..')
+const WEB = path.join(__dirname, '..', '..', 'plugin', 'web')
 // app.js and the modules it imports run here as one script (./page-script.js), the avatar library and the timeline's layout handed in as AV and TL
-const AVATARS = require('../avatars.mjs')
-const TIMELINE = require('../timeline.mjs')
+const AVATARS = require('../../plugin/web/avatars.mjs')
+const TIMELINE = require('../../plugin/web/timeline.mjs')
 const SOURCE = require('./page-script').pageScript()
 const SAMPLE = JSON.parse(fs.readFileSync(path.join(WEB, 'fixtures', 'state.v2.json'), 'utf8'))
 const NOW = SAMPLE.now

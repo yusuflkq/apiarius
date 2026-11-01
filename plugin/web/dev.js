@@ -1,5 +1,5 @@
 /**
- * The web deck on the v2 sample: `node web/dev.js` runs the server with a
+ * The web deck on the v2 sample: `node plugin/web/dev.js` runs the server with a
  * fixed dev secret and prints a link to open (a link opens one page, as the
  * mod's do: once its page traded it, the next one is printed). `--pane` prints
  * the Browser pane's kind of link instead: what the page then sends in your
@@ -40,7 +40,7 @@ const path = require('path')
 
 /** The dev server's secret: its tickets are sealed with it (web/server.js), as the mod's are with one made for every start. */
 const SECRET = 'apiarius-dev-secret'
-const USAGE = 'usage: node web/dev.js [--static] [--pane] [--fixtures <dir>]'
+const USAGE = 'usage: node plugin/web/dev.js [--static] [--pane] [--fixtures <dir>]'
 /** The grade of the links printed: the Browser pane's with --pane, your own browser's otherwise. */
 const GRADE = process.argv.includes('--pane') ? 'pane' : 'full'
 /** A one-time ticket of `grade`, as hooks/web.ts ticketOf makes one. */

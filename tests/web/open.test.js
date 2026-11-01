@@ -9,8 +9,8 @@ const assert = require('node:assert/strict')
 const { spawnSync } = require('node:child_process')
 const path = require('node:path')
 
-const OPEN = path.join(__dirname, '..', 'open.js')
-const { isLink, openerOf, appleString } = require('../open.js')
+const OPEN = path.join(__dirname, '..', '..', 'plugin', 'web', 'open.js')
+const { isLink, openerOf, appleString } = require('../../plugin/web/open.js')
 const LINK = 'http://127.0.0.1:4321/?t=f-0011223344556677-a284df635f2f16617d5887d94954f3f8'
 
 test('opens the deck`s link alone: its own address, a port and a ticket of the server`s shape; nothing else', () => {

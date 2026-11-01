@@ -15,8 +15,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const FILES_JS = path.join(__dirname, '..', 'files.js')
-const { readFiles, partsOf } = require('../files.js')
+const FILES_JS = path.join(__dirname, '..', '..', 'plugin', 'web', 'files.js')
+const { readFiles, partsOf } = require('../../plugin/web/files.js')
 const isWindows = process.platform === 'win32'
 const temps = []
 after(() => { for (const dir of temps) { try { fs.rmSync(dir, { recursive: true, force: true }) } catch {} } })

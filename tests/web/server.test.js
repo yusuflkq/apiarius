@@ -1,5 +1,5 @@
 /**
- * The web server against a temp dir, end to end: `node --test web/test/`.
+ * The web server against a temp dir, end to end: `node --test tests/web/`.
  * Each test talks to a real server process over HTTP, as the page and the mod do.
  */
 'use strict'
@@ -11,7 +11,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
-const SERVER = path.join(__dirname, '..', 'server.js')
+const WEB = path.join(__dirname, '..', '..', 'plugin', 'web')
+const SERVER = path.join(WEB, 'server.js')
 const crypto = require('node:crypto')
 /** The secret the servers here start with: what their tickets are sealed with, never a credential itself. */
 const SECRET = 'test-token-0123456789abcdef'
@@ -386,16 +387,16 @@ test('serves the page files with their types, no handle needed (app.js, every mo
   for (const file of SCRIPTS) types[`/${file}`] = [file, 'text/javascript']
   for (const [target, [file, type]] of Object.entries(types)) {
     const res = await request(main.port, { path: target })
-    if (!fs.existsSync(path.join(__dirname, '..', file))) { assert.equal(res.status, 404, target); continue }
+    if (!fs.existsSync(path.join(WEB, file))) { assert.equal(res.status, 404, target); continue }
     assert.equal(res.status, 200, target)
     assert.equal(res.headers['content-type'], `${type}; charset=utf-8`)
     assert.equal(res.headers['cache-control'], 'no-store')
-    assert.equal(res.body, fs.readFileSync(path.join(__dirname, '..', file), 'utf8'))
+    assert.equal(res.body, fs.readFileSync(path.join(WEB, file), 'utf8'))
   }
 })
 
 test('every page file is under 256 KiB: the plugin directory reviews a bigger one by hand', () => {
-  for (const file of ['index.html', 'app.css', ...SCRIPTS]) assert.ok(fs.statSync(path.join(__dirname, '..', file)).size < 256 * 1024, file)
+  for (const file of ['index.html', 'app.css', ...SCRIPTS]) assert.ok(fs.statSync(path.join(WEB, file)).size < 256 * 1024, file)
 })
 
 test('/state serves the current state; a missing or empty file serves {"v":1,"empty":true}', async () => {

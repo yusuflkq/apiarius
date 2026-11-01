@@ -7,8 +7,8 @@
 // web/fixtures/sessions.v2.json, the registry's files, and each other
 // session's deck under web/fixtures/sessions/<id>/ (state.json, agents/).
 //
-//   node web/fixtures/make-v2.mjs           writes them (the v2 folder afresh)
-//   node web/fixtures/make-v2.mjs --check   exits 1 when what is written is not what the builder makes now
+//   node plugin/web/fixtures/make-v2.mjs           writes them (the v2 folder afresh)
+//   node plugin/web/fixtures/make-v2.mjs --check   exits 1 when what is written is not what the builder makes now
 //
 // Node 22.18 or newer runs the TypeScript as it is (type stripping); the hook
 // below only adds the `.ts` the mod's imports leave off.
@@ -30,11 +30,12 @@ export async function resolve(spec, context, next) {
 register(`data:text/javascript,${encodeURIComponent(HOOKS)}`)
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const repo = path.resolve(here, '..', '..')
-const { v2Session } = await import(pathToFileURL(path.join(repo, 'tests', 'v2session.ts')).href)
-const { sampleSessions } = await import(pathToFileURL(path.join(repo, 'tests', 'v2sessions.ts')).href)
-const W = await import(pathToFileURL(path.join(repo, 'hooks', 'web.ts')).href)
-const T = await import(pathToFileURL(path.join(repo, 'hooks', 'timeline.ts')).href)
+// the mod's folder (plugin/ in the repository)
+const mod = path.resolve(here, '..', '..')
+const { v2Session } = await import(pathToFileURL(path.join(mod, 'tests', 'v2session.ts')).href)
+const { sampleSessions } = await import(pathToFileURL(path.join(mod, 'tests', 'v2sessions.ts')).href)
+const W = await import(pathToFileURL(path.join(mod, 'hooks', 'web.ts')).href)
+const T = await import(pathToFileURL(path.join(mod, 'hooks', 'timeline.ts')).href)
 
 const { data, git, usage, now, sessionId, cwd, answerable, gitDiffs } = v2Session()
 const state = W.deckStateOf(data, git, usage, now, sessionId, cwd, answerable, gitDiffs)

@@ -4,8 +4,9 @@
  * settings read before each run there (`repoConfigOf`: its filter drivers
  * off, the person's own set back), a repository that defines one the
  * command line cannot name refused, git started in the session's folder
- * (`-C`), names a repository chose shown safely. tests/gitpoc.test.mjs runs
- * the same against real git and hostile repositories.
+ * (`-C`), names a repository chose shown safely. tests/gitpoc.test.mjs, at
+ * the repository's top (outside the mod), runs the same against real git
+ * and hostile repositories.
  */
 import { expect, mock, test } from 'claude-code/testing'
 
