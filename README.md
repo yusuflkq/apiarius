@@ -153,7 +153,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). To try a clone without installing it, ru
 
 ```
 claude plugin validate .
-claude plugin test .     # the mod's tests
+scripts/test.sh          # the mod's tests, one file at a time
 node --test web/test/    # the server and page tests
 node web/dev.js          # the web page on sample data; prints its link
 ```
