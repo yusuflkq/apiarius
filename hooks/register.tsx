@@ -5,7 +5,7 @@
  * The hooks here record what the engine reports (tool calls, spawns, turns,
  * messages between agents) into one live model, run git in the background,
  * and draw the views from `./views`. `/apiarius web` serves the same model as a
- * live dashboard in the Desktop's Browser pane (`./web`).
+ * live dashboard in your own browser, or in the Desktop's Browser pane (`./web`).
  * Every `$` call lives in this file and in ./inspectHooks, which makes Inspect's reads.
  */
 import type {
@@ -710,16 +710,16 @@ function debugStateOf(now: number) {
 }
 
 /**
- * The web deck. `/apiarius web`, or the pane's Open dashboard,
- * starts `web/server.js` for the session and opens the page in the
- * Desktop's Browser pane. Each link carries a one-time ticket the page
- * trades for a handle (web/server.js), of one of two grades (`W.WebGrade`):
- * the Browser pane's is `pane`, since Claude's tools drive that pane, and
- * what it sends in your voice waits for your Send in the band (./hold);
- * "Open in browser" (the deck's header) starts the server too when it is
- * not running, then opens a `full` one in your own browser with the
- * system's opener, and the terminal deck shows one as text to copy. A link
- * is never in what the model reads. While it is on, what the
+ * The web deck. `/apiarius web`, or "Open in browser" (the deck's header,
+ * `o`, Settings), starts `web/server.js` for the session and opens the page
+ * in your own browser with the system's opener; `/apiarius web pane`, or
+ * Settings' "Open in Claude's Browser pane", opens it in the Desktop's
+ * Browser pane instead. Each link carries a one-time ticket the page trades
+ * for a handle (web/server.js), of one of two grades (`W.WebGrade`): your
+ * own browser's is `full`; the Browser pane's is `pane`, since Claude's
+ * tools drive that pane, and what it sends in your voice waits for your
+ * Send in the band (./hold). The terminal deck shows a `full` one as text
+ * to copy. A link is never in what the model reads. While it is on, what the
  * deck holds goes to `<home>/web/<sessionId>/state.json` at most every 300 ms
  * after a change (`W.webStateOf`, with the v2 view model under `v2`), each
  * edit's patch once beside it, each agent's file when it changed, and the
@@ -1134,7 +1134,7 @@ async function runWeb($: EngineInterface, epoch: number): Promise<void> {
   } else {
     web.status = 'failed'
     web.note = ran.isReady
-      ? `The dashboard's server stopped${ran.why ? ` (${ran.why})` : ''}; Open dashboard starts it again.`
+      ? `The dashboard's server stopped${ran.why ? ` (${ran.why})` : ''}; Open in browser starts it again.`
       : `The dashboard's server did not start${ran.why ? ` (${ran.why})` : ''}.`
   }
   settleWeb(false)
@@ -1668,8 +1668,17 @@ async function showWeb($: EngineInterface, url: string): Promise<void> {
   redraw($)
 }
 
-/** What `/apiarius web` answers once the page is up: no link, since a command's text reaches the model as its output; the links are the deck's. */
-const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in the Browser pane, where each message you send waits for one Send click above your prompt; Open in browser, at the top of the deck (/apiarius), opens it in your own browser, where messages go at once.'
+/**
+ * What `/apiarius web` and `/apiarius web pane` answer once the page is up:
+ * no link, since a command's text reaches the model as its output; the
+ * links are the deck's.
+ */
+const WEB_OPENED_TEXT = 'Apiarius web is running on this machine and opened in your own browser. Open in browser, at the top of the deck (/apiarius), opens it again.'
+const WEB_PANE_TEXT = "Apiarius web is running on this machine. It opens in Claude's Browser pane, which Claude can drive, so each message you send from it waits for one Send click above your prompt. /apiarius web opens it in your own browser instead, where messages go at once."
+const WEB_NO_PANE_TEXT = 'Apiarius web is running on this machine. A terminal has no Browser pane: press o in the deck (/apiarius), or Open in browser at its top, to open it in your own browser. The deck also shows a link to copy under its header.'
+
+/** What the model is told beside each: that the link is the person's. */
+const WEB_CONTEXT = ['/apiarius web opened the Apiarius dashboard for the user. Its address is for the user alone; if they ask to see it again, tell them to run /apiarius web, which opens it itself.']
 
 /** What a start of the web deck that ended the session refused says. */
 const WEB_ENDED_TEXT = 'This session has ended: Apiarius web starts again in a new one.'
@@ -1679,51 +1688,96 @@ function webDownWhy(): string {
   return web.status === 'starting' ? "The dashboard's server did not answer within 10 s." : web.note || "The dashboard's server did not start."
 }
 
+/** Whether the session draws only in a terminal, where there is no Browser pane; false while that is not known. */
+async function isTerminalOnly($: EngineInterface): Promise<boolean> {
+  try {
+    const surfaces = await $.session.surfaces()
+    return surfaces.length > 0 && surfaces.every(surface => surface === 'terminal')
+  } catch {
+    return false
+  }
+}
+
 /**
- * `/apiarius web` and the pane's Open dashboard: starts the web deck if it is
- * not running, then tries to open the page in the Browser pane (left to run)
- * with a new `pane` ticket. A link acts as the person, so it goes to the
- * person alone: the Browser pane, and the deck's own "Open in browser"
- * (`openOwnBrowser`, and the terminal's link text, `webPaneOf`), never sent
- * to the model. The answer's text and context, which the model reads, say
- * where it is, never a link. Without node the deck stays native.
+ * `/apiarius web`: the page in your own browser, as Open in browser opens it
+ * (`openOwnBrowser`: started first when it is not running, a `full` link
+ * made for it on web/open.js's stdin). `/apiarius web pane` and Settings'
+ * "Open in Claude's Browser pane" (`where` `pane`): started if need be,
+ * then the Browser pane (left to run) asked to open it with a new `pane`
+ * ticket, whose words in your voice wait for your Send (./hold); in a
+ * session that draws only in a terminal, which has no Browser pane, no pane
+ * is asked and the deck shows its link to copy. A link acts as the person,
+ * so it goes to the person alone (the system's opener, the Browser pane,
+ * the terminal's link text, `webPaneOf`), never to the model: the answer's
+ * text and context, which the model reads, say where it is, never a link
+ * nor why an opener failed. Without node the deck stays native.
  */
-async function openWeb($: EngineInterface): Promise<CommandRunResult> {
+async function openWeb($: EngineInterface, where: 'own' | 'pane'): Promise<CommandRunResult> {
   if (web.isEnded) return { text: WEB_ENDED_TEXT }
+  if (where === 'own') {
+    const opened = await ownBrowserOpen($)
+    if (opened.kind === 'down') return { text: `${opened.why} The deck stays in its pane: /apiarius.` }
+    if (opened.kind === 'busy') return { text: 'Apiarius web is starting, and opens in your own browser once it is up.' }
+    if (opened.kind === 'unopened') {
+      const copy = (await isTerminalOnly($)) ? ' The deck also shows a link to copy under its header.' : ''
+      return { text: `Apiarius web is running on this machine, but your browser did not open. Open in browser, at the top of the deck (/apiarius), tries again.${copy}`, context: WEB_CONTEXT }
+    }
+    return { text: WEB_OPENED_TEXT, context: WEB_CONTEXT }
+  }
   const isUp = await ensureWeb($)
   if (!isUp) {
     const why = webDownWhy()
     $.ui.toast(`Apiarius web: ${why}`)
     return { text: `${why} The deck stays in its pane: /apiarius.` }
   }
-  void showWeb($, W.webUrlOf(web.port, ticketFor('pane')))
-  return {
-    text: WEB_OPENED_TEXT,
-    context: ['/apiarius web opened the Apiarius dashboard for the user. Its address is for the user alone; if they ask to see it again, tell them to run /apiarius web, which opens it itself.'],
+  if (await isTerminalOnly($)) {
+    web.opened = 'failed'
+    redraw($)
+    return { text: WEB_NO_PANE_TEXT, context: WEB_CONTEXT }
   }
+  void showWeb($, W.webUrlOf(web.port, ticketFor('pane')))
+  return { text: WEB_PANE_TEXT, context: WEB_CONTEXT }
 }
 
 /** A press of Open in browser is waiting for the server it started: another press meanwhile starts and opens nothing. */
 let isBrowserWaiting = false
 
 /**
+ * How a try to open the deck in your own browser went: opened; nothing
+ * done, since a try before it waits for the server it started (`busy`); the
+ * server would not come up (`down`), or the opener did not open it
+ * (`unopened`), with what the toast says.
+ */
+type OwnOpen = { kind: 'opened' } | { kind: 'busy' } | { kind: 'down'; why: string } | { kind: 'unopened'; why: string }
+
+/**
  * "Open in browser" (at the right of the deck's header, `o`, and in
- * Settings): starts the web deck when it is not running, as `/apiarius web`
- * does (`ensureWeb`, and its toast when it could not; a second press while
- * it starts does nothing), but never opens the Browser pane; then a `full`
- * link made for this press, opened in your own browser by the system's
- * opener (web/open.js: osascript's `open location` read on its stdin on
- * macOS, so no process's arguments ever hold it; `start`, `xdg-open`
- * elsewhere, whose arguments do while they run), the link on its stdin; a
- * toast when it could not (the terminal shows a link to copy). Its ticket
- * works for `W.OPENER_TICKET_MS` only, unless the page traded it by then.
+ * Settings): starts the web deck when it is not running (`ensureWeb`, and
+ * its toast when it could not; a second press while it starts does
+ * nothing), but never opens the Browser pane; then a `full` link made for
+ * this press, opened in your own browser (`ownBrowserOpen`); a toast when it
+ * could not (the terminal shows a link to copy).
  */
 async function openOwnBrowser($: EngineInterface): Promise<void> {
+  const opened = await ownBrowserOpen($)
+  if (opened.kind === 'unopened') $.ui.toast(`Could not open your browser${opened.why ? ` (${F.trunc(F.oneLine(opened.why), 120)})` : ''}. In a terminal, the deck shows the link to copy under its header.`)
+}
+
+/**
+ * The page in your own browser: the web deck started first when it is not
+ * running (its toast when it could not), then a `full` link made for this
+ * try, opened by the system's opener (web/open.js: osascript's `open
+ * location` read on its stdin on macOS, so no process's arguments ever hold
+ * it; `start`, `xdg-open` elsewhere, whose arguments do while they run), the
+ * link on its stdin. Its ticket works for `W.OPENER_TICKET_MS` only, unless
+ * the page traded it by then.
+ */
+async function ownBrowserOpen($: EngineInterface): Promise<OwnOpen> {
   if (web.status !== 'running' || web.port <= 0) {
-    if (isBrowserWaiting) return
+    if (isBrowserWaiting) return { kind: 'busy' }
     if (web.isEnded) {
       $.ui.toast(WEB_ENDED_TEXT)
-      return
+      return { kind: 'down', why: WEB_ENDED_TEXT }
     }
     isBrowserWaiting = true
     let isUp = false
@@ -1733,25 +1787,26 @@ async function openOwnBrowser($: EngineInterface): Promise<void> {
       isBrowserWaiting = false
     }
     if (!isUp) {
-      $.ui.toast(`Apiarius web: ${webDownWhy()}`)
-      return
+      const why = webDownWhy()
+      $.ui.toast(`Apiarius web: ${why}`)
+      return { kind: 'down', why }
     }
   }
   const until = Math.ceil(((await $.clock.now()) + W.OPENER_TICKET_MS) / 1000)
   const ticket = web.status === 'running' && web.port > 0 ? ticketFor('full', until) : ''
   if (ticket === '') {
     $.ui.toast('Apiarius web is not running: Open in browser starts it.')
-    return
+    return { kind: 'down', why: 'Apiarius web is not running.' }
   }
   let why = ''
   try {
     const ran = await $.process.run(['node', `${$.plugin.root.replace(/[\\/]+$/, '')}/web/open.js`], { stdin: `${W.webUrlOf(web.port, ticket)}\n`, timeoutMs: 10_000, ...(nodeCwd() ? { cwd: nodeCwd() } : {}) })
-    if (ran.exitCode === 0 && W.isHomeDone(ran.stdout)) return
+    if (ran.exitCode === 0 && W.isHomeDone(ran.stdout)) return { kind: 'opened' }
     why = W.openWhyOf(ran.stdout)
   } catch (error) {
     why = error instanceof Error ? error.message : String(error)
   }
-  $.ui.toast(`Could not open your browser${why ? ` (${F.trunc(F.oneLine(why), 120)})` : ''}. In a terminal, the deck shows the link to copy under its header.`)
+  return { kind: 'unopened', why }
 }
 
 /** `/apiarius web stop`: the server ends, the state is no longer written, and the next start makes a new link. Answers whether it was on. */
@@ -3278,7 +3333,7 @@ function actionsFor($: EngineInterface): DeckActions {
       changed($)
       void openPane($)
     },
-    openWeb: () => void openWeb($),
+    openWebPane: () => void openWeb($, 'pane'),
     openBrowser: () => void openOwnBrowser($),
     // the band's rows of what the Browser pane's page sent in your voice (./hold): your Send runs it, Discard drops it, More shows it whole
     sendHeld: key => sendHeld($, key),
@@ -3999,9 +4054,9 @@ export const register: Register = on => {
     try {
       await $.command.register({
         name: 'apiarius',
-        description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in the Browser pane)',
+        description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in your browser)',
         // now (the Dashboard's id), help (Settings), probe (a dev check) and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
-        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close]',
+        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web pane|web stop|clear|clear show|band|avatars [style]|close]',
         immediate: true,
       })
     } catch (error) {
@@ -4135,11 +4190,11 @@ export const register: Register = on => {
     if (arg === 'clear') return { text: await clearFinished($) }
     if (arg === 'clear show' || arg === 'clear undo') return { text: await showCleared($) }
     if (arg === 'probe') return toggleProbe($)
-    // the live dashboard: started if need be, its link answered, opened in the Browser pane when it can be
+    // the live dashboard: started if need be, opened in your own browser; or, asked for, in Claude's Browser pane
     const words = arg.split(/\s+/)
     if (words[0] === 'web') {
       if (words[1] === 'stop' || words[1] === 'off' || words[1] === 'close') return { text: stopWeb($) ? 'Apiarius web stopped.' : 'Apiarius web was not running.' }
-      return openWeb($)
+      return openWeb($, words[1] === 'pane' ? 'pane' : 'own')
     }
     // an Org chart Client that failed is tried again whenever /apiarius opens
     orgDown.clear()

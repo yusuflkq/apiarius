@@ -360,10 +360,14 @@ type World = {
   isHomeRefused: boolean
   /** Each run of web/open.js ("Open in browser"): its arguments, and what its stdin got (it answers that it opened it). */
   browsed: { argv: string[]; stdin: string }[]
+  /** web/open.js answers that it could not open the browser. */
+  isOpenRefused: boolean
+  /** The surfaces the session draws on, as `$.session.surfaces()` answers; left out, no answer (not known). */
+  surfaces?: ('terminal' | 'desktop')[]
 }
 
 function newWorld(extra: Partial<World> = {}): World {
-  return { children: [], ready: [PORT], isMissing: false, hasBrowser: true, writes: [], sent: [], filled: [], toasts: [], opened: [], saved: [], homeRequests: [], isHomeRefused: false, browsed: [], ...extra }
+  return { children: [], ready: [PORT], isMissing: false, hasBrowser: true, writes: [], sent: [], filled: [], toasts: [], opened: [], saved: [], homeRequests: [], isHomeRefused: false, browsed: [], isOpenRefused: false, ...extra }
 }
 
 const EDIT_RESULT = {
@@ -396,6 +400,7 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
   on('session.usage', () => ({ value: { startedAt: NOW - 60_000, context: { window: 200_000, tokens: 24_000, percent: 12 }, rateLimits: [], cost: { usd: 1.25 } } }))
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [] }))
+  if (w.surfaces) on('session.surfaces', () => ({ value: w.surfaces ?? [] }))
   // web/home.js says it did what it was asked; node prints its parent (the session's process); git finds no repository
   on('process.run', ($, e) => {
     const isHome = e.argv[0] === 'node' && /[\\/]web[\\/]home\.js$/.test(e.argv[1] ?? '')
@@ -404,7 +409,7 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
     // "Open in browser": web/open.js, the link on its stdin
     if (e.argv[0] === 'node' && /[\\/]web[\\/]open\.js$/.test(e.argv[1] ?? '')) {
       w.browsed.push({ argv: [...e.argv], stdin: e.init?.stdin ?? '' })
-      return { value: { exitCode: 0, stdout: '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      return { value: { exitCode: w.isOpenRefused ? 1 : 0, stdout: w.isOpenRefused ? '{"ok":false,"why":"no opener at http://127.0.0.1"}\n' : '{"ok":true}\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return e.argv[0] === 'node'
       ? { value: { exitCode: 0, stdout: `${PID}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -528,7 +533,7 @@ function modelSees(answer: { text?: string; context?: readonly string[] }): stri
   return [answer.text ?? '', ...(answer.context ?? [])].join('\n')
 }
 
-test('/apiarius web starts the server once (node, web/server.js, its folder in the home, the session pid, a new secret on its stdin) and opens the page in the Browser pane with a pane ticket of its own; the model reads no link, no ticket and no secret', async ($, on) => {
+test('/apiarius web pane starts the server once (node, web/server.js, its folder in the home, the session pid, a new secret on its stdin) and opens the page in the Browser pane with a pane ticket of its own; the model reads no link, no ticket and no secret', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
@@ -540,10 +545,11 @@ test('/apiarius web starts the server once (node, web/server.js, its folder in t
   expect(w.homeRequests[0]).toMatchObject({ op: 'sweep', home: HOME, registry: `${HOME}/sessions`, keep: 'session-1', legacy: expect.stringMatching(/[\\/]\.web$/) })
   expect(w.homeRequests[1]).toEqual({ op: 'prepare', home: HOME, id: 'session-1', files: [], isOwnHome: false, registry: `${HOME}/sessions` })
 
-  const answer = await $.command.run(deck('web'))
+  const answer = await $.command.run(deck('web pane'))
   await clock.settle()
   const { url, ticket } = linkOf(w)
   expect(w.opened[0]).toEqual({ server: 'Claude_Browser', tool: 'preview_start', url })
+  expect(w.browsed).toEqual([])
   expect(url).toBe(`http://127.0.0.1:${PORT}/?t=${ticket}`)
   // the Browser pane's grade (p), sealed with this start's secret
   const secret = secretOf(w.children[0])
@@ -551,7 +557,7 @@ test('/apiarius web starts the server once (node, web/server.js, its folder in t
   expect(ticket).toMatch(/^p-[0-9a-f]{16}-[0-9a-f]{32}$/)
   expect(W.ticketOf(secret, 'pane', W.nonceOf(ticket))).toBe(ticket)
   // a command's text reaches the model as its output, and its context is the model's: neither holds the link, the port, the ticket or the secret
-  expect(answer.text).toBe('Apiarius web is running on this machine. It opens in the Browser pane, where each message you send waits for one Send click above your prompt; Open in browser, at the top of the deck (/apiarius), opens it in your own browser, where messages go at once.')
+  expect(answer.text).toBe("Apiarius web is running on this machine. It opens in Claude's Browser pane, which Claude can drive, so each message you send from it waits for one Send click above your prompt. /apiarius web opens it in your own browser instead, where messages go at once.")
   for (const said of [ticket, secret, url, String(PORT), 'http', '?t=']) expect(modelSees(answer)).not.toContain(said)
 
   expect(w.children).toHaveLength(1)
@@ -577,7 +583,7 @@ test('/apiarius web starts the server once (node, web/server.js, its folder in t
   expect(w.writes.some(one => one.text.includes(secret) || one.text.includes(ticket))).toBe(false)
 
   // again: a new pane ticket on the same server, no second server
-  const again = await $.command.run(deck('web'))
+  const again = await $.command.run(deck('web pane'))
   await clock.settle()
   expect(linkOf(w).url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=p-`))
   expect(linkOf(w).ticket).not.toBe(ticket)
@@ -769,7 +775,7 @@ test('/apiarius web stop ends the child and the writes; a reload starts the serv
   expect(argv.slice(2)).toEqual(['--dir', DIR, '--parent', PID, '--port', String(PORT), '--sessions', `${HOME}/sessions`])
   expect(input).toMatch(/^[0-9a-f]{64}\n$/)
   expect(input).not.toContain('token-kept')
-  await $.command.run(deck('web'))
+  await $.command.run(deck('web pane'))
   await clock.settle()
   expect(linkOf(w).url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=p-`))
   expect(W.ticketOf(secretOf(w.children[0]), 'pane', W.nonceOf(linkOf(w).ticket))).toBe(linkOf(w).ticket)
@@ -802,7 +808,7 @@ test('a restart that cannot take its old port again takes another and says so; o
   expect(w.children).toHaveLength(2)
   expect(w.children[1]!.request.argv).not.toContain('--port')
   expect(w.toasts.some(text => text.includes('another port'))).toBe(true)
-  await $.command.run(deck('web'))
+  await $.command.run(deck('web pane'))
   await clock.settle()
   expect(linkOf(w).url).toMatch(/^http:\/\/127\.0\.0\.1:5555\/\?t=p-/)
   // each start its own secret: the second child's tickets are not the first's
@@ -833,7 +839,7 @@ test('the pane: with no Browser pane to open the web deck in, the header`s Open 
   const w = newWorld({ hasBrowser: false })
   world(on, w)
   await work($)
-  await $.command.run(deck('web'))
+  await $.command.run(deck('web pane'))
   await clock.settle()
   expect(w.children).toHaveLength(1)
   // both spellings of the Browser pane's server, then the tool: none opened it
@@ -851,12 +857,90 @@ test('the pane: with no Browser pane to open the web deck in, the header`s Open 
   expect((await ui.find({ key: 'settings:web:open-browser' }))?.props.label).toBe('Open in browser')
   expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
   expect(await ui.find({ key: 'web:open' })).toBeUndefined()
+  // beside it, the Desktop's alone: Claude's Browser pane, as /apiarius web pane, asked again at a press
+  expect((await ui.find({ key: 'settings:web:open-pane' }))?.props.label).toBe('Open in Claude’s Browser pane')
+  await ui.press({ key: 'settings:web:open-pane' })
+  await clock.settle()
+  expect(w.opened.map(one => one.server)).toEqual(['Claude_Browser', 'Claude Browser', 'Claude_Browser', 'Claude Browser'])
+  expect(linkOf(w).ticket).toMatch(/^p-/)
+  expect(w.browsed).toEqual([])
   await ui.unmount()
   // the terminal: the link as text to copy under the header, a full one, and the header's Open in browser, no row of its own
   const term = await $.ui.mount(paneOf('terminal', 116))
   expect((await term.find({ key: 'web:link' }))?.text).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=f-[0-9a-f]{16}-[0-9a-f]{32}$`))
   expect((await term.find({ key: 'deck:browser' }))?.props.label).toBe('Open in browser')
   expect(await term.find({ key: 'web:open-browser' })).toBeUndefined()
+  // a terminal has no Browser pane: Settings offers your own browser alone
+  expect(await term.find({ key: 'settings:web:open-pane' })).toBeUndefined()
+  expect((await term.find({ key: 'settings:web:open-browser' }))?.props.label).toBe('Open in browser')
+  await term.unmount()
+})
+
+test('/apiarius web opens the page in your own browser as Open in browser does: its server started, a full link with the opener`s deadline on web/open.js`s stdin, none in its arguments, never the Browser pane; the answer says so, and the model reads no link, no ticket and no secret', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  const answer = await $.command.run(deck('web'))
+  await clock.settle()
+  expect(w.children).toHaveLength(1)
+  expect(w.opened).toEqual([])
+  expect(w.browsed).toHaveLength(1)
+  expect(w.browsed[0]?.stdin).toMatch(OPENER_LINK)
+  expectNoLinkInArgv(w)
+  const secret = secretOf(w.children[0])
+  const ticket = decodeURIComponent(/\?t=(\S+)/.exec(w.browsed[0]?.stdin ?? '')?.[1] ?? '')
+  const until = parseInt(ticket.split('-')[2] ?? '0', 16)
+  expect(W.ticketOf(secret, 'full', W.nonceOf(ticket), until)).toBe(ticket)
+  expect(until * 1000 - NOW >= W.OPENER_TICKET_MS).toBe(true)
+  expect(answer.text).toBe('Apiarius web is running on this machine and opened in your own browser. Open in browser, at the top of the deck (/apiarius), opens it again.')
+  for (const said of [ticket, secret, String(PORT), 'http', '?t=']) expect(modelSees(answer)).not.toContain(said)
+  expect(w.toasts).toEqual([])
+  expect(w.writes.some(one => one.text.includes(ticket) || one.text.includes(secret))).toBe(false)
+  // again: a new link of its own, on the same server
+  await $.command.run(deck('web'))
+  await clock.settle()
+  expect(w.browsed).toHaveLength(2)
+  expect(w.browsed[1]?.stdin).toMatch(OPENER_LINK)
+  expect(w.browsed[1]?.stdin).not.toBe(w.browsed[0]?.stdin)
+  expect(w.children).toHaveLength(1)
+  expect(w.opened).toEqual([])
+})
+
+test('/apiarius web whose browser did not open says so and where to try again, never why (the opener`s words may hold the link); in a terminal it points at the link to copy, which the deck shows', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld({ isOpenRefused: true, surfaces: ['terminal'] })
+  world(on, w)
+  await work($)
+  const answer = await $.command.run(deck('web'))
+  await clock.settle()
+  expect(w.browsed).toHaveLength(1)
+  expect(answer.text).toBe('Apiarius web is running on this machine, but your browser did not open. Open in browser, at the top of the deck (/apiarius), tries again. The deck also shows a link to copy under its header.')
+  expect(modelSees(answer)).not.toMatch(/127\.0\.0\.1|\?t=|no opener/)
+  expect(w.opened).toEqual([])
+  await $.command.run(deck(''))
+  await clock.advance(500)
+  const term = await $.ui.mount(paneOf('terminal', 116))
+  expect((await term.find({ key: 'web:link' }))?.text).toMatch(/\?t=f-/)
+  await term.unmount()
+})
+
+test('/apiarius web pane in a session that draws only in a terminal asks no Browser pane, which a terminal has not: the page runs, the answer says how to open it, and the deck shows its link to copy', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld({ surfaces: ['terminal'] })
+  world(on, w)
+  await work($)
+  const answer = await $.command.run(deck('web pane'))
+  await clock.settle()
+  expect(w.children).toHaveLength(1)
+  expect(w.opened).toEqual([])
+  expect(w.browsed).toEqual([])
+  expect(answer.text).toBe('Apiarius web is running on this machine. A terminal has no Browser pane: press o in the deck (/apiarius), or Open in browser at its top, to open it in your own browser. The deck also shows a link to copy under its header.')
+  expect(modelSees(answer)).not.toMatch(/127\.0\.0\.1|\?t=/)
+  await $.command.run(deck(''))
+  await clock.advance(500)
+  const term = await $.ui.mount(paneOf('terminal', 116))
+  expect((await term.find({ key: 'web:link' }))?.text).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=f-`))
   await term.unmount()
 })
 
@@ -892,7 +976,7 @@ test('Open in browser sits at the right of the header on both surfaces, server o
     await look('terminal', 136, 'Open in browser')
     await look('terminal', 40, 'Browser')
     if (isOn) break
-    await $.command.run(deck('web'))
+    await $.command.run(deck('web pane'))
     await clock.settle()
     expect(w.children).toHaveLength(1)
   }
@@ -1001,12 +1085,12 @@ test('a press of Open in browser whose start fails toasts why, as /apiarius web 
   await clock.advance(400)
 })
 
-test('/apiarius web still opens the Browser pane with a pane link of its own and nothing in your own browser; the header`s Open in browser then opens a full one there, and the Browser pane is not asked again', async ($, on) => {
+test('/apiarius web pane opens the Browser pane with a pane link of its own and nothing in your own browser; the header`s Open in browser then opens a full one there, and the Browser pane is not asked again', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = newWorld()
   world(on, w)
   await work($)
-  await $.command.run(deck('web'))
+  await $.command.run(deck('web pane'))
   await clock.settle()
   expect(w.children).toHaveLength(1)
   expect(w.opened).toHaveLength(1)

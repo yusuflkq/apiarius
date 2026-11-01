@@ -8,10 +8,11 @@
  *   terminal), the one drawn marked; a press draws every agent in it from
  *   now on, in every session and on the web page (`setAvatarStyle`, as
  *   `/apiarius avatars`);
- * - Web page: "Start the web page" (`/apiarius web`), then "Open in browser",
- *   which opens it in your own browser (and, on the terminal, its link to
- *   copy), and how the page stands; the header's Open in browser (./deck)
- *   does the same at any time, starting the page first;
+ * - Web page: "Open in browser", which starts the page when it is off and
+ *   opens it in your own browser (as `/apiarius web` and the header's,
+ *   ./deck), and on a desktop "Open in Claude's Browser pane" (as
+ *   `/apiarius web pane`); how the page stands, and on the terminal its
+ *   link to copy;
  * - Help: what each tab shows, and the few keys there are.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks module.
@@ -173,74 +174,54 @@ function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, wi
 
 // The web page.
 
-/** What the web page's line says, by how it stands. */
-function webNote(web: WebPane | undefined): { text: string; color: string } {
-  if (!web || web.status === 'off') return { text: 'The same deck as a live page in your browser (/apiarius web).', color: P.muted2 }
+/** Settings' button for the Browser pane, the Desktop's alone. */
+export const PANE_LABEL = 'Open in Claude’s Browser pane'
+
+/** What the web page's line says, by how it stands, and on a desktop what each way to open it does. */
+function webNote(kit: Kit, web: WebPane | undefined): { text: string; color: string } {
+  const ways = kit.surface === 'terminal' ? '' : ' In your own browser your messages go at once. Claude can drive its Browser pane, so there each one waits for one Send click above your prompt.'
+  if (!web || web.status === 'off') return { text: `The same deck as a live page, on this machine only (/apiarius web).${ways}`, color: P.muted2 }
   if (web.status === 'starting') return { text: 'Starting the web page…', color: P.muted2 }
   if (web.status === 'failed') return { text: web.note || 'The web page could not start.', color: P.failText }
-  return { text: 'Live, on this machine only. In your own browser your messages go at once; in the Browser pane, which Claude can drive, each waits for your Send above the prompt.', color: P.muted }
+  return { text: `Live, on this machine only.${ways}`, color: P.muted }
 }
 
 /**
- * "Open in browser": a Button that opens the running page in your own
- * browser with the system's opener, each press its own one-time link
- * (`actions.openBrowser`, as the header's, ./deck); never a link the surface
- * opens itself, which the Desktop may open in its Browser pane. The terminal
- * shows that link too (`web.url`), as text to copy: a link opens one page,
- * and the deck shows a new one once it was used. `prefix` keys its parts.
- */
-function browserRow(kit: Kit, web: WebPane, actions: DashActions, prefix: string, note: RenderElement | null): RenderElement {
-  const { Box, Button, Text } = kit
-  return (
-    <Box key={`${prefix}:browser`} flexDirection="column">
-      <Box flexDirection="row" columnGap={2} alignItems="center">
-        <Box flexShrink={0}>
-          <Button key={`${prefix}:open-browser`} label="Open in browser" onPress={() => actions.openBrowser()} />
-        </Box>
-        {note ? (
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            {note}
-          </Box>
-        ) : null}
-      </Box>
-      {kit.surface === 'terminal' && web.url !== '' ? (
-        <Box key={`${prefix}:link`}>
-          <Text color={P.muted} wrap="wrap">
-            {web.url}
-          </Text>
-        </Box>
-      ) : null}
-    </Box>
-  )
-}
-
-/**
- * The web page and how it stands. While it runs, "Open in browser" opens it
- * in your own browser (`browserRow`). Until then a Button starts it (as
- * /apiarius web), and "Open in browser" takes its place.
+ * The web page and how it stands: "Open in browser", which opens it in your
+ * own browser, each press its own one-time link (`actions.openBrowser`, as
+ * the header's, ./deck, and /apiarius web), the page started first when it
+ * is off; "Starting…" in its place meanwhile. On a desktop beside it, "Open
+ * in Claude's Browser pane" (`actions.openWebPane`, as /apiarius web pane),
+ * whose words in your voice wait for your Send. Never a link the surface
+ * opens itself, which the Desktop may open in its Browser pane; the
+ * terminal shows the running page's link (`web.url`) as text to copy: a
+ * link opens one page, and the deck shows a new one once it was used.
  */
 function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): RenderElement {
   const { Box, Button, Text } = kit
-  const note = webNote(web)
-  const isUp = web !== undefined && web.status === 'running' && web.url !== ''
-  const said = (
-    <Text color={note.color} wrap="wrap">
-      {note.text}
-    </Text>
-  )
+  const note = webNote(kit, web)
+  const isStarting = web?.status === 'starting'
   return section(kit, 'settings:web', sectionHead(kit, 'Web page', null), [
-    isUp ? (
-      browserRow(kit, web, actions, 'settings:web', said)
-    ) : (
-      <Box key="settings:web:row" flexDirection="row" columnGap={2} alignItems="center">
-        <Box flexShrink={0}>
-          <Button key="web:open" label={web?.status === 'starting' ? 'Starting…' : 'Start the web page'} onPress={() => actions.openWeb()} />
-        </Box>
-        <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          {said}
-        </Box>
+    <Box key="settings:web:row" flexDirection="row" columnGap={2} rowGap={isAiry(kit) ? 1 : 0} flexWrap="wrap">
+      <Box flexShrink={0}>
+        <Button key="settings:web:open-browser" label={isStarting ? 'Starting…' : 'Open in browser'} onPress={() => actions.openBrowser()} />
       </Box>
-    ),
+      {kit.surface === 'terminal' ? null : (
+        <Box flexShrink={0}>
+          <Button key="settings:web:open-pane" label={PANE_LABEL} onPress={() => actions.openWebPane()} />
+        </Box>
+      )}
+    </Box>,
+    <Text key="settings:web:note" color={note.color} wrap="wrap">
+      {note.text}
+    </Text>,
+    kit.surface === 'terminal' && web?.status === 'running' && web.url !== '' ? (
+      <Box key="settings:web:link">
+        <Text color={P.muted} wrap="wrap">
+          {web.url}
+        </Text>
+      </Box>
+    ) : null,
   ])
 }
 

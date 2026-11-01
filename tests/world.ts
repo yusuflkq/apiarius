@@ -352,7 +352,7 @@ export function deck(args: string) {
   return { command: 'apiarius', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: true, columns: 100 } }
 }
 
-/** The session starts, you ask, the Orchestrator's turn starts and it starts scout (`agent-x1`); then `/apiarius web`. */
+/** The session starts, you ask, the Orchestrator's turn starts and it starts scout (`agent-x1`); then `/apiarius web pane`, the page in the Browser pane. */
 export async function work($: Engine): Promise<void> {
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await $.prompt.submit({ text: 'Fix the off-by-one in src/range.js', origin: { kind: 'composer' }, wait: false })
@@ -368,7 +368,7 @@ export async function work($: Engine): Promise<void> {
     background: true,
     fork: false,
   })
-  await $.command.run(deck('web'))
+  await $.command.run(deck('web pane'))
 }
 
 /** Every state.json written, oldest first. */

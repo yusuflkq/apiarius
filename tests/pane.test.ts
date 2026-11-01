@@ -120,7 +120,7 @@ test('/apiarius is registered before session.start reads anything, so the menu h
 
   const spec = w.registered[0]
   expect(spec?.immediate).toBe(true)
-  expect(spec?.argumentHint).toBe('[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close]')
+  expect(spec?.argumentHint).toBe('[dashboard|chat|org|changes|inspect|settings|demo|web|web pane|web stop|clear|clear show|band|avatars [style]|close]')
   expect(spec?.argumentHint).not.toContain('probe')
   // the probe still opens, typed in full
   await $.command.run(deck('probe'))
@@ -358,8 +358,10 @@ test('5 opens Inspect, its sections folded to one line each, and Spend (the cont
     await press(ui, 'tab:settings')
     expect((await ui.find({ key: 'tab:settings' }))?.props.dimColor).toBe(false)
     expect(await ui.find({ key: 'inspect:tile:context' })).toBeUndefined()
-    // the web page: off, a Button starts it (as /apiarius web)
-    expect((await ui.find({ key: 'web:open' }))?.props.label).toBe('Start the web page')
+    // the web page: off, Open in browser starts it and opens it in your own browser (as /apiarius web); on a desktop, Claude's Browser pane beside it (as /apiarius web pane)
+    expect((await ui.find({ key: 'settings:web:open-browser' }))?.props.label).toBe('Open in browser')
+    expect((await ui.find({ key: 'settings:web:open-pane' }))?.props.label).toBe(surface === 'terminal' ? undefined : 'Open in Claude’s Browser pane')
+    expect(await ui.find({ key: 'web:open' })).toBeUndefined()
     expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
     // Help: each tab, then the keys that are left
     const help = (await ui.find({ key: 'help' }))?.text ?? ''
