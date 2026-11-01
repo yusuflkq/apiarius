@@ -127,7 +127,7 @@ test('/apiarius is registered before session.start reads anything, so the menu h
   expect(w.opens.map(one => one.id)).toContain('apiarius-probe')
 })
 
-test('the Dashboard: the header says the state, your request and model · mode · context · $ (the mode lit), and holds no keys; the tabs are Buttons with their digits as hotkeys, and nothing else has one', async ($, on) => {
+test('the Dashboard: the header says the state, your request and model · mode · context · $ (the mode lit), and holds one key, Open in browser`s `o`; the tabs are Buttons with their digits as hotkeys, and nothing else has one', async ($, on) => {
   const { v2 } = await demo($, on)
   for (const surface of SURFACES) {
     const ui = await $.ui.mount(pane(surface))
@@ -145,9 +145,9 @@ test('the Dashboard: the header says the state, your request and model · mode �
     expect((await ui.find({ key: 'tab:changes' }))?.props).toMatchObject({ label: `Changes ${v2.changes.files.length}`, hotkey: '4' })
     expect((await ui.find({ key: 'tab:inspect' }))?.props).toMatchObject({ label: 'Inspect', hotkey: '5', dimColor: true })
     expect((await ui.find({ key: 'tab:settings' }))?.props).toMatchObject({ label: 'Settings', hotkey: '6', dimColor: true })
-    // the tabs alone have hotkeys: no Message, ↓, ↑, Help or Next need
+    // the tabs and Open in browser alone have hotkeys (on a desktop its `o` sits on a Button out of sight): no Message, ↓, ↑, Help or Next need
     const hotkeys = Object.fromEntries((await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined).map(one => [one.props.hotkey, one.key]))
-    expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:org', '4': 'tab:changes', '5': 'tab:inspect', '6': 'tab:settings' })
+    expect(hotkeys).toEqual({ '1': 'tab:now', '2': 'tab:chat', '3': 'tab:org', '4': 'tab:changes', '5': 'tab:inspect', '6': 'tab:settings', o: surface === 'desktop' ? 'key:o' : 'deck:browser' })
     for (const key of ['key:n', 'key:i', 'key:h', 'key:m', 'key:j', 'key:k']) expect(await ui.find({ key })).toBeUndefined()
     expect(header?.text ?? '').not.toMatch(/Inspect|Help|Next need/)
     // the Dashboard: a card an agent, the figures

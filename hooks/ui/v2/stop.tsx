@@ -31,7 +31,7 @@ import type { V2AgentRow, WebStateV2 } from '../../web'
 import type { DashActions, Kit } from '../types'
 import { advanceOf, svgOf } from './look'
 import { P } from './palette'
-import { plainSlack, pressNote, pressOf, pressSending } from './parts'
+import { cellsForPx, plainSlack, pressNote, pressOf, pressSending } from './parts'
 import { cellsOf } from './text'
 
 /** The stop mark, `px` square: a rounded red square where the surface draws Svg (Lucide's `square`), else ■. */
@@ -82,6 +82,16 @@ export function stopTurnButton(kit: Kit, state: Pick<WebStateV2, 'header' | 'pee
       </Box>
     </Box>
   )
+}
+
+/** The cells Stop turn takes at the right of the header, about: its mark and its label, or what stands in its place on another session's deck; 0 between turns. */
+export function turnStopCells(kit: Kit, state: Pick<WebStateV2, 'header' | 'peer'>): number {
+  if (!state.header.turn) return 0
+  const adv = advanceOf(kit)
+  if (state.peer && !state.peer.canSteer) return cellsOf(NOT_ANSWERING, adv)
+  const press = pressOf(state, 'turn')
+  if (press?.status === 'sending') return cellsOf(press.text, adv)
+  return (svgOf(kit) ? cellsForPx(12) : 1) + 1 + cellsOf('Stop turn', adv) + plainSlack(kit)
 }
 
 /** Whether an agent's Stop is offered: Claude Code's check allows TaskStop of it. */

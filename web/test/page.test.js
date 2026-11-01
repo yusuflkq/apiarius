@@ -2038,7 +2038,7 @@ test('a link used already, one the server never sealed, none at all, or a handle
     return p.text('Page() || Unreachable()')
   }
   const refused = error => () => [403, JSON.stringify({ ok: false, error })]
-  assert.match(await said('?t=p-0011223344556677-adec674903d619b39d62c67a42bb3d17', { '/session': refused('used') }), /^This link was used already Each link opens one page\. Open it again from Claude Code: \/apiarius web for the Browser pane, or Open in browser in the deck's Settings for your own browser\.$/)
+  assert.match(await said('?t=p-0011223344556677-adec674903d619b39d62c67a42bb3d17', { '/session': refused('used') }), /^This link was used already Each link opens one page\. Open it again from Claude Code: \/apiarius web for the Browser pane, or Open in browser at the top of the deck for your own browser\.$/)
   assert.match(await said('?t=p-0011223344556677-adec674903d619b39d62c67a42bb3d17', { '/session': refused('unknown') }), /^This link no longer works It is from before the deck's server started again/)
   assert.match(await said('', {}), /^This page was opened without its link/)
   // the server started again: the tab's handle is refused, and let go

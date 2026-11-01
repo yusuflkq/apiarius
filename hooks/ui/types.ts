@@ -46,7 +46,7 @@ export type UsageInfo = {
 }
 
 
-/** The web deck (`/apiarius web`) as the pane shows it under its Open dashboard button. */
+/** The web deck (`/apiarius web`) as the deck shows it: the header's Open in browser, the line under the header, and Settings. */
 export type WebPane = {
   /** `off` until it is asked for, `starting` until the server says it is ready, `failed` when it could not start or stopped by itself. */
   status: 'off' | 'starting' | 'running' | 'failed'
@@ -108,7 +108,7 @@ export type Actions = {
   selectRepo: (root: string) => void
   /** What `/apiarius web` does: starts the dashboard's server if it is not running, then opens the page in the Browser pane (the pane shows the link when that fails). */
   openWeb: () => void
-  /** "Open in browser": a new `full` link to the running page, opened in your own browser by the system's opener (a toast when it could not). */
+  /** "Open in browser" (the header's, `o`, and Settings'): starts the web deck first when it is not running (never in the Browser pane; a press while it starts does nothing), then a new `full` link to the page, opened in your own browser by the system's opener (a toast when it could not). */
   openBrowser: () => void
   /** Send on a band row the Browser pane's page sent in your voice (../hold): it runs as your own browser's page would have run it at once. */
   sendHeld: (key: string) => void

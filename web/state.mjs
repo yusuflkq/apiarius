@@ -513,7 +513,7 @@ export async function command(body) {
   if (!res.ok || (data && data.ok === false)) {
     const code = data && (data.error || data.message);
     const plain = {
-      forbidden: 'The deck refused it: its server started again, so this page needs opening again from Claude Code (/apiarius web, or Open in browser in the deck\'s Settings).',
+      forbidden: 'The deck refused it: its server started again, so this page needs opening again from Claude Code (/apiarius web, or Open in browser at the top of the deck).',
       'too large': 'That is too long to send.',
       'bad command': 'The deck could not read that message.',
     }[code];

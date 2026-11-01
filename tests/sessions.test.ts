@@ -571,9 +571,9 @@ test('the header`s title is the switcher: "◆ 1 needs you · 2 sessions" at its
       // the terminal draws its cue, as each tab's: "s: 2 sessions"
       expect((await ui.find({ key: 'key:s' }))?.props).toMatchObject({ label: '2 sessions', hotkey: 's' })
     }
-    // the tabs and `s` are the only keys
+    // the tabs, `s` and Open in browser's `o` are the only keys
     const keys = (await ui.findAll({ type: 'Button' })).filter(one => one.props.hotkey !== undefined).map(one => one.props.hotkey)
-    expect(keys.sort()).toEqual(['1', '2', '3', '4', '5', '6', 's'])
+    expect(keys.sort()).toEqual(['1', '2', '3', '4', '5', '6', 'o', 's'])
     await ui.press({ key: surface === 'desktop' ? 'sessions:switch' : 'key:s' })
     await clock.advance(500)
     await ui.redraw()

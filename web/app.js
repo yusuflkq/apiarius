@@ -75,7 +75,7 @@ function ConnBanner() {
 }
 
 /** Where a page is opened again: the deck's own links, each for one page. */
-const OPEN_AGAIN = 'Open it again from Claude Code: /apiarius web for the Browser pane, or Open in browser in the deck\'s Settings for your own browser.';
+const OPEN_AGAIN = 'Open it again from Claude Code: /apiarius web for the Browser pane, or Open in browser at the top of the deck for your own browser.';
 
 /** Why the page has no access, in words, by what the server said (state.mjs `access.why`). */
 function deniedText() {

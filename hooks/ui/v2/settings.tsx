@@ -10,7 +10,8 @@
  *   `/apiarius avatars`);
  * - Web page: "Start the web page" (`/apiarius web`), then "Open in browser",
  *   which opens it in your own browser (and, on the terminal, its link to
- *   copy), and how the page stands;
+ *   copy), and how the page stands; the header's Open in browser (./deck)
+ *   does the same at any time, starting the page first;
  * - Help: what each tab shows, and the few keys there are.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks module.
@@ -183,12 +184,12 @@ function webNote(web: WebPane | undefined): { text: string; color: string } {
 /**
  * "Open in browser": a Button that opens the running page in your own
  * browser with the system's opener, each press its own one-time link
- * (`actions.openBrowser`); never a link the surface opens itself, which the
- * Desktop may open in its Browser pane. The terminal shows that link too
- * (`web.url`), as text to copy: a link opens one page, and the deck shows a
- * new one once it was used. `prefix` keys it apart where two draw.
+ * (`actions.openBrowser`, as the header's, ./deck); never a link the surface
+ * opens itself, which the Desktop may open in its Browser pane. The terminal
+ * shows that link too (`web.url`), as text to copy: a link opens one page,
+ * and the deck shows a new one once it was used. `prefix` keys its parts.
  */
-export function browserRow(kit: Kit, web: WebPane, actions: DashActions, prefix: string, note: RenderElement | null): RenderElement {
+function browserRow(kit: Kit, web: WebPane, actions: DashActions, prefix: string, note: RenderElement | null): RenderElement {
   const { Box, Button, Text } = kit
   return (
     <Box key={`${prefix}:browser`} flexDirection="column">
@@ -261,6 +262,7 @@ export const KEYS: readonly (readonly [string, string])[] = [
   ['Enter', 'opens what has the focus: an agent, a fold, a need, a file'],
   ['b', 'back from an agent’s page'],
   ['s', 'opens All sessions'],
+  ['o', 'opens the deck in your own browser (Open in browser, at the top), starting its web page if it is off'],
 ]
 
 /** Help: the tabs, then the keys. */

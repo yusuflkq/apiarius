@@ -716,7 +716,8 @@ function debugStateOf(now: number) {
  * trades for a handle (web/server.js), of one of two grades (`W.WebGrade`):
  * the Browser pane's is `pane`, since Claude's tools drive that pane, and
  * what it sends in your voice waits for your Send in the band (./hold);
- * "Open in browser" opens a `full` one in your own browser with the
+ * "Open in browser" (the deck's header) starts the server too when it is
+ * not running, then opens a `full` one in your own browser with the
  * system's opener, and the terminal deck shows one as text to copy. A link
  * is never in what the model reads. While it is on, what the
  * deck holds goes to `<home>/web/<sessionId>/state.json` at most every 300 ms
@@ -1668,7 +1669,15 @@ async function showWeb($: EngineInterface, url: string): Promise<void> {
 }
 
 /** What `/apiarius web` answers once the page is up: no link, since a command's text reaches the model as its output; the links are the deck's. */
-const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in the Browser pane, where each message you send waits for one Send click above your prompt; Open in browser (under Settings in /apiarius) opens it in your own browser, where messages go at once.'
+const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in the Browser pane, where each message you send waits for one Send click above your prompt; Open in browser, at the top of the deck (/apiarius), opens it in your own browser, where messages go at once.'
+
+/** What a start of the web deck that ended the session refused says. */
+const WEB_ENDED_TEXT = 'This session has ended: Apiarius web starts again in a new one.'
+
+/** Why the server is not up after `ensureWeb` gave up on it, in a sentence: it never answered, or what stopped it. */
+function webDownWhy(): string {
+  return web.status === 'starting' ? "The dashboard's server did not answer within 10 s." : web.note || "The dashboard's server did not start."
+}
 
 /**
  * `/apiarius web` and the pane's Open dashboard: starts the web deck if it is
@@ -1680,10 +1689,10 @@ const WEB_OPENED_TEXT = 'Apiarius web is running on this machine. It opens in th
  * where it is, never a link. Without node the deck stays native.
  */
 async function openWeb($: EngineInterface): Promise<CommandRunResult> {
-  if (web.isEnded) return { text: 'This session has ended: Apiarius web starts again in a new one.' }
+  if (web.isEnded) return { text: WEB_ENDED_TEXT }
   const isUp = await ensureWeb($)
   if (!isUp) {
-    const why = web.status === 'starting' ? "The dashboard's server did not answer within 10 s." : web.note || "The dashboard's server did not start."
+    const why = webDownWhy()
     $.ui.toast(`Apiarius web: ${why}`)
     return { text: `${why} The deck stays in its pane: /apiarius.` }
   }
@@ -1694,21 +1703,44 @@ async function openWeb($: EngineInterface): Promise<CommandRunResult> {
   }
 }
 
+/** A press of Open in browser is waiting for the server it started: another press meanwhile starts and opens nothing. */
+let isBrowserWaiting = false
+
 /**
- * "Open in browser" (Settings, and the deck's top line while the Browser
- * pane did not take the page): a `full` link made for this press, opened in
- * your own browser by the system's opener (web/open.js: osascript's `open
- * location` read on its stdin on macOS, so no process's arguments ever hold
- * it; `start`, `xdg-open` elsewhere, whose arguments do while they run), the
- * link on its stdin; a toast when it could not (the terminal shows a link to
- * copy). Its ticket works for `W.OPENER_TICKET_MS` only, unless the page
- * traded it by then.
+ * "Open in browser" (at the right of the deck's header, `o`, and in
+ * Settings): starts the web deck when it is not running, as `/apiarius web`
+ * does (`ensureWeb`, and its toast when it could not; a second press while
+ * it starts does nothing), but never opens the Browser pane; then a `full`
+ * link made for this press, opened in your own browser by the system's
+ * opener (web/open.js: osascript's `open location` read on its stdin on
+ * macOS, so no process's arguments ever hold it; `start`, `xdg-open`
+ * elsewhere, whose arguments do while they run), the link on its stdin; a
+ * toast when it could not (the terminal shows a link to copy). Its ticket
+ * works for `W.OPENER_TICKET_MS` only, unless the page traded it by then.
  */
 async function openOwnBrowser($: EngineInterface): Promise<void> {
+  if (web.status !== 'running' || web.port <= 0) {
+    if (isBrowserWaiting) return
+    if (web.isEnded) {
+      $.ui.toast(WEB_ENDED_TEXT)
+      return
+    }
+    isBrowserWaiting = true
+    let isUp = false
+    try {
+      isUp = await ensureWeb($)
+    } finally {
+      isBrowserWaiting = false
+    }
+    if (!isUp) {
+      $.ui.toast(`Apiarius web: ${webDownWhy()}`)
+      return
+    }
+  }
   const until = Math.ceil(((await $.clock.now()) + W.OPENER_TICKET_MS) / 1000)
   const ticket = web.status === 'running' && web.port > 0 ? ticketFor('full', until) : ''
   if (ticket === '') {
-    $.ui.toast('Apiarius web is not running: /apiarius web starts it.')
+    $.ui.toast('Apiarius web is not running: Open in browser starts it.')
     return
   }
   let why = ''
@@ -1719,7 +1751,7 @@ async function openOwnBrowser($: EngineInterface): Promise<void> {
   } catch (error) {
     why = error instanceof Error ? error.message : String(error)
   }
-  $.ui.toast(`Could not open your browser${why ? ` (${F.trunc(F.oneLine(why), 120)})` : ''}. In a terminal, Settings in /apiarius shows the link to copy.`)
+  $.ui.toast(`Could not open your browser${why ? ` (${F.trunc(F.oneLine(why), 120)})` : ''}. In a terminal, the deck shows the link to copy under its header.`)
 }
 
 /** `/apiarius web stop`: the server ends, the state is no longer written, and the next start makes a new link. Answers whether it was on. */

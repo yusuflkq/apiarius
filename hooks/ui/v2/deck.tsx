@@ -7,7 +7,9 @@
  *   this machine over the tabs), how many sessions there are and whether
  *   another needs you; then `model · permission mode · context % · ≈$cost`,
  *   the mode in amber (bypass permissions in red) as Claude Code's footer
- *   marks it, and Stop turn while a turn runs;
+ *   marks it, then Open in browser (`o`: the deck in your own browser, its
+ *   web page started first when it is not running), and Stop turn while a
+ *   turn runs;
  * - the tabs, `1` Dashboard · `2` Chat · `3` Org · `4` Changes · `5`
  *   Inspect · `6` Settings (the Dashboard's id stays `now`);
  * - under them the open tab (./now, ./chat, ./org, ./changes, ./inspect,
@@ -15,8 +17,8 @@
  *
  * Each tab is a Button with its digit as its hotkey, so it presses while the
  * pane has the keyboard; Enter presses the focused one. Help is a section of
- * Settings; the header's one key is `s` (./sessions: every session on this
- * machine, dropped over the tabs).
+ * Settings; the header's keys are `s` (./sessions: every session on this
+ * machine, dropped over the tabs) and `o` (Open in browser).
  *
  * Any session's deck is drawn so, this one's or another's (its state then
  * marked `peer`): there is no mode for another's.
@@ -34,13 +36,16 @@ import { changesTab } from './changes'
 import { chatTab } from './chat'
 import { FEWEST_ROWS, rowsOf } from './fit'
 import { inspectTab } from './inspect'
+import { advanceOf } from './look'
 import { nowTab } from './now'
 import { orgTab, type OrgSpot } from './org'
 import { agentPage } from './page'
 import { P } from './palette'
+import { buttonSlack } from './parts'
 import { headLine, sessionsList } from './sessions'
-import { browserRow, settingsTab } from './settings'
-import { stopTurnButton } from './stop'
+import { settingsTab } from './settings'
+import { stopTurnButton, turnStopCells } from './stop'
+import { cellsOf } from './text'
 
 /** The tabs, in their keys' order. */
 export const TABS: readonly { id: DeckView2['tab']; label: string; hotkey: string }[] = [
@@ -52,6 +57,16 @@ export const TABS: readonly { id: DeckView2['tab']; label: string; hotkey: strin
   { id: 'settings', label: 'Settings', hotkey: '6' },
 ]
 
+/** The key of the header's Open in browser, on every surface: one lowercase letter, as a pane's hotkey must be. */
+export const BROWSER_KEY = 'o'
+
+/** Open in browser's label, and the one it takes where the header's line is short of room. */
+const BROWSER_LABEL = 'Open in browser'
+const BROWSER_SHORT = 'Browser'
+
+/** The cells the header's line keeps for the model and the mode before Open in browser says "Browser". */
+const LINE_KEEPS = 22
+
 /** How Org stands when the hooks module says nothing of it: its chart not failed, no agent marked. */
 const ORG_FRESH: OrgSpot = { isDown: false, selected: null }
 
@@ -59,7 +74,7 @@ const ORG_FRESH: OrgSpot = { isDown: false, selected: null }
 export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckModel, actions: DashActions, isDemo: boolean, org: OrgSpot = ORG_FRESH): RenderElement {
   const { Box } = kit
   const list = model.isSessionsOpen === true && state.sessions ? sessionsList(kit, state.sessions, state.session.id, actions) : null
-  const top = [header(kit, state, model, actions), list, model.web ? webLine(kit, model.web, actions) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
+  const top = [header(kit, state, model, actions), list, model.web ? webLine(kit, model.web) : null, tabRow(kit, state, model, actions)].filter(one => one !== null)
   // the terminal: the tab gets the rows the header, the tabs and the gaps between leave it
   const rows = kit.rows === undefined ? undefined : Math.max(FEWEST_ROWS / 2, kit.rows - rowsOf(top, kit.columns) - top.length)
   return (
@@ -71,7 +86,7 @@ export function v2Deck(kit: Kit, state: WebStateV2, files: V2Files, model: DeckM
 }
 
 
-/** The header: the state's word and your latest request, the switcher once the sessions on this machine are known (./sessions `headLine`), then `model · mode · context % · ≈$cost`, the mode lit, and Stop turn at its right while the main loop's turn runs (./stop; another session's says where to stop it). */
+/** The header: the state's word and your latest request, the switcher once the sessions on this machine are known (./sessions `headLine`), then `model · mode · context % · ≈$cost`, the mode lit, Open in browser at its right (`browserControl`), and Stop turn at the far right while the main loop's turn runs (./stop; another session's says where to stop it). */
 function header(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActions): RenderElement {
   const { Box, Text } = kit
   const head = state.header
@@ -79,7 +94,8 @@ function header(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
   // the permission mode in the line, lit as Claude Code's footer lights it (a state of an earlier build names none)
   const mode = typeof head.mode === 'string' ? head.mode : ''
   const at = mode !== '' ? head.line.indexOf(mode) : -1
-  // three parts in a row, so the mode keeps its own colour and the line cuts at its end: the model and the mode whole, the rest cut to the room left; in a pane too narrow even for them, their row cuts them, never drawing under Stop turn
+  const stopCells = turnStopCells(kit, state)
+  // three parts in a row, so the mode keeps its own colour and the line cuts at its end: the model and the mode whole, the rest cut to the room left; in a pane too narrow even for them, their row cuts them, never drawing under Open in browser or Stop turn
   const lineParts =
     at < 0
       ? [
@@ -113,6 +129,7 @@ function header(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
         <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="row" overflow="hidden">
           {lineParts}
         </Box>
+        {browserControl(kit, model.web, kit.columns - 2 - (stopCells > 0 ? stopCells + 2 : 0), actions)}
         {stopTurnButton(kit, state, actions)}
       </Box>
     </Box>
@@ -120,14 +137,51 @@ function header(kit: Kit, state: WebStateV2, model: DeckModel, actions: DashActi
 }
 
 /**
- * The web deck (`/apiarius web`) in one line, while it is on and has something
- * to say: starting, why it could not start, or, where the Browser pane could
- * not take the page, "Open in browser" (your own: ./settings `browserRow`,
- * the terminal's link to copy under it). Nothing once the page is open, or
- * while it is off.
+ * Open in browser at the right of the header's second line, left of Stop
+ * turn, always: a plain dim Button whose press opens the deck in your own
+ * browser, its web page started first when it is not running
+ * (`actions.openBrowser`, never the Browser pane); "Starting…" in its place
+ * while the page starts, which takes no press. `o` presses it on every
+ * surface: on a desktop through a Button kept out of sight, as `s` is
+ * (./sessions), so no key cue shows beside it; the terminal draws its cue
+ * ("o: Open in browser"). "Browser" where `room` (the line's cells less Stop
+ * turn's and the gaps) would leave the model and the mode too little.
  */
-function webLine(kit: Kit, web: WebPane, actions: DashActions): RenderElement | null {
-  const { Text } = kit
+function browserControl(kit: Kit, web: WebPane | undefined, room: number, actions: Pick<DashActions, 'openBrowser'>): RenderElement {
+  const { Box, Text, Button } = kit
+  if (web?.status === 'starting') {
+    return (
+      <Box key="deck:browserbox" flexShrink={0}>
+        <Text color={P.muted2}>Starting…</Text>
+      </Box>
+    )
+  }
+  const isHidden = kit.surface === 'desktop'
+  const cells = cellsOf(BROWSER_LABEL, advanceOf(kit)) + buttonSlack(kit) + (isHidden ? 0 : 3)
+  const label = room - cells >= LINE_KEEPS ? BROWSER_LABEL : BROWSER_SHORT
+  const press = () => actions.openBrowser()
+  return (
+    <Box key="deck:browserbox" flexShrink={0} flexDirection="row">
+      <Button key="deck:browser" label={label} plain dimColor {...(isHidden ? {} : { hotkey: BROWSER_KEY })} onPress={press} />
+      {isHidden ? (
+        <Box display="none">
+          <Button key="key:o" label={BROWSER_LABEL} plain hotkey={BROWSER_KEY} onPress={press} />
+        </Box>
+      ) : null}
+    </Box>
+  )
+}
+
+/**
+ * The web deck (`/apiarius web`) in one line, while it is on and has something
+ * to say: starting, or why it could not start; on the terminal, while it runs
+ * and the Browser pane did not take the page, its `full` link as text to copy
+ * (`web.url`: a link opens one page, and the deck shows a new one once it was
+ * used). The header's Open in browser opens it in your own browser, so
+ * nothing else here; nothing while it is off.
+ */
+function webLine(kit: Kit, web: WebPane): RenderElement | null {
+  const { Box, Text } = kit
   if (web.status === 'starting') return <Text color={P.muted2}>Starting the web deck…</Text>
   if (web.status === 'failed') {
     return (
@@ -136,15 +190,13 @@ function webLine(kit: Kit, web: WebPane, actions: DashActions): RenderElement | 
       </Text>
     )
   }
-  if (web.status !== 'running' || web.url === '' || web.opened === 'opened') return null
-  return browserRow(
-    kit,
-    web,
-    actions,
-    'web',
-    <Text color={P.muted2} wrap="wrap">
-      The web deck is running: open it in your own browser.
-    </Text>,
+  if (kit.surface !== 'terminal' || web.status !== 'running' || web.url === '' || web.opened === 'opened') return null
+  return (
+    <Box key="web:link">
+      <Text color={P.muted} wrap="wrap">
+        {web.url}
+      </Text>
+    </Box>
   )
 }
 
