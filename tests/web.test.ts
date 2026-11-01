@@ -405,8 +405,9 @@ function world(on: On, w: World, saved?: DeckWebSaved) {
   })
   on('fs.exists', () => ({ value: false }))
   on('fs.stat', () => ({ value: { kind: 'file', size: 12, mtimeMs: NOW, isLink: false } }))
+  // each write by its path as the tests spell it: Claude Code resolves a file call's path the way the host does, so on Windows `/home/me/…` reaches a hook as `D:\home\me\…`
   on('fs.write', ($, e) => {
-    w.writes.push({ path: e.path, text: e.text })
+    w.writes.push({ path: e.path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, ''), text: e.text })
     return { value: undefined }
   })
   on('session.send', ($, e) => {

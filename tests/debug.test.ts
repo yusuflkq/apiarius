@@ -14,6 +14,9 @@ const NOW = 1_700_000_100_000
 
 type Disk = { isDebug: boolean; looks: string[]; writes: { path: string; text: string }[]; homeRuns: string[] }
 
+/** A file call's path as the tests spell it: Claude Code resolves it the way the host does before a hook sees it, so on Windows `/home/me/…` arrives as `D:\home\me\…`. */
+const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')
+
 /** Answers every engine call the deck makes, outside a repository, with the home's `debug/` there or not as `disk` says. */
 function world(on: On, disk: Disk) {
   mock.store(on)
@@ -35,12 +38,12 @@ function world(on: On, disk: Disk) {
     return { value: { exitCode: 128, stdout: '', stderr: 'not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.exists', ($, e) => {
-    disk.looks.push(e.path)
-    return { value: disk.isDebug && e.path === `${HOME}/debug` }
+    disk.looks.push(norm(e.path))
+    return { value: disk.isDebug && norm(e.path) === `${HOME}/debug` }
   })
   on('fs.write', ($, e) => {
     // the dump's writes alone: the registry's file in the home is another test's
-    if (e.path.startsWith(`${HOME}/debug/`)) disk.writes.push({ path: e.path, text: e.text })
+    if (norm(e.path).startsWith(`${HOME}/debug/`)) disk.writes.push({ path: norm(e.path), text: e.text })
     return { value: undefined }
   })
   on('prompt.submit', ($, e) => ({ text: e.text }))

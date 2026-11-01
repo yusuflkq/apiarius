@@ -15,6 +15,9 @@ import * as W from '../hooks/web'
 import { isConfigList } from './tools'
 import { deck, newWorld, NOW, world } from './world'
 
+/** A file call's path as the tests spell it: Claude Code resolves it the way the host does before a hook sees it, so on Windows `/work/a.ts` arrives as `D:\work\a.ts`. */
+const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')
+
 /** `git config --list --show-scope -z` as git prints it: each setting's scope, a NUL, its key, a newline and its value, a NUL. */
 function listing(...settings: [scope: string, key: string, value?: string][]): string {
   return settings.map(([scope, key, value]) => `${scope}\0${key}${value === undefined ? '' : `\n${value}`}\0`).join('')
@@ -226,7 +229,7 @@ test('through the deck: before a command that reads the working tree, every filt
     '/work/my.attrs': '* filter=attrfile\n',
   }
   // gone/.gitattributes is in the index alone
-  w.stat = path => (path.replace(/\\/g, '/') === '/work/gone/.gitattributes' ? null : { size: 12, mtimeMs: NOW })
+  w.stat = path => (norm(path) === '/work/gone/.gitattributes' ? null : { size: 12, mtimeMs: NOW })
   world(on, w)
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await $.command.run(deck('changes'))
@@ -243,7 +246,7 @@ for (const how of ['a link', 'one web/files.js refuses'] as const) {
     const clock = mock.clock(on, { now: NOW })
     const { w, runs } = repoWorld(() => ({ exitCode: 0, stdout: '' }))
     w.gitAttrs = argv => (argv.join(' ').includes('ls-files') && !argv.includes('--ignored') ? { exitCode: 0, stdout: 'sub/.gitattributes\0' } : { exitCode: 0, stdout: '' })
-    w.stat = path => (path.replace(/\\/g, '/') === '/work/sub/.gitattributes' ? { size: 12, mtimeMs: NOW, isLink: how === 'a link' } : { size: 12, mtimeMs: NOW })
+    w.stat = path => (norm(path) === '/work/sub/.gitattributes' ? { size: 12, mtimeMs: NOW, isLink: how === 'a link' } : { size: 12, mtimeMs: NOW })
     w.onDisk = { '/work/sub/.gitattributes': '* filter=evil\n' }
     w.safeRead = abs => (how !== 'a link' && abs === '/work/sub/.gitattributes' ? { kind: 'refused', why: 'a link on the way' } : undefined)
     world(on, w)
@@ -287,7 +290,6 @@ test('through the deck: a repository whose filter settings move while git reads 
 
 test('through the deck: an untracked symbolic link is never read through (its diff is the target`s path, as git shows a link, never the target`s content), an untracked file whose real place is outside the repository is left out, not read, and a plain one is read through web/files.js alone, never `fs.read`', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
-  const norm = (p: string) => p.replace(/\\/g, '/')
   // three untracked files: a link to a secret outside the repository, a plain file inside it, and one whose real place is outside (reached through a parent alias)
   const w = newWorld({
     gitConfig: () => ({ exitCode: 0, stdout: '' }),
@@ -301,11 +303,12 @@ test('through the deck: an untracked symbolic link is never read through (its di
       if (line.includes('--numstat')) return { exitCode: 0, stdout: '' }
       return { exitCode: 1, stdout: '' }
     },
+    // the repository and the plain file land where they were asked for, as the host spells it (on Windows `D:\work`)
     stat: path => {
       const p = norm(path)
-      if (p === '/work') return { size: 0, mtimeMs: NOW, kind: 'dir', realPath: '/work' }
+      if (p === '/work') return { size: 0, mtimeMs: NOW, kind: 'dir' }
       if (p === '/work/id_rsa') return { size: 20, mtimeMs: NOW, kind: 'file', isLink: true, realPath: '/secrets/id_rsa' }
-      if (p === '/work/inside.txt') return { size: 12, mtimeMs: NOW, kind: 'file', realPath: '/work/inside.txt' }
+      if (p === '/work/inside.txt') return { size: 12, mtimeMs: NOW, kind: 'file' }
       if (p === '/work/escape') return { size: 14, mtimeMs: NOW, kind: 'file', realPath: '/elsewhere/escape' }
       return null
     },
@@ -360,8 +363,8 @@ test('through the deck: an untracked file swapped for a link after the deck`s lo
       if (line.includes('status --porcelain')) return { exitCode: 0, stdout: '?? notes.txt\0?? swapped.txt\0' }
       return { exitCode: 0, stdout: '' }
     },
-    // both look like plain files inside the repository to `fs.stat`
-    stat: path => (path.replace(/\\/g, '/') === '/work' ? { size: 0, mtimeMs: NOW, kind: 'dir', realPath: '/work' } : { size: 12, mtimeMs: mtime }),
+    // both look like plain files inside the repository to `fs.stat`, each landing where it was asked for, as the host spells it
+    stat: path => (norm(path) === '/work' ? { size: 0, mtimeMs: NOW, kind: 'dir' } : { size: 12, mtimeMs: mtime }),
   })
   // on the disk, as web/files.js finds them: swapped.txt became a link to a secret between the deck's look and the open, which refuses it (O_NOFOLLOW_ANY: ELOOP)
   w.onDisk = { '/work/notes.txt': 'hello\nworld\n', '/work/swapped.txt': 'TOP-SECRET-KEY' }
