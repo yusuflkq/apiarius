@@ -118,6 +118,25 @@ function world(on: On, sent: { to: string; text: string }[] = [], options: { isR
   })
 }
 
+test('the pane`s Review puts its request in the prompt box after what you had typed there, a blank line between, never over it', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const fills: { text: string; mode: string }[] = []
+  on('prompt.read', () => ({ value: { text: 'and keep it short', cursor: 17 } }))
+  on('prompt.fill', ($, e) => {
+    fills.push({ text: e.text, mode: e.mode })
+    return { isFilled: true }
+  })
+  world(on)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/repo' })
+  await $.command.run(deck('changes'))
+  await clock.advance(1000)
+  const ui = await $.ui.mount({ plugin: 'apiarius', surface: 'terminal', component: 'Pane', requestId: 'apiarius', viewport: VIEWPORT, props: PANE })
+  await ui.press({ key: 'changes:review' })
+  await clock.settle()
+  expect(fills).toEqual([{ text: '\n\nReview my uncommitted changes in the git repository Changes shows (its status, its diff against HEAD and any new files) and point out bugs or risky edits before I commit.', mode: 'append' }])
+  await ui.unmount()
+})
+
 test('/apiarius opens the pane on the Dashboard; Changes shows git`s files (one opened to git`s own diff) and the commit log; /apiarius stats lands on Inspect and /apiarius classic on the Dashboard, on each surface', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   world(on)

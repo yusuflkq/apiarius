@@ -2200,6 +2200,17 @@ export function routeOf(cmd: unknown, data: DeckData): WebRoute | null {
 }
 
 /**
+ * How Review's request goes into the prompt box over `draft`, what you had
+ * typed there: after it (`append`), a blank line between, so your words
+ * stay; over a box that holds nothing but blanks, as it is (`replace`).
+ */
+export function reviewFillOf(draft: string, text: string): { text: string; mode: 'replace' | 'append' } {
+  if (draft.trim() === '') return { text, mode: 'replace' }
+  const gap = draft.endsWith('\n\n') ? '' : draft.endsWith('\n') ? '\n' : '\n\n'
+  return { text: `${gap}${text}`, mode: 'append' }
+}
+
+/**
  * What the page's Review does once the prompt box answered its fill: done
  * (the request is in the box, for you to send); sent as your next prompt
  * where the session binds no box (`no_composer`: the Desktop app draws its

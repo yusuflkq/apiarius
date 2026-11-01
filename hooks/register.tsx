@@ -1867,24 +1867,39 @@ async function endWeb($: EngineInterface): Promise<void> {
   if (ids.length > 0) await runHome($, { op: 'remove', home, ids })
 }
 
-/** Puts a review request in the prompt box, for the person to send (the pane's Review). */
+/**
+ * Puts Review's request in the prompt box after what you had typed there,
+ * read first so it stays (`W.reviewFillOf`: a blank line between; into an
+ * empty box, as it is). The draft is read for this alone and kept nowhere.
+ */
+async function fillAfterDraft($: EngineInterface, text: string): Promise<Awaited<ReturnType<EngineInterface['prompt']['fill']>>> {
+  let draft = ''
+  try {
+    draft = (await $.prompt.read()).text
+  } catch {
+    // no box to read: it takes the request as it is
+  }
+  return $.prompt.fill(W.reviewFillOf(draft, text))
+}
+
+/** Puts a review request in the prompt box, for the person to send (the pane's Review), what they had typed kept. */
 function fillReview($: EngineInterface, text: string) {
-  void $.prompt
-    .fill({ text, mode: 'replace' })
+  void fillAfterDraft($, text)
     .then(filled => $.ui.toast(filled.isFilled ? 'The review request is in your prompt; press Enter to send it.' : 'Could not fill the prompt.'))
     .catch(() => $.ui.toast('Could not fill the prompt.'))
 }
 
 /**
  * The page's Review, which it asked you to confirm: the request goes in the
- * prompt box where there is one (the terminal), for you to send. Where the
+ * prompt box where there is one (the terminal), after what you had typed
+ * there, for you to send. Where the
  * surface draws its own composer (the Desktop app: `no_composer`) it goes to
  * the Orchestrator as your next prompt, which runs once Claude is free.
  */
 async function sendReview($: EngineInterface, text: string, ackId: string): Promise<void> {
   let filled: Awaited<ReturnType<EngineInterface['prompt']['fill']>> | undefined
   try {
-    filled = await $.prompt.fill({ text, mode: 'replace' })
+    filled = await fillAfterDraft($, text)
   } catch {
     filled = undefined
   }

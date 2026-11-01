@@ -198,6 +198,7 @@ test('Review: into the prompt box where there is one; a refusal whose cause is u
   command(child, { cmd: 'review', id: 'r1', text })
   await clock.settle()
   expect(w.filled).toEqual([text])
+  expect(w.fillModes).toEqual(['replace'])
   // a hook's refusal: the engine strips its cause, so the deck cannot tell there is no box, and sends nothing
   w.fill = 'no_composer'
   command(child, { cmd: 'review', id: 'r2', text })
@@ -208,6 +209,27 @@ test('Review: into the prompt box where there is one; a refusal whose cause is u
     ['r1', 'delivered', 'In your prompt box: press Enter to send it'],
     ['r2', 'failed', 'Could not fill the prompt box'],
   ])
+})
+
+test('Review keeps what you had typed in the prompt box: its request goes after your draft, a blank line between, never over it; into an empty box as it is', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = newWorld()
+  world(on, w)
+  await work($)
+  const child = w.children[0]
+  const text = 'Review the uncommitted changes in src/range.js for bugs.'
+  w.draft = 'also check the tests for the new'
+  command(child, { cmd: 'review', id: 'r1', text })
+  await clock.settle()
+  expect(w.filled).toEqual([`\n\n${text}`])
+  expect(w.fillModes).toEqual(['append'])
+  await clock.advance(400)
+  expect(lastState(w).acks.map(one => [one.id, one.status])).toEqual([['r1', 'delivered']])
+  // a draft that ends its line already, one that ends a paragraph, and a box of blanks
+  expect(W.reviewFillOf('first line\n', text)).toEqual({ text: `\n${text}`, mode: 'append' })
+  expect(W.reviewFillOf('a paragraph\n\n', text)).toEqual({ text, mode: 'append' })
+  expect(W.reviewFillOf(' \n ', text)).toEqual({ text, mode: 'replace' })
+  expect(W.reviewFillOf('', text)).toEqual({ text, mode: 'replace' })
 })
 
 test('Review`s next step from the prompt box`s answer: filled; no box (the Desktop app draws its own composer) sends it as your next prompt; a dialog, or a refusal of no known cause, fails', () => {

@@ -45,6 +45,10 @@ export type World = {
   /** How the prompt box takes a fill: it does, there is none (the Desktop app), or a dialog holds the keys. */
   fill: 'filled' | 'no_composer' | 'dialog'
   filled: string[]
+  /** How each fill went in: over the draft, after it, or at the cursor. */
+  fillModes: string[]
+  /** What the person has typed in the prompt box, as `$.prompt.read` answers. */
+  draft: string
   toasts: string[]
   notices: { id: string; text: string | undefined }[]
   /** The tools whose calls are held open (AskUserQuestion always is). */
@@ -115,6 +119,8 @@ export function newWorld(extra: Partial<World> = {}): World {
     dropPrompt: '',
     fill: 'filled',
     filled: [],
+    fillModes: [],
+    draft: '',
     toasts: [],
     notices: [],
     holding: [],
@@ -251,8 +257,10 @@ export function world(on: On, w: World, restored?: DeckSnapshot) {
   on('prompt.fill', ($, e) => {
     if (w.fill !== 'filled') return { isFilled: false, refusal: w.fill }
     w.filled.push(e.text)
+    w.fillModes.push(e.mode)
     return { isFilled: true }
   })
+  on('prompt.read', () => ({ value: { text: w.draft, cursor: w.draft.length } }))
   on('prompt.submit', ($, e) => {
     w.submitted.push({ text: e.text, origin: e.origin })
     return w.dropPrompt ? { drop: w.dropPrompt } : { text: e.text }
