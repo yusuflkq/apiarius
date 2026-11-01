@@ -117,34 +117,7 @@ test('through the hooks: the prompt you submit is the goal, the Orchestrator`s t
   expect(JSON.stringify(state)).not.toMatch(/pasted_content|command-name|local-command-caveat|system-reminder/)
 })
 
-test('restored: a snapshot an earlier build kept with the tags reads as you wrote it (the goal, its follow-ups, your prompts in Talk), an echo kept as a prompt is the command you ran, and words with no tags stay exactly', () => {
-  const raw = M.emptyData(NOW)
-  raw.goals = [
-    {
-      id: 'g1',
-      headline: '<pasted_content id="3c84">',
-      text: `${pasted('3c84', 'a\nb')}\nfix this`,
-      at: NOW,
-      followUps: [
-        { text: 'and <pasted_content id="9">x</pasted_content id="9"> too', at: NOW + 1 },
-        { text: `${CAVEAT} ${ECHO}`, at: NOW + 2 },
-      ],
-      origin: 'composer',
-    },
-  ]
-  raw.messages = [
-    { id: 'm1', from: M.YOU, to: M.MAIN, kind: 'prompt', text: `fix this\n${pasted('3c84', 'a\nb')}`, at: NOW },
-    { id: 'm2', from: M.YOU, to: M.MAIN, kind: 'prompt', text: ECHO, at: NOW + 1 },
-    { id: 'm3', from: M.MAIN, to: M.YOU, kind: 'answer', text: 'Kept <pasted_content> as it came', at: NOW + 2 },
-  ]
-  const data = M.healData(M.copyOf(raw), NOW)
-  expect(data.goals[0]).toMatchObject({ headline: '[pasted text, 2 lines]', text: '[pasted text, 2 lines]\nfix this', followUps: [{ text: 'and [pasted text] too', at: NOW + 1 }] })
-  expect(data.messages.map(one => [one.id, one.kind, one.to, one.text])).toEqual([
-    ['m1', 'prompt', M.MAIN, 'fix this\n[pasted text, 2 lines]'],
-    ['m2', 'command', '', '/apiarius web'],
-    ['m3', 'answer', M.YOU, 'Kept <pasted_content> as it came'],
-  ])
-
+test('restored: the goal, its follow-ups and your prompts stay exactly as they were kept', () => {
   const plain = M.emptyData(NOW)
   M.noteGoal(plain, 'goal', { text: 'Fix the login bug', headline: '/fix login', origin: 'composer', at: NOW })
   M.noteGoal(plain, 'followUp', { text: 'and the docs', origin: 'composer', at: NOW + 1 })

@@ -187,7 +187,7 @@ test('needs come only from Claude Code: its questions, its permission prompts an
   expect([M.noteTypeTextOf('permission_prompt'), M.noteTypeTextOf('elicitation_dialog'), M.noteTypeTextOf('something_new')]).toEqual(['Permission prompt', 'MCP input', 'something_new'])
 })
 
-test('an idle prompt is Claude Code saying its turn ended: no need, no band count, no chat row, and the header says Idle; one an earlier build kept as a need is healed away', () => {
+test('an idle prompt is Claude Code saying its turn ended: no need, no band count, no chat row, and the header says Idle', () => {
   const data = M.emptyData(NOW - 600_000)
   M.noteGoal(data, 'goal', { text: 'Fix the flaky test', origin: 'composer', at: NOW - 600_000 })
   M.noteMainTurn(data, 't1', NOW - 500_000)
@@ -199,19 +199,6 @@ test('an idle prompt is Claude Code saying its turn ended: no need, no band coun
   expect(state.figures.needs).toBe(0)
   expect(W.bandOf(state)).toBeNull()
   expect(state.chat.some(row => row.kind === 'notification')).toBe(false)
-  // a snapshot an earlier build kept: its idle need and its chat row go, a real need stays
-  const kept = M.copyOf(data)
-  const idle = { kind: 'idle_prompt', text: 'Claude is waiting for your input', at: NOW - 30_000 }
-  kept.needs = [idle]
-  M.agentOf(kept, M.MAIN)!.needs = { ...idle }
-  M.addMessage(kept, { from: M.ENGINE, to: M.YOU, kind: 'notification', text: 'Claude is waiting for your input', at: NOW - 30_000, title: 'idle_prompt' })
-  const healed = M.healData(kept, NOW)
-  expect([healed.needs, M.agentOf(healed, M.MAIN)?.needs, healed.messages.filter(one => one.kind === 'notification')]).toEqual([[], undefined, []])
-  expect(stateOf(healed).header.state).toBe('idle')
-  const asks = M.copyOf(kept)
-  asks.needs = [{ kind: 'elicitation_dialog', text: 'The github MCP server is asking for your input', at: NOW - 40_000 }, idle]
-  expect(M.healData(asks, NOW).needs.map(one => one.kind)).toEqual(['elicitation_dialog'])
-  expect(M.agentOf(M.healData(asks, NOW), M.MAIN)?.needs?.kind).toBe('elicitation_dialog')
 })
 
 // ---------------------------------------------------------------------------
@@ -302,11 +289,10 @@ test('a row`s call in flight is shown verbatim, tool and what it was given; its 
   expect(rowOf(state, 'agent-done')).toMatchObject({ live: null, status: 'done', elapsed: '4m', isResultCut: true })
   expect(state.agents.some(row => row.id === 'toolu_none')).toBe(false)
   expect([rowOf(state, 'toolu_cloud').result, rowOf(state, 'toolu_cloud').status]).toEqual(['', 'idle'])
-  // a snapshot of an earlier build, which kept the refused call as a stopped agent and wrote words of its own on both: the refused one gone, the other's words healed to none
+  // a snapshot that kept a call's row no spawn bound as a stopped agent: gone on restore, no agent ran
   const old = M.copyOf(data)
   const cloud = old.agents.find(one => one.id === 'toolu_cloud')!
-  old.agents.push({ ...M.copyOf(cloud), id: 'toolu_none', toolUseId: 'toolu_none', status: 'killed', endedAt: NOW - 30_000, answer: 'Not started: The person declined to start it' })
-  cloud.answer = 'Runs in a cloud session, outside this view'
+  old.agents.push({ ...M.copyOf(cloud), id: 'toolu_none', toolUseId: 'toolu_none', status: 'killed', endedAt: NOW - 30_000 })
   expect(M.healData(old, NOW).agents.filter(one => one.id.startsWith('toolu_')).map(one => [one.id, one.answer])).toEqual([['toolu_cloud', undefined]])
 
   const file = JSON.parse(W.agentFilesOf(data).find(one => one.id === W.webIdOf('agent-fixer'))?.text ?? '{}') as W.V2AgentFile

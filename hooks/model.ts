@@ -392,24 +392,6 @@ function labelCut(words: string, less = 0): string {
   return cutAtWord(words, LIMITS.label - less, LIMITS.labelStretch - less)
 }
 
-/**
- * How labels were cut before they kept phrases whole: whole words up to 18
- * characters, whatever word came last. Kept only to know such a label again
- * in a restored snapshot (`isOldCut`).
- */
-function oldCut(words: string): string {
-  const line = oneLine(words)
-  if (Array.from(line).length <= LIMITS.label) return line
-  let out = ''
-  for (const word of line.split(' ')) {
-    const next = out === '' ? word : `${out} ${word}`
-    if (Array.from(next).length > LIMITS.label) break
-    out = next
-  }
-  out = out.replace(/[\s,;:.(\-–—]+$/, '')
-  return out !== '' ? out : trunc(line, LIMITS.label)
-}
-
 /** A label fitted to `room` characters (a drawing's column): cut after a whole word as labels are, a sibling's " 2" kept. */
 export function fitLabel(label: string, room: number): string {
   if (Array.from(label).length <= room) return label
@@ -432,22 +414,23 @@ export function splitMarker(description: string): { marker: string; scope: strin
 }
 
 /**
- * The label an agent's own words give it, cut by `cut`; the words it is cut
- * from (its name, else its description's leading marker, else its
- * description); and the scope beside it. Undefined while it has no words.
+ * The label an agent's own words give it, cut as labels are (`labelCut`);
+ * the words it is cut from (its name, else its description's leading
+ * marker, else its description); and the scope beside it. Undefined while it
+ * has no words.
  */
-function labelParts(agent: DeckAgent, cut: (words: string) => string = labelCut): { label: string; words: string; scope: string } | undefined {
+function labelParts(agent: DeckAgent): { label: string; words: string; scope: string } | undefined {
   const name = agent.name.trim()
   const named = name !== '' && !isMadeUpName(agent) ? name : ''
   const description = oneLine(agent.description)
   const marked = splitMarker(description)
   if (named !== '') {
     const scope = marked ? marked.scope : description
-    return { label: cut(named), words: named, scope: scope === named ? '' : scope }
+    return { label: labelCut(named), words: named, scope: scope === named ? '' : scope }
   }
-  if (marked) return { label: cut(marked.marker), words: marked.marker, scope: marked.scope }
+  if (marked) return { label: labelCut(marked.marker), words: marked.marker, scope: marked.scope }
   if (description !== '') {
-    const label = cut(description)
+    const label = labelCut(description)
     return { label, words: description, scope: label === description ? '' : description }
   }
   return undefined
@@ -486,22 +469,6 @@ export function fixLabel(data: DeckData, agent: DeckAgent): void {
   }
   agent.label = label
   if (parts.scope !== '') agent.scope = trunc(parts.scope, 200)
-}
-
-/**
- * Whether the agent's label is the one an earlier build's cut (`oldCut`) made
- * of its words as they stand now, a sibling's " 2" after it, where today's cut
- * makes another. Such a label is made again on restore (`healData`); one whose
- * words changed since it was fixed stays as it is.
- */
-function isOldCut(agent: DeckAgent): boolean {
-  const label = agent.label
-  if (label === undefined) return false
-  const old = labelParts(agent, oldCut)?.label
-  if (old === undefined || old === labelParts(agent)?.label) return false
-  if (label === old) return true
-  const suffix = / \d+$/.exec(label)?.[0]
-  return suffix !== undefined && label === `${Array.from(old).slice(0, LIMITS.label - suffix.length).join('').trimEnd()}${suffix}`
 }
 
 /**
@@ -960,11 +927,9 @@ export function copyOf<T>(value: T): T {
 }
 
 /**
- * Fills, field by field, what a snapshot from an older shape lacks, drops
- * what it holds of the wrong shape, and cuts each list to its cap (goals 20,
- * board 200, 50 todos per agent, files 500). Agents without a label get one,
- * and so do agents whose label an earlier build cut from the words they still
- * have (`isOldCut`): it is made again, in spawn order, the way labels are cut now.
+ * Fills, field by field, what a snapshot lacks, drops what it holds of the
+ * wrong shape, and cuts each list to its cap (goals 20, board 200, 50 todos
+ * per agent, files 500). Agents without a label get one, in spawn order.
  */
 export function healData(value: DeckData, now: number): DeckData {
   const base = emptyData(now)
@@ -972,18 +937,10 @@ export function healData(value: DeckData, now: number): DeckData {
   data.agents = Array.isArray(value.agents) ? value.agents.filter(isRecord).map(agent => healAgent({ ...newAgent(agent.id, agent.kind, agent.name, now), ...agent })) : base.agents
   if (!agentOf(data, YOU)) data.agents.unshift(base.agents[0] as DeckAgent)
   if (!agentOf(data, MAIN)) data.agents.splice(1, 0, base.agents[1] as DeckAgent)
-  // a prompt of yours that an earlier build kept and that holds none of your words (a local command's echo) goes, and so does an idle prompt it kept (titled by its type)
-  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage).filter(message => (!isYourPrompt(message) || message.text !== '') && !(message.kind === 'notification' && message.title === IDLE_KIND)) : []
+  data.messages = Array.isArray(value.messages) ? value.messages.filter(isRecord).map(healMessage) : []
   data.pending = healPending(value.pending)
   data.acks = healAcks(value.acks)
   data.needs = healNeeds(value.needs)
-  // an idle prompt an earlier build kept as a need waits on no one
-  const main = agentOf(data, MAIN)
-  if (main?.needs?.kind === IDLE_KIND) {
-    const newest = data.needs[data.needs.length - 1]
-    if (newest) main.needs = shownNeedsOf(newest)
-    else delete main.needs
-  }
   const approved = value.approved as unknown
   if (isRecord(approved) && typeof approved.text === 'string' && approved.text.trim() !== '' && num(approved.at) !== undefined) {
     data.approved = { text: trunc(approved.text, LIMITS.planChars), at: approved.at as number, by: typeof approved.by === 'string' ? approved.by : MAIN }
@@ -1002,14 +959,9 @@ export function healData(value: DeckData, now: number): DeckData {
   if (value.isFork !== true) delete data.isFork
   if (typeof value.mainTurnId !== 'string' || value.mainTurnId === '') delete data.mainTurnId
   if (data.mainTurnId === undefined || typeof value.mainTurnAt !== 'number' || !Number.isFinite(value.mainTurnAt)) delete data.mainTurnAt
-  for (const agent of data.agents) {
-    if (!isOldCut(agent)) continue
-    delete agent.label
-    delete agent.scope
-  }
-  // an Agent call that started no agent, which an earlier build kept as a stopped one, goes: no agent ran
+  // an Agent call's row that no spawn bound, kept as a stopped one, goes: no agent ran
   data.agents = data.agents.filter(agent => !(isPlaceholder(agent) && agent.status === 'killed'))
-  // a loop of Claude Code's own an earlier build kept as an agent (a prompt suggestion's, its guess a result to the Orchestrator) goes once it ended
+  // a loop of Claude Code's own kept as an agent (a prompt suggestion's, its guess a result to the Orchestrator) goes once it ended
   for (const agent of data.agents.filter(one => isEngineLoop(one) && isEnded(one.status))) forgetLoop(data, agent.id)
   for (const agent of data.agents) fixLabel(data, agent)
   return data
@@ -1021,9 +973,6 @@ const ITEM_STATES: readonly DeckTodoItem['status'][] = ['done', 'active', 'pendi
 function num(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
-
-/** The results earlier builds wrote for an Agent call that started no agent, or one in a cloud session. */
-const MADE_UP_RESULT = /^(?:Not started: |Runs in a cloud session, outside this view$)/
 
 /** One restored agent's newer fields, each kept only in its own shape. */
 function healAgent(agent: DeckAgent): DeckAgent {
@@ -1040,8 +989,6 @@ function healAgent(agent: DeckAgent): DeckAgent {
   if (num(loose.resumedAt) === undefined) delete agent.resumedAt
   L.healLane(agent)
   if (!['handback', 'answer', 'call', 'stop'].includes(String(loose.resultVia))) delete agent.resultVia
-  // the words earlier builds made up for an Agent call that started no agent: no result of any agent's
-  if (agent.resultVia === undefined && agent.kind !== 'main' && typeof agent.answer === 'string' && MADE_UP_RESULT.test(agent.answer)) delete agent.answer
   const during = loose.during
   if (!isRecord(during) || (during.kind !== 'todo' && during.kind !== 'task') || typeof during.key !== 'string' || typeof during.text !== 'string') delete agent.during
   const words = Array.isArray(loose.words) ? healWordList(loose.words) : []
@@ -1082,18 +1029,17 @@ function healGoals(value: unknown): DeckGoal[] {
     .filter(isRecord)
     .filter(goal => typeof goal.id === 'string' && typeof goal.text === 'string' && num(goal.at) !== undefined)
     .map(goal => {
-      // words an earlier build kept with a paste's or a reminder's tags read as the person wrote them; a goal with none of theirs left keeps what it had
-      const text = healWords(goal.text as string) || (goal.text as string)
+      const text = goal.text as string
       const healed: DeckGoal = {
         id: goal.id as string,
-        headline: typeof goal.headline === 'string' && healWords(goal.headline) === goal.headline ? goal.headline : headlineOf(text),
+        headline: typeof goal.headline === 'string' ? goal.headline : headlineOf(text),
         text,
         at: goal.at as number,
         followUps: Array.isArray(goal.followUps)
           ? goal.followUps
               .filter(isRecord)
               .filter(one => typeof one.text === 'string' && num(one.at) !== undefined)
-              .map(one => ({ text: healWords(one.text as string), at: one.at as number }))
+              .map(one => ({ text: one.text as string, at: one.at as number }))
               .filter(one => one.text !== '')
               .slice(-LIMITS.followUps)
           : [],
@@ -1171,35 +1117,13 @@ function healWorkflows(value: unknown): DeckWorkflow[] {
     .slice(-LIMITS.workflows)
 }
 
-/**
- * One restored message's newer fields, each kept only in its own shape. A
- * prompt of yours that an earlier build kept with a paste's or a reminder's
- * tags reads as you wrote it (`cleanPrompt`; '' with none of your words left).
- */
+/** One restored message's newer fields, each kept only in its own shape. */
 function healMessage(value: Record<string, unknown>): DeckMessage {
   const message = value as unknown as DeckMessage
   if (typeof value.full !== 'string') delete message.full
   if (value.isSaved !== true) delete message.isSaved
   for (const field of ['ackId', 'callId', 'title', 'agent'] as const) if (typeof value[field] !== 'string') delete message[field]
-  // a slash command run alone that an earlier build kept as your words ("/login"): the command you ran
-  const line = isYourPrompt(message) && typeof value.text === 'string' ? commandLineOf(message.full ?? value.text) : ''
-  if (line) {
-    message.kind = 'command'
-    message.to = ''
-    setMessageText(message, line)
-  }
-  if (isYourPrompt(message) && typeof value.text === 'string') {
-    const kept = message.full ?? value.text
-    const words = cleanPrompt(kept)
-    if (words !== kept.trim()) setMessageText(message, words)
-  }
   return message
-}
-
-/** Words an earlier build kept with a paste's, a reminder's or a local command's tags, as the person wrote them (`cleanPrompt`); words with none stay exactly as they were. */
-function healWords(text: string): string {
-  const words = cleanPrompt(text)
-  return words === text.trim() ? text : words
 }
 
 const PENDING_KINDS: readonly DeckPending['kind'][] = ['question', 'permission']
@@ -1229,7 +1153,7 @@ function healNeeds(value: unknown): DeckNeeds[] {
   if (!Array.isArray(value)) return []
   return value
     .filter(isRecord)
-    .filter(one => typeof one.text === 'string' && typeof one.kind === 'string' && one.kind !== IDLE_KIND && num(one.at) !== undefined)
+    .filter(one => typeof one.text === 'string' && typeof one.kind === 'string' && num(one.at) !== undefined)
     .map(one => {
       const healed: DeckNeeds = { text: one.text as string, kind: one.kind as string, at: one.at as number }
       for (const field of ['agent', 'call', 'title'] as const) if (typeof one[field] === 'string') healed[field] = one[field] as string

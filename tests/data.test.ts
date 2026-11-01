@@ -424,7 +424,7 @@ test('labels: the name, else the description`s marker (its scope after), else th
 test('a label never ends on a word that leaves its phrase hanging, runs on to 24 characters when 18 keep one word or very little, and a name that fits stays as it is', () => {
   const data = M.emptyData(NOW)
   const hanging = /\s(?:and|or|the|a|an|of|to|for|with|in|on|from|into|by|as)$/i
-  // the old cut made "Recover goal and": the hanging "and" goes, and two words of twelve characters are enough
+  // whole words to 18 would make "Recover goal and": the hanging "and" goes, and two words of twelve characters are enough
   const recover = spawnInto(data, NOW, { id: 'b1', description: 'Recover goal and results on startup' })
   expect([M.labelOf(recover), M.scopeOf(recover)]).toEqual(['Recover goal', 'Recover goal and results on startup'])
   expect(M.labelOf(spawnInto(data, NOW, { id: 'b2', description: 'Fix the bug in the parser module' }))).toBe('Fix the bug')
@@ -781,7 +781,7 @@ test('the summary`s step is the plan`s step in progress, else the steps done; it
 
 // Snapshots.
 
-test('an older snapshot heals field by field: new fields take their defaults, wrong shapes are dropped, caps hold, and agents get their labels', () => {
+test('a snapshot heals field by field: missing fields take their defaults, wrong shapes are dropped, caps hold, and agents get their labels', () => {
   const base = M.emptyData(NOW)
   const older = {
     ...base,
@@ -812,35 +812,6 @@ test('an older snapshot heals field by field: new fields take their defaults, wr
   const bare = M.healData(JSON.parse(JSON.stringify(noGoals)) as DeckData, NOW)
   expect(bare.goals).toEqual([])
   expect(JSON.parse(JSON.stringify(bare))).toEqual(bare)
-})
-
-test('a snapshot restored with the old cut gets those labels made again, siblings in spawn order; a label whose words changed since stays as it was fixed', () => {
-  const base = M.emptyData(NOW)
-  const row = (id: string, name: string, description: string, label: string, scope: string) => ({
-    ...M.newAgent(id, 'agent', name, NOW, { description, parentId: M.MAIN, status: 'completed', origin: 'agent' }),
-    label,
-    scope,
-  })
-  const older = {
-    ...base,
-    agents: [
-      ...base.agents,
-      // the old cut of the words each still has: a hanging last word, and a sibling's " 2" after one
-      row('r1', '', 'Recover goal and results on startup', 'Recover goal and', 'Recover goal and results on startup'),
-      row('r2', '', 'Investigate the flaky refresh test suite', 'Investigate the', 'Investigate the flaky refresh test suite'),
-      row('r3', '', 'Investigate the flaky refresh test suite', 'Investigate the 2', 'Investigate the flaky refresh test suite'),
-      // fixed from words it no longer has: it stays
-      row('r4', '', 'Something else entirely', 'Recover goal and', 'Recover goal and results on startup'),
-      // the same under either cut
-      row('r5', 'scout', 'Find the token bug', 'scout', 'Find the token bug'),
-    ],
-  }
-  const healed = M.healData(JSON.parse(JSON.stringify(older)) as DeckData, NOW)
-  const labels = (data: DeckData) => ['r1', 'r2', 'r3', 'r4', 'r5'].map(id => M.labelOf(agentIn(data, id)))
-  expect(labels(healed)).toEqual(['Recover goal', 'Investigate the flaky', 'Investigate the flaky 2', 'Recover goal and', 'scout'])
-  expect([M.scopeOf(agentIn(healed, 'r1')), M.scopeOf(agentIn(healed, 'r4'))]).toEqual(['Recover goal and results on startup', 'Recover goal and results on startup'])
-  // made again once, a label stays: the next restore changes nothing
-  expect(labels(M.healData(JSON.parse(JSON.stringify(healed)) as DeckData, NOW))).toEqual(labels(healed))
 })
 
 // The redraw policy.

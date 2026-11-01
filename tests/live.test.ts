@@ -254,7 +254,7 @@ test('an Agent call that errors before any agent starts ("Cannot create agent wo
   ])
 })
 
-test('a reload forgets what an earlier build kept of Claude Code`s own loops once they ended (the prompt suggestion`s row and its guess as a result to the Orchestrator) and of Agent calls that started no agent (their stopped rows); the agents, a loop still at work and a call in a cloud session stay', () => {
+test('a reload forgets what a snapshot kept of Claude Code`s own loops once they ended (the prompt suggestion`s row and its guess as a result to the Orchestrator) and of Agent calls that started no agent (their stopped rows); the agents, a loop still at work and a call in a cloud session stay', () => {
   const data = M.emptyData(NOW - 600_000)
   // as two real sessions' dumps held them
   const explorer = M.addPlaceholder(data, { toolUseId: 'toolu_explore', parentId: M.MAIN, description: 'Explore working directory', prompt: 'Look around.', type: 'Explore', at: NOW - 500_000 })
