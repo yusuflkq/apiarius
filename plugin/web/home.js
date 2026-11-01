@@ -83,12 +83,14 @@ function privateFile(p) {
   fs.closeSync(fs.openSync(p, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600))
 }
 
-/** Writes `text` to `p` (0600, a link there removed first, never followed; a FIFO there never holds the open, and nothing but a regular file is written). */
+/** Writes `text` to `p` (0600, a link there removed first, never followed; a FIFO there never holds the open, and nothing but a regular file is emptied or written). */
 function writePrivate(p, text) {
   privateFile(p)
-  const fd = fs.openSync(p, fs.constants.O_WRONLY | fs.constants.O_TRUNC | NOFOLLOW | NONBLOCK)
+  // emptied once it is known to be a file, not by O_TRUNC: Windows refuses O_TRUNC without O_CREAT (EINVAL)
+  const fd = fs.openSync(p, fs.constants.O_WRONLY | NOFOLLOW | NONBLOCK)
   try {
     if (!fs.fstatSync(fd).isFile()) throw new Error(`${p} is not a file of this user's`)
+    fs.ftruncateSync(fd, 0)
     fs.writeSync(fd, text)
   } finally {
     fs.closeSync(fd)
