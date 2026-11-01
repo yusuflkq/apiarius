@@ -87,7 +87,6 @@ To look around before you run any agents, use `/apiarius demo`. The deck shows a
 | `/apiarius chat`, `org`, `changes`, `inspect`, `settings` | Opens that tab. A prefix works: `/apiarius i` is Inspect |
 | `/apiarius sessions` | Opens All sessions |
 | `/apiarius web` | Starts the web page and opens it in your own browser, as Open in browser at the top of the deck does |
-| `/apiarius web pane` | Opens the web page in Claude's Browser pane in the Desktop app instead, where each message you send waits for one Send click above your prompt |
 | `/apiarius web stop` | Stops the web page. Its links stop working |
 | `/apiarius demo` | Shows the deck on sample data |
 | `/apiarius clear` | Hides finished agents from the deck (Claude Code is untouched) |
@@ -111,7 +110,6 @@ Where Claude Code loads its built-in guard (on a Team or Enterprise login, or a 
 - Apiarius makes no network requests of its own. What it hands to Claude goes through Claude Code like anything you type.
 - It reads Claude Code's events for the session, the session's transcript and what git says about your repositories. Its files live in `~/.claude/apiarius/`, in folders only you can open, and a session's files go when the session ends. The debug dump, which you turn on yourself, stays until you delete it.
 - The web page runs only after you start it. It listens on 127.0.0.1, each link to it opens one page, and Apiarius never hands a link to Claude.
-- Claude can drive the Desktop app's Browser pane, so a message, an answer or a Review you send from the page there waits for your Send above the prompt. From your own browser it goes at once.
 
 [PRIVACY.md](PRIVACY.md) has the rest: everything Apiarius runs, writes and reads, and what stays as it is.
 

@@ -524,6 +524,6 @@ export function Composer(scope) {
         st && st.status === 'error' ? StatusNote({ tone: 'fail', icon: 'x', text: st.text }) : lastNote ? StatusNote(lastNote) : null),
       // the Browser pane's page, which Claude's tools can drive: what you send waits for your Send above the prompt in Claude Code
       access.grade === 'pane'
-        ? h('span', { class: 'composer-keys', title: 'Claude can drive the Browser pane, so a message from here waits for one Send click above your prompt in Claude Code. In your own browser (Open in browser, at the top of the deck) it goes at once.' }, 'Enter sends · then press Send above your prompt in Claude Code')
+        ? h('span', { class: 'composer-keys', title: 'What you send from here waits above your prompt in Claude Code until you press Send there.' }, 'Enter sends · then press Send above your prompt in Claude Code')
         : h('span', { class: 'composer-keys' }, 'Enter sends · Shift+Enter adds a line')));
 }

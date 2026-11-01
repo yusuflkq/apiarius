@@ -10,9 +10,7 @@
  *   `/apiarius avatars`);
  * - Web page: "Open in browser", which starts the page when it is off and
  *   opens it in your own browser (as `/apiarius web` and the header's,
- *   ./deck), and on a desktop "Open in Claude's Browser pane" (as
- *   `/apiarius web pane`); how the page stands, and on the terminal its
- *   link to copy;
+ *   ./deck); how the page stands, and on the terminal its link to copy;
  * - Help: what each tab shows, and the few keys there are.
  *
  * Pure: Kit, the state, the deck model and DashActions come from the hooks module.
@@ -174,43 +172,32 @@ function styleChip(kit: Kit, id: AV.AvatarStyle, name: string, isOn: boolean, wi
 
 // The web page.
 
-/** Settings' button for the Browser pane, the Desktop's alone. */
-export const PANE_LABEL = 'Open in Claude’s Browser pane'
-
-/** What the web page's line says, by how it stands, and on a desktop what each way to open it does. */
-function webNote(kit: Kit, web: WebPane | undefined): { text: string; color: string } {
-  const ways = kit.surface === 'terminal' ? '' : ' In your own browser your messages go at once. Claude can drive its Browser pane, so there each one waits for one Send click above your prompt.'
-  if (!web || web.status === 'off') return { text: `The same deck as a live page, on this machine only (/apiarius web).${ways}`, color: P.muted2 }
+/** What the web page's line says, by how it stands. */
+function webNote(web: WebPane | undefined): { text: string; color: string } {
+  if (!web || web.status === 'off') return { text: 'The same deck as a live page, on this machine only (/apiarius web).', color: P.muted2 }
   if (web.status === 'starting') return { text: 'Starting the web page…', color: P.muted2 }
   if (web.status === 'failed') return { text: web.note || 'The web page could not start.', color: P.failText }
-  return { text: `Live, on this machine only.${ways}`, color: P.muted }
+  return { text: 'Live, on this machine only.', color: P.muted }
 }
 
 /**
  * The web page and how it stands: "Open in browser", which opens it in your
  * own browser, each press its own one-time link (`actions.openBrowser`, as
  * the header's, ./deck, and /apiarius web), the page started first when it
- * is off; "Starting…" in its place meanwhile. On a desktop beside it, "Open
- * in Claude's Browser pane" (`actions.openWebPane`, as /apiarius web pane),
- * whose words in your voice wait for your Send. Never a link the surface
+ * is off; "Starting…" in its place meanwhile. Never a link the surface
  * opens itself, which the Desktop may open in its Browser pane; the
  * terminal shows the running page's link (`web.url`) as text to copy: a
  * link opens one page, and the deck shows a new one once it was used.
  */
 function webSection(kit: Kit, web: WebPane | undefined, actions: DashActions): RenderElement {
   const { Box, Button, Text } = kit
-  const note = webNote(kit, web)
+  const note = webNote(web)
   const isStarting = web?.status === 'starting'
   return section(kit, 'settings:web', sectionHead(kit, 'Web page', null), [
-    <Box key="settings:web:row" flexDirection="row" columnGap={2} rowGap={isAiry(kit) ? 1 : 0} flexWrap="wrap">
+    <Box key="settings:web:row" flexDirection="row">
       <Box flexShrink={0}>
         <Button key="settings:web:open-browser" label={isStarting ? 'Starting…' : 'Open in browser'} onPress={() => actions.openBrowser()} />
       </Box>
-      {kit.surface === 'terminal' ? null : (
-        <Box flexShrink={0}>
-          <Button key="settings:web:open-pane" label={PANE_LABEL} onPress={() => actions.openWebPane()} />
-        </Box>
-      )}
     </Box>,
     <Text key="settings:web:note" color={note.color} wrap="wrap">
       {note.text}

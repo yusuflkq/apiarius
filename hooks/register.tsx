@@ -712,13 +712,12 @@ function debugStateOf(now: number) {
 /**
  * The web deck. `/apiarius web`, or "Open in browser" (the deck's header,
  * `o`, Settings), starts `web/server.js` for the session and opens the page
- * in your own browser with the system's opener; `/apiarius web pane`, or
- * Settings' "Open in Claude's Browser pane", opens it in the Desktop's
- * Browser pane instead. Each link carries a one-time ticket the page trades
- * for a handle (web/server.js), of one of two grades (`W.WebGrade`): your
- * own browser's is `full`; the Browser pane's is `pane`, since Claude's
- * tools drive that pane, and what it sends in your voice waits for your
- * Send in the band (./hold). The terminal deck shows a `full` one as text
+ * in your own browser with the system's opener; `/apiarius web pane` opens
+ * it in the Desktop's Browser pane instead. Each link carries a one-time
+ * ticket the page trades for a handle (web/server.js), of one of two grades
+ * (`W.WebGrade`): your own browser's is `full`; the Browser pane's is
+ * `pane`, since Claude's tools drive that pane, and what it sends in your
+ * voice waits for your Send in the band (./hold). The terminal deck shows a `full` one as text
  * to copy. A link is never in what the model reads. While it is on, what the
  * deck holds goes to `<home>/web/<sessionId>/state.json` at most every 300 ms
  * after a change (`W.webStateOf`, with the v2 view model under `v2`), each
@@ -1674,7 +1673,7 @@ async function showWeb($: EngineInterface, url: string): Promise<void> {
  * links are the deck's.
  */
 const WEB_OPENED_TEXT = 'Apiarius web is running on this machine and opened in your own browser. Open in browser, at the top of the deck (/apiarius), opens it again.'
-const WEB_PANE_TEXT = "Apiarius web is running on this machine. It opens in Claude's Browser pane, which Claude can drive, so each message you send from it waits for one Send click above your prompt. /apiarius web opens it in your own browser instead, where messages go at once."
+const WEB_PANE_TEXT = "Apiarius web is open in Claude's Browser pane. What you send from there waits above your prompt until you press Send."
 const WEB_NO_PANE_TEXT = 'Apiarius web is running on this machine. A terminal has no Browser pane: press o in the deck (/apiarius), or Open in browser at its top, to open it in your own browser. The deck also shows a link to copy under its header.'
 
 /** What the model is told beside each: that the link is the person's. */
@@ -1701,8 +1700,8 @@ async function isTerminalOnly($: EngineInterface): Promise<boolean> {
 /**
  * `/apiarius web`: the page in your own browser, as Open in browser opens it
  * (`openOwnBrowser`: started first when it is not running, a `full` link
- * made for it on web/open.js's stdin). `/apiarius web pane` and Settings'
- * "Open in Claude's Browser pane" (`where` `pane`): started if need be,
+ * made for it on web/open.js's stdin). `/apiarius web pane` (`where`
+ * `pane`), which nothing in the deck offers: started if need be,
  * then the Browser pane (left to run) asked to open it with a new `pane`
  * ticket, whose words in your voice wait for your Send (./hold); in a
  * session that draws only in a terminal, which has no Browser pane, no pane
@@ -3348,7 +3347,6 @@ function actionsFor($: EngineInterface): DeckActions {
       changed($)
       void openPane($)
     },
-    openWebPane: () => void openWeb($, 'pane'),
     openBrowser: () => void openOwnBrowser($),
     // the band's rows of what the Browser pane's page sent in your voice (./hold): your Send runs it, Discard drops it, More shows it whole
     sendHeld: key => sendHeld($, key),
@@ -4071,7 +4069,7 @@ export const register: Register = on => {
         name: 'apiarius',
         description: 'Open Apiarius: what Claude is doing, who is working on what, and what needs you (/apiarius dashboard, chat, org, changes, inspect or settings; /apiarius demo: sample data; /apiarius web: in your browser)',
         // now (the Dashboard's id), help (Settings), probe (a dev check) and an earlier build's tabs (plan, stats, classic, details) still open, unlisted
-        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web pane|web stop|clear|clear show|band|avatars [style]|close]',
+        argumentHint: '[dashboard|chat|org|changes|inspect|settings|demo|web|web stop|clear|clear show|band|avatars [style]|close]',
         immediate: true,
       })
     } catch (error) {

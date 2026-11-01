@@ -106,8 +106,6 @@ export type Actions = {
   open: (tab: DeckTab | DeckView2['tab']) => void
   /** Pins the deck to the repository at `root`; '' follows the work again. */
   selectRepo: (root: string) => void
-  /** What `/apiarius web pane` does: starts the dashboard's server if it is not running, then opens the page in Claude's Browser pane, whose words in your voice wait for your Send (the terminal shows the link when that fails). */
-  openWebPane: () => void
   /** "Open in browser" (the header's, `o`, and Settings'), as `/apiarius web`: starts the web deck first when it is not running (never in the Browser pane; a press while it starts does nothing), then a new `full` link to the page, opened in your own browser by the system's opener (a toast when it could not). */
   openBrowser: () => void
   /** Send on a band row the Browser pane's page sent in your voice (../hold): it runs as your own browser's page would have run it at once. */

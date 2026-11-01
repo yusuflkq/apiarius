@@ -557,7 +557,7 @@ test('/apiarius web pane starts the server once (node, web/server.js, its folder
   expect(ticket).toMatch(/^p-[0-9a-f]{16}-[0-9a-f]{32}$/)
   expect(W.ticketOf(secret, 'pane', W.nonceOf(ticket))).toBe(ticket)
   // a command's text reaches the model as its output, and its context is the model's: neither holds the link, the port, the ticket or the secret
-  expect(answer.text).toBe("Apiarius web is running on this machine. It opens in Claude's Browser pane, which Claude can drive, so each message you send from it waits for one Send click above your prompt. /apiarius web opens it in your own browser instead, where messages go at once.")
+  expect(answer.text).toBe("Apiarius web is open in Claude's Browser pane. What you send from there waits above your prompt until you press Send.")
   for (const said of [ticket, secret, url, String(PORT), 'http', '?t=']) expect(modelSees(answer)).not.toContain(said)
 
   expect(w.children).toHaveLength(1)
@@ -857,9 +857,10 @@ test('the pane: with no Browser pane to open the web deck in, the header`s Open 
   expect((await ui.find({ key: 'settings:web:open-browser' }))?.props.label).toBe('Open in browser')
   expect(await ui.find({ key: 'settings:web:link' })).toBeUndefined()
   expect(await ui.find({ key: 'web:open' })).toBeUndefined()
-  // beside it, the Desktop's alone: Claude's Browser pane, as /apiarius web pane, asked again at a press
-  expect((await ui.find({ key: 'settings:web:open-pane' }))?.props.label).toBe('Open in Claude’s Browser pane')
-  await ui.press({ key: 'settings:web:open-pane' })
+  // no button for Claude's Browser pane, nor a word about it: /apiarius web pane alone asks it again
+  expect(await ui.find({ key: 'settings:web:open-pane' })).toBeUndefined()
+  expect(JSON.stringify(await ui.drawn())).not.toMatch(/Browser pane|Claude can drive/)
+  await $.command.run(deck('web pane'))
   await clock.settle()
   expect(w.opened.map(one => one.server)).toEqual(['Claude_Browser', 'Claude Browser', 'Claude_Browser', 'Claude Browser'])
   expect(linkOf(w).ticket).toMatch(/^p-/)
@@ -870,7 +871,6 @@ test('the pane: with no Browser pane to open the web deck in, the header`s Open 
   expect((await term.find({ key: 'web:link' }))?.text).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${PORT}/\\?t=f-[0-9a-f]{16}-[0-9a-f]{32}$`))
   expect((await term.find({ key: 'deck:browser' }))?.props.label).toBe('Open in browser')
   expect(await term.find({ key: 'web:open-browser' })).toBeUndefined()
-  // a terminal has no Browser pane: Settings offers your own browser alone
   expect(await term.find({ key: 'settings:web:open-pane' })).toBeUndefined()
   expect((await term.find({ key: 'settings:web:open-browser' }))?.props.label).toBe('Open in browser')
   await term.unmount()
