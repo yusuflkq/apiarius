@@ -75,6 +75,15 @@ test('prepare makes a new home, its web folder, the session`s folder and its fol
   assert.equal(modeOf(path.join(dir, 'state.json')), 0o600)
 })
 
+test('prepare writes its owner over a longer owner.json an earlier run left, nothing of the old one kept', () => {
+  const home = path.join(tempDir(), 'apiarius')
+  const dir = path.join(home, 'web', 'sess-1')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'owner.json'), `${JSON.stringify({ pid: 1, note: 'x'.repeat(200) })}\n`)
+  assert.deepEqual(run({ op: 'prepare', home, id: 'sess-1', files: [] }), { ok: true })
+  assert.equal(fs.readFileSync(path.join(dir, 'owner.json'), 'utf8'), `${JSON.stringify({ pid: process.pid })}\n`)
+})
+
 test('prepare makes an existing file 0600 and loose folders 0700 (a viewer`s write made them 0755); a home the person named stays as they keep it, Apiarius`s own is made 0700', { skip: isWindows }, () => {
   const named = tempDir()
   fs.chmodSync(named, 0o755)
