@@ -778,10 +778,10 @@ test('the plan: every source Claude used, each as made (the board with owners, t
 
 /** The chat's groups and notices, in order: a group's key is `g:` and its first message's key, a notice's its message's. */
 const groupsIn = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(cgroup|notice|cmp-line)( |$)/.test(one.p.class))
-/** The keys of every message drawn: each bubble's, each hand-off's line (folded), each notice's, each compaction's line. */
+/** The keys of every message drawn: each bubble's, each agent started's row (folded), each notice's, each compaction's line. */
 const messageKeys = v => findAll(v, one => !!one.p && typeof one.p.class === 'string' && /^(brow|handoff|notice|cmp-line)( |$)/.test(one.p.class)).map(one => one.k)
 
-test('Chat is a group chat: others` bubbles at the left under their avatar and name, "to X" with X`s small avatar; yours at the right in blue under "You"; one sender`s run stacks under one head, its hand-offs a line each; Claude Code`s notices in the middle', () => {
+test('Chat is a group chat: others` bubbles at the left under their avatar and name, "to X" with X`s small avatar; yours at the right in blue under "You"; one sender`s run stacks under one head, the agents it started a list; Claude Code`s notices in the middle', () => {
   const p = page({ hash: '#/chat' })
   p.load(SAMPLE)
   assert.equal(p.run('route.tab'), 'chat')
@@ -798,20 +798,43 @@ test('Chat is a group chat: others` bubbles at the left under their avatar and n
   assert.equal(head('m1792011780000_main_you'), 'Orchestrator 30m')
   assert.deepEqual(find(run, 'brow').map(b => b.k), ['m1792011780000_main_you'])
   assert.equal(findAll(find(run, 'cg-av')[0], v => v.t === 'img' && v.p.class === 'av').length, 1, 'the sender`s avatar')
-  // its three hand-offs minutes after: a line each, one under the other, whom each went to and the start of its task, folded
+  // the three agents it started minutes after: a list, one under the other, each "[face] Orchestrator started [face] builder" and when, the start of its task under it, folded
   const handoffs = group('m1792011840000_main_b81c6f3e2a9d4c17')
   assert.equal(handoffs.p.class, 'cgroup handoffs')
   assert.deepEqual(find(handoffs, 'handoff').map(b => b.k), ['m1792011840000_main_b81c6f3e2a9d4c17', 'm1792012020000_main_e5f6a7b8c9d0142b', 'm1792012080000_main_f1e2d3c4b5a6978c'])
-  assert.deepEqual(find(handoffs, 'handoff-who').map(t => flat(textOf(t))), ['Orchestrator → builder', 'Orchestrator → docs', 'Orchestrator → scout'])
+  assert.deepEqual(find(handoffs, 'handoff-who').map(t => flat(textOf(t))), ['Orchestrator started builder', 'Orchestrator started docs', 'Orchestrator started scout'])
+  for (const one of find(handoffs, 'handoff')) {
+    // each name beside the avatar its card has, and a press on it opening its drawer; "started" between them
+    assert.equal(findAll(find(one, 'handoff-who')[0], v => v.t === 'img' && v.p.class === 'av').length, 2, 'both avatars')
+    assert.equal(find(one, 'party-link').length, 2)
+    assert.equal(flat(textOf(find(one, 'handoff-verb')[0])), 'started')
+    assert.match(flat(textOf(find(one, 'handoff-time')[0])), /^[0-9]+m$/)
+    assert.equal(find(one, 'handoff-fold')[0].p['aria-expanded'], 'false')
+  }
   assert.match(flat(textOf(find(handoffs, 'handoff-gist')[0])), /^Write a sliding-window rate limiter in src\/rateLimit\.ts/)
   assert.equal(find(handoffs, 'bubble').length, 0)
-  // a press opens one: its words in a bubble under its line; again, folded
-  click(find(find(group('m1792011840000_main_b81c6f3e2a9d4c17'), 'handoff')[0], 'handoff-gist')[0])
-  const opened = find(group('m1792011840000_main_b81c6f3e2a9d4c17'), 'handoff')[0]
+  const builderRow = () => find(group('m1792011840000_main_b81c6f3e2a9d4c17'), 'handoff')[0]
+  // a press on the task opens it: in a bubble in its line's place, the chevron turned; one on the chevron folds it again
+  click(find(builderRow(), 'handoff-gist')[0])
+  const opened = builderRow()
   assert.equal(opened.p.class, 'handoff open')
+  assert.equal(find(opened, 'handoff-fold')[0].p['aria-expanded'], 'true')
+  assert.equal(find(opened, 'handoff-gist').length, 0)
   assert.match(flat(textOf(find(opened, 'bubble')[0])), /^Write a sliding-window rate limiter/)
   click(find(opened, 'handoff-fold')[0])
-  assert.equal(find(find(group('m1792011840000_main_b81c6f3e2a9d4c17'), 'handoff')[0], 'bubble').length, 0)
+  assert.equal(find(builderRow(), 'bubble').length, 0)
+  // the names' line presses as the chevron does, and so does Enter on the row
+  click(find(builderRow(), 'handoff-line')[0])
+  assert.equal(builderRow().p.class, 'handoff open')
+  const enter = { key: 'Enter', preventDefault() {} }
+  enter.target = enter.currentTarget = {}
+  builderRow().p.onKeyDown(enter)
+  assert.equal(builderRow().p.class, 'handoff')
+  // a name opens its drawer, and leaves the task as it was
+  click(find(builderRow(), 'party-link')[1])
+  assert.equal(p.run('route.drawer.id'), BUILDER)
+  assert.equal(builderRow().p.class, 'handoff')
+  p.open('null')
   // a SendMessage: its summary bold over its words (Markdown), to an agent, that agent`s small avatar beside its name
   const sent = group('m1792013040000_b81c6f3e2a9d4c17_aa11bb22cc33dd44')
   assert.equal(head('m1792013040000_b81c6f3e2a9d4c17_aa11bb22cc33dd44'), 'builder to reviewer 9m')

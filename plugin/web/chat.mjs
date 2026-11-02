@@ -73,7 +73,7 @@ function Members(f) {
     open ? behind.map(a => MemberButton(a, f === a.id)) : null);
 }
 
-/** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone, what you stopped, and a compaction) in the middle, a hand-off a line of its own. */
+/** Where a message stands: yours at the right, others' at the left, Claude Code's own (and a slash command you ran alone, what you stopped, and a compaction) in the middle, an agent started (a hand-off) a row of its own. */
 const sideOf = m => (m.kind === 'command' || m.kind === 'stop' || m.kind === 'compaction' || m.from === 'engine' ? 'notice' : m.kind === 'spawn' ? 'handoff' : m.from === 'you' ? 'mine' : 'theirs');
 
 /** A send from here not in the chat yet (or refused): drawn as the row it becomes, so it turns into it in place. */
@@ -132,8 +132,8 @@ function headTo(e) {
 export const timeTitle = at => (at ? new Date(at).toLocaleString() : '');
 
 /**
- * A group: Claude Code's notice alone in the middle; one sender's hand-offs
- * a line each, one under the other; yours at the right, "You" over them;
+ * A group: Claude Code's notice alone in the middle; the agents one sender
+ * started a list, one under the other; yours at the right, "You" over them;
  * others' at the left, the sender's avatar beside its name and the messages
  * under the name. A message to another recipient than the one before it says
  * so over it.
@@ -235,24 +235,37 @@ function Notice(e) {
     h('span', { class: 'notice-time' }, ageOf(m.at)));
 }
 
+/** The avatars of an agent started and of the one that started it, in px: a recipient's beside "to". */
+const STARTED_FACE = 16;
+
 /**
- * A hand-off (a spawn row: the task an agent was started with), one line:
- * "▸ Orchestrator → scout: Find the off-by-one in …" and when, its words
- * cut to the line, each name opening its drawer; a press on the chevron or
- * the words opens them under it, in a bubble as any message's (folded when
- * long), and folds them again.
+ * An agent started (a spawn row: the task it was started with), two short
+ * lines, as the Desktop pane draws it: "[face] Orchestrator started [face]
+ * scout" and when, each name beside the avatar its card has and opening its
+ * drawer, "started" dim; under it, after a chevron under the first avatar,
+ * the start of its task, dim, cut to the line. A press on the names' line,
+ * the chevron or the task (or Enter on the row) opens the task in its
+ * place, in a bubble as any message's (folded when long), and folds it
+ * again.
  */
 function Handoff(e) {
   const m = e.m;
   const key = `handoff|${m.id}`, open = isOpen(key, false);
   const flip = () => { ui.holdChat = true; toggle(key); };
-  return h('div', { key: e.key, class: `handoff${open ? ' open' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at) },
-    h('div', { class: 'handoff-line' },
-      h('button', { type: 'button', class: 'handoff-fold', 'aria-expanded': open ? 'true' : 'false', 'aria-label': open ? 'Hide the task' : 'The task it was given', onClick: flip }, icon('chevronRight', 'chev')),
-      h('span', { class: 'handoff-who' }, h('span', { class: 'handoff-from' }, Party(m.from, 0)), h('span', { class: 'handoff-arrow' }, '→'), Party(m.to, 14)),
-      open ? h('span', { class: 'handoff-gist' }) : h('button', { type: 'button', class: 'handoff-gist', onClick: flip }, oneLine(m.text)),
-      h('span', { class: 'handoff-time' }, ageOf(m.at))),
-    open && h('div', { class: 'handoff-words' }, Bubble(e, false)));
+  return h('div', {
+    key: e.key, class: `handoff${open ? ' open' : ''}`, 'data-nav': 'chat', tabindex: '-1', enter: true, title: timeTitle(m.at),
+    onKeyDown: ev => { if (ev.key === 'Enter' && ev.target === ev.currentTarget) { ev.preventDefault(); flip(); } },
+  },
+  // the names' line presses as the chevron does; a name (its own button) opens its drawer instead
+  h('div', { class: 'handoff-line', onClick: flip },
+    h('span', { class: 'handoff-who' },
+      h('span', { class: 'handoff-from' }, Party(m.from, STARTED_FACE)),
+      h('span', { class: 'handoff-verb' }, 'started'),
+      h('span', { class: 'handoff-to' }, Party(m.to, STARTED_FACE))),
+    h('span', { class: 'handoff-time' }, ageOf(m.at))),
+  h('div', { class: 'handoff-task' },
+    h('button', { type: 'button', class: 'handoff-fold', 'aria-expanded': open ? 'true' : 'false', 'aria-label': open ? 'Hide the task' : 'Show the task it was given', onClick: flip }, icon('chevronRight', 'chev')),
+    open ? h('div', { class: 'handoff-words' }, Bubble(e, false)) : h('button', { type: 'button', class: 'handoff-gist', onClick: flip }, oneLine(m.text))));
 }
 
 /**
