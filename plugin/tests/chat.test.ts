@@ -189,7 +189,7 @@ test('Chat is a group chat: yours at the right in a blue bubble, when under it; 
   }
 })
 
-test('one sender`s messages within a few minutes stack under one avatar and name; one to another recipient says so over it, with that one`s avatar and name; its hand-offs are a line each, one under the other, a press opening one', async ($, on) => {
+test('one sender`s messages within a few minutes stack under one avatar and name; one to another recipient says so over it, with that one`s avatar and name; the agents it started are a list, "Orchestrator started builder" with both avatars over the start of the task, a press opening one', async ($, on) => {
   // the Orchestrator answers you, tells builder something, then starts builder, docs and scout, each within minutes of the last
   const { v2 } = await demo($, on, newWorld(), state => {
     const said = state.chat.find(row => row.from === 'main' && row.to === 'you' && row.kind === 'answer')!
@@ -219,25 +219,42 @@ test('one sender`s messages within a few minutes stack under one avatar and name
       const glyphs = under(group, node => node.type === 'Text' && AV.ROBOT_GLYPHS.includes(node.children?.[0] as string))
       expect(glyphs.length).toBe(2)
     }
-    // the hand-offs: a line each, one under the other, "▸ Orchestrator → builder: Write a sliding-window…" and when; one row on the terminal
+    // the agents it started: a list, one under the other, each two lines: "[face] Orchestrator started [face] builder" and when, then the start of its task after a chevron
     const lines = await ui.find({ key: `grp:msg:${spawns[0]!.id}` })
     for (const row of spawns.slice(1)) expect(await ui.find({ key: `grp:msg:${row.id}` })).toBeUndefined()
     expect(under(lines, node => keyOf(node).startsWith('msg:')).map(keyOf)).toEqual(spawns.map(row => `msg:${row.id}`))
     for (const [i, name] of ['builder', 'docs', 'scout'].entries()) {
       const row = spawns[i]!
-      expect(String((await ui.find({ key: `chat:handoff:${row.id}` }))?.props.label)).toMatch(new RegExp(`^▸ Orchestrator → ${name}: ${row.text.slice(0, 12)}`))
+      const who = await ui.find({ key: `who:msg:${row.id}` })
+      expect(who?.text).toMatch(new RegExp(`^(\\S{1,2} )?Orchestrator ?started ?(\\S{1,2} )?${name}[0-9]+m$`))
+      // each name beside the avatar its card has: an image on a desktop, its glyph in its colour on the terminal
+      if (surface === 'desktop') expect(under(who, node => node.type === 'Svg').map(node => String(node.props?.alt))).toEqual(["Orchestrator's avatar", `${name}'s avatar`])
+      else expect(under(who, node => node.type === 'Text' && AV.ROBOT_GLYPHS.includes(node.children?.[0] as string)).length).toBe(2)
+      // "started" dim, the names in the names' ink
+      expect(under(who, node => node.type === 'Text' && (node.children ?? []).some(one => typeof one === 'string' && one.trim() === 'started')).map(node => node.props?.color)).toEqual([P.muted2])
+      // the start of its task under it, dim: on the terminal the line is the press; on a desktop the chevron, and a veil over both lines
+      const label = String((await ui.find({ key: `chat:handoff:${row.id}` }))?.props.label)
+      if (surface === 'terminal') expect(label).toMatch(new RegExp(`^▸ ${row.text.slice(0, 12)}`))
+      else {
+        expect(label).toBe('▸')
+        expect(await ui.find({ key: `row:chat:handoff:${row.id}` })).toBeDefined()
+      }
       const line = await ui.find({ key: `msg:${row.id}` })
-      expect(line?.text).toMatch(/[0-9]+m$/)
+      expect(line?.text).toContain(row.text.slice(0, 12))
       expect(under(line, node => node.type === 'Markdown')).toEqual([])
-      if (surface === 'terminal') expect(rowsOf(line, 84)).toBe(1)
+      if (surface === 'terminal') expect(rowsOf(line, 84)).toBe(2)
     }
-    // a press opens one, its words under its line; another folds it again
+    // a press opens one: its task in the second line's place (in the dark bubble on a desktop), the chevron turned down; a press on its names folds it again
     const builder = spawns[0]!
     await press(ui, `chat:handoff:${builder.id}`)
-    expect((await ui.find({ key: `chat:handoff:${builder.id}` }))?.props.label).toBe('▾ Orchestrator → builder')
-    expect(under(await ui.find({ key: `msg:${builder.id}` }), node => node.type === 'Markdown').map(node => String(node.props?.text).slice(0, 40))).toEqual([builder.text.slice(0, 40)])
-    await press(ui, `chat:handoff:${builder.id}`)
-    expect(String((await ui.find({ key: `chat:handoff:${builder.id}` }))?.props.label)).toMatch(/^▸ Orchestrator → builder: /)
+    expect((await ui.find({ key: `chat:handoff:${builder.id}` }))?.props.label).toBe('▾')
+    const opened = await ui.find({ key: `msg:${builder.id}` })
+    expect(under(opened, node => node.type === 'Markdown').map(node => String(node.props?.text).slice(0, 40))).toEqual([builder.text.slice(0, 40)])
+    expect(under(opened, node => node.type === 'Box' && node.props?.backgroundColor === '#262626').length).toBe(surface === 'desktop' ? 1 : 0)
+    expect((await ui.find({ key: `who:msg:${builder.id}` }))?.text.trim()).toMatch(/builder[0-9]+m$/)
+    await press(ui, surface === 'desktop' ? `row:chat:handoff:${builder.id}` : `chat:handoff:${builder.id}`)
+    expect(String((await ui.find({ key: `chat:handoff:${builder.id}` }))?.props.label)).toMatch(/^▸/)
+    expect(under(await ui.find({ key: `msg:${builder.id}` }), node => node.type === 'Markdown')).toEqual([])
     // another sender between starts a group of its own
     const result = v2.chat.find(row => row.from === IDS.researcher && row.kind === 'result')!
     expect(await ui.find({ key: `grp:msg:${result.id}` })).toBeDefined()

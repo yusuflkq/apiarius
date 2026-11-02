@@ -1,7 +1,7 @@
 {
   "name": "apiarius",
   "displayName": "Apiarius",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "See what every agent and subagent in your Claude Code session is doing, live: a deck in the side pane, the terminal or your browser.",
   "author": { "name": "Yusuf", "url": "https://github.com/yusuflkq" },
   "homepage": "https://github.com/yusuflkq/apiarius",

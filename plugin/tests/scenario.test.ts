@@ -297,8 +297,8 @@ function nodesUnder(el: { children?: unknown[] }): Node[] {
  * sender (the name its head presses, `chat:from:<key>`; you, for yours at
  * the right) and recipient (the name "to" presses, `chat:to:<key>`; none to
  * you, nor for yours to the Orchestrator), the line over a message stacked
- * under it naming another; a hand-off's line names both ("▸ Orchestrator →
- * scout: …", `chat:handoff:<id>`).
+ * under it naming another; an agent started names both on its first line
+ * ("Orchestrator started scout", `who:<key>`), read as "Orchestrator → scout".
  */
 function routesOf(boxes: readonly FoundElement[]): string[] {
   const routes: string[] = []
@@ -310,7 +310,12 @@ function routesOf(boxes: readonly FoundElement[]): string[] {
     const label = (key: string) => String(nodes.find(node => keyOf(node) === key)?.props?.label ?? '')
     const handoffs = nodes.filter(node => keyOf(node).startsWith('chat:handoff:'))
     if (handoffs.length > 0) {
-      for (const one of handoffs) routes.push(String(one.props?.label ?? '').replace(/^[▸▾] /, '').replace(/: [\s\S]*$/, ''))
+      for (const one of handoffs) {
+        // its names' line as drawn: an avatar's glyph (the terminal's) or image (a desktop's, no text), a name, "started", the other, when
+        const who = boxes.find(other => other.key === `who:msg:${keyOf(one).slice('chat:handoff:'.length)}`)?.text.trim() ?? ''
+        const names = /^(?:\S{1,2} )?(.+?) ?started ?(?:\S{1,2} )?(.+?)(?:now|[0-9]+[mhd])$/.exec(who)
+        routes.push(names ? `${names[1]} → ${names[2]}` : who)
+      }
       continue
     }
     const messages = nodes.filter(node => node.type === 'Box' && /^(msg|send):/.test(keyOf(node)))
