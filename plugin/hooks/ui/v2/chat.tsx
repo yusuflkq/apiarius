@@ -34,10 +34,12 @@
  * - Claude Code's own notices (`engine`: its notifications, a task's end)
  *   centred, small and dim: "Claude Code · Agent "X" completed · 12m". A
  *   slash command you ran alone sits there too: "You ran /login · 12m".
- * - A hand-off (a spawn row: the task an agent was started with) is one
- *   line, "▸ Orchestrator → scout: Find the off-by-one in … · 12m", its
- *   words cut to the row; a press opens them under it, as any message's,
- *   and folds them again.
+ * - An agent started (a spawn row: the task it was started with) is two
+ *   short lines: "[face] Orchestrator started [face] scout" and when, each
+ *   name beside the avatar its card has, "started" dim; under it, after a
+ *   chevron, the start of its task, dim, cut to the row. A press opens the
+ *   task in its place, as any message's (folded to about six lines, Show
+ *   more), and folds it again. One sender's, minutes apart, a list.
  * - A question held on you: its bubble edged amber, and "Answer on
  *   Dashboard →", which takes the Dashboard's card for it into view, the
  *   focus on it.
@@ -81,10 +83,11 @@ import { isFinishedRow, needKeyOf, recipientOf, type V2AgentRow, type V2ChatRow,
 import type { DashActions, Kit } from '../types'
 import { rowsOf } from './fit'
 import { compactionLine } from './inspect'
-import { AVATAR, icon, quiet, svgOf } from './look'
+import * as AV from '../../../web/avatars.mjs'
+import { AVATAR, advanceOf, avatarAgentOf, avatarCells, avatarStyleOf, icon, quiet, svgOf, terminalCell } from './look'
 import { P, mix, toneOf } from './palette'
-import { chevronOf, face, finishedRow, openFoldsWith, wrapAdvanceOf } from './parts'
-import { ago, cellsOf, cut, flat, foldText, plural } from './text'
+import { chevronOf, chromeOf, face, finishedRow, openFoldsWith, veil, wrapAdvanceOf } from './parts'
+import { ago, cellsOf, cut, cutCells, flat, foldText, plural } from './text'
 
 /** The messages the window shows at first, and the more each "Show earlier" adds. */
 const PAGE = 30
@@ -116,6 +119,8 @@ const MEMBER_CELLS = 40
 const MEAN_MOST = 6
 /** A recipient's avatar beside "to", in CSS px: a little under the sender's. */
 const TO_FACE = 16
+/** The avatars of an agent started and of the one that started it, in CSS px: a recipient's. */
+const STARTED_FACE = TO_FACE
 
 /** The bubbles: others' dark, a held question's amber-edged, yours blue. */
 const BUBBLE = '#262626'
@@ -815,7 +820,7 @@ function groupOf(kit: Kit, start: Drawn, els: RenderElement[]): RenderElement {
   if (start.entry.side === 'notice') return els[0] as RenderElement
   if (start.entry.side === 'handoff') {
     return (
-      <Box key={key} flexDirection="column">
+      <Box key={key} flexDirection="column" rowGap={kit.surface === 'terminal' ? 0 : 1}>
         {els}
       </Box>
     )
@@ -1067,64 +1072,145 @@ function noticeOf(ctx: Ctx, entry: Entry): RenderElement {
   )
 }
 
+/** A party's face as a run of a terminal line: its glyph in its colour; a grey dot for one the state does not hold. */
+function faceRun(kit: Kit, row: V2AgentRow | undefined): RenderElement {
+  const { Text } = kit
+  if (!row) return <Text color={P.muted3}>●</Text>
+  return terminalCell(kit, AV.terminalFace(avatarAgentOf(row), avatarStyleOf(kit)))
+}
+
 /**
- * A hand-off in one line, "▸ Orchestrator → scout: Find the off-by-one in …"
- * and when, its words cut to the row (on the terminal, the names lit); a
- * press opens them under it, as any message's (folded to about six lines,
- * Show more), and folds them again.
+ * An agent started (a spawn row), two short lines. The first: the avatar of
+ * the one that started it and its name, "started" dim, the new agent's avatar
+ * and its name (each avatar the one its card has, in the deck's style; on the
+ * terminal its glyph), and when at the right. The second: a chevron under the
+ * first avatar, then the start of the task it was given, dim, cut to the row.
+ *
+ * A press opens the task in the second line's place, as any message's words
+ * (folded to about six lines, Show more; in the dark bubble on a desktop),
+ * the chevron turned down beside it, and folds it again. The chevron is the
+ * row's Button (`chat:handoff:<id>`), its key the same either way, so the
+ * focus stays on it. On a desktop a veil (./parts) lies over the two lines
+ * folded, over the first open, so a press anywhere on them does the same; on
+ * the terminal the second line folded is the Button, its runs lit.
  */
 function handoffOf(ctx: Ctx, entry: Entry, most = FOLD_ROWS): RenderElement {
   const { kit, state, actions } = ctx
   const { Box, Text, Button } = kit
   const row = entry.row
+  const isTerminal = kit.surface === 'terminal'
   const isOpen = view.handoffs.has(row.id)
-  const from = senderOf(state, row)
+  const fromRow = rowOf(state, row.from)
+  const toRow = rowOf(state, row.to)
+  const from = cut(senderOf(state, row), TO_MOST)
   const to = recipientName(state, row)
   const when = ago(row.at, state.now)
-  const head = `${chevronOf(isOpen)} ${from} → ${to}`
-  // one row: the words take what the names and the time leave them
-  const room = kit.columns - cellsOf(head) - 2 - (when ? cellsOf(when) + 1 : 0)
-  const gist = cut(flat(clean(row.text)), Math.max(12, room))
-  // open, the words show whole under the line
-  const label = isOpen ? head : `${head}: ${gist}`
+  const key = `chat:handoff:${row.id}`
   const toggle = () => {
     if (isOpen) view.handoffs.delete(row.id)
     else view.handoffs.add(row.id)
     actions.redraw()
   }
-  const press =
-    kit.surface === 'terminal' ? (
-      <Button key={`chat:handoff:${row.id}`} label={label} plain onPress={toggle}>
+  const chevron = chevronOf(isOpen)
+  // the chevron's column: as wide as the avatar over it, so the task starts where the names do
+  const lead = avatarCells(kit, STARTED_FACE)
+  const names = isTerminal ? (
+    <Box key={`who:${entry.key}`} flexDirection="row" columnGap={1}>
+      <Box flexShrink={1} minWidth={0}>
         <Text wrap="truncate-end">
-          <Text color={P.muted2}>{`${chevronOf(isOpen)} `}</Text>
-          <Text bold color={P.text}>
-            {from}
-          </Text>
-          <Text color={P.muted2}>{' → '}</Text>
-          <Text color={P.fg2}>{to}</Text>
-          {isOpen ? null : <Text color={P.muted}>{`: ${gist}`}</Text>}
+          {faceRun(kit, fromRow)}
+          <Text bold color={P.text}>{` ${from}`}</Text>
+          <Text color={P.muted2}>{' started '}</Text>
+          {faceRun(kit, toRow)}
+          <Text bold color={P.text}>{` ${to}`}</Text>
         </Text>
-      </Button>
-    ) : (
-      <Button key={`chat:handoff:${row.id}`} label={label} plain dimColor onPress={toggle} />
+      </Box>
+      <Box flexGrow={1} flexShrink={0} justifyContent="flex-end">
+        <Text color={P.muted2}>{when}</Text>
+      </Box>
+    </Box>
+  ) : (
+    <Box key={`who:${entry.key}`} flexDirection="row" alignItems="center" columnGap={1}>
+      <Box flexShrink={0}>{face(kit, fromRow ?? null, STARTED_FACE)}</Box>
+      <Box flexShrink={1} minWidth={0}>
+        <Text color={P.text} wrap="truncate-end">
+          {from}
+        </Text>
+      </Box>
+      <Box flexShrink={0}>
+        <Text color={P.muted2}>started</Text>
+      </Box>
+      <Box flexShrink={0}>{face(kit, toRow ?? null, STARTED_FACE)}</Box>
+      <Box flexShrink={1} minWidth={0}>
+        <Text color={P.text} wrap="truncate-end">
+          {to}
+        </Text>
+      </Box>
+      <Box flexGrow={1} flexShrink={0} justifyContent="flex-end">
+        <Text color={P.muted2}>{when}</Text>
+      </Box>
+      {isOpen ? veil(kit, key, toggle) : null}
+    </Box>
+  )
+  if (isOpen) {
+    const width = foldWidth(kit, 'theirs') - lead - 1 - (isTerminal ? 0 : chromeOf(kit))
+    const words = wordsOf(ctx, entry, Math.max(16, Math.floor(width)), most)
+    return (
+      <Box key={entry.key} flexDirection="column">
+        {names}
+        <Box flexDirection="row" columnGap={1} alignItems="flex-start">
+          <Box flexShrink={0} width={lead} flexDirection="row" justifyContent="center">
+            <Button key={key} label={chevron} plain dimColor={!isTerminal} onPress={toggle}>
+              <Text color={P.muted2}>{chevron}</Text>
+            </Button>
+          </Box>
+          <Box flexDirection="column" flexShrink={1} minWidth={0} alignItems="flex-start" {...(isTerminal ? {} : { width: '88%' })}>
+            {isTerminal ? (
+              words
+            ) : (
+              <Box flexDirection="column" borderStyle="round" borderColor={BUBBLE_EDGE} backgroundColor={BUBBLE} paddingX={1}>
+                {words}
+              </Box>
+            )}
+          </Box>
+        </Box>
+      </Box>
     )
+  }
+  // folded: the start of the task, cut to what the chevron's column leaves of the row
+  const adv = advanceOf(kit)
+  const gist = cutCells(flat(clean(row.text)), Math.max(12, kit.columns - lead - 2), adv)
+  if (isTerminal) {
+    return (
+      <Box key={entry.key} flexDirection="column">
+        {names}
+        <Box flexDirection="row">
+          <Box flexShrink={1} minWidth={0}>
+            <Button key={key} label={`${chevron} ${gist}`} plain onPress={toggle}>
+              <Text wrap="truncate-end">
+                <Text color={P.muted2}>{chevron.padEnd(lead + 1)}</Text>
+                <Text color={P.muted}>{gist}</Text>
+              </Text>
+            </Button>
+          </Box>
+        </Box>
+      </Box>
+    )
+  }
   return (
     <Box key={entry.key} flexDirection="column">
-      <Box flexDirection="row" alignItems="center" columnGap={1}>
+      {names}
+      <Box flexDirection="row" columnGap={1} alignItems="center">
+        <Box flexShrink={0} width={lead} flexDirection="row" justifyContent="center">
+          <Button key={key} label={chevron} plain dimColor onPress={toggle} />
+        </Box>
         <Box flexShrink={1} minWidth={0}>
-          {press}
+          <Text color={P.muted} wrap="truncate-end">
+            {gist}
+          </Text>
         </Box>
-        {when ? (
-          <Box flexShrink={0}>
-            <Text color={P.muted2}>{when}</Text>
-          </Box>
-        ) : null}
       </Box>
-      {isOpen ? (
-        <Box flexDirection="column" paddingLeft={2}>
-          {wordsOf(ctx, entry, foldWidth(kit, 'theirs') - 2, most)}
-        </Box>
-      ) : null}
+      {veil(kit, key, toggle)}
     </Box>
   )
 }
