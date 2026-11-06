@@ -12,28 +12,38 @@ Apiarius only shows what Claude Code is already doing. It reads the events Claud
 
 ## Install
 
-This GitHub repository is its own plugin marketplace: its `.claude-plugin/marketplace.json` lists Apiarius, and an install copies only its `plugin/` folder. You add the repository once and install from it.
+### In the Claude Desktop app
 
-In a Claude Code session in the terminal, run:
+The Desktop app runs Claude Code but doesn't add the `claude` command to your terminal, and `/plugin` doesn't run in its Code tab. Ask Claude to install Apiarius instead. Paste this into a chat in the Code tab:
+
+```
+Add the Apiarius plugin to my Claude Code user settings. In ~/.claude/settings.json, add "extraKnownMarketplaces": {"apiarius": {"source": {"source": "github", "repo": "yusuflkq/apiarius"}}} and "enabledPlugins": {"apiarius@apiarius": true}, and keep everything else in the file as it is.
+```
+
+Claude Code then downloads Apiarius from GitHub in the background. Give it a moment, start a new session and type `/apiarius`. It doesn't appear in the slash-command menu yet, but it runs when you type it in full. To turn Apiarius off or remove it later, click + next to the prompt box and choose Plugins, then Manage plugins.
+
+### In the terminal
+
+If the `claude` command works in your terminal, one command installs Apiarius:
+
+```
+claude plugin install apiarius --marketplace yusuflkq/apiarius
+```
+
+Inside a Claude Code session, run these instead. The install shows what the plugin adds and asks where to install it. Install for you (user scope) puts it in every project.
 
 ```
 /plugin marketplace add yusuflkq/apiarius
 /plugin install apiarius@apiarius
 ```
 
-The install shows what the plugin adds and asks where to install it. Install for you (user scope) puts it in every project.
+Then run `/apiarius`.
 
-From your shell, without starting a session, one command adds the marketplace and installs Apiarius for you.
+The terminal and the Desktop app read the same settings, so installing Apiarius in one puts it in the other. An install copies only this repository's `plugin/` folder.
 
-```
-claude plugin install apiarius --marketplace yusuflkq/apiarius
-```
-
-In the Claude Desktop app, `/plugin` doesn't run in the Code tab. The app has a plugin browser instead: in a local session, click + next to the prompt box and choose Add plugins (or Plugins, then Browse plugins). It lists the plugins from the marketplaces you have added, so add this one first from a terminal with `claude plugin marketplace add yusuflkq/apiarius`, then pick Apiarius in the browser. Or run the shell command above. The terminal and the Desktop app's local sessions read the same settings, so a plugin you install for yourself in one is there in the other.
+### What it needs
 
 It needs Claude Code 2.1.304 or later, in the terminal or in the Code tab of the Claude Desktop app, and Node.js 22 or later on your PATH. Node.js isn't only for the web page: Apiarius also uses it to make its folders private and clear out what a session leaves behind, to write the debug dump, to check which listed sessions still run, and to show the text of new files in Changes. Changes needs git 2.26 or later.
-
-Then run `/apiarius`.
 
 ## What you see
 
